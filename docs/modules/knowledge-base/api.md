@@ -6,9 +6,9 @@
 
 - Base URL：`/api/v1`
 - 协议：`HTTP + JSON`
-- 当前实现入口：[src/by_qa/main.py](/Users/jialangli/code/workspace/by-qa/src/by_qa/main.py)
-- 路由定义：[src/by_qa/knowledge_base/api/routes.py](/Users/jialangli/code/workspace/by-qa/src/by_qa/knowledge_base/api/routes.py)
-- 请求/响应模型：[src/by_qa/knowledge_base/api/schemas.py](/Users/jialangli/code/workspace/by-qa/src/by_qa/knowledge_base/api/schemas.py)
+- 当前实现入口：`src/by_qa/main.py`
+- 路由定义：`src/by_qa/knowledge_base/api/routes.py`
+- 请求/响应模型：`src/by_qa/knowledge_base/api/schemas.py`
 
 说明：
 

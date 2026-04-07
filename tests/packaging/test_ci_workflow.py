@@ -25,3 +25,12 @@ def test_ci_workflow_runs_module_specific_test_scripts():
     assert "bash scripts/knowledge_build/run_unit_tests.sh" in content
     assert "bash scripts/qa/run_unit_tests.sh" in content
     assert "uv run python -m pytest tests/packaging -q" in content
+
+
+def test_release_workflow_uses_named_pypi_environment():
+    """Trusted publishing should use a stable GitHub environment name."""
+    content = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+
+    assert "publish-pypi:" in content
+    assert "environment: pypi" in content
+    assert "uses: pypa/gh-action-pypi-publish@release/v1" in content

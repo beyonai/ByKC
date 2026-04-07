@@ -23,7 +23,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Install dependencies
-        run: uv sync --extra dev --all-extras
+        run: uv sync --extra dev --extra knowledge --extra knowledge-build --extra qa
 
       - name: Run pre-commit
         run: uv run pre-commit run --all-files

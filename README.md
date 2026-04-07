@@ -129,6 +129,97 @@ cp .env.example .env
 
 如果只使用 `knowledge_build`，通常只需要 embedding 相关配置；如果使用 `knowledge_base`，还需要 openGauss、MinIO 等运行配置。
 
+## 中间件依赖
+
+不同模块依赖的中间件不同：
+
+- `knowledge_build`：只依赖 embedding 服务，不依赖 openGauss 或 MinIO
+- `knowledge_base`：依赖 openGauss、MinIO 和 embedding 服务
+- `qa.instant`：当前是代码级能力入口，不直接依赖 openGauss、MinIO，但如果结合知识检索使用，通常仍会依赖 `knowledge_base`
+
+### openGauss
+
+`knowledge_base` 需要一份带扩展能力的 openGauss 环境。当前仓库默认使用自定义镜像，而不是直接使用原始官方镜像。
+
+需要满足的能力包括：
+
+- `vector` 类型与 `ivfflat` 索引能力
+- `age` 扩展
+- `ltree` 扩展
+- `pg_trgm` 扩展
+
+其中：
+
+- `vector` 与 `age` 依赖底层 openGauss / DataVec 能力
+- `ltree` 和 `pg_trgm` 由仓库里的自定义镜像在构建时编译并安装
+
+相关文件：
+
+- 自定义镜像定义：`docker/opengauss/custom/Dockerfile`
+- 初始化脚本：`docker/opengauss/init/init-opengauss.sh`
+- 编排文件：`docker-compose.kb-stack.yml`
+
+初始化脚本会在数据库可用后执行以下检查和准备：
+
+- 校验 `ltree`、`pg_trgm`、`age` 是否可用
+- 校验 `vector` 类型是否可用
+- 创建扩展、图谱和 smoke test 表
+- 验证 `ivfflat` 索引是否可正常创建
+
+### MinIO
+
+`knowledge_base` 用 MinIO 存放原始文件和读取链接。默认编排同时提供：
+
+- MinIO 服务
+- bucket 初始化容器
+
+相关文件：
+
+- MinIO 初始化脚本：`docker/minio/init/init-minio.sh`
+- 编排文件：`docker-compose.kb-stack.yml`
+
+### 构建 openGauss 自定义镜像
+
+如果你要本地运行知识库，推荐直接使用仓库提供的 compose 配置构建镜像：
+
+```bash
+docker compose -f docker-compose.kb-stack.yml build opengauss
+```
+
+如果希望单独构建镜像，也可以直接执行：
+
+```bash
+docker build \
+  -f docker/opengauss/custom/Dockerfile \
+  -t by_qa/opengauss-server-kb:7.0.0-RC1 \
+  .
+```
+
+默认会基于 `opengauss/opengauss-server:7.0.0-RC1` 构建，并从 openGauss 对应源码中编译 `ltree` 与 `pg_trgm`。
+
+### 启动知识库中间件
+
+启动 openGauss 和 MinIO：
+
+```bash
+docker compose -f docker-compose.kb-stack.yml up -d opengauss minio
+```
+
+执行初始化：
+
+```bash
+docker compose -f docker-compose.kb-stack.yml --profile init up --abort-on-container-exit opengauss-init minio-init
+```
+
+如果需要重置或验证环境，也可以使用仓库脚本：
+
+```bash
+/bin/bash scripts/reset_kb_stack.sh
+/bin/bash scripts/verify_kb_stack.sh
+```
+
+如果你只是想体验 `knowledge_build` 的示例接口，可以不启动这套中间件。
+
 ## 测试
 
 知识库单元测试：

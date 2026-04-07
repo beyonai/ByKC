@@ -12,6 +12,17 @@ license = {text = "MIT"}
 authors = [
     {name = "AI Assistant"}
 ]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+keywords = ["knowledge-base", "rag", "fastapi", "opengauss", "minio"]
 dependencies = [
     "fastapi>=0.115.0",
     "minio>=7.2.15",
@@ -28,6 +39,9 @@ dependencies = [
     "python-docx>=1.1.0",
     "httpx>=0.27.0",
 ]
+
+[project.scripts]
+by-qa = "by_qa.main:main"
 
 [project.optional-dependencies]
 dev = [

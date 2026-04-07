@@ -23,7 +23,7 @@ def _mock_settings():
 def test_create_checkpointer_uses_sqlite_saver_for_sqlite_backend():
     settings = _mock_settings()
     fake_connection = object()
-    fake_saver = object()
+    fake_saver = MagicMock()
 
     with (
         patch("by_qa.qa.services.checkpointer_factory.SqliteSaver") as sqlite_saver,
@@ -37,13 +37,15 @@ def test_create_checkpointer_uses_sqlite_saver_for_sqlite_backend():
         settings.checkpointer_sqlite_path, check_same_thread=False
     )
     sqlite_saver.assert_called_once_with(fake_connection)
+    fake_saver.setup.assert_called_once_with()
     assert saver is fake_saver
 
 
 @pytest.mark.asyncio
 async def test_create_checkpointer_async_uses_opengauss_factory():
     settings = _mock_settings()
-    fake_saver = object()
+    fake_saver = MagicMock()
+    fake_saver.setup = AsyncMock()
 
     with patch(
         "by_qa.qa.services.checkpointer_factory._create_async_opengauss_saver",
@@ -52,6 +54,22 @@ async def test_create_checkpointer_async_uses_opengauss_factory():
         saver = await create_checkpointer_async(settings=settings, backend="opengauss")
 
     factory.assert_awaited_once_with(settings, settings.checkpointer_opengauss_dsn)
+    fake_saver.setup.assert_awaited_once_with()
+    assert saver is fake_saver
+
+
+def test_create_checkpointer_uses_opengauss_saver_and_runs_setup():
+    settings = _mock_settings()
+    fake_saver = MagicMock()
+
+    with patch(
+        "by_qa.qa.services.checkpointer_factory._create_sync_opengauss_saver",
+        return_value=fake_saver,
+    ) as factory:
+        saver = create_checkpointer(settings=settings, backend="opengauss")
+
+    factory.assert_called_once_with(settings, settings.checkpointer_opengauss_dsn)
+    fake_saver.setup.assert_called_once_with()
     assert saver is fake_saver
 
 

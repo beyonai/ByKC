@@ -194,7 +194,7 @@ class MultiHopMiddleware(AgentMiddleware):
     def __init__(self, settings):
         self.settings = settings
 
-    async def abefore_model(self, state_unused, runtime_unused):
+    async def abefore_model(self, state_unused, runtime_unused=None):
         del state_unused
         del runtime_unused
         return None

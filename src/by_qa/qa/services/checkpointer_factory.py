@@ -104,15 +104,19 @@ def create_checkpointer(
             )
         path = sqlite_path or settings.checkpointer_sqlite_path
         conn = sqlite3.connect(path, check_same_thread=False)
-        return SqliteSaver(conn)
+        saver = SqliteSaver(conn)
+        saver.setup()
+        return saver
 
     if backend == "memory":
         return InMemorySaver()
 
     if backend == "opengauss":
-        return _create_sync_opengauss_saver(
+        saver = _create_sync_opengauss_saver(
             settings, opengauss_dsn or settings.checkpointer_opengauss_dsn
         )
+        saver.setup()
+        return saver
 
     raise ValueError(
         "Unknown checkpointer backend: "
@@ -141,15 +145,19 @@ async def create_checkpointer_async(
 
         path = sqlite_path or settings.checkpointer_sqlite_path
         conn = await aiosqlite.connect(path)
-        return AsyncSqliteSaver(conn)
+        saver = AsyncSqliteSaver(conn)
+        await saver.setup()
+        return saver
 
     if backend == "memory":
         return InMemorySaver()
 
     if backend == "opengauss":
-        return await _create_async_opengauss_saver(
+        saver = await _create_async_opengauss_saver(
             settings, opengauss_dsn or settings.checkpointer_opengauss_dsn
         )
+        await saver.setup()
+        return saver
 
     raise ValueError(
         "Unknown checkpointer backend: "

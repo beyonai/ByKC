@@ -1,4 +1,4 @@
-.PHONY: init opengauss-build opengauss-up opengauss-down kb-stack-up kb-stack-down verify-opengauss verify-kb-stack reset-kb-data kb-test-unit kb-test-integration qa-test-unit
+.PHONY: init opengauss-build opengauss-up opengauss-down kb-stack-up kb-stack-down verify-opengauss verify-kb-stack reset-kb-data kb-test-unit kb-test-integration knowledge-build-test-unit qa-test-unit
 
 COMPOSE_FILE ?= docker-compose.kb-stack.yml
 
@@ -40,6 +40,9 @@ kb-test-unit:
 
 kb-test-integration:
 	/bin/bash scripts/knowledge_base/run_integration_tests.sh
+
+knowledge-build-test-unit:
+	/bin/bash scripts/knowledge_build/run_unit_tests.sh
 
 qa-test-unit:
 	/bin/bash scripts/qa/run_unit_tests.sh

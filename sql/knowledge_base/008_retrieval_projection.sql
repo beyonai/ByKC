@@ -1,0 +1,23 @@
+CREATE TABLE IF NOT EXISTS knowledge_item_chunk_retrieval_mv (
+    chunk_id bigint PRIMARY KEY,
+    knowledge_base_id bigint NOT NULL,
+    kb_code varchar(64) NOT NULL,
+    knowledge_base_status varchar(32) NOT NULL,
+    fs_entry_id bigint NOT NULL,
+    parent_entry_id bigint,
+    item_code varchar(255) NOT NULL,
+    full_path text NOT NULL,
+    knowledge_item_id bigint NOT NULL,
+    knowledge_item_status varchar(32) NOT NULL,
+    current_version_id bigint NOT NULL,
+    knowledge_item_version_id bigint NOT NULL,
+    version varchar(64) NOT NULL,
+    source_code varchar(64) NOT NULL,
+    type_code varchar(64) NOT NULL,
+    metadata jsonb NOT NULL,
+    chunk_no integer NOT NULL,
+    start_line integer NOT NULL,
+    end_line integer NOT NULL,
+    chunk_text text NOT NULL,
+    search_text tsvector NOT NULL
+);

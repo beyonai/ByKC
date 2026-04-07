@@ -1,0 +1,808 @@
+"""Route registration for knowledge base APIs."""
+
+from typing import Any, Optional
+
+from fastapi.responses import JSONResponse
+
+from by_qa.core import logger
+from by_qa.knowledge_base.api.schemas import (
+    CreateKnowledgeBaseRequest,
+    DeleteKnowledgeBaseRequest,
+    DeleteKnowledgeItemRequest,
+    KnowledgeItemFetchRequest,
+    KnowledgeItemGlobRequest,
+    KnowledgeItemImportRequest,
+    KnowledgeItemListDirRequest,
+    KnowledgeItemSearchRequest,
+    WriteFileRequest,
+    WriteIndexRequest,
+)
+from by_qa.knowledge_base.services.errors import (
+    KnowledgeBaseConfigurationError,
+    KnowledgeBaseValidationError,
+)
+
+
+def _success_response(
+    *,
+    data: dict[str, Any],
+    status_code: int = 200,
+) -> JSONResponse:
+    """Return the standardized success envelope."""
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "code": status_code,
+            "message": "success",
+            "error": None,
+            "data": data,
+        },
+    )
+
+
+def _error_response(
+    *,
+    status_code: int,
+    error_type: str,
+    error_code: str,
+    error_message: str,
+    details: dict[str, Any] | None = None,
+) -> JSONResponse:
+    """Return the standardized error envelope."""
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "code": status_code,
+            "message": "error",
+            "data": None,
+            "error": {
+                "type": error_type,
+                "error_code": error_code,
+                "error_message": error_message,
+                "details": details or {},
+            },
+        },
+    )
+
+
+def _map_create_knowledge_base_validation_error(
+    *,
+    exc: KnowledgeBaseValidationError,
+    kb_code: str,
+) -> JSONResponse:
+    """Map create-knowledge-base validation errors to the new protocol."""
+    message = str(exc)
+    if message.startswith("kb_code already exists:"):
+        return _error_response(
+            status_code=409,
+            error_type="conflict",
+            error_code="KB_CODE_CONFLICT",
+            error_message=message,
+            details={"kb_code": kb_code},
+        )
+    if message.startswith("kb_code is occupied by a soft-deleted knowledge base:"):
+        return _error_response(
+            status_code=409,
+            error_type="conflict",
+            error_code="KB_CODE_SOFT_DELETED_CONFLICT",
+            error_message=message,
+            details={"kb_code": kb_code},
+        )
+    return _error_response(
+        status_code=422,
+        error_type="business_validation",
+        error_code="KB_REQUEST_INVALID",
+        error_message=message,
+        details={"kb_code": kb_code},
+    )
+
+
+def _map_delete_knowledge_base_validation_error(
+    *,
+    exc: KnowledgeBaseValidationError,
+    kb_code: str,
+) -> JSONResponse:
+    """Map delete-knowledge-base validation errors to the standardized protocol."""
+    message = str(exc)
+    if message.startswith("knowledge base not found:"):
+        return _error_response(
+            status_code=404,
+            error_type="not_found",
+            error_code="KB_NOT_FOUND",
+            error_message=message,
+            details={"kb_code": kb_code},
+        )
+    return _error_response(
+        status_code=422,
+        error_type="business_validation",
+        error_code="KB_DELETE_KB_INVALID",
+        error_message=message,
+        details={"kb_code": kb_code},
+    )
+
+
+def _map_write_file_validation_error(
+    *,
+    exc: KnowledgeBaseValidationError,
+    file_code: str,
+    version: str,
+    file_path: str,
+) -> JSONResponse:
+    """Map write-file validation errors to the new protocol."""
+    message = str(exc)
+    if message.startswith("item_code/version already exists:"):
+        return _error_response(
+            status_code=409,
+            error_type="conflict",
+            error_code="KB_FILE_VERSION_CONFLICT",
+            error_message=message,
+            details={"file_code": file_code, "version": version},
+        )
+    if message.startswith("file_code is occupied by a soft-deleted knowledge item:"):
+        return _error_response(
+            status_code=409,
+            error_type="conflict",
+            error_code="KB_FILE_CODE_SOFT_DELETED_CONFLICT",
+            error_message=message,
+            details={"file_code": file_code, "version": version},
+        )
+    return _error_response(
+        status_code=422,
+        error_type="business_validation",
+        error_code="KB_WRITE_FILE_INVALID",
+        error_message=message,
+        details={"file_code": file_code, "version": version, "file_path": file_path},
+    )
+
+
+def _map_delete_knowledge_item_validation_error(
+    *,
+    exc: KnowledgeBaseValidationError,
+    kb_code: str,
+    file_code: str,
+) -> JSONResponse:
+    """Map delete-knowledge-item validation errors to the standardized protocol."""
+    message = str(exc)
+    if message.startswith("knowledge base not found:"):
+        return _error_response(
+            status_code=404,
+            error_type="not_found",
+            error_code="KB_NOT_FOUND",
+            error_message=message,
+            details={"kb_code": kb_code},
+        )
+    if message.startswith("knowledge item not found:"):
+        return _error_response(
+            status_code=404,
+            error_type="not_found",
+            error_code="KB_FILE_NOT_FOUND",
+            error_message=message,
+            details={"kb_code": kb_code, "file_code": file_code},
+        )
+    return _error_response(
+        status_code=422,
+        error_type="business_validation",
+        error_code="KB_DELETE_FILE_INVALID",
+        error_message=message,
+        details={"kb_code": kb_code, "file_code": file_code},
+    )
+
+
+def _map_write_index_validation_error(
+    *,
+    exc: KnowledgeBaseValidationError,
+    file_code: str,
+    version: str,
+) -> JSONResponse:
+    """Map write-index validation errors to the new protocol."""
+    message = str(exc)
+    if message.startswith("knowledge item not found:"):
+        return _error_response(
+            status_code=404,
+            error_type="not_found",
+            error_code="KB_FILE_NOT_FOUND",
+            error_message=message,
+            details={"file_code": file_code},
+        )
+    if message.startswith("knowledge item version not found:"):
+        return _error_response(
+            status_code=404,
+            error_type="not_found",
+            error_code="KB_FILE_VERSION_NOT_FOUND",
+            error_message=message,
+            details={"file_code": file_code, "version": version},
+        )
+    return _error_response(
+        status_code=422,
+        error_type="business_validation",
+        error_code="KB_WRITE_INDEX_INVALID",
+        error_message=message,
+        details={"file_code": file_code, "version": version},
+    )
+
+
+def _map_import_validation_error(
+    *,
+    exc: KnowledgeBaseValidationError,
+    file_code: str,
+    version: str,
+    file_path: str,
+) -> JSONResponse:
+    """Map combined-import validation errors to the standardized protocol."""
+    message = str(exc)
+    if message.startswith("item_code/version already exists:"):
+        return _error_response(
+            status_code=409,
+            error_type="conflict",
+            error_code="KB_FILE_VERSION_CONFLICT",
+            error_message=message,
+            details={"file_code": file_code, "version": version},
+        )
+    if message.startswith("file_code is occupied by a soft-deleted knowledge item:"):
+        return _error_response(
+            status_code=409,
+            error_type="conflict",
+            error_code="KB_FILE_CODE_SOFT_DELETED_CONFLICT",
+            error_message=message,
+            details={
+                "file_code": file_code,
+                "version": version,
+                "file_path": file_path,
+            },
+        )
+    return _error_response(
+        status_code=422,
+        error_type="business_validation",
+        error_code="KB_IMPORT_INVALID",
+        error_message=message,
+        details={"file_code": file_code, "version": version, "file_path": file_path},
+    )
+
+
+def _map_search_validation_error(*, exc: KnowledgeBaseValidationError) -> JSONResponse:
+    """Map search validation/runtime errors to the standardized protocol."""
+    return _error_response(
+        status_code=422,
+        error_type="business_validation",
+        error_code="KB_SEARCH_INVALID",
+        error_message=str(exc),
+        details={},
+    )
+
+
+def _map_list_dir_validation_error(
+    *, exc: KnowledgeBaseValidationError, path: str
+) -> JSONResponse:
+    """Map list-dir validation errors to the standardized protocol."""
+    return _error_response(
+        status_code=422,
+        error_type="business_validation",
+        error_code="KB_LIST_DIR_INVALID",
+        error_message=str(exc),
+        details={"path": path},
+    )
+
+
+def _map_glob_validation_error(
+    *, exc: KnowledgeBaseValidationError, path: str
+) -> JSONResponse:
+    """Map glob validation errors to the standardized protocol."""
+    return _error_response(
+        status_code=422,
+        error_type="business_validation",
+        error_code="KB_GLOB_INVALID",
+        error_message=str(exc),
+        details={"path": path},
+    )
+
+
+def _map_read_file_validation_error(
+    *, exc: KnowledgeBaseValidationError, path: str, kb_codes: list[str]
+) -> JSONResponse:
+    """Map read-file validation errors to the standardized protocol."""
+    message = str(exc)
+    if message.startswith("file not found:") or message.startswith(
+        "current version not found:"
+    ):
+        return _error_response(
+            status_code=404,
+            error_type="not_found",
+            error_code="KB_FILE_NOT_FOUND",
+            error_message=message,
+            details={"path": path, "kb_codes": kb_codes},
+        )
+    return _error_response(
+        status_code=422,
+        error_type="business_validation",
+        error_code="KB_READ_FILE_INVALID",
+        error_message=message,
+        details={"path": path, "kb_codes": kb_codes},
+    )
+
+
+def register_routes(
+    app,
+    *,
+    get_knowledge_base_service,
+    get_knowledge_item_ingestion_service,
+    get_knowledge_item_search_service,
+):
+    """Register knowledge base API routes on the FastAPI app."""
+
+    @app.post("/api/v1/knowledge-bases/create")
+    async def create_knowledge_base(request: CreateKnowledgeBaseRequest):
+        logger.info(
+            "create_knowledge_base request received: kb_code=%s, kb_name=%s, status=%s, has_metadata=%s",
+            request.kb_code,
+            request.kb_name,
+            request.status,
+            request.metadata is not None,
+        )
+        try:
+            service = get_knowledge_base_service()
+            logger.info(
+                "create_knowledge_base resolved service: service_class=%s",
+                service.__class__.__name__,
+            )
+            result = service.create_knowledge_base(request)
+            logger.info(
+                "create_knowledge_base service call succeeded: kb_code=%s, status=%s",
+                result.kb_code,
+                result.status,
+            )
+        except KnowledgeBaseConfigurationError as exc:
+            logger.warning(
+                "create_knowledge_base configuration failed: kb_code=%s, error=%s",
+                request.kb_code,
+                exc,
+            )
+            return _error_response(
+                status_code=503,
+                error_type="configuration_error",
+                error_code="KB_RUNTIME_CONFIG_ERROR",
+                error_message=str(exc),
+                details={"kb_code": request.kb_code},
+            )
+        except KnowledgeBaseValidationError as exc:
+            logger.warning(
+                "create_knowledge_base validation failed: kb_code=%s, error=%s",
+                request.kb_code,
+                exc,
+            )
+            return _map_create_knowledge_base_validation_error(
+                exc=exc,
+                kb_code=request.kb_code,
+            )
+
+        logger.info(
+            "create_knowledge_base response ready: code=200, kb_code=%s, status=%s",
+            result.kb_code,
+            result.status,
+        )
+        return _success_response(data=result.model_dump())
+
+    @app.post("/api/v1/knowledge-bases/delete")
+    async def delete_knowledge_base(request: DeleteKnowledgeBaseRequest):
+        logger.info(
+            "delete_knowledge_base request received: kb_code=%s", request.kb_code
+        )
+        try:
+            service = get_knowledge_base_service()
+            result = service.delete_knowledge_base(request)
+        except KnowledgeBaseConfigurationError as exc:
+            return _error_response(
+                status_code=503,
+                error_type="configuration_error",
+                error_code="KB_RUNTIME_CONFIG_ERROR",
+                error_message=str(exc),
+                details={"kb_code": request.kb_code},
+            )
+        except KnowledgeBaseValidationError as exc:
+            return _map_delete_knowledge_base_validation_error(
+                exc=exc, kb_code=request.kb_code
+            )
+        return _success_response(data=result.model_dump())
+
+    @app.post("/api/v1/knowledge-items/import")
+    async def import_knowledge_item(request: KnowledgeItemImportRequest):
+        logger.info(
+            "import_knowledge_item request received: kb_code=%s, file_code=%s, file_path=%s, version=%s, chunk_count=%s",
+            request.kb_code,
+            request.file_code,
+            request.file_path,
+            request.version,
+            len(request.chunks),
+        )
+        try:
+            service = get_knowledge_item_ingestion_service()
+            logger.info(
+                "import_knowledge_item resolved service: service_class=%s",
+                service.__class__.__name__,
+            )
+            result = service.import_knowledge_item(request)
+            logger.info(
+                "import_knowledge_item service call succeeded: kb_code=%s, file_code=%s, version=%s, chunk_count=%s",
+                result.kb_code,
+                result.file_code,
+                result.version,
+                result.chunks.count,
+            )
+        except KnowledgeBaseConfigurationError as exc:
+            logger.warning(
+                "import_knowledge_item configuration failed: kb_code=%s, file_code=%s, error=%s",
+                request.kb_code,
+                request.file_code,
+                exc,
+            )
+            return _error_response(
+                status_code=503,
+                error_type="configuration_error",
+                error_code="KB_RUNTIME_CONFIG_ERROR",
+                error_message=str(exc),
+                details={"kb_code": request.kb_code, "file_code": request.file_code},
+            )
+        except KnowledgeBaseValidationError as exc:
+            logger.warning(
+                "import_knowledge_item validation failed: kb_code=%s, file_code=%s, error=%s",
+                request.kb_code,
+                request.file_code,
+                exc,
+            )
+            return _map_import_validation_error(
+                exc=exc,
+                file_code=request.file_code,
+                version=request.version,
+                file_path=request.file_path,
+            )
+
+        logger.info(
+            "import_knowledge_item response ready: code=200, kb_code=%s, file_code=%s, version=%s, chunk_count=%s",
+            result.kb_code,
+            result.file_code,
+            result.version,
+            result.chunks.count,
+        )
+        return _success_response(data=result.model_dump())
+
+    @app.post("/api/v1/knowledge-items/delete")
+    async def delete_knowledge_item(request: DeleteKnowledgeItemRequest):
+        logger.info(
+            "delete_knowledge_item request received: kb_code=%s, file_code=%s",
+            request.kb_code,
+            request.file_code,
+        )
+        try:
+            service = get_knowledge_item_ingestion_service()
+            result = service.delete_knowledge_item(request)
+        except KnowledgeBaseConfigurationError as exc:
+            return _error_response(
+                status_code=503,
+                error_type="configuration_error",
+                error_code="KB_RUNTIME_CONFIG_ERROR",
+                error_message=str(exc),
+                details={"kb_code": request.kb_code, "file_code": request.file_code},
+            )
+        except KnowledgeBaseValidationError as exc:
+            return _map_delete_knowledge_item_validation_error(
+                exc=exc,
+                kb_code=request.kb_code,
+                file_code=request.file_code,
+            )
+        return _success_response(data=result.model_dump())
+
+    @app.post("/api/v1/write-file")
+    async def write_file(request: WriteFileRequest):
+        logger.info(
+            "write_file request received: kb_code=%s, file_code=%s, file_path=%s, version=%s",
+            request.kb_code,
+            request.file_code,
+            request.file_path,
+            request.version,
+        )
+        try:
+            service = get_knowledge_item_ingestion_service()
+            logger.info(
+                "write_file resolved service: service_class=%s",
+                service.__class__.__name__,
+            )
+            result = service.write_file(request)
+            logger.info(
+                "write_file service call succeeded: kb_code=%s, file_code=%s, file_path=%s, version=%s",
+                result.kb_code,
+                result.file_code,
+                result.file_path,
+                result.version,
+            )
+        except KnowledgeBaseConfigurationError as exc:
+            logger.warning(
+                "write_file configuration failed: kb_code=%s, file_code=%s, error=%s",
+                request.kb_code,
+                request.file_code,
+                exc,
+            )
+            return _error_response(
+                status_code=503,
+                error_type="configuration_error",
+                error_code="KB_RUNTIME_CONFIG_ERROR",
+                error_message=str(exc),
+                details={"kb_code": request.kb_code, "file_code": request.file_code},
+            )
+        except KnowledgeBaseValidationError as exc:
+            logger.warning(
+                "write_file validation failed: kb_code=%s, file_code=%s, error=%s",
+                request.kb_code,
+                request.file_code,
+                exc,
+            )
+            return _map_write_file_validation_error(
+                exc=exc,
+                file_code=request.file_code,
+                version=request.version,
+                file_path=request.file_path,
+            )
+
+        logger.info(
+            "write_file response ready: code=200, kb_code=%s, file_code=%s, version=%s",
+            result.kb_code,
+            result.file_code,
+            result.version,
+        )
+        return _success_response(data=result.model_dump())
+
+    @app.post("/api/v1/write-index")
+    async def write_index(request: WriteIndexRequest):
+        logger.info(
+            "write_index request received: kb_code=%s, file_code=%s, version=%s, chunk_count=%s",
+            request.kb_code,
+            request.file_code,
+            request.version,
+            len(request.chunks),
+        )
+        try:
+            service = get_knowledge_item_ingestion_service()
+            logger.info(
+                "write_index resolved service: service_class=%s",
+                service.__class__.__name__,
+            )
+            result = service.write_index(request)
+            logger.info(
+                "write_index service call succeeded: kb_code=%s, file_code=%s, version=%s, chunk_count=%s",
+                result.kb_code,
+                result.file_code,
+                result.version,
+                result.chunks.count,
+            )
+        except KnowledgeBaseConfigurationError as exc:
+            logger.warning(
+                "write_index configuration failed: kb_code=%s, file_code=%s, error=%s",
+                request.kb_code,
+                request.file_code,
+                exc,
+            )
+            return _error_response(
+                status_code=503,
+                error_type="configuration_error",
+                error_code="KB_RUNTIME_CONFIG_ERROR",
+                error_message=str(exc),
+                details={"kb_code": request.kb_code, "file_code": request.file_code},
+            )
+        except KnowledgeBaseValidationError as exc:
+            logger.warning(
+                "write_index validation failed: kb_code=%s, file_code=%s, error=%s",
+                request.kb_code,
+                request.file_code,
+                exc,
+            )
+            return _map_write_index_validation_error(
+                exc=exc,
+                file_code=request.file_code,
+                version=request.version,
+            )
+
+        logger.info(
+            "write_index response ready: code=200, kb_code=%s, file_code=%s, version=%s, chunk_count=%s",
+            result.kb_code,
+            result.file_code,
+            result.version,
+            result.chunks.count,
+        )
+        return _success_response(data=result.model_dump())
+
+    @app.post("/api/v1/knowledge-items/search")
+    async def search_knowledge_items(request: KnowledgeItemSearchRequest):
+        logger.info(
+            "search_knowledge_items request received: query=%s, kb_code_count=%s, top_k=%s, vector_top_k=%s, text_top_k=%s, source_code_count=%s, type_code_count=%s",
+            request.query,
+            len(request.kb_codes),
+            request.top_k,
+            request.vector_top_k,
+            request.text_top_k,
+            len(request.source_codes or []),
+            len(request.type_codes or []),
+        )
+        try:
+            service = get_knowledge_item_search_service()
+            logger.info(
+                "search_knowledge_items resolved service: service_class=%s",
+                service.__class__.__name__,
+            )
+            result = service.search(request)
+            logger.info(
+                "search_knowledge_items service call succeeded: returned_count=%s, top_k=%s",
+                result.meta.returned_count,
+                result.meta.top_k,
+            )
+        except KnowledgeBaseConfigurationError as exc:
+            logger.warning("search_knowledge_items configuration failed: error=%s", exc)
+            return _error_response(
+                status_code=503,
+                error_type="configuration_error",
+                error_code="KB_RUNTIME_CONFIG_ERROR",
+                error_message=str(exc),
+                details={},
+            )
+        except KnowledgeBaseValidationError as exc:
+            logger.warning("search_knowledge_items validation failed: error=%s", exc)
+            return _map_search_validation_error(exc=exc)
+
+        logger.info(
+            "search_knowledge_items response ready: code=200, returned_count=%s",
+            result.meta.returned_count,
+        )
+        return _success_response(data=result.model_dump())
+
+    @app.post("/api/v1/list_dir")
+    async def list_dir(request: KnowledgeItemListDirRequest):
+        logger.info("list_dir request received: path=%s", request.path)
+        try:
+            service = get_knowledge_base_service()
+            logger.info(
+                "list_dir resolved service: service_class=%s",
+                service.__class__.__name__,
+            )
+            result = service.list_dir(request)
+            logger.info(
+                "list_dir service call succeeded: path=%s, item_count=%s",
+                request.path,
+                len(result.items),
+            )
+        except KnowledgeBaseConfigurationError as exc:
+            logger.warning(
+                "list_dir configuration failed: path=%s, error=%s", request.path, exc
+            )
+            return _error_response(
+                status_code=503,
+                error_type="configuration_error",
+                error_code="KB_RUNTIME_CONFIG_ERROR",
+                error_message=str(exc),
+                details={"path": request.path},
+            )
+        except KnowledgeBaseValidationError as exc:
+            logger.warning(
+                "list_dir validation failed: path=%s, error=%s", request.path, exc
+            )
+            return _map_list_dir_validation_error(exc=exc, path=request.path)
+
+        logger.info(
+            "list_dir response ready: code=200, item_count=%s",
+            len(result.items),
+        )
+        return {"code": 200, "message": "success", "data": result.model_dump()["items"]}
+
+    @app.post("/api/v1/glob")
+    async def glob(request: KnowledgeItemGlobRequest):
+        logger.info("glob request received: path=%s", request.path)
+        try:
+            service = get_knowledge_base_service()
+            logger.info(
+                "glob resolved service: service_class=%s",
+                service.__class__.__name__,
+            )
+            result = service.glob(request)
+            logger.info(
+                "glob service call succeeded: path=%s, item_count=%s",
+                request.path,
+                len(result.items),
+            )
+        except KnowledgeBaseConfigurationError as exc:
+            logger.warning(
+                "glob configuration failed: path=%s, error=%s", request.path, exc
+            )
+            return _error_response(
+                status_code=503,
+                error_type="configuration_error",
+                error_code="KB_RUNTIME_CONFIG_ERROR",
+                error_message=str(exc),
+                details={"path": request.path},
+            )
+        except KnowledgeBaseValidationError as exc:
+            logger.warning(
+                "glob validation failed: path=%s, error=%s", request.path, exc
+            )
+            return _map_glob_validation_error(exc=exc, path=request.path)
+
+        logger.info(
+            "glob response ready: code=200, item_count=%s",
+            len(result.items),
+        )
+        return {"code": 200, "message": "success", "data": result.model_dump()["items"]}
+
+    @app.post("/api/v1/read-file")
+    async def read_file(request: KnowledgeItemFetchRequest):
+        logger.info(
+            "read_file request received: path=%s, kb_code_count=%s, content_type=%s, start_line=%s, end_line=%s",
+            request.path,
+            len(request.kb_codes),
+            request.content_type,
+            request.start_line,
+            request.end_line,
+        )
+        try:
+            service = get_knowledge_base_service()
+            logger.info(
+                "read_file resolved service: service_class=%s",
+                service.__class__.__name__,
+            )
+            result = service.fetch(request)
+            if result.content_type == "original":
+                logger.info(
+                    "read_file service call succeeded: path=%s, mode=original_url",
+                    request.path,
+                )
+            else:
+                logger.info(
+                    "read_file service call succeeded: path=%s, returned_bytes=%s",
+                    request.path,
+                    len((result.data or "").encode("utf-8")),
+                )
+        except KnowledgeBaseConfigurationError as exc:
+            logger.warning(
+                "read_file configuration failed: path=%s, error=%s",
+                request.path,
+                exc,
+            )
+            return _error_response(
+                status_code=503,
+                error_type="configuration_error",
+                error_code="KB_RUNTIME_CONFIG_ERROR",
+                error_message=str(exc),
+                details={"path": request.path, "kb_codes": request.kb_codes},
+            )
+        except KnowledgeBaseValidationError as exc:
+            logger.warning(
+                "read_file validation failed: path=%s, error=%s",
+                request.path,
+                exc,
+            )
+            return _map_read_file_validation_error(
+                exc=exc,
+                path=request.path,
+                kb_codes=request.kb_codes,
+            )
+
+        if result.content_type == "original":
+            logger.info(
+                "read_file response ready: code=200, path=%s, mode=original_url",
+                request.path,
+            )
+        else:
+            logger.info(
+                "read_file response ready: code=200, path=%s, returned_bytes=%s",
+                request.path,
+                len((result.data or "").encode("utf-8")),
+            )
+        return _success_response(data=result.model_dump(exclude_none=True))
+
+
+def _require_form_value(form, key: str) -> str:
+    value = form.get(key)
+    if value is None or str(value) == "":
+        raise ValueError(f"{key} is required")
+    return str(value)
+
+
+def _optional_form_value(form, key: str) -> Optional[str]:
+    value = form.get(key)
+    if value in (None, ""):
+        return None
+    return str(value)

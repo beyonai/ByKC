@@ -45,6 +45,16 @@ knowledge = [
     "openpyxl>=3.1.0",
     "pymupdf>=1.24.0",
     "python-docx>=1.1.0",
+    "python-pptx>=1.0.2",
+]
+knowledge-build = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "langchain-text-splitters>=0.3.0",
+    "openpyxl>=3.1.0",
+    "pymupdf>=1.24.0",
+    "python-docx>=1.1.0",
+    "python-pptx>=1.0.2",
 ]
 qa = [
     "langchain>=0.3.0",
@@ -67,6 +77,9 @@ all = [
     "openpyxl>=3.1.0",
     "pymupdf>=1.24.0",
     "python-docx>=1.1.0",
+    "python-pptx>=1.0.2",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
     "langchain>=0.3.0",
     "langchain-core>=0.3.0",
     "langchain-openai>=0.2.0",

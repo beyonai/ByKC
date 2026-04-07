@@ -19,7 +19,7 @@ ENTRYPOINT_MODE=${BY_QA_ENTRYPOINT_MODE:-${BYAI_ENTRYPOINT_MODE:-api}}
 
 case "$ENTRYPOINT_MODE" in
   api)
-    CMD=(uvicorn by_qa.main:app --host "$HOST" --port "$PORT")
+    CMD=(uvicorn by_qa.main:create_app --factory --host "$HOST" --port "$PORT")
     ;;
   worker)
     CMD=(python -m by_qa.workers.instant_search_worker)

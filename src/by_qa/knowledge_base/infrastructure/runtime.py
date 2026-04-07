@@ -32,9 +32,6 @@ from by_qa.knowledge_base.repositories.retrieval_projection_repository import (
 from by_qa.knowledge_base.services.bootstrap_service import (
     KnowledgeBaseSchemaBootstrapService,
 )
-from by_qa.knowledge_base.services.document_chunking_service import (
-    DocumentChunkingService,
-)
 from by_qa.knowledge_base.services.embedding_query_service import EmbeddingQueryService
 from by_qa.knowledge_base.services.errors import KnowledgeBaseConfigurationError
 from by_qa.knowledge_base.services.knowledge_base_service import KnowledgeBaseService
@@ -170,19 +167,4 @@ def build_knowledge_item_search_service(
             api_key=settings.embedding_api_key,
             model_name=settings.embedding_model_name,
         ),
-    )
-
-
-def build_document_chunking_service(settings: Settings) -> DocumentChunkingService:
-    """Build the server-side document chunking and embedding service."""
-    validate_knowledge_base_settings(settings)
-    if not settings.embedding_base_url:
-        raise KnowledgeBaseConfigurationError(
-            "EMBEDDING_BASE_URL is required for server-side chunking"
-        )
-    return DocumentChunkingService(
-        embedding_base_url=settings.embedding_base_url,
-        embedding_api_key=settings.embedding_api_key,
-        embedding_model_name=settings.embedding_model_name,
-        embedding_dimension=settings.embedding_dimension,
     )

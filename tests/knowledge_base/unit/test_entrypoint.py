@@ -52,4 +52,5 @@ def test_entrypoint_loads_root_env_file(tmp_path):
     assert "HOST=127.0.0.1" in result.stdout
     assert "PORT=9123" in result.stdout
     assert "ENTRYPOINT_TEST_VALUE=loaded-from-dotenv" in result.stdout
-    assert "by_qa.main:app" in result.stdout
+    assert "by_qa.main:create_app" in result.stdout
+    assert "--factory" in result.stdout

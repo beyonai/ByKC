@@ -11,8 +11,8 @@ from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
 )
 
-from by_qa.knowledge_base.api.schemas import KnowledgeItemChunkPayload
-from by_qa.knowledge_base.services.errors import KnowledgeBaseConfigurationError
+from by_qa.knowledge_common.exceptions import KnowledgeConfigurationError
+from by_qa.knowledge_common.schemas import KnowledgeItemChunkPayload
 
 SUPPORTED_EXTENSIONS = {
     ".md",
@@ -54,7 +54,7 @@ class DocumentChunkingService:
     }
 
     def extract_text_from_file(self, file_bytes: bytes, file_type: str) -> str:
-        """Extract text from a file given its type label (e.g. 'pdf', 'docx')."""
+        """Extract text from a file given its type label."""
         ext = self.FILE_TYPE_TO_EXT.get(file_type)
         if ext is None:
             supported = ", ".join(sorted(self.FILE_TYPE_TO_EXT))
@@ -97,7 +97,6 @@ class DocumentChunkingService:
 
     @staticmethod
     def _compute_line_range(full_text: str, chunk_text: str) -> tuple[int, int]:
-        """Compute 1-based start_line and end_line for a chunk within the document."""
         char_start = full_text.find(chunk_text)
         if char_start < 0:
             return 1, 1
@@ -105,10 +104,6 @@ class DocumentChunkingService:
         start_line = full_text[:char_start].count("\n") + 1
         end_line = start_line + chunk_text.count("\n")
         return start_line, end_line
-
-    # ------------------------------------------------------------------
-    # Text extraction
-    # ------------------------------------------------------------------
 
     def _extract_text(self, file_bytes: bytes, ext: str) -> str:
         if ext in (".md", ".markdown", ".txt"):
@@ -131,15 +126,13 @@ class DocumentChunkingService:
     @staticmethod
     def _extract_pdf(file_bytes: bytes) -> str:
         try:
-            import fitz  # pymupdf
+            import fitz
         except ImportError as exc:
-            raise KnowledgeBaseConfigurationError(
+            raise KnowledgeConfigurationError(
                 "pymupdf is required for PDF support: pip install pymupdf"
             ) from exc
         doc = fitz.open(stream=file_bytes, filetype="pdf")
-        pages = []
-        for page in doc:
-            pages.append(page.get_text())
+        pages = [page.get_text() for page in doc]
         doc.close()
         return "\n\n".join(pages)
 
@@ -148,7 +141,7 @@ class DocumentChunkingService:
         try:
             from docx import Document
         except ImportError as exc:
-            raise KnowledgeBaseConfigurationError(
+            raise KnowledgeConfigurationError(
                 "python-docx is required for DOCX support: pip install python-docx"
             ) from exc
         doc = Document(io.BytesIO(file_bytes))
@@ -159,7 +152,7 @@ class DocumentChunkingService:
         try:
             from pptx import Presentation
         except ImportError as exc:
-            raise KnowledgeBaseConfigurationError(
+            raise KnowledgeConfigurationError(
                 "python-pptx is required for PPTX support: pip install python-pptx"
             ) from exc
         prs = Presentation(io.BytesIO(file_bytes))
@@ -181,7 +174,7 @@ class DocumentChunkingService:
         try:
             from openpyxl import load_workbook
         except ImportError as exc:
-            raise KnowledgeBaseConfigurationError(
+            raise KnowledgeConfigurationError(
                 "openpyxl is required for Excel support: pip install openpyxl"
             ) from exc
         wb = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
@@ -208,10 +201,6 @@ class DocumentChunkingService:
                 rows.append(" | ".join(row))
         return "\n".join(rows)
 
-    # ------------------------------------------------------------------
-    # Text splitting
-    # ------------------------------------------------------------------
-
     def _split_text(self, text: str, ext: str) -> list[dict]:
         if ext in (".md", ".markdown"):
             return self._split_markdown(text)
@@ -233,8 +222,7 @@ class DocumentChunkingService:
         chunks: list[dict] = []
         chunk_no = 1
         for doc in header_docs:
-            sub_docs = char_splitter.split_text(doc.page_content)
-            for sub_text in sub_docs:
+            for sub_text in char_splitter.split_text(doc.page_content):
                 char_start = text.find(sub_text)
                 char_end = char_start + len(sub_text) if char_start >= 0 else None
                 chunks.append(
@@ -254,11 +242,9 @@ class DocumentChunkingService:
             chunk_overlap=self.chunk_overlap,
             length_function=len,
         )
-        sub_docs = char_splitter.split_text(text)
-
         chunks: list[dict] = []
         chunk_no = 1
-        for sub_text in sub_docs:
+        for sub_text in char_splitter.split_text(text):
             char_start = text.find(sub_text)
             char_end = char_start + len(sub_text) if char_start >= 0 else None
             chunks.append(
@@ -272,13 +258,9 @@ class DocumentChunkingService:
             chunk_no += 1
         return chunks
 
-    # ------------------------------------------------------------------
-    # Embedding
-    # ------------------------------------------------------------------
-
     def _batch_embed(self, texts: list[str]) -> list[list[float]]:
         if not self.embedding_base_url:
-            raise KnowledgeBaseConfigurationError(
+            raise KnowledgeConfigurationError(
                 "EMBEDDING_BASE_URL is required for server-side embedding"
             )
 
@@ -300,17 +282,16 @@ class DocumentChunkingService:
         payload = response.json()
         data = payload.get("data") or []
         if len(data) != len(texts):
-            raise KnowledgeBaseConfigurationError(
+            raise KnowledgeConfigurationError(
                 f"embedding API returned {len(data)} vectors for {len(texts)} inputs"
             )
 
         sorted_data = sorted(data, key=lambda d: d.get("index", 0))
         embeddings = [item["embedding"] for item in sorted_data]
-
-        for i, emb in enumerate(embeddings):
-            if len(emb) != self.embedding_dimension:
-                raise KnowledgeBaseConfigurationError(
-                    f"embedding dimension mismatch at chunk {i}: "
-                    f"got {len(emb)}, expected {self.embedding_dimension}"
+        for index, embedding in enumerate(embeddings):
+            if len(embedding) != self.embedding_dimension:
+                raise KnowledgeConfigurationError(
+                    f"embedding dimension mismatch at chunk {index}: "
+                    f"got {len(embedding)}, expected {self.embedding_dimension}"
                 )
         return embeddings

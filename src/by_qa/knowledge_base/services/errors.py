@@ -1,8 +1,8 @@
 """Service-layer exceptions for knowledge base ingestion."""
 
+from by_qa.knowledge_common.exceptions import KnowledgeConfigurationError
 
-class KnowledgeBaseConfigurationError(RuntimeError):
-    """Raised when required knowledge-base runtime configuration is missing."""
+KnowledgeBaseConfigurationError = KnowledgeConfigurationError
 
 
 class KnowledgeBaseValidationError(ValueError):

@@ -6,6 +6,8 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+from by_qa.knowledge_common.schemas import KnowledgeItemChunkPayload
+
 Status = Literal["ACTIVE", "INACTIVE"]
 
 
@@ -169,18 +171,6 @@ class KnowledgeItemDocumentPayload(BaseModel):
     type_code: str
     version: str
     metadata: dict[str, Any] | None = None
-
-
-class KnowledgeItemChunkPayload(BaseModel):
-    """Single chunk payload carried in the import manifest."""
-
-    chunk_no: int
-    start_line: int
-    end_line: int
-    chunk_text: str
-    embedding: list[float]
-    char_start: Optional[int] = None
-    char_end: Optional[int] = None
 
 
 class KnowledgeItemImportManifest(BaseModel):

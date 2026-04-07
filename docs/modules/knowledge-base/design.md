@@ -4,6 +4,12 @@
 
 知识库模块采用“对象存储保存文件内容，openGauss 保存结构化元数据与检索索引”的双存储方案。
 
+相关文档：
+
+- [framework.md](/Users/jialangli/code/workspace/by-qa/docs/modules/knowledge-base/framework.md)
+- [design.md](/Users/jialangli/code/workspace/by-qa/docs/modules/knowledge-base/design.md)
+- [api.md](/Users/jialangli/code/workspace/by-qa/docs/modules/knowledge-base/api.md)
+
 设计目标如下：
 
 - 支持知识库级和文档级的业务管理

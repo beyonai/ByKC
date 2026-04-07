@@ -38,6 +38,12 @@ tests/
 docs/modules/knowledge-base/
 ```
 
+模块文档：
+
+- [framework.md](/Users/jialangli/code/workspace/by-qa/docs/modules/knowledge-base/framework.md)
+- [design.md](/Users/jialangli/code/workspace/by-qa/docs/modules/knowledge-base/design.md)
+- [api.md](/Users/jialangli/code/workspace/by-qa/docs/modules/knowledge-base/api.md)
+
 ## 分层职责
 
 ### API 层

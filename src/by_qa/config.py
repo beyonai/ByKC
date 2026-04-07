@@ -42,13 +42,39 @@ class Settings(BaseSettings):
         default="cosine", alias="EMBEDDING_DISTANCE_METRIC"
     )
 
-    kb_search_top_k: int = Field(default=10, alias="KB_SEARCH_TOP_K")
-    kb_search_score_threshold: float = Field(
-        default=0.6, alias="KB_SEARCH_SCORE_THRESHOLD"
+    llm_base_url: str = Field(default="https://api.openai.com/v1", alias="LLM_BASE_URL")
+    llm_api_key: str = Field(default="", alias="LLM_API_KEY")
+    classifier_model: str = Field(default="gpt-4o-mini", alias="CLASSIFIER_MODEL")
+    classifier_temp: float = Field(default=0.0, alias="CLASSIFIER_TEMP")
+    retrieval_model: str = Field(default="gpt-4o", alias="RETRIEVAL_MODEL")
+    retrieval_temp: float = Field(default=0.0, alias="RETRIEVAL_TEMP")
+    generator_model: str = Field(default="gpt-4o", alias="GENERATOR_MODEL")
+    generator_temp: float = Field(default=0.7, alias="GENERATOR_TEMP")
+    quality_model: str = Field(default="gpt-4o", alias="QUALITY_MODEL")
+    quality_temp: float = Field(default=0.0, alias="QUALITY_TEMP")
+    decomposer_model: str = Field(default="gpt-4o-mini", alias="DECOMPOSER_MODEL")
+    decomposer_temp: float = Field(default=0.0, alias="DECOMPOSER_TEMP")
+    decomposer_max_sub_queries: int = Field(
+        default=5, alias="DECOMPOSER_MAX_SUB_QUERIES"
     )
-
-    kb_import_max_part_size: int = Field(
-        default=8 * 1024 * 1024, alias="KB_IMPORT_MAX_PART_SIZE"
+    aggregator_model: str = Field(default="gpt-4o", alias="AGGREGATOR_MODEL")
+    aggregator_temp: float = Field(default=0.7, alias="AGGREGATOR_TEMP")
+    context_max_tokens: int = Field(default=128000, alias="CONTEXT_MAX_TOKENS")
+    instant_search_max_context_ratio: float = Field(
+        default=0.8, alias="INSTANT_SEARCH_MAX_CONTEXT_RATIO"
+    )
+    instant_search_reserved_tokens: int = Field(
+        default=2000, alias="INSTANT_SEARCH_RESERVED_TOKENS"
+    )
+    instant_search_min_sentence_tokens: int = Field(
+        default=50, alias="INSTANT_SEARCH_MIN_SENTENCE_TOKENS"
+    )
+    checkpointer_backend: str = Field(default="sqlite", alias="CHECKPOINTER_BACKEND")
+    checkpointer_sqlite_path: str = Field(
+        default="./data/checkpoints.db", alias="CHECKPOINTER_SQLITE_PATH"
+    )
+    checkpointer_opengauss_dsn: str = Field(
+        default="", alias="CHECKPOINTER_OPENGAUSS_DSN"
     )
     kb_fetch_cache_ttl_seconds: int = Field(
         default=24 * 60 * 60, alias="KB_FETCH_CACHE_TTL_SECONDS"
@@ -63,6 +89,16 @@ class Settings(BaseSettings):
         return self.agent_data_path / "logs"
 
     @property
+    def sessions_path(self) -> Path:
+        """Get sessions storage path."""
+        return self.agent_data_path / "sessions"
+
+    @property
+    def retrieval_results_path(self) -> Path:
+        """Get retrieval results storage path."""
+        return self.agent_data_path / "retrieval_results"
+
+    @property
     def kb_cache_path(self) -> Path:
         """Get fetched-file cache path."""
         return self.agent_data_path / "kb_cache"
@@ -71,6 +107,8 @@ class Settings(BaseSettings):
         """Ensure all required directories exist."""
         self.agent_data_path.mkdir(parents=True, exist_ok=True)
         self.logs_path.mkdir(parents=True, exist_ok=True)
+        self.sessions_path.mkdir(parents=True, exist_ok=True)
+        self.retrieval_results_path.mkdir(parents=True, exist_ok=True)
         self.kb_cache_path.mkdir(parents=True, exist_ok=True)
 
 

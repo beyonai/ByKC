@@ -1,0 +1,133 @@
+"""Tests for the instant QA engine."""
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from by_qa.qa.common.models import CoreInput, StreamEventType
+from by_qa.qa.instant.config import KnowledgeBaseConfig
+from by_qa.qa.instant.engine import InstantQAEngine
+
+
+def _mock_settings():
+    settings = type("Settings", (), {})()
+    settings.context_max_tokens = 4096
+    return settings
+
+
+@pytest.mark.asyncio
+async def test_stream_search_emits_answer_event_for_final_answer_node():
+    with patch("by_qa.qa.instant.engine.get_settings", return_value=_mock_settings()):
+        engine = InstantQAEngine()
+
+    mock_graph = MagicMock()
+
+    async def mock_astream_events(*_args, **_kwargs):
+        yield {
+            "event": "on_chain_end",
+            "name": "final_answer",
+            "metadata": {"langgraph_node": "final_answer"},
+            "run_id": "run-final",
+            "parent_ids": ["run-parent"],
+            "data": {"output": {"final_answer": "worker answer"}},
+        }
+
+    mock_graph.astream_events = mock_astream_events
+    engine._graph = mock_graph
+
+    events = []
+    async for event in engine.stream_search(
+        CoreInput(query="Test question", dataset_ids=[])
+    ):
+        events.append(event)
+
+    answer_events = [event for event in events if event.type == StreamEventType.ANSWER]
+    assert len(answer_events) == 1
+    assert answer_events[0].role == "final_answer"
+    assert answer_events[0].data["content"] == "worker answer"
+
+
+@pytest.mark.asyncio
+async def test_stream_search_passes_runtime_context_into_langgraph():
+    with patch("by_qa.qa.instant.engine.get_settings", return_value=_mock_settings()):
+        engine = InstantQAEngine(
+            config={
+                "retrieval": {
+                    "knowledge_bases": [
+                        {
+                            "kb_code": "hr-policy",
+                            "kb_name": "人力制度知识库",
+                            "kb_description": "公司人事制度与流程",
+                            "kb_url": "http://kb-a/api/v1/knowledge-items/search",
+                        }
+                    ]
+                }
+            }
+        )
+
+    mock_graph = MagicMock()
+    captured = {}
+
+    async def mock_astream_events(*_args, **_kwargs):
+        captured["context"] = _kwargs.get("context")
+        yield {
+            "event": "on_chain_end",
+            "name": "final_answer",
+            "metadata": {"langgraph_node": "final_answer"},
+            "run_id": "run-final",
+            "parent_ids": [],
+            "data": {"output": {"final_answer": "worker answer"}},
+        }
+
+    mock_graph.astream_events = mock_astream_events
+    engine._graph = mock_graph
+
+    events = []
+    async for event in engine.stream_search(
+        CoreInput(query="Test question", dataset_ids=[])
+    ):
+        events.append(event)
+
+    runtime_context = captured["context"]
+    assert runtime_context.retrieval.knowledge_bases == [
+        KnowledgeBaseConfig(
+            kb_code="hr-policy",
+            kb_name="人力制度知识库",
+            kb_description="公司人事制度与流程",
+            kb_url="http://kb-a/api/v1/knowledge-items/search",
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_search_uses_prefixed_thread_id_for_checkpointer():
+    with patch("by_qa.qa.instant.engine.get_settings", return_value=_mock_settings()):
+        engine = InstantQAEngine()
+
+    mock_graph = MagicMock()
+    captured = {}
+
+    async def mock_astream_events(initial_state, config=None, **kwargs):
+        del initial_state
+        del kwargs
+        captured["config"] = config
+        yield {
+            "event": "on_chain_end",
+            "name": "final_answer",
+            "metadata": {"langgraph_node": "final_answer"},
+            "run_id": "run-final",
+            "parent_ids": [],
+            "data": {"output": {"final_answer": "Answer"}},
+        }
+
+    mock_graph.astream_events = mock_astream_events
+    engine._graph = mock_graph
+
+    async for unused_event in engine.stream_search(
+        CoreInput(query="Test", session_id="session-42", dataset_ids=[])
+    ):
+        del unused_event
+
+    assert (
+        captured["config"]["configurable"]["thread_id"] == "instant_search_session-42"
+    )

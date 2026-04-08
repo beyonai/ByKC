@@ -112,6 +112,18 @@ GET /health
 
 健康检查响应中会包含当前已启用和被跳过的模块信息，便于确认模块是否按预期加载。
 
+## End-to-End Example
+
+如果你希望按 `pip install by-qa[all]` 的方式完整体验“服务拉起 -> 知识构建 -> 入库 -> `list_dir` / `glob` / 检索 -> 即时问答”，可以直接使用仓库根目录下的示例：
+
+```bash
+bash examples/e2e_kb_qa/start_kb_service.sh
+python examples/e2e_kb_qa/run_kb_flow.py
+python examples/e2e_kb_qa/run_instant_qa.py
+```
+
+详细说明见 [examples/e2e_kb_qa/README.md](./examples/e2e_kb_qa/README.md)。
+
 ## 配置
 
 项目通过仓库根目录的 `.env` 文件读取配置，参考示例：

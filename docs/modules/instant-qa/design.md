@@ -2,14 +2,12 @@
 
 ## 设计目标
 
-即时问答模块在当前开源仓库中的目标是保留源项目中已经验证过的即时问答核心编排能力，同时把它从旧主程序、旧 adapter 和深度问答实现中拆出来。
+即时问答模块的目标是提供一个独立、清晰、可扩展的即时问答编排能力层，用于承接查询分解、检索调度、子答案聚合和最终回答输出。
 
 设计原则：
 
-- 问答域按 `qa.instant` 和 `qa.deep` 分层
-- 当前只迁移 `qa.instant`
-- 深度问答保留为未来重设计的预留子模块
-- 即时问答保持代码级能力入口，不先固定对外 HTTP 协议
+- 当前实现聚焦 `qa.instant`
+- 即时问答保持代码级能力入口，不对外 HTTP 协议
 
 相关文档：
 
@@ -19,7 +17,7 @@
 
 ## 编排设计
 
-即时问答沿用源项目的 capability-local 结构：
+即时问答采用 capability-local 结构：
 
 - `graphs/` 负责组装 LangGraph
 - `nodes/` 负责分解、路由、上下文管理和最终聚合
@@ -27,7 +25,7 @@
 - `runtime/` 负责运行时上下文、hooks 和检索适配
 - `engine.py` 负责统一入口和流式事件转换
 
-这样迁移后，问答链路仍然保留：
+当前问答链路包括：
 
 1. 查询分解
 2. 路由单跳或多跳处理
@@ -37,7 +35,7 @@
 
 ## 检索设计
 
-当前即时问答不再依赖旧项目里的历史检索入口，而是统一走当前开源仓库可用的知识库搜索接口。
+当前即时问答统一走当前仓库可用的知识库搜索接口。
 
 具体做法：
 
@@ -65,13 +63,75 @@
 - `qa` 依赖 LangChain、LangGraph 和即时问答运行所需库
 - 默认安装不承诺任一能力模块可直接运行
 
-## 当前限制
+## StreamEvent 设计
 
-这次迁移刻意没有包含：
+即时问答的流式输出统一使用 `qa.common.models.StreamEvent`。这个模型既是引擎对外暴露的事件协议，也是 CLI、上层服务或前端消费流式结果时的统一数据结构。
 
-- `qa.deep`
-- 对外 Web API
-- worker 网关接入
-- 旧 openGauss checkpointer 适配
+### 核心字段
 
-这些能力后续如果需要恢复，会以问答域下的独立子设计继续演进，而不会重新把即时问答绑回旧架构。
+`StreamEvent` 包含以下核心字段：
+
+- `type`：事件类型，对应 `StreamEventType`
+- `data`：事件负载，具体结构随事件类型变化
+- `timestamp`：事件产生时间
+- `role`：当前事件所属节点、agent 或执行角色
+- `parent_ids`：父运行链路 ID，用于表示事件层级
+- `instance_id`：当前运行实例 ID
+- `sub_query_id`：子问题 ID
+- `query_type`：查询类型，例如单跳或多跳
+- `hop_number`：多跳链路中的 hop 序号
+- `routing_path`：路由决策结果
+
+其中：
+
+- `type`、`data`、`timestamp` 是最基础的通用字段
+- 其余字段主要用于节点关联、可视化和调试追踪
+
+### 事件类型
+
+当前 `StreamEventType` 定义了以下事件类型：
+
+- `node_start`
+- `node_end`
+- `token`
+- `tool_call`
+- `tool_response`
+- `answer`
+- `done`
+- `error`
+- `search_result_chunks`
+- `decomposition_complete`
+- `routing_decision`
+- `subgraph_start`
+- `subgraph_end`
+- `sub_answer_generated`
+- `hop_start`
+- `hop_end`
+- `intermediate_answer`
+
+这些事件大致可以分成几类：
+
+- 执行过程事件：`node_start`、`node_end`、`subgraph_start`、`subgraph_end`、`hop_start`、`hop_end`
+- 模型输出事件：`token`、`answer`、`intermediate_answer`
+- 工具与检索事件：`tool_call`、`tool_response`、`search_result_chunks`
+- 编排决策事件：`decomposition_complete`、`routing_decision`、`sub_answer_generated`
+- 收尾事件：`done`、`error`
+
+### 常用事件负载约定
+
+虽然 `data` 是开放结构，但当前实现里有一些相对稳定的约定：
+
+- `token`：`data.content` 表示单次 token 或文本片段
+- `answer`：`data.content` 表示最终答案，`data.citations` 表示引用信息
+- `search_result_chunks`：`data.chunks` 表示检索命中的 chunk 列表
+- `done`：`data.sessionId` 表示会话 ID
+- `error`：`data.error` 或其他错误上下文字段表示异常信息
+
+### 设计意图
+
+`StreamEvent` 采用统一事件模型有几个目的：
+
+- 让图编排内部事件可以被外部消费，而不直接暴露 LangGraph 原始事件
+- 让不同输出端统一消费同一种结构，例如 CLI、HTTP/SSE 和前端 UI
+- 保留足够多的运行时上下文字段，便于定位问题和做可视化追踪
+- 在不破坏基础协议的前提下，允许未来新增事件类型或补充 `data` 字段

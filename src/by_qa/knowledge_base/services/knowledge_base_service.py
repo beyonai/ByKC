@@ -10,6 +10,8 @@ from typing import Any, Callable
 
 from by_qa.core import logger
 from by_qa.knowledge_base.api.schemas import (
+    CreateDirectoryRequest,
+    CreateDirectoryResponse,
     CreateKnowledgeBaseRequest,
     CreateKnowledgeBaseResponse,
     DeleteKnowledgeBaseRequest,
@@ -225,6 +227,90 @@ class KnowledgeBaseService:
                 kb_name=next_kb_name,
                 kb_description=next_description,
                 metadata=next_metadata,
+            )
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def create_directory(
+        self, request: CreateDirectoryRequest
+    ) -> CreateDirectoryResponse:
+        """Create one explicit directory under an existing parent directory."""
+        logger.info(
+            "knowledge_base_service.create_directory started: kb_code=%s, directory_code=%s, directory_path=%s",
+            request.kb_code,
+            request.directory_code,
+            request.directory_path,
+        )
+        if self.knowledge_item_repository is None:
+            raise KnowledgeBaseValidationError(
+                "create directory runtime is not configured"
+            )
+
+        normalized_directory_path = self._normalize_virtual_path(request.directory_path)
+        connection = self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            kb_row = self.knowledge_base_repository.get_by_code(cursor, request.kb_code)
+            if not kb_row:
+                raise KnowledgeBaseValidationError(
+                    f"knowledge base not found: {request.kb_code}"
+                )
+            knowledge_base_id = self._row_id(kb_row)
+
+            existing_item = self.knowledge_item_repository.get_by_item_code(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                item_code=request.directory_code,
+            )
+            if existing_item is not None:
+                raise KnowledgeBaseValidationError(
+                    f"directory_code already exists: {request.directory_code}"
+                )
+            deleted_item = self.knowledge_item_repository.get_any_by_item_code(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                item_code=request.directory_code,
+            )
+            if deleted_item is not None and deleted_item.get("is_deleted") is True:
+                raise KnowledgeBaseValidationError(
+                    f"directory_code is occupied by a soft-deleted knowledge item: {request.directory_code}"
+                )
+
+            try:
+                directory_entry = (
+                    self.knowledge_fs_entry_repository.create_directory_entry(
+                        cursor,
+                        knowledge_base_id=knowledge_base_id,
+                        root_entry_id=int(kb_row["root_entry_id"]),
+                        full_path=normalized_directory_path,
+                    )
+                )
+            except ValueError as exc:
+                raise KnowledgeBaseValidationError(str(exc)) from exc
+
+            self.knowledge_item_repository.upsert(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                fs_entry_id=self._row_id(directory_entry),
+                item_code=request.directory_code,
+                item_kind="DIRECTORY",
+                description=request.directory_description,
+                status=request.status,
+                source_code=request.source_code,
+                type_code="DIRECTORY",
+                metadata=request.metadata,
+            )
+            connection.commit()
+            return CreateDirectoryResponse(
+                kb_code=request.kb_code,
+                directory_code=request.directory_code,
+                directory_path=self._ensure_leading_slash(normalized_directory_path),
+                directory_description=request.directory_description,
+                status=request.status,
+                metadata=request.metadata,
             )
         except Exception:
             connection.rollback()

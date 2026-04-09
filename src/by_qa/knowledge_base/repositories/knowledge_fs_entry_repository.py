@@ -169,6 +169,95 @@ class KnowledgeFsEntryRepository:
         )
         return fetchone() if callable(fetchone) else None
 
+    def create_directory_entry(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        root_entry_id: int,
+        full_path: str,
+    ) -> dict[str, Any] | None:
+        """Create one directory node when its parent directory already exists."""
+        normalized_path = full_path.strip("/")
+        if not normalized_path:
+            raise ValueError("full_path must not be empty")
+
+        fetchone = getattr(cursor, "fetchone", None)
+        root_entry = self._get_entry_by_id(cursor, entry_id=root_entry_id)
+        if root_entry is None:
+            raise ValueError(f"root entry not found: {root_entry_id}")
+
+        current_parent_id = self._row_id(root_entry)
+        current_path_ltree = self._row_value(root_entry, "path_ltree")
+        path_segments = normalized_path.split("/")
+
+        for index, segment in enumerate(path_segments[:-1], start=1):
+            existing = self._get_child_entry(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                parent_entry_id=current_parent_id,
+                name=segment,
+            )
+            if existing is None or existing.get("entry_type") != "DIRECTORY":
+                missing_directory_path = "/".join(path_segments[:index])
+                raise ValueError(
+                    f"parent directory not found: {missing_directory_path}"
+                )
+            current_parent_id = self._row_id(existing)
+            current_path_ltree = self._row_value(existing, "path_ltree")
+
+        existing_directory = self._get_child_entry(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            parent_entry_id=current_parent_id,
+            name=path_segments[-1],
+        )
+        if existing_directory is not None:
+            raise ValueError(f"directory path already exists: {normalized_path}")
+
+        directory_name = path_segments[-1]
+        path_ltree = f"{current_path_ltree}.{self._path_label('d', len(path_segments), directory_name)}"
+        cursor.execute(
+            """
+            INSERT INTO knowledge_fs_entry (
+                knowledge_base_id,
+                parent_entry_id,
+                entry_type,
+                is_root,
+                name,
+                path_ltree,
+                depth,
+                status,
+                metadata,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                %(knowledge_base_id)s,
+                %(parent_entry_id)s,
+                'DIRECTORY',
+                FALSE,
+                %(name)s,
+                %(path_ltree)s::ltree,
+                %(depth)s,
+                'ACTIVE',
+                %(metadata)s::jsonb,
+                NOW(),
+                NOW()
+            )
+            RETURNING kid, knowledge_base_id, parent_entry_id, path_ltree, name, entry_type, is_root, depth
+            """,
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "parent_entry_id": current_parent_id,
+                "name": directory_name,
+                "path_ltree": path_ltree,
+                "depth": len(path_segments),
+                "metadata": json.dumps({}),
+            },
+        )
+        return fetchone() if callable(fetchone) else None
+
     def list_root_entries(
         self, cursor: Any, *, kb_codes: list[str]
     ) -> list[dict[str, Any]]:

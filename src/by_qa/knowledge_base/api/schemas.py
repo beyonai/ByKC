@@ -62,6 +62,29 @@ class UpdateKnowledgeBaseResponse(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
+class CreateDirectoryRequest(BaseModel):
+    """Request body for creating one directory in a knowledge base."""
+
+    kb_code: str = Field(min_length=1)
+    directory_code: str = Field(min_length=1)
+    directory_path: str = Field(min_length=1)
+    directory_description: str | None = None
+    source_code: str = Field(min_length=1)
+    status: Status = "ACTIVE"
+    metadata: dict[str, Any] | None = None
+
+
+class CreateDirectoryResponse(BaseModel):
+    """Business response for successfully creating a directory."""
+
+    kb_code: str
+    directory_code: str
+    directory_path: str
+    directory_description: str | None = None
+    status: Status
+    metadata: dict[str, Any] | None = None
+
+
 class WriteFileRequest(BaseModel):
     """Request body for writing a file into a knowledge base."""
 

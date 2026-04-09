@@ -6,6 +6,7 @@ from pathlib import Path
 
 from by_qa.core import logger
 from by_qa.knowledge_base.api.schemas import (
+    CreateDirectoryRequest,
     CreateKnowledgeBaseRequest,
     DeleteKnowledgeBaseRequest,
     DeleteKnowledgeItemRequest,
@@ -303,6 +304,34 @@ class FakeKnowledgeFsEntryRepository:
         self.calls.append(
             ("rename_entry", {"entry_id": entry_id, "new_name": new_name})
         )
+
+    def create_directory_entry(
+        self, cursor, *, knowledge_base_id, root_entry_id, full_path
+    ):
+        self.calls.append(
+            (
+                "create_directory_entry",
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "root_entry_id": root_entry_id,
+                    "full_path": full_path,
+                },
+            )
+        )
+        if self.raise_missing_parent_directory:
+            parent_path = full_path.strip("/").rsplit("/", 1)[0]
+            raise ValueError(f"parent directory not found: {parent_path}")
+        return {
+            "kid": 81,
+            "knowledge_base_id": knowledge_base_id,
+            "parent_entry_id": root_entry_id,
+            "entry_type": "DIRECTORY",
+            "name": full_path.strip("/").split("/")[-1],
+            "path_ltree": "kb_7.d1_archive",
+            "depth": len(
+                [segment for segment in full_path.strip("/").split("/") if segment]
+            ),
+        }
 
     def ensure_file_entry(self, cursor, *, knowledge_base_id, root_entry_id, full_path):
         self.calls.append(
@@ -959,6 +988,116 @@ def test_update_knowledge_base_clears_fields_only_when_null_is_explicit():
             "updates": {"kb_description": None, "metadata": None},
         },
     ) in knowledge_base_repository.calls
+
+
+def test_create_directory_commits_and_returns_business_fields():
+    """Directory creation should commit and return only business fields."""
+    connection = FakeConnection()
+    knowledge_base_repository = FakeKnowledgeBaseRepository(
+        default_lookup_result={
+            "kid": 7,
+            "kb_code": "hr-policy",
+            "kb_name": "人力制度知识库",
+            "kb_description": None,
+            "status": "ACTIVE",
+            "is_deleted": False,
+            "root_entry_id": 70,
+            "metadata": {},
+        }
+    )
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    knowledge_item_repository = FakeKnowledgeItemRepository()
+    service = KnowledgeBaseService(
+        connection_factory=lambda: connection,
+        knowledge_base_repository=knowledge_base_repository,
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        knowledge_item_repository=knowledge_item_repository,
+    )
+
+    response = service.create_directory(
+        CreateDirectoryRequest(
+            kb_code="hr-policy",
+            directory_code="attendance-archive",
+            directory_path="/考勤制度/归档",
+            directory_description="考勤制度归档目录",
+            source_code="manual",
+            status="ACTIVE",
+            metadata={"owner": "HR"},
+        )
+    )
+
+    assert response.kb_code == "hr-policy"
+    assert response.directory_code == "attendance-archive"
+    assert response.directory_path == "/考勤制度/归档"
+    assert response.directory_description == "考勤制度归档目录"
+    assert response.status == "ACTIVE"
+    assert response.metadata == {"owner": "HR"}
+    assert connection.committed is True
+    assert (
+        "create_directory_entry",
+        {
+            "knowledge_base_id": 7,
+            "root_entry_id": 70,
+            "full_path": "考勤制度/归档",
+        },
+    ) in knowledge_fs_entry_repository.calls
+    assert (
+        "upsert",
+        {
+            "knowledge_base_id": 7,
+            "fs_entry_id": 81,
+            "item_code": "attendance-archive",
+            "item_kind": "DIRECTORY",
+            "description": "考勤制度归档目录",
+            "status": "ACTIVE",
+            "source_code": "manual",
+            "type_code": "DIRECTORY",
+            "metadata": {"owner": "HR"},
+        },
+    ) in knowledge_item_repository.calls
+
+
+def test_create_directory_rejects_missing_parent_directory():
+    """Directory creation should fail when the parent directory is missing."""
+    connection = FakeConnection()
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    knowledge_fs_entry_repository.raise_missing_parent_directory = True
+    service = KnowledgeBaseService(
+        connection_factory=lambda: connection,
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={
+                "kid": 7,
+                "kb_code": "hr-policy",
+                "kb_name": "人力制度知识库",
+                "kb_description": None,
+                "status": "ACTIVE",
+                "is_deleted": False,
+                "root_entry_id": 70,
+                "metadata": {},
+            }
+        ),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        knowledge_item_repository=FakeKnowledgeItemRepository(),
+    )
+
+    try:
+        service.create_directory(
+            CreateDirectoryRequest(
+                kb_code="hr-policy",
+                directory_code="attendance-archive",
+                directory_path="/missing-dir/归档",
+                directory_description=None,
+                source_code="manual",
+                status="ACTIVE",
+                metadata=None,
+            )
+        )
+    except KnowledgeBaseValidationError as exc:
+        assert str(exc) == "parent directory not found: missing-dir"
+    else:
+        raise AssertionError("expected KnowledgeBaseValidationError")
+
+    assert connection.rolled_back is True
 
 
 def test_delete_knowledge_item_marks_item_and_fs_entry_deleted():

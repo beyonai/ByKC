@@ -124,6 +124,60 @@ def test_update_knowledge_base_only_updates_provided_fields():
     assert params == {"kb_code": "hr-policy", "kb_name": "新知识库名称"}
 
 
+def test_create_directory_entry_executes_insert_sql():
+    """Directory creation should emit a directory insert statement."""
+    repo = KnowledgeFsEntryRepository()
+    cursor = FakeCursor(
+        fetchone_results=[
+            {
+                "kid": 70,
+                "knowledge_base_id": 7,
+                "parent_entry_id": None,
+                "path_ltree": "kb_7",
+                "name": "root",
+                "entry_type": "DIRECTORY",
+                "is_root": True,
+                "depth": 0,
+            },
+            {
+                "kid": 80,
+                "knowledge_base_id": 7,
+                "parent_entry_id": 70,
+                "path_ltree": "kb_7.d1_attendance",
+                "name": "考勤制度",
+                "entry_type": "DIRECTORY",
+                "is_root": False,
+                "depth": 1,
+            },
+            None,
+            {
+                "kid": 81,
+                "knowledge_base_id": 7,
+                "parent_entry_id": 80,
+                "path_ltree": "kb_7.d1_attendance.d2_archive",
+                "name": "归档",
+                "entry_type": "DIRECTORY",
+                "is_root": False,
+                "depth": 2,
+            },
+        ]
+    )
+
+    repo.create_directory_entry(
+        cursor,
+        knowledge_base_id=7,
+        root_entry_id=70,
+        full_path="考勤制度/归档",
+    )
+
+    insert_sql, params = cursor.executed[-1]
+    lowered = insert_sql.lower()
+    assert "insert into knowledge_fs_entry" in lowered
+    assert "'directory'" in lowered
+    assert params["knowledge_base_id"] == 7
+    assert params["name"] == "归档"
+
+
 def test_get_knowledge_base_by_code_filters_deleted_rows():
     """Knowledge base lookup should ignore logically deleted rows in SQL."""
     repo = KnowledgeBaseRepository()

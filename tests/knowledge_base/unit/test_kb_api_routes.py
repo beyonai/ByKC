@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from by_qa.knowledge_base.api import routes
 from by_qa.knowledge_base.api.schemas import (
+    CreateDirectoryResponse,
     CreateKnowledgeBaseResponse,
     DeleteKnowledgeBaseResponse,
     DeleteKnowledgeItemResponse,
@@ -31,6 +32,7 @@ class FakeKBService:
 
     def __init__(self):
         self.created_requests = []
+        self.created_directory_requests = []
         self.import_calls = []
 
     def create_knowledge_base(self, request):
@@ -39,6 +41,17 @@ class FakeKBService:
             kb_code=request.kb_code,
             kb_name=request.kb_name,
             kb_description=request.kb_description,
+            status=request.status,
+            metadata=request.metadata,
+        )
+
+    def create_directory(self, request):
+        self.created_directory_requests.append(request)
+        return CreateDirectoryResponse(
+            kb_code=request.kb_code,
+            directory_code=request.directory_code,
+            directory_path=request.directory_path,
+            directory_description=request.directory_description,
             status=request.status,
             metadata=request.metadata,
         )
@@ -274,6 +287,67 @@ def test_update_knowledge_base_route_returns_business_response(monkeypatch):
             "kb_code": "hr-policy",
             "kb_name": "新知识库名称",
             "kb_description": "更新后的描述",
+            "metadata": {"owner": "HR"},
+        },
+    }
+
+
+def test_create_directory_route_maps_missing_parent_to_404(monkeypatch):
+    """Create-directory should return 404 when the parent directory is missing."""
+
+    class BrokenKBService(FakeKBService):
+        def create_directory(self, request):
+            raise KnowledgeBaseValidationError(
+                "parent directory not found: missing-dir"
+            )
+
+    client = make_test_client(monkeypatch, BrokenKBService())
+    response = client.post(
+        "/api/v1/directories/create",
+        json={
+            "kb_code": "hr-policy",
+            "directory_code": "attendance-archive",
+            "directory_path": "/missing-dir/归档",
+            "directory_description": None,
+            "source_code": "manual",
+            "status": "ACTIVE",
+            "metadata": None,
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["error_code"] == "KB_DIRECTORY_PARENT_NOT_FOUND"
+
+
+def test_create_directory_route_returns_business_response(monkeypatch):
+    """Create-directory route should delegate to the KB service."""
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/directories/create",
+        json={
+            "kb_code": "hr-policy",
+            "directory_code": "attendance-archive",
+            "directory_path": "/考勤制度/归档",
+            "directory_description": "考勤制度归档目录",
+            "source_code": "manual",
+            "status": "ACTIVE",
+            "metadata": {"owner": "HR"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "code": 200,
+        "message": "success",
+        "error": None,
+        "data": {
+            "kb_code": "hr-policy",
+            "directory_code": "attendance-archive",
+            "directory_path": "/考勤制度/归档",
+            "directory_description": "考勤制度归档目录",
+            "status": "ACTIVE",
             "metadata": {"owner": "HR"},
         },
     }

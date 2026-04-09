@@ -92,6 +92,7 @@
 | `POST` | `/api/v1/knowledge-bases/create` | 创建知识库 |
 | `POST` | `/api/v1/knowledge-bases/delete` | 删除知识库 |
 | `POST` | `/api/v1/knowledge-bases/update` | 修改知识库名称、描述、元数据 |
+| `POST` | `/api/v1/directories/create` | 按完整路径创建目录 |
 | `POST` | `/api/v1/write-file` | 写入原始文件 |
 | `POST` | `/api/v1/write-index` | 写入 Markdown sidecar 与 chunk 索引 |
 | `POST` | `/api/v1/knowledge-items/import` | 原子导入原始文件、Markdown 与索引 |
@@ -116,7 +117,6 @@
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `POST` | `/api/v1/directories/create` | 按完整路径创建目录 |
 | `POST` | `/api/v1/directories/update` | 修改目录名称、描述、元数据 |
 | `POST` | `/api/v1/directories/delete` | 逻辑删除目录，可删除非空目录 |
 | `POST` | `/api/v1/files/update` | 修改文件名称、描述、元数据 |
@@ -405,6 +405,88 @@
 - `KB_FILE_CODE_SOFT_DELETED_CONFLICT`
 - `KB_WRITE_FILE_INVALID`
 - `KB_RUNTIME_CONFIG_ERROR`
+
+## 创建目录
+
+### `POST /api/v1/directories/create`
+
+在指定知识库中按完整逻辑路径创建目录。
+
+补充语义：
+
+- `directory_path` 使用知识库内的完整逻辑路径，例如 `/考勤制度/归档`
+- `directory_path` 的最后一段即目录名称
+- 父目录必须已经存在
+- 当前实现不会根据 `directory_path` 自动补建缺失中间目录
+- `directory_code` 仅用于定位目录，不允许修改
+- 创建成功后会同时写入 `knowledge_fs_entry` 与 `knowledge_item`
+
+### 请求体
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `kb_code` | string | 是 | 知识库编码 |
+| `directory_code` | string | 是 | 目录编码，不可修改 |
+| `directory_path` | string | 是 | 目录完整路径 |
+| `directory_description` | string \| null | 否 | 目录描述 |
+| `source_code` | string | 是 | 来源系统编码 |
+| `status` | `ACTIVE` \| `INACTIVE` | 否 | 目录状态 |
+| `metadata` | object \| null | 否 | 扩展元数据 |
+
+### 请求示例
+
+```json
+{
+  "kb_code": "hr-policy",
+  "directory_code": "attendance-archive",
+  "directory_path": "/考勤制度/归档",
+  "directory_description": "考勤制度历史归档目录",
+  "source_code": "manual",
+  "status": "ACTIVE",
+  "metadata": {
+    "owner_dept": "HR"
+  }
+}
+```
+
+### 成功响应 `data`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `kb_code` | string | 知识库编码 |
+| `directory_code` | string | 目录编码 |
+| `directory_path` | string | 当前目录完整路径 |
+| `directory_description` | string \| null | 当前目录描述 |
+| `status` | string | 当前目录状态 |
+| `metadata` | object \| null | 当前元数据 |
+
+### 成功响应示例
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "error": null,
+  "data": {
+    "kb_code": "hr-policy",
+    "directory_code": "attendance-archive",
+    "directory_path": "/考勤制度/归档",
+    "directory_description": "考勤制度历史归档目录",
+    "status": "ACTIVE",
+    "metadata": {
+      "owner_dept": "HR"
+    }
+  }
+}
+```
+
+### 典型错误码
+
+- `KB_NOT_FOUND`
+- `KB_DIRECTORY_CODE_CONFLICT`
+- `KB_DIRECTORY_PARENT_NOT_FOUND`
+- `KB_DIRECTORY_PATH_CONFLICT`
+- `KB_DIRECTORY_CREATE_INVALID`
 
 ## 写入索引
 
@@ -1025,67 +1107,6 @@
 ## 规划中的新增管理接口说明
 
 以下内容描述计划新增但当前尚未落地实现的接口草案，用于后续开发与联调对齐。
-
-## 创建目录
-
-### `POST /api/v1/directories/create`
-
-在指定知识库中按完整逻辑路径创建目录。
-
-补充语义：
-
-- `directory_path` 使用完整逻辑路径，例如 `/考勤制度/归档`
-- `directory_path` 的最后一段即目录名称
-- 父目录必须已经存在
-- 当前实现规划中不支持根据 `directory_path` 自动补建缺失中间目录
-- `directory_code` 仅用于定位目录，不允许修改
-
-### 请求体
-
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `kb_code` | string | 是 | 知识库编码 |
-| `directory_code` | string | 是 | 目录编码，不可修改 |
-| `directory_path` | string | 是 | 目录完整路径 |
-| `directory_description` | string \| null | 否 | 目录描述 |
-| `source_code` | string | 是 | 来源系统编码 |
-| `status` | `ACTIVE` \| `INACTIVE` | 否 | 目录状态 |
-| `metadata` | object \| null | 否 | 扩展元数据 |
-
-### 请求示例
-
-```json
-{
-  "kb_code": "hr-policy",
-  "directory_code": "attendance-archive",
-  "directory_path": "/考勤制度/归档",
-  "directory_description": "考勤制度历史归档目录",
-  "source_code": "manual",
-  "status": "ACTIVE",
-  "metadata": {
-    "owner_dept": "HR"
-  }
-}
-```
-
-### 成功响应 `data`
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `kb_code` | string | 知识库编码 |
-| `directory_code` | string | 目录编码 |
-| `directory_path` | string | 当前目录完整路径 |
-| `directory_description` | string \| null | 当前目录描述 |
-| `status` | string | 当前目录状态 |
-| `metadata` | object \| null | 当前元数据 |
-
-### 典型错误码
-
-- `KB_NOT_FOUND`
-- `KB_DIRECTORY_CODE_CONFLICT`
-- `KB_DIRECTORY_PARENT_NOT_FOUND`
-- `KB_DIRECTORY_PATH_CONFLICT`
-- `KB_DIRECTORY_CREATE_INVALID`
 
 ## 修改目录
 

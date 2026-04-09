@@ -14,6 +14,7 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemImportRequest,
     KnowledgeItemListDirRequest,
     KnowledgeItemSearchRequest,
+    UpdateKnowledgeBaseRequest,
     WriteFileRequest,
     WriteIndexRequest,
 )
@@ -116,6 +117,30 @@ def _map_delete_knowledge_base_validation_error(
         status_code=422,
         error_type="business_validation",
         error_code="KB_DELETE_KB_INVALID",
+        error_message=message,
+        details={"kb_code": kb_code},
+    )
+
+
+def _map_update_knowledge_base_validation_error(
+    *,
+    exc: KnowledgeBaseValidationError,
+    kb_code: str,
+) -> JSONResponse:
+    """Map update-knowledge-base validation errors to the standardized protocol."""
+    message = str(exc)
+    if message.startswith("knowledge base not found:"):
+        return _error_response(
+            status_code=404,
+            error_type="not_found",
+            error_code="KB_NOT_FOUND",
+            error_message=message,
+            details={"kb_code": kb_code},
+        )
+    return _error_response(
+        status_code=422,
+        error_type="business_validation",
+        error_code="KB_UPDATE_INVALID",
         error_message=message,
         details={"kb_code": kb_code},
     )
@@ -400,6 +425,33 @@ def register_routes(
         except KnowledgeBaseValidationError as exc:
             return _map_delete_knowledge_base_validation_error(
                 exc=exc, kb_code=request.kb_code
+            )
+        return _success_response(data=result.model_dump())
+
+    @app.post("/api/v1/knowledge-bases/update")
+    async def update_knowledge_base(request: UpdateKnowledgeBaseRequest):
+        logger.info(
+            "update_knowledge_base request received: kb_code=%s, has_kb_name=%s, has_description=%s, has_metadata=%s",
+            request.kb_code,
+            "kb_name" in request.model_fields_set,
+            "kb_description" in request.model_fields_set,
+            "metadata" in request.model_fields_set,
+        )
+        try:
+            service = get_knowledge_base_service()
+            result = service.update_knowledge_base(request)
+        except KnowledgeBaseConfigurationError as exc:
+            return _error_response(
+                status_code=503,
+                error_type="configuration_error",
+                error_code="KB_RUNTIME_CONFIG_ERROR",
+                error_message=str(exc),
+                details={"kb_code": request.kb_code},
+            )
+        except KnowledgeBaseValidationError as exc:
+            return _map_update_knowledge_base_validation_error(
+                exc=exc,
+                kb_code=request.kb_code,
             )
         return _success_response(data=result.model_dump())
 

@@ -44,6 +44,24 @@ class DeleteKnowledgeBaseResponse(BaseModel):
     is_deleted: bool
 
 
+class UpdateKnowledgeBaseRequest(BaseModel):
+    """Request body for updating knowledge base business fields."""
+
+    kb_code: str = Field(min_length=1)
+    kb_name: str | None = None
+    kb_description: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class UpdateKnowledgeBaseResponse(BaseModel):
+    """Business response for knowledge base updates."""
+
+    kb_code: str
+    kb_name: str
+    kb_description: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
 class WriteFileRequest(BaseModel):
     """Request body for writing a file into a knowledge base."""
 

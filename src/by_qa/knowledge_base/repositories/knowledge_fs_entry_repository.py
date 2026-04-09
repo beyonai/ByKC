@@ -476,6 +476,19 @@ class KnowledgeFsEntryRepository:
             {"knowledge_base_id": knowledge_base_id, "fs_entry_id": fs_entry_id},
         )
 
+    def rename_entry(self, cursor: Any, *, entry_id: int, new_name: str) -> None:
+        """Rename one filesystem entry without moving it."""
+        cursor.execute(
+            """
+            UPDATE knowledge_fs_entry
+            SET name = %(new_name)s,
+                updated_at = NOW()
+            WHERE kid = %(entry_id)s
+              AND is_deleted = FALSE
+            """,
+            {"entry_id": entry_id, "new_name": new_name},
+        )
+
     def _update_knowledge_base_root(
         self, cursor: Any, *, knowledge_base_id: int, root_entry_id: int
     ) -> None:

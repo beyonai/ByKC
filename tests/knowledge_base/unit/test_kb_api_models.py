@@ -28,6 +28,22 @@ def test_delete_knowledge_base_request_requires_kb_code():
     assert request.kb_code == "hr-policy"
 
 
+def test_update_knowledge_base_request_accepts_partial_fields():
+    """Update-knowledge-base requests should allow partial metadata updates."""
+    from by_qa.knowledge_base.api.schemas import UpdateKnowledgeBaseRequest
+
+    request = UpdateKnowledgeBaseRequest(
+        kb_code="hr-policy",
+        kb_name="新知识库名称",
+        metadata={"owner": "HR"},
+    )
+
+    assert request.kb_code == "hr-policy"
+    assert request.kb_name == "新知识库名称"
+    assert request.kb_description is None
+    assert request.metadata == {"owner": "HR"}
+
+
 def test_delete_knowledge_item_request_requires_kb_code_and_file_code():
     """Delete-knowledge-item requests should require kb_code and file_code."""
     from by_qa.knowledge_base.api.schemas import DeleteKnowledgeItemRequest

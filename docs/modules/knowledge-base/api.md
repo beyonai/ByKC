@@ -91,6 +91,7 @@
 | --- | --- | --- |
 | `POST` | `/api/v1/knowledge-bases/create` | 创建知识库 |
 | `POST` | `/api/v1/knowledge-bases/delete` | 删除知识库 |
+| `POST` | `/api/v1/knowledge-bases/update` | 修改知识库名称、描述、元数据 |
 | `POST` | `/api/v1/write-file` | 写入原始文件 |
 | `POST` | `/api/v1/write-index` | 写入 Markdown sidecar 与 chunk 索引 |
 | `POST` | `/api/v1/knowledge-items/import` | 原子导入原始文件、Markdown 与索引 |
@@ -99,6 +100,26 @@
 | `POST` | `/api/v1/list_dir` | 列出虚拟目录 |
 | `POST` | `/api/v1/glob` | 按路径模式匹配文件或目录 |
 | `POST` | `/api/v1/read-file` | 读取原文件访问地址或 Markdown 内容 |
+
+## 规划中的新增管理接口
+
+以下接口为下一阶段计划补充的管理能力设计稿，当前开源仓库尚未实现。
+
+这些接口的设计约束如下：
+
+- `kb_code`、`file_code`、`directory_code` 都是稳定标识，不允许修改
+- 目录和文件都应有对应的业务实体记录，目录无内容版本
+- 目录必须显式创建，不允许通过写文件或导入文件自动补建
+- 文件信息修改只允许修改文件名、描述、元数据
+- 目录信息修改暂不支持移动到其他父目录
+- 目录删除支持非空目录，语义为整棵子树逻辑删除
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `POST` | `/api/v1/directories/create` | 按完整路径创建目录 |
+| `POST` | `/api/v1/directories/update` | 修改目录名称、描述、元数据 |
+| `POST` | `/api/v1/directories/delete` | 逻辑删除目录，可删除非空目录 |
+| `POST` | `/api/v1/files/update` | 修改文件名称、描述、元数据 |
 
 ## 创建知识库
 
@@ -218,6 +239,77 @@
 
 - `KB_NOT_FOUND`
 - `KB_DELETE_KB_INVALID`
+- `KB_RUNTIME_CONFIG_ERROR`
+
+## 修改知识库信息
+
+### `POST /api/v1/knowledge-bases/update`
+
+修改知识库名称、描述、元数据。
+
+补充语义：
+
+- `kb_code` 仅用于定位知识库，不允许修改
+- 请求中未传的字段保持原值不变
+- `kb_description` 传入 `null` 时清空描述
+- `metadata` 传入 `null` 时清空元数据
+- 若更新了 `kb_name`，当前实现会同步更新根目录节点的显示名称
+
+### 请求体
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `kb_code` | string | 是 | 知识库编码，不可修改 |
+| `kb_name` | string \| null | 否 | 新知识库名称 |
+| `kb_description` | string \| null | 否 | 新描述，`null` 表示清空 |
+| `metadata` | object \| null | 否 | 新元数据，`null` 表示清空 |
+
+### 请求示例
+
+```json
+{
+  "kb_code": "hr-policy",
+  "kb_name": "人力制度知识库",
+  "kb_description": "更新后的人力制度与流程文档",
+  "metadata": {
+    "owner_dept": "HR",
+    "language": "zh-CN"
+  }
+}
+```
+
+### 成功响应 `data`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `kb_code` | string | 知识库编码 |
+| `kb_name` | string | 当前名称 |
+| `kb_description` | string \| null | 当前描述 |
+| `metadata` | object \| null | 当前元数据 |
+
+### 成功响应示例
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "error": null,
+  "data": {
+    "kb_code": "hr-policy",
+    "kb_name": "人力制度知识库",
+    "kb_description": "更新后的人力制度与流程文档",
+    "metadata": {
+      "owner_dept": "HR",
+      "language": "zh-CN"
+    }
+  }
+}
+```
+
+### 典型错误码
+
+- `KB_NOT_FOUND`
+- `KB_UPDATE_INVALID`
 - `KB_RUNTIME_CONFIG_ERROR`
 
 ## 写入原始文件
@@ -930,6 +1022,230 @@
 - `KB_READ_FILE_INVALID`
 - `KB_RUNTIME_CONFIG_ERROR`
 
+## 规划中的新增管理接口说明
+
+以下内容描述计划新增但当前尚未落地实现的接口草案，用于后续开发与联调对齐。
+
+## 创建目录
+
+### `POST /api/v1/directories/create`
+
+在指定知识库中按完整逻辑路径创建目录。
+
+补充语义：
+
+- `directory_path` 使用完整逻辑路径，例如 `/考勤制度/归档`
+- `directory_path` 的最后一段即目录名称
+- 父目录必须已经存在
+- 当前实现规划中不支持根据 `directory_path` 自动补建缺失中间目录
+- `directory_code` 仅用于定位目录，不允许修改
+
+### 请求体
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `kb_code` | string | 是 | 知识库编码 |
+| `directory_code` | string | 是 | 目录编码，不可修改 |
+| `directory_path` | string | 是 | 目录完整路径 |
+| `directory_description` | string \| null | 否 | 目录描述 |
+| `source_code` | string | 是 | 来源系统编码 |
+| `status` | `ACTIVE` \| `INACTIVE` | 否 | 目录状态 |
+| `metadata` | object \| null | 否 | 扩展元数据 |
+
+### 请求示例
+
+```json
+{
+  "kb_code": "hr-policy",
+  "directory_code": "attendance-archive",
+  "directory_path": "/考勤制度/归档",
+  "directory_description": "考勤制度历史归档目录",
+  "source_code": "manual",
+  "status": "ACTIVE",
+  "metadata": {
+    "owner_dept": "HR"
+  }
+}
+```
+
+### 成功响应 `data`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `kb_code` | string | 知识库编码 |
+| `directory_code` | string | 目录编码 |
+| `directory_path` | string | 当前目录完整路径 |
+| `directory_description` | string \| null | 当前目录描述 |
+| `status` | string | 当前目录状态 |
+| `metadata` | object \| null | 当前元数据 |
+
+### 典型错误码
+
+- `KB_NOT_FOUND`
+- `KB_DIRECTORY_CODE_CONFLICT`
+- `KB_DIRECTORY_PARENT_NOT_FOUND`
+- `KB_DIRECTORY_PATH_CONFLICT`
+- `KB_DIRECTORY_CREATE_INVALID`
+
+## 修改目录
+
+### `POST /api/v1/directories/update`
+
+修改目录名称、描述、元数据。
+
+补充语义：
+
+- `directory_code` 仅用于定位目录，不允许修改
+- 当前阶段暂不支持修改父目录
+- 修改 `directory_name` 会影响该目录及其子树的逻辑路径展示
+- 若 `directory_description` 传入 `null`，表示清空描述
+- 若 `metadata` 传入 `null`，建议实现为清空元数据
+
+### 请求体
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `kb_code` | string | 是 | 知识库编码 |
+| `directory_code` | string | 是 | 目录编码，不可修改 |
+| `directory_name` | string | 否 | 新目录名称，仅修改当前层级名称 |
+| `directory_description` | string \| null | 否 | 新目录描述，`null` 表示清空 |
+| `metadata` | object \| null | 否 | 新元数据，`null` 表示清空 |
+
+### 请求示例
+
+```json
+{
+  "kb_code": "hr-policy",
+  "directory_code": "attendance-archive",
+  "directory_name": "历史归档",
+  "directory_description": "更新后的目录说明",
+  "metadata": {
+    "owner_dept": "HR",
+    "retention_policy": "long-term"
+  }
+}
+```
+
+### 成功响应 `data`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `kb_code` | string | 知识库编码 |
+| `directory_code` | string | 目录编码 |
+| `directory_path` | string | 修改后的完整路径 |
+| `directory_description` | string \| null | 当前目录描述 |
+| `metadata` | object \| null | 当前元数据 |
+
+### 典型错误码
+
+- `KB_NOT_FOUND`
+- `KB_DIRECTORY_NOT_FOUND`
+- `KB_DIRECTORY_NAME_CONFLICT`
+- `KB_DIRECTORY_UPDATE_INVALID`
+
+## 删除目录
+
+### `POST /api/v1/directories/delete`
+
+逻辑删除目录，可删除非空目录。
+
+补充语义：
+
+- 删除语义为整棵目录子树逻辑删除
+- 应递归逻辑删除目录子树中的 `knowledge_fs_entry`
+- 应递归逻辑删除目录子树中的 `knowledge_item`
+- 应清理或重建受影响的检索投影数据
+- 文件历史版本、chunk 记录与对象存储内容不要求在该接口内立即物理删除
+
+### 请求体
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `kb_code` | string | 是 | 知识库编码 |
+| `directory_code` | string | 是 | 目录编码 |
+
+### 请求示例
+
+```json
+{
+  "kb_code": "hr-policy",
+  "directory_code": "attendance-archive"
+}
+```
+
+### 成功响应 `data`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `kb_code` | string | 知识库编码 |
+| `directory_code` | string | 目录编码 |
+| `is_deleted` | boolean | 删除后的逻辑删除标记 |
+
+### 典型错误码
+
+- `KB_NOT_FOUND`
+- `KB_DIRECTORY_NOT_FOUND`
+- `KB_DIRECTORY_DELETE_INVALID`
+
+## 修改文件信息
+
+### `POST /api/v1/files/update`
+
+修改文件名称、描述、元数据。
+
+补充语义：
+
+- `file_code` 仅用于定位文件，不允许修改
+- 不允许修改文件所属目录
+- 不允许修改文件内容
+- 不允许修改当前版本、chunk、embedding、对象存储位置等构建信息
+- 修改 `file_name` 仅影响当前层级名称与逻辑路径展示
+- 若 `file_description` 传入 `null`，表示清空描述
+- 若 `metadata` 传入 `null`，建议实现为清空元数据
+
+### 请求体
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `kb_code` | string | 是 | 知识库编码 |
+| `file_code` | string | 是 | 文件编码，不可修改 |
+| `file_name` | string | 否 | 新文件名，仅修改当前层级名称 |
+| `file_description` | string \| null | 否 | 新文件描述，`null` 表示清空 |
+| `metadata` | object \| null | 否 | 新元数据，`null` 表示清空 |
+
+### 请求示例
+
+```json
+{
+  "kb_code": "hr-policy",
+  "file_code": "attendance-policy-pdf",
+  "file_name": "异常考勤处理办法（正式版）.pdf",
+  "file_description": "更新后的文件说明",
+  "metadata": {
+    "owner_dept": "HR",
+    "doc_category": "policy",
+    "priority": "high"
+  }
+}
+```
+
+### 成功响应 `data`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `kb_code` | string | 知识库编码 |
+| `file_code` | string | 文件编码 |
+| `file_path` | string | 修改后的完整路径 |
+| `file_description` | string \| null | 当前文件描述 |
+| `metadata` | object \| null | 当前元数据 |
+
+### 典型错误码
+
+- `KB_NOT_FOUND`
+- `KB_FILE_NOT_FOUND`
+- `KB_FILE_NAME_CONFLICT`
+- `KB_FILE_UPDATE_INVALID`
+
 ## 错误码摘要
 
 | 错误码 | HTTP 状态码 | 说明 |
@@ -954,3 +1270,14 @@
 | `KB_LIST_DIR_INVALID` | `422` | 目录浏览请求不满足业务约束 |
 | `KB_GLOB_INVALID` | `422` | 路径匹配请求不满足业务约束 |
 | `KB_READ_FILE_INVALID` | `422` | 读文件请求不满足业务约束 |
+| `KB_UPDATE_INVALID` | `422` | 修改知识库信息请求不满足业务约束 |
+| `KB_DIRECTORY_CODE_CONFLICT` | `409` | 目录编码已存在 |
+| `KB_DIRECTORY_NOT_FOUND` | `404` | 目录不存在 |
+| `KB_DIRECTORY_PARENT_NOT_FOUND` | `404` | 目录父节点不存在 |
+| `KB_DIRECTORY_PATH_CONFLICT` | `409` | 目录路径已存在冲突 |
+| `KB_DIRECTORY_CREATE_INVALID` | `422` | 创建目录请求不满足业务约束 |
+| `KB_DIRECTORY_NAME_CONFLICT` | `409` | 同级目录名称冲突 |
+| `KB_DIRECTORY_UPDATE_INVALID` | `422` | 修改目录请求不满足业务约束 |
+| `KB_DIRECTORY_DELETE_INVALID` | `422` | 删除目录请求不满足业务约束 |
+| `KB_FILE_NAME_CONFLICT` | `409` | 同级文件名称冲突 |
+| `KB_FILE_UPDATE_INVALID` | `422` | 修改文件信息请求不满足业务约束 |

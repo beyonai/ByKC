@@ -11,7 +11,7 @@ class KnowledgeBaseRepository:
         """Fetch a knowledge base by business code including logically deleted rows."""
         cursor.execute(
             """
-            SELECT kid, kb_code, kb_name, kb_description, status, is_deleted, root_entry_id
+            SELECT kid, kb_code, kb_name, kb_description, status, is_deleted, root_entry_id, metadata
             FROM knowledge_base
             WHERE kb_code = %(kb_code)s
             """,
@@ -65,7 +65,7 @@ class KnowledgeBaseRepository:
         """Fetch a knowledge base by business code."""
         cursor.execute(
             """
-            SELECT kid, kb_code, kb_name, kb_description, status, is_deleted, root_entry_id
+            SELECT kid, kb_code, kb_name, kb_description, status, is_deleted, root_entry_id, metadata
             FROM knowledge_base
             WHERE kb_code = %(kb_code)s
               AND is_deleted = FALSE
@@ -85,4 +85,39 @@ class KnowledgeBaseRepository:
             WHERE kb_code = %(kb_code)s
             """,
             {"kb_code": kb_code},
+        )
+
+    def update_knowledge_base(
+        self,
+        cursor: Any,
+        *,
+        kb_code: str,
+        updates: dict[str, Any],
+    ) -> None:
+        """Update mutable business fields of one knowledge base."""
+        assignments: list[str] = []
+        params: dict[str, Any] = {"kb_code": kb_code}
+
+        if "kb_name" in updates:
+            assignments.append("kb_name = %(kb_name)s")
+            params["kb_name"] = updates["kb_name"]
+        if "kb_description" in updates:
+            assignments.append("kb_description = %(kb_description)s")
+            params["kb_description"] = updates["kb_description"]
+        if "metadata" in updates:
+            assignments.append("metadata = %(metadata)s::jsonb")
+            params["metadata"] = json.dumps(updates["metadata"] or {})
+
+        if not assignments:
+            return
+
+        cursor.execute(
+            f"""
+            UPDATE knowledge_base
+            SET {", ".join(assignments)},
+                updated_at = NOW()
+            WHERE kb_code = %(kb_code)s
+              AND is_deleted = FALSE
+            """,
+            params,
         )

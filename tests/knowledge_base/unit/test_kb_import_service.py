@@ -14,6 +14,7 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemImportManifest,
     KnowledgeItemImportRequest,
     KnowledgeItemListDirRequest,
+    UpdateKnowledgeBaseRequest,
     WriteFileRequest,
     WriteIndexRequest,
 )
@@ -81,6 +82,16 @@ class FakeKnowledgeBaseRepository:
 
     def soft_delete_by_code(self, cursor, *, kb_code):
         self.calls.append(("soft_delete_by_code", {"kb_code": kb_code}))
+
+    def update_knowledge_base(self, cursor, *, kb_code, updates):
+        self.calls.append(
+            ("update_knowledge_base", {"kb_code": kb_code, "updates": updates})
+        )
+        existing = self.existing_by_code.get(kb_code) or self.default_lookup_result
+        if existing is None:
+            return
+        for key, value in updates.items():
+            existing[key] = value
 
     def update_root_entry(self, cursor, *, knowledge_base_id, root_entry_id):
         self.calls.append(
@@ -287,6 +298,11 @@ class FakeKnowledgeFsEntryRepository:
             )
         )
         return self.root_entry
+
+    def rename_entry(self, cursor, *, entry_id, new_name):
+        self.calls.append(
+            ("rename_entry", {"entry_id": entry_id, "new_name": new_name})
+        )
 
     def ensure_file_entry(self, cursor, *, knowledge_base_id, root_entry_id, full_path):
         self.calls.append(
@@ -784,6 +800,165 @@ def test_delete_knowledge_base_marks_kb_and_descendants_deleted():
     assert retrieval_projection_repository.calls == [
         ("delete_for_knowledge_base", {"knowledge_base_id": 7})
     ]
+
+
+def test_update_knowledge_base_commits_and_updates_root_entry_name():
+    """Updating a KB should persist metadata changes and sync the root entry display name."""
+    connection = FakeConnection()
+    knowledge_base_repository = FakeKnowledgeBaseRepository(
+        default_lookup_result={
+            "kid": 7,
+            "kb_code": "hr-policy",
+            "kb_name": "人力制度知识库",
+            "kb_description": "旧描述",
+            "status": "ACTIVE",
+            "is_deleted": False,
+            "root_entry_id": 70,
+            "metadata": {"owner": "old"},
+        }
+    )
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    service = KnowledgeBaseService(
+        connection_factory=lambda: connection,
+        knowledge_base_repository=knowledge_base_repository,
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+    )
+
+    response = service.update_knowledge_base(
+        UpdateKnowledgeBaseRequest(
+            kb_code="hr-policy",
+            kb_name="新知识库名称",
+            kb_description="新描述",
+            metadata={"owner": "HR"},
+        )
+    )
+
+    assert response.kb_code == "hr-policy"
+    assert response.kb_name == "新知识库名称"
+    assert response.kb_description == "新描述"
+    assert response.metadata == {"owner": "HR"}
+    assert connection.committed is True
+    assert ("get_by_code", {"kb_code": "hr-policy"}) in knowledge_base_repository.calls
+    assert (
+        "update_knowledge_base",
+        {
+            "kb_code": "hr-policy",
+            "updates": {
+                "kb_name": "新知识库名称",
+                "kb_description": "新描述",
+                "metadata": {"owner": "HR"},
+            },
+        },
+    ) in knowledge_base_repository.calls
+    assert (
+        "rename_entry",
+        {"entry_id": 70, "new_name": "新知识库名称"},
+    ) in knowledge_fs_entry_repository.calls
+
+
+def test_update_knowledge_base_rejects_missing_kb():
+    """Updating a KB should fail when kb_code does not exist."""
+    connection = FakeConnection()
+    knowledge_base_repository = FakeKnowledgeBaseRepository(default_lookup_result=None)
+    service = KnowledgeBaseService(
+        connection_factory=lambda: connection,
+        knowledge_base_repository=knowledge_base_repository,
+        knowledge_fs_entry_repository=FakeKnowledgeFsEntryRepository(),
+    )
+
+    try:
+        service.update_knowledge_base(
+            UpdateKnowledgeBaseRequest(
+                kb_code="missing-kb",
+                kb_name="新知识库名称",
+            )
+        )
+    except KnowledgeBaseValidationError as exc:
+        assert str(exc) == "knowledge base not found: missing-kb"
+    else:
+        raise AssertionError("expected KnowledgeBaseValidationError")
+
+    assert connection.rolled_back is True
+
+
+def test_update_knowledge_base_keeps_omitted_fields_unchanged():
+    """Omitted fields should not be overwritten when updating a KB."""
+    connection = FakeConnection()
+    knowledge_base_repository = FakeKnowledgeBaseRepository(
+        default_lookup_result={
+            "kid": 7,
+            "kb_code": "hr-policy",
+            "kb_name": "人力制度知识库",
+            "kb_description": "旧描述",
+            "status": "ACTIVE",
+            "is_deleted": False,
+            "root_entry_id": 70,
+            "metadata": {"owner": "old", "lang": "zh-CN"},
+        }
+    )
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    service = KnowledgeBaseService(
+        connection_factory=lambda: connection,
+        knowledge_base_repository=knowledge_base_repository,
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+    )
+
+    response = service.update_knowledge_base(
+        UpdateKnowledgeBaseRequest(
+            kb_code="hr-policy",
+            kb_name="新知识库名称",
+        )
+    )
+
+    assert response.kb_description == "旧描述"
+    assert response.metadata == {"owner": "old", "lang": "zh-CN"}
+    assert (
+        "update_knowledge_base",
+        {
+            "kb_code": "hr-policy",
+            "updates": {"kb_name": "新知识库名称"},
+        },
+    ) in knowledge_base_repository.calls
+
+
+def test_update_knowledge_base_clears_fields_only_when_null_is_explicit():
+    """Explicit null should clear mutable nullable fields."""
+    connection = FakeConnection()
+    knowledge_base_repository = FakeKnowledgeBaseRepository(
+        default_lookup_result={
+            "kid": 7,
+            "kb_code": "hr-policy",
+            "kb_name": "人力制度知识库",
+            "kb_description": "旧描述",
+            "status": "ACTIVE",
+            "is_deleted": False,
+            "root_entry_id": 70,
+            "metadata": {"owner": "old"},
+        }
+    )
+    service = KnowledgeBaseService(
+        connection_factory=lambda: connection,
+        knowledge_base_repository=knowledge_base_repository,
+        knowledge_fs_entry_repository=FakeKnowledgeFsEntryRepository(),
+    )
+
+    response = service.update_knowledge_base(
+        UpdateKnowledgeBaseRequest(
+            kb_code="hr-policy",
+            kb_description=None,
+            metadata=None,
+        )
+    )
+
+    assert response.kb_description is None
+    assert response.metadata is None
+    assert (
+        "update_knowledge_base",
+        {
+            "kb_code": "hr-policy",
+            "updates": {"kb_description": None, "metadata": None},
+        },
+    ) in knowledge_base_repository.calls
 
 
 def test_delete_knowledge_item_marks_item_and_fs_entry_deleted():

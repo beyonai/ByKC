@@ -19,6 +19,8 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemGlobRequest,
     KnowledgeItemListDirRequest,
     KnowledgeItemListDirResponse,
+    UpdateKnowledgeBaseRequest,
+    UpdateKnowledgeBaseResponse,
 )
 from by_qa.knowledge_base.services.cache_file_lock import acquire_cache_file_lock
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
@@ -157,6 +159,73 @@ class KnowledgeBaseService:
             )
             connection.commit()
             return DeleteKnowledgeBaseResponse(kb_code=request.kb_code, is_deleted=True)
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def update_knowledge_base(
+        self, request: UpdateKnowledgeBaseRequest
+    ) -> UpdateKnowledgeBaseResponse:
+        """Update mutable business fields for one knowledge base."""
+        logger.info(
+            "knowledge_base_service.update_knowledge_base started: kb_code=%s, has_kb_name=%s, has_description=%s, has_metadata=%s",
+            request.kb_code,
+            "kb_name" in request.model_fields_set,
+            "kb_description" in request.model_fields_set,
+            "metadata" in request.model_fields_set,
+        )
+        connection = self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            kb_row = self.knowledge_base_repository.get_by_code(cursor, request.kb_code)
+            if not kb_row:
+                raise KnowledgeBaseValidationError(
+                    f"knowledge base not found: {request.kb_code}"
+                )
+            updates: dict[str, Any] = {}
+            if "kb_name" in request.model_fields_set:
+                updates["kb_name"] = request.kb_name
+            if "kb_description" in request.model_fields_set:
+                updates["kb_description"] = request.kb_description
+            if "metadata" in request.model_fields_set:
+                updates["metadata"] = request.metadata
+
+            self.knowledge_base_repository.update_knowledge_base(
+                cursor,
+                kb_code=request.kb_code,
+                updates=updates,
+            )
+            if (
+                "kb_name" in updates
+                and request.kb_name is not None
+                and kb_row.get("root_entry_id") is not None
+            ):
+                self.knowledge_fs_entry_repository.rename_entry(
+                    cursor,
+                    entry_id=int(kb_row["root_entry_id"]),
+                    new_name=request.kb_name,
+                )
+
+            connection.commit()
+            next_kb_name = (
+                updates["kb_name"] if "kb_name" in updates else kb_row.get("kb_name")
+            )
+            next_description = (
+                updates["kb_description"]
+                if "kb_description" in updates
+                else kb_row.get("kb_description")
+            )
+            next_metadata = (
+                updates["metadata"] if "metadata" in updates else kb_row.get("metadata")
+            )
+            return UpdateKnowledgeBaseResponse(
+                kb_code=request.kb_code,
+                kb_name=next_kb_name,
+                kb_description=next_description,
+                metadata=next_metadata,
+            )
         except Exception:
             connection.rollback()
             raise

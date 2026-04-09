@@ -15,6 +15,7 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemSearchHit,
     KnowledgeItemSearchMeta,
     KnowledgeItemSearchResponse,
+    UpdateKnowledgeBaseResponse,
     WriteFileResponse,
     WriteIndexResponse,
 )
@@ -44,6 +45,14 @@ class FakeKBService:
 
     def delete_knowledge_base(self, request):
         return DeleteKnowledgeBaseResponse(kb_code=request.kb_code, is_deleted=True)
+
+    def update_knowledge_base(self, request):
+        return UpdateKnowledgeBaseResponse(
+            kb_code=request.kb_code,
+            kb_name=request.kb_name or "人力制度知识库",
+            kb_description=request.kb_description,
+            metadata=request.metadata,
+        )
 
     def delete_knowledge_item(self, request):
         return DeleteKnowledgeItemResponse(
@@ -238,6 +247,35 @@ def test_delete_knowledge_base_route_returns_business_response(monkeypatch):
         "message": "success",
         "error": None,
         "data": {"kb_code": "hr-policy", "is_deleted": True},
+    }
+
+
+def test_update_knowledge_base_route_returns_business_response(monkeypatch):
+    """Update-knowledge-base route should delegate to the KB service."""
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/knowledge-bases/update",
+        json={
+            "kb_code": "hr-policy",
+            "kb_name": "新知识库名称",
+            "kb_description": "更新后的描述",
+            "metadata": {"owner": "HR"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "code": 200,
+        "message": "success",
+        "error": None,
+        "data": {
+            "kb_code": "hr-policy",
+            "kb_name": "新知识库名称",
+            "kb_description": "更新后的描述",
+            "metadata": {"owner": "HR"},
+        },
     }
 
 

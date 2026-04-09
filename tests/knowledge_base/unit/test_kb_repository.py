@@ -81,6 +81,49 @@ def test_soft_delete_knowledge_base_updates_is_deleted_flag():
     assert params == {"kb_code": "hr-policy"}
 
 
+def test_update_knowledge_base_executes_update_sql():
+    """Knowledge base updates should emit a plain update statement."""
+    repo = KnowledgeBaseRepository()
+    cursor = FakeCursor()
+
+    repo.update_knowledge_base(
+        cursor,
+        kb_code="hr-policy",
+        updates={
+            "kb_name": "新知识库名称",
+            "kb_description": "更新后的描述",
+            "metadata": {"owner": "HR"},
+        },
+    )
+
+    sql, params = cursor.executed[0]
+    lowered = sql.lower()
+    assert "update knowledge_base" in lowered
+    assert "kb_name = %(kb_name)s" in sql
+    assert "kb_description = %(kb_description)s" in sql
+    assert "metadata = %(metadata)s::jsonb" in sql
+    assert params["kb_code"] == "hr-policy"
+    assert params["kb_name"] == "新知识库名称"
+
+
+def test_update_knowledge_base_only_updates_provided_fields():
+    """Partial KB updates should not emit assignments for omitted fields."""
+    repo = KnowledgeBaseRepository()
+    cursor = FakeCursor()
+
+    repo.update_knowledge_base(
+        cursor,
+        kb_code="hr-policy",
+        updates={"kb_name": "新知识库名称"},
+    )
+
+    sql, params = cursor.executed[0]
+    assert "kb_name = %(kb_name)s" in sql
+    assert "kb_description = %(kb_description)s" not in sql
+    assert "metadata = %(metadata)s::jsonb" not in sql
+    assert params == {"kb_code": "hr-policy", "kb_name": "新知识库名称"}
+
+
 def test_get_knowledge_base_by_code_filters_deleted_rows():
     """Knowledge base lookup should ignore logically deleted rows in SQL."""
     repo = KnowledgeBaseRepository()

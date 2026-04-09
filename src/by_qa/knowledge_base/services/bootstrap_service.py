@@ -147,8 +147,8 @@ class KnowledgeBaseSchemaBootstrapService:
         self.embedding_model_name = embedding_model_name
         self.embedding_dimension = embedding_dimension
         self.embedding_table_name = normalize_embedding_table_name(embedding_model_name)
-        self.sql_directory = sql_directory or (
-            Path(__file__).resolve().parents[4] / "sql" / "knowledge_base"
+        self.sql_directory = (
+            sql_directory or Path(__file__).resolve().parents[1] / "sql"
         )
 
     def build_schema_statements(self) -> list[str]:

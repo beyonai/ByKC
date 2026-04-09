@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from by_qa.knowledge_base import __file__ as knowledge_base_init_file
 from by_qa.knowledge_base.services.bootstrap_service import (
     KnowledgeBaseSchemaBootstrapService,
     normalize_embedding_table_name,
@@ -96,6 +97,28 @@ def test_build_schema_statements_loads_external_sql_files(tmp_path: Path):
     assert (
         statements[2] == "CREATE TABLE chunk_embedding_bge_m3 (embedding vector(1024));"
     )
+
+
+def test_default_sql_directory_points_to_packaged_resources():
+    """Bootstrap should default to the SQL directory shipped inside the package."""
+    service = KnowledgeBaseSchemaBootstrapService(
+        embedding_model_name="bge-m3",
+        embedding_dimension=1024,
+    )
+
+    assert service.sql_directory == (
+        Path(knowledge_base_init_file).resolve().parent / "sql"
+    )
+
+
+def test_default_sql_directory_contains_embedding_template():
+    """Packaged SQL resources should include the dynamic embedding template."""
+    service = KnowledgeBaseSchemaBootstrapService(
+        embedding_model_name="bge-m3",
+        embedding_dimension=1024,
+    )
+
+    assert (service.sql_directory / "014_embedding_table.sql.tpl").is_file()
 
 
 def test_split_sql_statements_handles_multiple_top_level_statements():

@@ -136,7 +136,6 @@ flowchart LR
 - `entry_type`：`DIRECTORY` 或 `FILE`
 - `is_root`：是否根节点
 - `name`：当前层级名称
-- `full_path`：从知识库根开始的完整路径
 - `path_ltree`：用于层级查询的 `ltree`
 - `depth`：目录深度
 - `status`、`is_deleted`：状态与软删除
@@ -145,19 +144,18 @@ flowchart LR
 
 - 根节点必须 `parent_entry_id IS NULL` 且 `depth = 0`
 - 非根节点必须 `depth >= 1`
-- 根节点 `full_path = ''`
-- 同一知识库内活动路径唯一：`(knowledge_base_id, full_path)`
 - 同一父目录下活动名称唯一：`(knowledge_base_id, parent_entry_id, name)`
 
 设计要点：
 
 - 文件树层只表达路径和层级，不表达业务文档版本
 - 文件和目录共用一张表，便于统一做目录遍历和路径匹配
+- 完整路径不再作为主数据持久化，读取侧按树结构推导
 - `ltree` 主要服务目录查询、子树查询和路径匹配
 
 ### `knowledge_item`
 
-文档主表，表示一个业务文档实体。
+业务实体主表，当前统一用于承载文件与目录的业务元数据。
 
 核心字段：
 
@@ -165,10 +163,11 @@ flowchart LR
 - `knowledge_base_id`：所属知识库
 - `fs_entry_id`：绑定的文件节点，唯一
 - `item_code`：文档编码，在知识库内唯一
+- `item_kind`：`FILE` 或 `DIRECTORY`
+- `description`：描述信息
 - `current_version_id`：当前版本
 - `source_code`：来源系统
 - `type_code`：文档类型
-- `title`：标题
 - `status`、`is_deleted`：状态与软删除
 - `metadata`：扩展属性
 
@@ -180,8 +179,9 @@ flowchart LR
 设计要点：
 
 - `knowledge_fs_entry` 解决“文件在哪里”
-- `knowledge_item` 解决“这是谁的业务文档”
+- `knowledge_item` 解决“这是谁的业务实体以及它有哪些业务属性”
 - `current_version_id` 让检索和读取默认指向当前生效版本
+- 当前名称真相位于 `knowledge_fs_entry.name`，`knowledge_item` 不再保存独立标题字段
 
 ### `knowledge_item_version`
 
@@ -209,6 +209,7 @@ flowchart LR
 - 版本表不直接保存大文本，只保存对象位置和摘要
 - 原始文件与 Markdown sidecar 都挂在版本级，而不是文档级
 - 当前实现支持“一个业务文档多个历史版本，一个当前版本”
+- 对象键不再依赖逻辑路径，而是依赖稳定的知识库 ID、文档 ID 与版本号
 
 ### `knowledge_item_chunk`
 
@@ -262,7 +263,7 @@ chunk 表，记录某个版本切分后的文本块。
 - `chunk_id`
 - `knowledge_base_id`、`kb_code`、`knowledge_base_status`
 - `fs_entry_id`、`parent_entry_id`、`full_path`
-- `knowledge_item_id`、`item_code`、`knowledge_item_status`
+- `knowledge_item_id`、`item_code`、`item_kind`、`knowledge_item_status`
 - `current_version_id`、`knowledge_item_version_id`、`version`
 - `source_code`、`type_code`
 - `metadata`
@@ -274,6 +275,7 @@ chunk 表，记录某个版本切分后的文本块。
 - 只保留“当前版本”的检索视图，减少历史版本噪声
 - 查询时不必多表 join，提升检索链路稳定性
 - 命名虽然带 `mv`，当前实现是物化投影表，不是数据库原生 materialized view
+- `full_path` 在该表中是检索展示字段，由文件树结构推导后写入
 
 ### `knowledge_fetch_cache_index`
 
@@ -392,33 +394,33 @@ tmp/{import_request_id}/content.md
 #### 原始文件 key
 
 ```text
-{knowledge_base_id}/{full_path}/{version}/{file_name}
+kb/{knowledge_base_id}/item/{knowledge_item_id}/version/{version}/original
 ```
 
 示例：
 
 ```text
-12/hr/policy/leave.docx/v1/leave.docx
+kb/12/item/345/version/v1/original
 ```
 
 #### Markdown 对象 key
 
 ```text
-{knowledge_base_id}/{full_path}/{version}/{stem}.md
+kb/{knowledge_base_id}/item/{knowledge_item_id}/version/{version}/markdown
 ```
 
 示例：
 
 ```text
-12/hr/policy/leave.docx/v1/leave.md
+kb/12/item/345/version/v1/markdown
 ```
 
 设计意图：
 
 - 用 `knowledge_base_id` 做租户边界
-- 用 `full_path` 保留业务语义
+- 用 `knowledge_item_id` 保持对象键稳定
 - 用 `version` 显式隔离不同版本
-- 用文件名保留排障可读性
+- 避免逻辑路径变化要求对象迁移
 
 ### 导入存储方法
 

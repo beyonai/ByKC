@@ -51,7 +51,7 @@ def test_build_schema_statements_enable_ltree_and_pg_trgm_for_current_stack():
 
 
 def test_build_schema_statements_make_fs_entry_uniqueness_apply_only_to_active_rows():
-    """Filesystem path/name uniqueness should apply only to non-deleted rows."""
+    """Filesystem sibling-name uniqueness should apply only to non-deleted rows."""
     service = KnowledgeBaseSchemaBootstrapService(
         embedding_model_name="bge-m3",
         embedding_dimension=1024,
@@ -60,16 +60,11 @@ def test_build_schema_statements_make_fs_entry_uniqueness_apply_only_to_active_r
     ddl = "\n".join(service.build_schema_statements())
 
     assert (
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_knowledge_fs_entry_full_path_active"
-        in ddl
-    )
-    assert "ON knowledge_fs_entry (knowledge_base_id, full_path)" in ddl
-    assert "WHERE is_deleted = false;" in ddl
-    assert (
         "CREATE UNIQUE INDEX IF NOT EXISTS uq_knowledge_fs_entry_sibling_name_active"
         in ddl
     )
     assert "ON knowledge_fs_entry (knowledge_base_id, parent_entry_id, name)" in ddl
+    assert "WHERE is_deleted = false;" in ddl
 
 
 def test_build_schema_statements_loads_external_sql_files(tmp_path: Path):

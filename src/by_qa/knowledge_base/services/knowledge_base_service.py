@@ -424,7 +424,7 @@ class KnowledgeBaseService:
             segment for segment in path.strip("/").split("/") if segment
         ]
         root_nodes = [
-            self._with_virtual_full_path(node, str(node["full_path"]))
+            self._with_virtual_full_path(node, str(node["name"]))
             for node in self.knowledge_fs_entry_repository.list_root_nodes(
                 cursor,
                 kb_codes=kb_codes,
@@ -563,7 +563,7 @@ class KnowledgeBaseService:
         if not path_segments:
             return None
         current_nodes = [
-            self._with_virtual_full_path(node, str(node["full_path"]))
+            self._with_virtual_full_path(node, str(node["name"]))
             for node in self.knowledge_fs_entry_repository.list_root_nodes(
                 cursor,
                 kb_codes=kb_codes,

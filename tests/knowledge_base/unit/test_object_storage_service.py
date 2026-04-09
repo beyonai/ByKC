@@ -52,8 +52,8 @@ class FakeResponse:
         self.released = True
 
 
-def test_build_original_object_key_uses_kb_and_version_hierarchy():
-    """Original object keys should follow the documented directory structure."""
+def test_build_original_object_key_uses_stable_item_identity_hierarchy():
+    """Original object keys should be stable across path renames."""
     service = KnowledgeBaseObjectStorage(
         client=FakeMinioClient(),
         bucket_name="knowledge-base",
@@ -62,15 +62,15 @@ def test_build_original_object_key_uses_kb_and_version_hierarchy():
 
     object_key = service.build_original_object_key(
         knowledge_base_id=7,
-        full_path="dir1/hr-policy-001.md",
+        knowledge_item_id=42,
         version="v2",
     )
 
-    assert object_key == "7/dir1/hr-policy-001.md/v2/hr-policy-001.md"
+    assert object_key == "kb/7/item/42/version/v2/original"
 
 
-def test_build_markdown_object_key_uses_markdown_filename_under_original_path():
-    """Markdown sidecars should reuse the original path hierarchy with a markdown filename."""
+def test_build_markdown_object_key_uses_stable_item_identity_hierarchy():
+    """Markdown sidecars should no longer depend on the source path."""
     service = KnowledgeBaseObjectStorage(
         client=FakeMinioClient(),
         bucket_name="knowledge-base",
@@ -79,11 +79,11 @@ def test_build_markdown_object_key_uses_markdown_filename_under_original_path():
 
     object_key = service.build_markdown_object_key(
         knowledge_base_id=7,
-        full_path="dir1/hr-policy-001.pdf",
+        knowledge_item_id=42,
         version="v2",
     )
 
-    assert object_key == "7/dir1/hr-policy-001.pdf/v2/hr-policy-001.md"
+    assert object_key == "kb/7/item/42/version/v2/markdown"
 
 
 def test_upload_temp_object_writes_expected_bucket_prefix_and_content_type():

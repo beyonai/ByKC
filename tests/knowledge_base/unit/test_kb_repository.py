@@ -198,7 +198,8 @@ def test_upsert_knowledge_item_persists_item_code():
         knowledge_base_id=7,
         fs_entry_id=71,
         item_code="item-1",
-        title="item-1.md",
+        item_kind="FILE",
+        description="Policy file",
         status="ACTIVE",
         source_code="oa",
         type_code="policy_markdown",
@@ -294,7 +295,7 @@ def test_list_root_entries_queries_root_directories():
 
 
 def test_list_root_nodes_returns_tree_fields_for_pattern_traversal():
-    """Root node traversal should fetch path_ltree and full_path for iterative matching."""
+    """Root node traversal should fetch path_ltree and node names for iterative matching."""
     repo = KnowledgeFsEntryRepository()
     cursor = FakeCursor()
 
@@ -304,7 +305,7 @@ def test_list_root_nodes_returns_tree_fields_for_pattern_traversal():
     lowered = sql.lower()
     assert "kb.kb_code" in sql
     assert "path_ltree" in lowered
-    assert "full_path" in lowered
+    assert "fs.name" in lowered
     assert "is_root = true" in lowered
     assert "fs.is_deleted = false" in lowered
     assert "kb.is_deleted = false" in lowered
@@ -350,45 +351,6 @@ def test_list_child_nodes_uses_path_ltree_for_direct_children_traversal():
     assert "nlevel(fs.path_ltree) = nlevel(%(parent_path_ltree)s::ltree) + 1" in sql
     assert "path_ltree" in lowered
     assert params == {"parent_path_ltree": "kb_7"}
-
-
-def test_list_entries_by_path_pattern_uses_regex_against_full_path():
-    """Pattern listing should evaluate regex against full_path."""
-    repo = KnowledgeFsEntryRepository()
-    cursor = FakeCursor()
-
-    repo.list_entries_by_path_pattern(cursor, path_regex="^.*\\.md$")
-
-    sql, params = cursor.executed[0]
-    lowered = sql.lower()
-    assert "from knowledge_fs_entry fs" in lowered
-    assert "join knowledge_base kb" in lowered
-    assert "kb.kb_code" in sql
-    assert "fs.is_deleted = false" in lowered
-    assert "kb.is_deleted = false" in lowered
-    assert "fs.full_path ~ %(path_regex)s" in sql
-    assert "left join knowledge_item ki" in lowered
-    assert "left join knowledge_item_version kv" in lowered
-    assert params == {"path_regex": "^.*\\.md$", "ancestor_path_ltree": None}
-
-
-def test_list_entries_by_path_pattern_can_constrain_to_ancestor_subtree():
-    """Pattern listing should optionally narrow candidates with ancestor path_ltree."""
-    repo = KnowledgeFsEntryRepository()
-    cursor = FakeCursor()
-
-    repo.list_entries_by_path_pattern(
-        cursor,
-        path_regex="^dir1/.*\\.md$",
-        ancestor_path_ltree="kb_7.d1_a",
-    )
-
-    sql, params = cursor.executed[0]
-    assert "fs.path_ltree <@ %(ancestor_path_ltree)s::ltree" in sql
-    assert params == {
-        "path_regex": "^dir1/.*\\.md$",
-        "ancestor_path_ltree": "kb_7.d1_a",
-    }
 
 
 def test_get_current_file_version_by_entry_id_joins_current_version_metadata():
@@ -544,6 +506,7 @@ def test_refresh_retrieval_projection_rebuilds_current_version_rows():
     assert "knowledge_item_status" in combined_sql
     assert "metadata" in combined_sql
     assert "item_code" in combined_sql
+    assert "item_kind" in combined_sql
     assert "full_path" in combined_sql
     assert "start_line" in combined_sql
     assert "end_line" in combined_sql
@@ -635,6 +598,7 @@ def test_search_repository_executes_text_retrieval_against_projection_table():
     assert "knowledge_item_chunk_retrieval_mv" in lowered
     assert "knowledge_base_status" in lowered
     assert "knowledge_item_status" in lowered
+    assert "item_kind = 'file'" in lowered
     assert "plainto_tsquery" in lowered
     assert "item_code" in lowered
     assert params["kb_codes"] == ["hr-policy"]
@@ -662,6 +626,7 @@ def test_search_repository_executes_vector_retrieval_via_embedding_table_and_pro
     assert "join knowledge_item_chunk_retrieval_mv" in lowered
     assert "knowledge_base_status" in lowered
     assert "knowledge_item_status" in lowered
+    assert "r.item_kind = 'file'" in lowered
     assert "item_code" in lowered
     assert params["query_embedding"] == "[0.1,0.2,0.3]"
 

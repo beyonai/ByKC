@@ -115,7 +115,6 @@ class KnowledgeItemIngestionService:
         markdown_bytes = request.markdown_content.encode("utf-8")
         markdown_checksum = hashlib.sha256(markdown_bytes).hexdigest()
         type_code = self._derive_type_code(normalized_object_path)
-        title = PurePosixPath(normalized_object_path).name or normalized_object_path
 
         original_temp_object_key = self.object_storage.upload_temp_object(
             f"import-{request.file_code}-{request.version}-original",
@@ -157,23 +156,16 @@ class KnowledgeItemIngestionService:
                 kb_name=kb_row["kb_name"],
             )
             root_entry_id = self._row_id(root_entry_row)
-            file_entry_row = self.knowledge_fs_entry_repository.ensure_file_entry(
-                cursor,
-                knowledge_base_id=knowledge_base_id,
-                root_entry_id=root_entry_id,
-                full_path=normalized_object_path,
-            )
+            try:
+                file_entry_row = self.knowledge_fs_entry_repository.ensure_file_entry(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    root_entry_id=root_entry_id,
+                    full_path=normalized_object_path,
+                )
+            except ValueError as exc:
+                raise KnowledgeBaseValidationError(str(exc)) from exc
             fs_entry_id = self._row_id(file_entry_row)
-            original_object_key = self.object_storage.build_original_object_key(
-                knowledge_base_id=knowledge_base_id,
-                full_path=normalized_object_path,
-                version=request.version,
-            )
-            markdown_object_key = self.object_storage.build_markdown_object_key(
-                knowledge_base_id=knowledge_base_id,
-                full_path=normalized_object_path,
-                version=request.version,
-            )
             existing_item = self.knowledge_item_repository.get_by_fs_entry_id(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
@@ -204,15 +196,27 @@ class KnowledgeItemIngestionService:
                 knowledge_base_id=knowledge_base_id,
                 fs_entry_id=fs_entry_id,
                 item_code=request.file_code,
-                title=title,
+                item_kind="FILE",
+                description=request.file_description,
                 status=request.status,
                 source_code=request.source_code,
                 type_code=type_code,
                 metadata=metadata,
             )
+            knowledge_item_id = self._row_id(item_row)
+            original_object_key = self.object_storage.build_original_object_key(
+                knowledge_base_id=knowledge_base_id,
+                knowledge_item_id=knowledge_item_id,
+                version=request.version,
+            )
+            markdown_object_key = self.object_storage.build_markdown_object_key(
+                knowledge_base_id=knowledge_base_id,
+                knowledge_item_id=knowledge_item_id,
+                version=request.version,
+            )
             version_row = self.knowledge_item_version_repository.upsert(
                 cursor,
-                knowledge_item_id=self._row_id(item_row),
+                knowledge_item_id=knowledge_item_id,
                 fs_entry_id=fs_entry_id,
                 version=request.version,
                 bucket_name=self.object_storage.bucket_name,
@@ -243,11 +247,11 @@ class KnowledgeItemIngestionService:
             )
             self.knowledge_item_repository.update_current_version(
                 cursor,
-                knowledge_item_id=self._row_id(item_row),
+                knowledge_item_id=knowledge_item_id,
                 version_id=self._row_id(version_row),
             )
             self.retrieval_projection_repository.refresh_for_item(
-                cursor, knowledge_item_id=self._row_id(item_row)
+                cursor, knowledge_item_id=knowledge_item_id
             )
             connection.commit()
             self.object_storage.promote_temp_object(
@@ -340,12 +344,9 @@ class KnowledgeItemIngestionService:
                 raise KnowledgeBaseValidationError(
                     f"knowledge item version not found: {request.file_code}/{request.version}"
                 )
-            full_path = str(
-                item_row.get("full_path") or item_row.get("title") or request.file_code
-            )
             markdown_object_key = self.object_storage.build_markdown_object_key(
                 knowledge_base_id=knowledge_base_id,
-                full_path=full_path,
+                knowledge_item_id=self._row_id(item_row),
                 version=request.version,
             )
             self.knowledge_item_version_repository.upsert(
@@ -435,7 +436,6 @@ class KnowledgeItemIngestionService:
         content_bytes = self._decode_file_content(request)
         checksum = hashlib.sha256(content_bytes).hexdigest()
         type_code = self._derive_type_code(normalized_object_path)
-        title = PurePosixPath(normalized_object_path).name or normalized_object_path
         import_request_id = f"write-{request.file_code}-{request.version}"
         temp_object_key = self.object_storage.upload_temp_object(
             import_request_id,
@@ -471,18 +471,16 @@ class KnowledgeItemIngestionService:
                 kb_name=kb_row["kb_name"],
             )
             root_entry_id = self._row_id(root_entry_row)
-            file_entry_row = self.knowledge_fs_entry_repository.ensure_file_entry(
-                cursor,
-                knowledge_base_id=knowledge_base_id,
-                root_entry_id=root_entry_id,
-                full_path=normalized_object_path,
-            )
+            try:
+                file_entry_row = self.knowledge_fs_entry_repository.ensure_file_entry(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    root_entry_id=root_entry_id,
+                    full_path=normalized_object_path,
+                )
+            except ValueError as exc:
+                raise KnowledgeBaseValidationError(str(exc)) from exc
             fs_entry_id = self._row_id(file_entry_row)
-            final_object_key = self.object_storage.build_original_object_key(
-                knowledge_base_id=knowledge_base_id,
-                full_path=normalized_object_path,
-                version=request.version,
-            )
             existing_item = self.knowledge_item_repository.get_by_fs_entry_id(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
@@ -513,15 +511,22 @@ class KnowledgeItemIngestionService:
                 knowledge_base_id=knowledge_base_id,
                 fs_entry_id=fs_entry_id,
                 item_code=request.file_code,
-                title=title,
+                item_kind="FILE",
+                description=request.file_description,
                 status=request.status,
                 source_code=request.source_code,
                 type_code=type_code,
                 metadata=metadata,
             )
+            knowledge_item_id = self._row_id(item_row)
+            final_object_key = self.object_storage.build_original_object_key(
+                knowledge_base_id=knowledge_base_id,
+                knowledge_item_id=knowledge_item_id,
+                version=request.version,
+            )
             version_row = self.knowledge_item_version_repository.upsert(
                 cursor,
-                knowledge_item_id=self._row_id(item_row),
+                knowledge_item_id=knowledge_item_id,
                 fs_entry_id=fs_entry_id,
                 version=request.version,
                 bucket_name=self.object_storage.bucket_name,
@@ -535,7 +540,7 @@ class KnowledgeItemIngestionService:
             )
             self.knowledge_item_repository.update_current_version(
                 cursor,
-                knowledge_item_id=self._row_id(item_row),
+                knowledge_item_id=knowledge_item_id,
                 version_id=self._row_id(version_row),
             )
             connection.commit()
@@ -576,15 +581,10 @@ class KnowledgeItemIngestionService:
         self, *, markdown_bytes: bytes, manifest: KnowledgeItemImportManifest
     ) -> KnowledgeItemImportResponse:
         """Import one markdown document, its chunks, and its embeddings."""
-        derived_title = (
-            PurePosixPath(manifest.document.full_path).name
-            or manifest.document.full_path
-        )
         logger.info(
-            "knowledge_item_ingestion_service.import_document started: kb_code=%s, item_code=%s, title=%s, version=%s, chunk_count=%s, content_bytes=%s",
+            "knowledge_item_ingestion_service.import_document started: kb_code=%s, item_code=%s, version=%s, chunk_count=%s, content_bytes=%s",
             manifest.kb_code,
             manifest.document.item_code,
-            derived_title,
             manifest.document.version,
             len(manifest.chunks),
             len(markdown_bytes),
@@ -613,9 +613,8 @@ class KnowledgeItemIngestionService:
             bucket_name=self.object_storage.markdown_bucket_name,
         )
         logger.info(
-            "knowledge_item_ingestion_service temp object upload finished: item_code=%s, title=%s, import_request_id=%s, temp_object_key=%s",
+            "knowledge_item_ingestion_service temp object upload finished: item_code=%s, import_request_id=%s, temp_object_key=%s",
             manifest.document.item_code,
-            derived_title,
             import_request_id,
             temp_object_key,
         )
@@ -656,24 +655,16 @@ class KnowledgeItemIngestionService:
                 kb_name=kb_row["kb_name"],
             )
             root_entry_id = self._row_id(root_entry_row)
-            file_entry_row = self.knowledge_fs_entry_repository.ensure_file_entry(
-                cursor,
-                knowledge_base_id=knowledge_base_id,
-                root_entry_id=root_entry_id,
-                full_path=manifest.document.full_path,
-            )
+            try:
+                file_entry_row = self.knowledge_fs_entry_repository.ensure_file_entry(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    root_entry_id=root_entry_id,
+                    full_path=manifest.document.full_path,
+                )
+            except ValueError as exc:
+                raise KnowledgeBaseValidationError(str(exc)) from exc
             fs_entry_id = self._row_id(file_entry_row)
-
-            final_object_key = self.object_storage.build_original_object_key(
-                knowledge_base_id=knowledge_base_id,
-                full_path=manifest.document.full_path,
-                version=manifest.document.version,
-            )
-            markdown_object_key = self.object_storage.build_markdown_object_key(
-                knowledge_base_id=knowledge_base_id,
-                full_path=manifest.document.full_path,
-                version=manifest.document.version,
-            )
             existing_item = self.knowledge_item_repository.get_by_fs_entry_id(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
@@ -704,15 +695,27 @@ class KnowledgeItemIngestionService:
                 knowledge_base_id=knowledge_base_id,
                 fs_entry_id=fs_entry_id,
                 item_code=manifest.document.item_code,
-                title=derived_title,
+                item_kind="FILE",
+                description=None,
                 status=manifest.document.status,
                 source_code=manifest.document.source_code,
                 type_code=manifest.document.type_code,
                 metadata=manifest.document.metadata,
             )
+            knowledge_item_id = self._row_id(item_row)
+            final_object_key = self.object_storage.build_original_object_key(
+                knowledge_base_id=knowledge_base_id,
+                knowledge_item_id=knowledge_item_id,
+                version=manifest.document.version,
+            )
+            markdown_object_key = self.object_storage.build_markdown_object_key(
+                knowledge_base_id=knowledge_base_id,
+                knowledge_item_id=knowledge_item_id,
+                version=manifest.document.version,
+            )
             version_row = self.knowledge_item_version_repository.upsert(
                 cursor,
-                knowledge_item_id=self._row_id(item_row),
+                knowledge_item_id=knowledge_item_id,
                 fs_entry_id=fs_entry_id,
                 version=manifest.document.version,
                 bucket_name=self.object_storage.bucket_name,
@@ -747,10 +750,9 @@ class KnowledgeItemIngestionService:
                 ],
             )
             logger.info(
-                "knowledge_item_ingestion_service persistence finished: item_code=%s, title=%s, knowledge_item_id=%s, version_id=%s, chunk_count=%s, final_object_key=%s",
+                "knowledge_item_ingestion_service persistence finished: item_code=%s, knowledge_item_id=%s, version_id=%s, chunk_count=%s, final_object_key=%s",
                 manifest.document.item_code,
-                derived_title,
-                self._row_id(item_row),
+                knowledge_item_id,
                 self._row_id(version_row),
                 len(manifest.chunks),
                 final_object_key,
@@ -770,9 +772,8 @@ class KnowledgeItemIngestionService:
                 bucket_name=self.object_storage.markdown_bucket_name,
             )
             logger.info(
-                "knowledge_item_ingestion_service.import_document finished: item_code=%s, title=%s, version=%s, chunk_count=%s, final_object_key=%s",
+                "knowledge_item_ingestion_service.import_document finished: item_code=%s, version=%s, chunk_count=%s, final_object_key=%s",
                 manifest.document.item_code,
-                derived_title,
                 manifest.document.version,
                 len(manifest.chunks),
                 final_object_key,

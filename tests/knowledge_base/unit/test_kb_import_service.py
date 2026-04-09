@@ -99,6 +99,7 @@ class FakeKnowledgeFsEntryRepository:
 
     def __init__(self):
         self.calls = []
+        self.raise_missing_parent_directory = False
         self.root_entry = {"kid": 70, "is_root": True, "full_path": "人力制度知识库"}
         self.file_entry = {"kid": 71, "entry_type": "FILE", "full_path": "item-1"}
         self.root_entries_by_kb_code = {
@@ -298,6 +299,9 @@ class FakeKnowledgeFsEntryRepository:
                 },
             )
         )
+        if self.raise_missing_parent_directory:
+            parent_path = full_path.strip("/").rsplit("/", 1)[0]
+            raise ValueError(f"parent directory not found: {parent_path}")
         return {**self.file_entry, "full_path": full_path}
 
     def list_root_entries(self, cursor, *, kb_codes):
@@ -363,9 +367,9 @@ class FakeKnowledgeFsEntryRepository:
                 "full_path": "dir1/doc.md",
                 "version": "v1",
                 "bucket_name": "knowledge-base",
-                "object_key": "7/dir1/doc.md/v1/doc.md",
+                "object_key": "kb/7/item/10/version/v1/original",
                 "markdown_bucket_name": "knowledge-base-markdown",
-                "markdown_object_key": "7/dir1/doc.md/v1/doc.md",
+                "markdown_object_key": "kb/7/item/10/version/v1/markdown",
                 "markdown_file_size": 18,
                 "markdown_checksum": "abc123",
                 "checksum": "abc123",
@@ -526,7 +530,7 @@ class FakeObjectStorage:
         self.object_payloads = {
             (
                 "knowledge-base-markdown",
-                "7/dir1/doc.md/v1/doc.md",
+                "kb/7/item/10/version/v1/markdown",
             ): b"line1\nline2\nline3\n",
         }
 
@@ -536,13 +540,15 @@ class FakeObjectStorage:
         self.uploaded.append((import_request_id, content, content_type, bucket_name))
         return f"tmp/{import_request_id}/content.md"
 
-    def build_original_object_key(self, *, knowledge_base_id, full_path, version):
-        file_name = full_path.split("/")[-1]
-        return f"{knowledge_base_id}/{full_path}/{version}/{file_name}"
+    def build_original_object_key(
+        self, *, knowledge_base_id, knowledge_item_id, version
+    ):
+        return f"kb/{knowledge_base_id}/item/{knowledge_item_id}/version/{version}/original"
 
-    def build_markdown_object_key(self, *, knowledge_base_id, full_path, version):
-        file_name = f"{full_path.split('/')[-1].rsplit('.', 1)[0]}.md"
-        return f"{knowledge_base_id}/{full_path}/{version}/{file_name}"
+    def build_markdown_object_key(
+        self, *, knowledge_base_id, knowledge_item_id, version
+    ):
+        return f"kb/{knowledge_base_id}/item/{knowledge_item_id}/version/{version}/markdown"
 
     def promote_temp_object(
         self, temp_object_key, final_object_key, *, bucket_name=None
@@ -921,12 +927,12 @@ def test_import_document_commits_promotes_and_updates_current_version():
     assert storage.promoted == [
         (
             "tmp/import-item-1-v1/content.md",
-            "7/dir1/item-1.md/v1/item-1.md",
+            "kb/7/item/10/version/v1/original",
             "knowledge-base",
         ),
         (
             "tmp/import-item-1-v1-markdown/content.md",
-            "7/dir1/item-1.md/v1/item-1.md",
+            "kb/7/item/10/version/v1/markdown",
             "knowledge-base-markdown",
         ),
     ]
@@ -937,12 +943,15 @@ def test_import_document_commits_promotes_and_updates_current_version():
         call for call in knowledge_item_repository.calls if call[0] == "upsert"
     )
     assert upsert_call[1]["item_code"] == "item-1"
+    assert upsert_call[1]["item_kind"] == "FILE"
+    assert upsert_call[1]["description"] is None
     version_upsert_call = next(
         call for call in knowledge_item_version_repository.calls if call[0] == "upsert"
     )
     assert version_upsert_call[1]["checksum"] == hashlib.sha256(b"# hello").hexdigest()
     assert (
-        version_upsert_call[1]["markdown_object_key"] == "7/dir1/item-1.md/v1/item-1.md"
+        version_upsert_call[1]["markdown_object_key"]
+        == "kb/7/item/10/version/v1/markdown"
     )
     assert version_upsert_call[1]["markdown_bucket_name"] == "knowledge-base-markdown"
 
@@ -1006,7 +1015,8 @@ def test_import_document_ignores_manifest_content_hash_and_generates_checksum():
     )
     assert version_upsert_call[1]["checksum"] == hashlib.sha256(b"# hello").hexdigest()
     assert (
-        version_upsert_call[1]["markdown_object_key"] == "7/dir1/item-1.md/v1/item-1.md"
+        version_upsert_call[1]["markdown_object_key"]
+        == "kb/7/item/10/version/v1/markdown"
     )
     assert version_upsert_call[1]["markdown_bucket_name"] == "knowledge-base-markdown"
 
@@ -1094,7 +1104,7 @@ def test_write_file_commits_promotes_and_updates_current_version():
     assert storage.promoted == [
         (
             "tmp/write-file-001-v1/content.md",
-            "7/dir1/item-1.pdf/v1/item-1.pdf",
+            "kb/7/item/10/version/v1/original",
             "knowledge-base",
         )
     ]
@@ -1102,6 +1112,8 @@ def test_write_file_commits_promotes_and_updates_current_version():
         call for call in knowledge_item_repository.calls if call[0] == "upsert"
     )
     assert upsert_call[1]["item_code"] == "file-001"
+    assert upsert_call[1]["item_kind"] == "FILE"
+    assert upsert_call[1]["description"] == "操作手册"
     assert upsert_call[1]["type_code"] == "pdf"
     assert upsert_call[1]["metadata"] == {
         "owner": "HR",
@@ -1259,6 +1271,52 @@ def test_write_file_rejects_soft_deleted_file_code():
     assert connection.rolled_back is True
 
 
+def test_write_file_rejects_missing_parent_directory():
+    """Write-file should fail instead of auto-creating missing directories."""
+    connection = FakeConnection()
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    knowledge_fs_entry_repository.raise_missing_parent_directory = True
+    service = KnowledgeItemIngestionService(
+        connection_factory=lambda: connection,
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={
+                "id": 7,
+                "kb_code": "hr-policy",
+                "kb_name": "人力制度知识库",
+                "status": "ACTIVE",
+            }
+        ),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        knowledge_item_repository=FakeKnowledgeItemRepository(),
+        knowledge_item_version_repository=FakeKnowledgeItemVersionRepository(),
+        knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        object_storage=FakeObjectStorage(),
+        embedding_dimension=2,
+    )
+
+    try:
+        service.write_file(
+            WriteFileRequest(
+                kb_code="hr-policy",
+                file_code="file-001",
+                file_path="/missing-dir/item-1.pdf",
+                file_description=None,
+                file_content="ZmFrZS1iYXNlNjQ=",
+                version="v1",
+                source_code="oa",
+                status="ACTIVE",
+                metadata=None,
+            )
+        )
+    except KnowledgeBaseValidationError as exc:
+        assert str(exc) == "parent directory not found: missing-dir"
+    else:
+        raise AssertionError("expected KnowledgeBaseValidationError")
+
+    assert connection.rolled_back is True
+
+
 def test_write_index_replaces_chunks_embeddings_and_refreshes_projection():
     """Write-index should replace version chunks and refresh retrieval projection."""
     connection = FakeConnection()
@@ -1268,7 +1326,6 @@ def test_write_index_replaces_chunks_embeddings_and_refreshes_projection():
         "knowledge_base_id": 7,
         "fs_entry_id": 71,
         "item_code": "file-001",
-        "full_path": "dir1/item-1.md",
         "type_code": "md",
         "current_version_id": 21,
         "status": "ACTIVE",
@@ -1277,9 +1334,9 @@ def test_write_index_replaces_chunks_embeddings_and_refreshes_projection():
     knowledge_item_version_repository.existing = {
         "kid": 22,
         "bucket_name": "knowledge-base",
-        "object_key": "7/dir1/item-1.md/v1/item-1.md",
+        "object_key": "kb/7/item/10/version/v1/original",
         "markdown_bucket_name": "knowledge-base-markdown",
-        "markdown_object_key": "7/dir1/item-1.md/v1/item-1.md",
+        "markdown_object_key": "kb/7/item/10/version/v1/markdown",
         "markdown_file_size": 128,
         "markdown_checksum": "abc123",
         "file_size": 128,
@@ -1337,7 +1394,7 @@ def test_write_index_replaces_chunks_embeddings_and_refreshes_projection():
     assert service.object_storage.promoted == [
         (
             "tmp/index-file-001-v1/content.md",
-            "7/dir1/item-1.md/v1/item-1.md",
+            "kb/7/item/10/version/v1/markdown",
             "knowledge-base-markdown",
         )
     ]
@@ -1350,7 +1407,8 @@ def test_write_index_replaces_chunks_embeddings_and_refreshes_projection():
         call for call in knowledge_item_version_repository.calls if call[0] == "upsert"
     )
     assert (
-        version_upsert_call[1]["markdown_object_key"] == "7/dir1/item-1.md/v1/item-1.md"
+        version_upsert_call[1]["markdown_object_key"]
+        == "kb/7/item/10/version/v1/markdown"
     )
 
 
@@ -1363,7 +1421,6 @@ def test_write_index_allows_non_markdown_file_types():
         "knowledge_base_id": 7,
         "fs_entry_id": 71,
         "item_code": "file-001",
-        "full_path": "dir1/item-1.pdf",
         "type_code": "pdf",
         "current_version_id": 21,
         "status": "ACTIVE",
@@ -1372,9 +1429,9 @@ def test_write_index_allows_non_markdown_file_types():
     knowledge_item_version_repository.existing = {
         "kid": 22,
         "bucket_name": "knowledge-base",
-        "object_key": "7/dir1/item-1.pdf/v1/item-1.pdf",
+        "object_key": "kb/7/item/10/version/v1/original",
         "markdown_bucket_name": "knowledge-base-markdown",
-        "markdown_object_key": "7/dir1/item-1.pdf/v1/item-1.md",
+        "markdown_object_key": "kb/7/item/10/version/v1/markdown",
         "markdown_file_size": 128,
         "markdown_checksum": "abc123",
         "file_size": 128,
@@ -1465,13 +1522,13 @@ def test_import_document_emits_internal_key_node_logs(monkeypatch):
 
     assert response.chunk_count == 2
     assert info_messages == [
-        "knowledge_item_ingestion_service.import_document started: kb_code=hr-policy, item_code=item-1, title=item-1.md, version=v1, chunk_count=2, content_bytes=7",
+        "knowledge_item_ingestion_service.import_document started: kb_code=hr-policy, item_code=item-1, version=v1, chunk_count=2, content_bytes=7",
         "knowledge_item_ingestion_service embedding validation finished: item_code=item-1, expected_dimension=2, chunk_count=2",
-        "knowledge_item_ingestion_service temp object upload finished: item_code=item-1, title=item-1.md, import_request_id=import-item-1-v1, temp_object_key=tmp/import-item-1-v1/content.md",
+        "knowledge_item_ingestion_service temp object upload finished: item_code=item-1, import_request_id=import-item-1-v1, temp_object_key=tmp/import-item-1-v1/content.md",
         "knowledge_item_ingestion_service knowledge base validation finished: kb_code=hr-policy, knowledge_base_id=7, status=ACTIVE",
         "knowledge_item_ingestion_service duplicate check finished: item_code=item-1, existing_item=False, existing_version=False",
-        "knowledge_item_ingestion_service persistence finished: item_code=item-1, title=item-1.md, knowledge_item_id=10, version_id=22, chunk_count=2, final_object_key=7/dir1/item-1.md/v1/item-1.md",
-        "knowledge_item_ingestion_service.import_document finished: item_code=item-1, title=item-1.md, version=v1, chunk_count=2, final_object_key=7/dir1/item-1.md/v1/item-1.md",
+        "knowledge_item_ingestion_service persistence finished: item_code=item-1, knowledge_item_id=10, version_id=22, chunk_count=2, final_object_key=kb/7/item/10/version/v1/original",
+        "knowledge_item_ingestion_service.import_document finished: item_code=item-1, version=v1, chunk_count=2, final_object_key=kb/7/item/10/version/v1/original",
     ]
 
 
@@ -1672,6 +1729,115 @@ def test_import_knowledge_item_rolls_back_and_deletes_temp_objects_on_failure():
         ("tmp/import-file-001-v1-original/content.md", "knowledge-base"),
         ("tmp/import-file-001-v1-markdown/content.md", "knowledge-base-markdown"),
     ]
+
+
+def test_import_knowledge_item_rejects_missing_parent_directory():
+    """Combined import should fail instead of auto-creating missing directories."""
+    connection = FakeConnection()
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    knowledge_fs_entry_repository.raise_missing_parent_directory = True
+    service = KnowledgeItemIngestionService(
+        connection_factory=lambda: connection,
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={
+                "id": 7,
+                "kb_code": "hr-policy",
+                "kb_name": "人力制度知识库",
+                "status": "ACTIVE",
+            }
+        ),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        knowledge_item_repository=FakeKnowledgeItemRepository(),
+        knowledge_item_version_repository=FakeKnowledgeItemVersionRepository(),
+        knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        object_storage=FakeObjectStorage(),
+        embedding_dimension=2,
+    )
+
+    try:
+        service.import_knowledge_item(
+            KnowledgeItemImportRequest(
+                kb_code="hr-policy",
+                file_code="file-001",
+                file_path="/missing-dir/item-1.pdf",
+                file_content="ZmFrZS1iYXNlNjQ=",
+                version="v1",
+                source_code="oa",
+                status="ACTIVE",
+                markdown_content="# hello",
+                chunks=[
+                    {
+                        "chunk_no": 1,
+                        "start_line": 1,
+                        "end_line": 10,
+                        "chunk_text": "hello",
+                        "embedding": [0.1, 0.2],
+                    }
+                ],
+            )
+        )
+    except KnowledgeBaseValidationError as exc:
+        assert str(exc) == "parent directory not found: missing-dir"
+    else:
+        raise AssertionError("expected KnowledgeBaseValidationError")
+
+    assert connection.rolled_back is True
+
+
+def test_import_document_rejects_missing_parent_directory():
+    """Document import should fail instead of auto-creating missing directories."""
+    connection = FakeConnection()
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    knowledge_fs_entry_repository.raise_missing_parent_directory = True
+    service = KnowledgeItemIngestionService(
+        connection_factory=lambda: connection,
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={
+                "id": 7,
+                "kb_code": "hr-policy",
+                "kb_name": "人力制度知识库",
+                "status": "ACTIVE",
+            }
+        ),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        knowledge_item_repository=FakeKnowledgeItemRepository(),
+        knowledge_item_version_repository=FakeKnowledgeItemVersionRepository(),
+        knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        object_storage=FakeObjectStorage(),
+        embedding_dimension=2,
+    )
+
+    manifest = KnowledgeItemImportManifest(
+        kb_code="hr-policy",
+        document={
+            "item_code": "item-1",
+            "full_path": "missing-dir/item-1.md",
+            "status": "ACTIVE",
+            "source_code": "oa",
+            "type_code": "policy_markdown",
+            "version": "v1",
+        },
+        chunks=[
+            {
+                "chunk_no": 1,
+                "start_line": 1,
+                "end_line": 10,
+                "chunk_text": "hello",
+                "embedding": [0.1, 0.2],
+            }
+        ],
+    )
+
+    try:
+        service.import_document(markdown_bytes=b"# hello", manifest=manifest)
+    except KnowledgeBaseValidationError as exc:
+        assert str(exc) == "parent directory not found: missing-dir"
+    else:
+        raise AssertionError("expected KnowledgeBaseValidationError")
+
+    assert connection.rolled_back is True
 
     assert connection.rolled_back is True
 
@@ -1997,7 +2163,7 @@ def test_fetch_downloads_current_version_and_caches_file(tmp_path):
     assert response.reached_eof is True
     assert response.kb_code == "hr-policy"
     assert storage.downloaded == [
-        ("7/dir1/doc.md/v1/doc.md", "knowledge-base-markdown")
+        ("kb/7/item/10/version/v1/markdown", "knowledge-base-markdown")
     ]
     assert (tmp_path / "人力制度知识库" / "dir1" / "doc.md").read_text(
         encoding="utf-8"
@@ -2041,9 +2207,9 @@ def test_fetch_returns_access_url_for_binary_files(tmp_path):
             "full_path": "dir1/doc.pdf",
             "version": "v1",
             "bucket_name": "knowledge-base",
-            "object_key": "7/dir1/doc.pdf/v1/doc.pdf",
+            "object_key": "kb/7/item/10/version/v1/original",
             "markdown_bucket_name": "knowledge-base-markdown",
-            "markdown_object_key": "7/dir1/doc.pdf/v1/doc.md",
+            "markdown_object_key": "kb/7/item/10/version/v1/markdown",
             "checksum": "abc123",
         }
     )
@@ -2060,7 +2226,7 @@ def test_fetch_returns_access_url_for_binary_files(tmp_path):
         "kb_code": "hr-policy",
         "path": "人力制度知识库/dir1/doc.md",
         "content_type": "original",
-        "url": "https://minio.example/knowledge-base/7/dir1/doc.pdf/v1/doc.pdf?ttl=3600",
+        "url": "https://minio.example/knowledge-base/kb/7/item/10/version/v1/original?ttl=3600",
     }
     assert storage.downloaded == []
     assert cache_repository.calls == []
@@ -2129,7 +2295,7 @@ def test_fetch_markdown_request_falls_back_to_original_url_when_sidecar_missing(
             "full_path": "dir1/doc.pdf",
             "version": "v1",
             "bucket_name": "knowledge-base",
-            "object_key": "7/dir1/doc.pdf/v1/doc.pdf",
+            "object_key": "kb/7/item/10/version/v1/original",
             "markdown_bucket_name": None,
             "markdown_object_key": None,
             "checksum": "abc123",
@@ -2149,7 +2315,7 @@ def test_fetch_markdown_request_falls_back_to_original_url_when_sidecar_missing(
         "kb_code": "hr-policy",
         "path": "人力制度知识库/dir1/doc.md",
         "content_type": "original",
-        "url": "https://minio.example/knowledge-base/7/dir1/doc.pdf/v1/doc.pdf?ttl=3600",
+        "url": "https://minio.example/knowledge-base/kb/7/item/10/version/v1/original?ttl=3600",
     }
 
 
@@ -2293,7 +2459,7 @@ def test_fetch_redownloads_when_cache_is_expired(tmp_path):
     assert response.data == "line1\nline2\n"
     assert response.reached_eof is False
     assert storage.downloaded == [
-        ("7/dir1/doc.md/v1/doc.md", "knowledge-base-markdown")
+        ("kb/7/item/10/version/v1/markdown", "knowledge-base-markdown")
     ]
 
 

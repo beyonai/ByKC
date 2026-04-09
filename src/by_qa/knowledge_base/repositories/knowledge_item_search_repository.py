@@ -42,6 +42,7 @@ class KnowledgeItemSearchRepository:
                 WHERE kb_code = ANY(%(kb_codes)s)
                   AND knowledge_base_status = 'ACTIVE'
                   AND knowledge_item_status = 'ACTIVE'
+                  AND item_kind = 'FILE'
                   AND (
                         %(source_codes)s::text[] IS NULL
                         OR source_code = ANY(%(source_codes)s::text[])
@@ -111,6 +112,7 @@ class KnowledgeItemSearchRepository:
             WHERE r.kb_code = ANY(%(kb_codes)s)
               AND r.knowledge_base_status = 'ACTIVE'
               AND r.knowledge_item_status = 'ACTIVE'
+              AND r.item_kind = 'FILE'
               AND (
                     %(source_codes)s::text[] IS NULL
                     OR r.source_code = ANY(%(source_codes)s::text[])

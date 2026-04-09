@@ -25,6 +25,7 @@ class RetrievalProjectionRepository:
                 fs_entry_id,
                 parent_entry_id,
                 item_code,
+                item_kind,
                 full_path,
                 knowledge_item_id,
                 knowledge_item_status,
@@ -48,7 +49,22 @@ class RetrievalProjectionRepository:
                 fs.kid,
                 fs.parent_entry_id,
                 ki.item_code,
-                fs.full_path,
+                ki.item_kind,
+                (
+                    WITH RECURSIVE item_path AS (
+                        SELECT kid, parent_entry_id, name, depth, is_root
+                        FROM knowledge_fs_entry
+                        WHERE kid = fs.kid
+                      UNION ALL
+                        SELECT parent.kid, parent.parent_entry_id, parent.name, parent.depth, parent.is_root
+                        FROM knowledge_fs_entry parent
+                        JOIN item_path child ON child.parent_entry_id = parent.kid
+                        WHERE parent.is_deleted = FALSE
+                    )
+                    SELECT COALESCE(string_agg(name, '/' ORDER BY depth), '')
+                    FROM item_path
+                    WHERE is_root = FALSE
+                ) AS full_path,
                 ki.kid,
                 ki.status,
                 ki.current_version_id,

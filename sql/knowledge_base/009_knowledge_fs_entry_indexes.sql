@@ -15,7 +15,3 @@ USING GIST (path_ltree);
 CREATE INDEX IF NOT EXISTS idx_knowledge_fs_entry_name_trgm
 ON knowledge_fs_entry
 USING GIN (name gin_trgm_ops);
-
-CREATE INDEX IF NOT EXISTS idx_knowledge_fs_entry_full_path_trgm
-ON knowledge_fs_entry
-USING GIN (full_path gin_trgm_ops);

@@ -16,7 +16,7 @@ class KnowledgeFsEntryRepository:
         """Ensure one root directory entry exists for the knowledge base."""
         cursor.execute(
             """
-            SELECT kid, knowledge_base_id, parent_entry_id, path_ltree, full_path, name
+            SELECT kid, knowledge_base_id, parent_entry_id, path_ltree, name, entry_type, is_root, depth
             FROM knowledge_fs_entry
             WHERE knowledge_base_id = %(knowledge_base_id)s
               AND is_root = TRUE
@@ -42,7 +42,6 @@ class KnowledgeFsEntryRepository:
                 entry_type,
                 is_root,
                 name,
-                full_path,
                 path_ltree,
                 depth,
                 status,
@@ -56,7 +55,6 @@ class KnowledgeFsEntryRepository:
                 'DIRECTORY',
                 TRUE,
                 %(name)s,
-                %(full_path)s,
                 %(path_ltree)s::ltree,
                 0,
                 'ACTIVE',
@@ -64,12 +62,11 @@ class KnowledgeFsEntryRepository:
                 NOW(),
                 NOW()
             )
-            RETURNING kid, knowledge_base_id, parent_entry_id, path_ltree, full_path, name
+            RETURNING kid, knowledge_base_id, parent_entry_id, path_ltree, name, entry_type, is_root, depth
             """,
             {
                 "knowledge_base_id": knowledge_base_id,
                 "name": kb_name,
-                "full_path": kb_name,
                 "path_ltree": f"kb_{knowledge_base_id}",
                 "metadata": json.dumps({}),
             },
@@ -106,66 +103,25 @@ class KnowledgeFsEntryRepository:
         path_segments = normalized_path.split("/")
 
         for index, segment in enumerate(path_segments[:-1], start=1):
-            directory_full_path = "/".join(path_segments[:index])
-            existing = self._get_entry_by_full_path(
+            existing = self._get_child_entry(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
-                full_path=directory_full_path,
+                parent_entry_id=current_parent_id,
+                name=segment,
             )
-            if existing is None:
-                path_ltree = (
-                    f"{current_path_ltree}.{self._path_label('d', index, segment)}"
+            if existing is None or existing.get("entry_type") != "DIRECTORY":
+                missing_directory_path = "/".join(path_segments[:index])
+                raise ValueError(
+                    f"parent directory not found: {missing_directory_path}"
                 )
-                cursor.execute(
-                    """
-                    INSERT INTO knowledge_fs_entry (
-                        knowledge_base_id,
-                        parent_entry_id,
-                        entry_type,
-                        is_root,
-                        name,
-                        full_path,
-                        path_ltree,
-                        depth,
-                        status,
-                        metadata,
-                        created_at,
-                        updated_at
-                    )
-                    VALUES (
-                        %(knowledge_base_id)s,
-                        %(parent_entry_id)s,
-                        'DIRECTORY',
-                        FALSE,
-                        %(name)s,
-                        %(full_path)s,
-                        %(path_ltree)s::ltree,
-                        %(depth)s,
-                        'ACTIVE',
-                        %(metadata)s::jsonb,
-                        NOW(),
-                        NOW()
-                    )
-                    RETURNING kid, knowledge_base_id, parent_entry_id, path_ltree, full_path, name
-                    """,
-                    {
-                        "knowledge_base_id": knowledge_base_id,
-                        "parent_entry_id": current_parent_id,
-                        "name": segment,
-                        "full_path": directory_full_path,
-                        "path_ltree": path_ltree,
-                        "depth": index,
-                        "metadata": json.dumps({}),
-                    },
-                )
-                existing = fetchone() if callable(fetchone) else None
             current_parent_id = self._row_id(existing)
             current_path_ltree = self._row_value(existing, "path_ltree")
 
-        existing_file = self._get_entry_by_full_path(
+        existing_file = self._get_child_entry(
             cursor,
             knowledge_base_id=knowledge_base_id,
-            full_path=normalized_path,
+            parent_entry_id=current_parent_id,
+            name=path_segments[-1],
         )
         if existing_file is not None:
             return existing_file
@@ -180,7 +136,6 @@ class KnowledgeFsEntryRepository:
                 entry_type,
                 is_root,
                 name,
-                full_path,
                 path_ltree,
                 depth,
                 status,
@@ -194,7 +149,6 @@ class KnowledgeFsEntryRepository:
                 'FILE',
                 FALSE,
                 %(name)s,
-                %(full_path)s,
                 %(path_ltree)s::ltree,
                 %(depth)s,
                 'ACTIVE',
@@ -202,13 +156,12 @@ class KnowledgeFsEntryRepository:
                 NOW(),
                 NOW()
             )
-            RETURNING kid, knowledge_base_id, parent_entry_id, path_ltree, full_path, name
+            RETURNING kid, knowledge_base_id, parent_entry_id, path_ltree, name, entry_type, is_root, depth
             """,
             {
                 "knowledge_base_id": knowledge_base_id,
                 "parent_entry_id": current_parent_id,
                 "name": file_name,
-                "full_path": normalized_path,
                 "path_ltree": path_ltree,
                 "depth": len(path_segments),
                 "metadata": json.dumps({}),
@@ -224,7 +177,7 @@ class KnowledgeFsEntryRepository:
             """
             SELECT
                 kb.kb_code,
-                fs.full_path AS name,
+                fs.name AS name,
                 'directory' AS type,
                 0 AS size
             FROM knowledge_fs_entry fs
@@ -235,7 +188,7 @@ class KnowledgeFsEntryRepository:
               AND fs.is_deleted = FALSE
               AND kb.is_deleted = FALSE
               AND kb.kb_code = ANY(%(kb_codes)s)
-            ORDER BY lower(fs.full_path)
+            ORDER BY lower(fs.name)
             """,
             {"kb_codes": kb_codes},
         )
@@ -251,7 +204,6 @@ class KnowledgeFsEntryRepository:
                 fs.kid,
                 kb.kb_code,
                 fs.name,
-                fs.full_path,
                 fs.path_ltree,
                 'directory' AS type,
                 0 AS size
@@ -263,7 +215,7 @@ class KnowledgeFsEntryRepository:
               AND fs.is_deleted = FALSE
               AND kb.is_deleted = FALSE
               AND kb.kb_code = ANY(%(kb_codes)s)
-            ORDER BY lower(fs.full_path)
+            ORDER BY lower(fs.name)
             """,
             {"kb_codes": kb_codes},
         )
@@ -275,7 +227,6 @@ class KnowledgeFsEntryRepository:
             SELECT
                 fs.kid,
                 fs.name,
-                fs.full_path,
                 fs.path_ltree,
                 'directory' AS type,
                 0 AS size
@@ -284,7 +235,7 @@ class KnowledgeFsEntryRepository:
               AND fs.entry_type = 'DIRECTORY'
               AND fs.status = 'ACTIVE'
               AND fs.is_deleted = FALSE
-            ORDER BY lower(fs.full_path)
+            ORDER BY lower(fs.name)
             """)
         return self._fetchall(cursor)
 
@@ -292,21 +243,24 @@ class KnowledgeFsEntryRepository:
         self, cursor: Any, *, full_path: str
     ) -> dict[str, Any] | None:
         """Look up one directory entry by its virtual path."""
-        cursor.execute(
-            """
-            SELECT kid, knowledge_base_id, parent_entry_id, path_ltree, full_path, name
-            FROM knowledge_fs_entry
-            WHERE full_path = %(full_path)s
-              AND entry_type = 'DIRECTORY'
-              AND status = 'ACTIVE'
-              AND is_deleted = FALSE
-            ORDER BY is_root DESC, kid ASC
-            LIMIT 1
-            """,
-            {"full_path": full_path},
-        )
-        fetchone = getattr(cursor, "fetchone", None)
-        return fetchone() if callable(fetchone) else None
+        path_segments = [
+            segment for segment in full_path.strip("/").split("/") if segment
+        ]
+        if not path_segments:
+            return None
+        current = self._get_root_by_name(cursor, name=path_segments[0])
+        if current is None:
+            return None
+        for segment in path_segments[1:]:
+            current = self._get_child_entry(
+                cursor,
+                knowledge_base_id=int(current["knowledge_base_id"]),
+                parent_entry_id=self._row_id(current),
+                name=segment,
+            )
+            if current is None:
+                return None
+        return current if current.get("entry_type") == "DIRECTORY" else None
 
     def list_children(
         self, cursor: Any, *, parent_path_ltree: str
@@ -316,7 +270,7 @@ class KnowledgeFsEntryRepository:
             """
             SELECT
                 kb.kb_code,
-                fs.full_path AS name,
+                fs.name AS name,
                 CASE
                     WHEN fs.entry_type = 'DIRECTORY' THEN 'directory'
                     ELSE 'file'
@@ -355,7 +309,6 @@ class KnowledgeFsEntryRepository:
                 fs.kid,
                 kb.kb_code,
                 fs.name,
-                fs.full_path,
                 fs.path_ltree,
                 CASE
                     WHEN fs.entry_type = 'DIRECTORY' THEN 'directory'
@@ -385,52 +338,22 @@ class KnowledgeFsEntryRepository:
         )
         return self._fetchall(cursor)
 
-    def list_entries_by_path_pattern(
-        self, cursor: Any, *, path_regex: str, ancestor_path_ltree: str | None = None
-    ) -> list[dict[str, Any]]:
-        """List entries whose full_path matches the supplied regex."""
-        ancestor_clause = ""
-        if ancestor_path_ltree:
-            ancestor_clause = " AND fs.path_ltree <@ %(ancestor_path_ltree)s::ltree"
-        cursor.execute(
-            f"""
-            SELECT
-                kb.kb_code,
-                fs.full_path AS name,
-                CASE
-                    WHEN fs.entry_type = 'DIRECTORY' THEN 'directory'
-                    ELSE 'file'
-                END AS type,
-                CASE
-                    WHEN fs.entry_type = 'DIRECTORY' THEN 0
-                    ELSE COALESCE(kv.file_size, 0)
-                END AS size
-            FROM knowledge_fs_entry fs
-            JOIN knowledge_base kb ON kb.kid = fs.knowledge_base_id
-            LEFT JOIN knowledge_item ki
-                ON ki.fs_entry_id = fs.kid
-            LEFT JOIN knowledge_item_version kv
-                ON kv.kid = ki.current_version_id
-            WHERE fs.status = 'ACTIVE'
-              AND fs.is_deleted = FALSE
-              AND kb.is_deleted = FALSE
-              AND fs.full_path ~ %(path_regex)s
-              {ancestor_clause}
-            ORDER BY lower(fs.full_path)
-            """,
-            {
-                "path_regex": path_regex,
-                "ancestor_path_ltree": ancestor_path_ltree,
-            },
-        )
-        return self._fetchall(cursor)
-
     def get_current_file_version_by_entry_id(
         self, cursor: Any, *, fs_entry_id: int
     ) -> dict[str, Any] | None:
         """Resolve current-version object metadata for one file entry."""
         cursor.execute(
             """
+            WITH RECURSIVE item_path AS (
+                SELECT kid, parent_entry_id, name, depth, is_root
+                FROM knowledge_fs_entry
+                WHERE kid = %(fs_entry_id)s
+              UNION ALL
+                SELECT parent.kid, parent.parent_entry_id, parent.name, parent.depth, parent.is_root
+                FROM knowledge_fs_entry parent
+                JOIN item_path child ON child.parent_entry_id = parent.kid
+                WHERE parent.is_deleted = FALSE
+            )
             SELECT
                 fs.kid,
                 fs.knowledge_base_id,
@@ -438,8 +361,12 @@ class KnowledgeFsEntryRepository:
                 kv.kid AS knowledge_item_version_id,
                 kb.kb_code,
                 kb.kb_name,
-                fs.full_path,
                 fs.name,
+                (
+                    SELECT COALESCE(string_agg(name, '/' ORDER BY depth), '')
+                    FROM item_path
+                    WHERE is_root = FALSE
+                ) AS full_path,
                 kv.version,
                 kv.bucket_name,
                 kv.object_key,
@@ -473,7 +400,7 @@ class KnowledgeFsEntryRepository:
     def _get_entry_by_id(self, cursor: Any, *, entry_id: int) -> dict[str, Any] | None:
         cursor.execute(
             """
-            SELECT kid, knowledge_base_id, parent_entry_id, path_ltree, full_path, name
+            SELECT kid, knowledge_base_id, parent_entry_id, path_ltree, name, entry_type, is_root, depth
             FROM knowledge_fs_entry
             WHERE kid = %(entry_id)s
               AND is_deleted = FALSE
@@ -483,18 +410,39 @@ class KnowledgeFsEntryRepository:
         fetchone = getattr(cursor, "fetchone", None)
         return fetchone() if callable(fetchone) else None
 
-    def _get_entry_by_full_path(
-        self, cursor: Any, *, knowledge_base_id: int, full_path: str
+    def _get_child_entry(
+        self, cursor: Any, *, knowledge_base_id: int, parent_entry_id: int, name: str
     ) -> dict[str, Any] | None:
         cursor.execute(
             """
-            SELECT kid, knowledge_base_id, parent_entry_id, path_ltree, full_path, name
+            SELECT kid, knowledge_base_id, parent_entry_id, path_ltree, name, entry_type, is_root, depth
             FROM knowledge_fs_entry
             WHERE knowledge_base_id = %(knowledge_base_id)s
-              AND full_path = %(full_path)s
+              AND parent_entry_id = %(parent_entry_id)s
+              AND name = %(name)s
               AND is_deleted = FALSE
             """,
-            {"knowledge_base_id": knowledge_base_id, "full_path": full_path},
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "parent_entry_id": parent_entry_id,
+                "name": name,
+            },
+        )
+        fetchone = getattr(cursor, "fetchone", None)
+        return fetchone() if callable(fetchone) else None
+
+    def _get_root_by_name(self, cursor: Any, *, name: str) -> dict[str, Any] | None:
+        cursor.execute(
+            """
+            SELECT kid, knowledge_base_id, parent_entry_id, path_ltree, name, entry_type, is_root, depth
+            FROM knowledge_fs_entry
+            WHERE is_root = TRUE
+              AND name = %(name)s
+              AND is_deleted = FALSE
+            ORDER BY kid ASC
+            LIMIT 1
+            """,
+            {"name": name},
         )
         fetchone = getattr(cursor, "fetchone", None)
         return fetchone() if callable(fetchone) else None

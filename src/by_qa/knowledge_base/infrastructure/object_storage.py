@@ -2,7 +2,6 @@
 
 from datetime import timedelta
 from io import BytesIO
-from pathlib import PurePosixPath
 from typing import Any
 
 try:
@@ -26,25 +25,19 @@ class KnowledgeBaseObjectStorage:
         self,
         *,
         knowledge_base_id: int,
-        full_path: str,
+        knowledge_item_id: int,
         version: str,
     ) -> str:
-        normalized_path = full_path.strip("/")
-        file_name = PurePosixPath(normalized_path).name or normalized_path
-        return f"{knowledge_base_id}/{normalized_path}/{version}/{file_name}"
+        return f"kb/{knowledge_base_id}/item/{knowledge_item_id}/version/{version}/original"
 
     def build_markdown_object_key(
         self,
         *,
         knowledge_base_id: int,
-        full_path: str,
+        knowledge_item_id: int,
         version: str,
     ) -> str:
-        normalized_path = full_path.strip("/")
-        path = PurePosixPath(normalized_path)
-        stem = path.stem or path.name or "content"
-        file_name = f"{stem}.md"
-        return f"{knowledge_base_id}/{normalized_path}/{version}/{file_name}"
+        return f"kb/{knowledge_base_id}/item/{knowledge_item_id}/version/{version}/markdown"
 
     def upload_temp_object(
         self,

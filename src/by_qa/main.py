@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from importlib import import_module
@@ -346,7 +347,7 @@ except ImportError:
     app = None
 
 
-def main() -> None:
+async def async_main() -> None:
     """Run the local development server."""
     try:
         import uvicorn
@@ -363,6 +364,11 @@ def main() -> None:
         reload=True,
         factory=True,
     )
+
+
+def main() -> None:
+    """Run the async CLI entrypoint in a dedicated event loop."""
+    asyncio.run(async_main())
 
 
 if __name__ == "__main__":

@@ -207,6 +207,13 @@ class FakeKBService:
             reached_eof=True,
         )
 
+    def download_file(self, request):
+        return {
+            "filename": "doc.pdf",
+            "media_type": "application/pdf",
+            "content": b"%PDF-1.4 test payload",
+        }
+
 
 def make_test_client(monkeypatch, service):
     """Create a TestClient with unrelated startup dependencies stubbed out."""
@@ -1229,6 +1236,55 @@ def test_read_file_route_returns_access_url_for_binary_files(monkeypatch):
         "content_type": "original",
         "url": "https://minio.example/knowledge-base/7/dir1/doc.pdf/v1/doc.pdf?ttl=3600",
     }
+
+
+def test_download_file_route_returns_binary_stream(monkeypatch):
+    """Download-file should return raw file bytes with attachment headers."""
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/download-file",
+        json={
+            "kb_codes": ["hr-policy"],
+            "path": "Integration KB/dir1/doc.pdf",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"%PDF-1.4 test payload"
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.headers["content-disposition"] == 'attachment; filename="doc.pdf"'
+
+
+def test_download_file_route_supports_non_ascii_filename(monkeypatch):
+    """Download-file should encode non-ASCII filenames safely in headers."""
+
+    class UnicodeFilenameKBService(FakeKBService):
+        def download_file(self, request):
+            return {
+                "filename": "开源项目最佳实践汇报.md",
+                "media_type": "text/markdown",
+                "content": b"# hello\n",
+            }
+
+    client = make_test_client(monkeypatch, UnicodeFilenameKBService())
+    response = client.post(
+        "/api/v1/download-file",
+        json={
+            "kb_codes": ["demo"],
+            "path": "DEMO知识库/考勤制度/开源项目最佳实践汇报.md",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"# hello\n"
+    assert response.headers["content-type"].startswith("text/markdown")
+    assert (
+        response.headers["content-disposition"]
+        == 'attachment; filename="download.md"; '
+        "filename*=UTF-8''%E5%BC%80%E6%BA%90%E9%A1%B9%E7%9B%AE%E6%9C%80%E4%BD%B3%E5%AE%9E%E8%B7%B5%E6%B1%87%E6%8A%A5.md"
+    )
 
 
 def test_read_file_route_requires_kb_codes(monkeypatch):

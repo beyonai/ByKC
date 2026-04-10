@@ -1,6 +1,7 @@
 """Service for creating and updating knowledge bases."""
 
 import fnmatch
+import mimetypes
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -18,6 +19,7 @@ from by_qa.knowledge_base.api.schemas import (
     DeleteDirectoryResponse,
     DeleteKnowledgeBaseRequest,
     DeleteKnowledgeBaseResponse,
+    KnowledgeItemDownloadRequest,
     KnowledgeItemFetchRequest,
     KnowledgeItemFetchResponse,
     KnowledgeItemGlobRequest,
@@ -853,6 +855,63 @@ class KnowledgeBaseService:
             data=selected_text,
             reached_eof=reached_eof,
         )
+
+    def download_file(self, request: KnowledgeItemDownloadRequest) -> dict[str, Any]:
+        """Download the current original file bytes for a virtual path."""
+        logger.info(
+            "knowledge_base_service.download_file started: path=%s",
+            request.path,
+        )
+        if self.object_storage is None:
+            raise KnowledgeBaseValidationError("download runtime is not configured")
+
+        normalized_virtual_path = self._normalize_virtual_path(request.path)
+        connection = self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            file_node = self._resolve_virtual_path(
+                cursor,
+                normalized_virtual_path,
+                kb_codes=request.kb_codes,
+            )
+            if file_node is None or file_node["type"] != "file":
+                raise KnowledgeBaseValidationError(f"file not found: {request.path}")
+            version_row = (
+                self.knowledge_fs_entry_repository.get_current_file_version_by_entry_id(
+                    cursor,
+                    fs_entry_id=int(file_node["kid"]),
+                )
+            )
+            if version_row is None:
+                raise KnowledgeBaseValidationError(
+                    f"current version not found: {request.path}"
+                )
+        finally:
+            connection.close()
+
+        payload = self.object_storage.download_object(
+            str(version_row["object_key"]),
+            bucket_name=str(version_row["bucket_name"]),
+        )
+        filename = PurePosixPath(normalized_virtual_path).name or "download"
+        media_type = self._guess_media_type(filename)
+        logger.info(
+            "knowledge_base_service.download_file finished: path=%s, filename=%s, returned_bytes=%s",
+            request.path,
+            filename,
+            len(payload),
+        )
+        return {
+            "filename": filename,
+            "media_type": media_type,
+            "content": payload,
+        }
+
+    def _guess_media_type(self, filename: str) -> str:
+        suffix = PurePosixPath(filename).suffix.lower()
+        if suffix in {".md", ".markdown"}:
+            return "text/markdown"
+        return mimetypes.guess_type(filename)[0] or "application/octet-stream"
 
     def _row_id(self, row: dict[str, Any]) -> int:
         if "kid" in row:

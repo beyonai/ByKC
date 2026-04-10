@@ -57,6 +57,8 @@
 | 18 | 普通使用者 | 读取 markdown 全量内容 | `knowledge-items/import -> read-file(markdown full)` | 返回完整 markdown；`reached_eof=true` | 已写 |
 | 19 | 普通使用者 | 读取 markdown 行窗口 | `knowledge-items/import -> read-file(start_line,end_line)` | 返回指定行范围；`reached_eof` 正确；非法窗口报错 | 已写 |
 | 20 | 普通使用者 | 读取 original 文件 | `write-file/import -> read-file(original)` | 返回原文件 URL，不返回 markdown 文本 | 已写 |
+| 20A | 普通使用者 | 下载中文文件名的 Markdown 原文件 | `knowledge-items/import(中文文件名) -> download-file` | 返回原始字节流；`Content-Disposition` 对非 ASCII 文件名安全；`Content-Type=text/markdown` | 已写 |
+| 20B | 普通使用者 | 下载二进制 PDF 原文件 | `file-to-markdown -> build-markdown-index -> knowledge-items/import(pdf) -> download-file` | 返回原始 PDF 字节流；`Content-Type=application/pdf`；下载文件名正确 | 已写 |
 | 21 | 检索使用者 | 单文件命中检索 | `knowledge-items/import -> knowledge-items/search` | 返回对应 chunk；路径、版本、chunk 编号正确 | 已写 |
 | 22 | 检索使用者 | 过滤条件检索 | `import multiple files -> search with kb/source/type filters` | 仅返回符合过滤条件的结果 | 已写 |
 | 23 | 检索使用者 | 删除后的检索收敛 | `import -> search hit -> delete file/dir -> search again` | 已删除内容不再命中 | 已写 |
@@ -88,7 +90,7 @@
 | 文件 | 覆盖重点 |
 | --- | --- |
 | [tests/knowledge_build/integration/test_api_integration.py](/Users/jialangli/code/workspace/by-qa/tests/knowledge_build/integration/test_api_integration.py) | `knowledge_build` 三接口正常/异常与组合链路等价性 |
-| [tests/knowledge_base/integration/test_kb_api_stateful_integration.py](/Users/jialangli/code/workspace/by-qa/tests/knowledge_base/integration/test_kb_api_stateful_integration.py) | 混合构建导入、分步写入、知识库改名、单文件/目录删除、多级目录改名删除、读取窗口校验、真实搜索链路与失败保护 |
+| [tests/knowledge_base/integration/test_kb_api_stateful_integration.py](/Users/jialangli/code/workspace/by-qa/tests/knowledge_base/integration/test_kb_api_stateful_integration.py) | 混合构建导入、分步写入、知识库改名、单文件/目录删除、多级目录改名删除、读取窗口校验、`download-file` 的中文文件名/二进制文件下载、真实搜索链路与失败保护 |
 
 ## 下一轮优先补充建议
 

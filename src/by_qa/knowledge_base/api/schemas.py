@@ -369,6 +369,13 @@ class KnowledgeItemFetchRequest(BaseModel):
         return self
 
 
+class KnowledgeItemDownloadRequest(BaseModel):
+    """Request body for downloading the original file content."""
+
+    kb_codes: list[str] = Field(min_length=1)
+    path: str = Field(min_length=1)
+
+
 class KnowledgeItemFetchResponse(BaseModel):
     """Business response for fetch."""
 

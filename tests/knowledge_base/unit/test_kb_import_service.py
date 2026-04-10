@@ -11,6 +11,7 @@ from by_qa.knowledge_base.api.schemas import (
     DeleteDirectoryRequest,
     DeleteKnowledgeBaseRequest,
     DeleteKnowledgeItemRequest,
+    KnowledgeItemDownloadRequest,
     KnowledgeItemFetchRequest,
     KnowledgeItemGlobRequest,
     KnowledgeItemImportManifest,
@@ -3136,6 +3137,71 @@ def test_fetch_returns_access_url_for_binary_files(tmp_path):
         "url": "https://minio.example/knowledge-base/kb/7/item/10/version/v1/original?ttl=3600",
     }
     assert storage.downloaded == []
+    assert cache_repository.calls == []
+
+
+def test_download_file_returns_original_bytes(tmp_path):
+    """Download-file should fetch the current original object bytes."""
+    connection = FakeConnection()
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    storage = FakeObjectStorage()
+    storage.object_payloads[("knowledge-base", "kb/7/item/10/version/v1/original")] = (
+        b"%PDF-1.4 binary payload"
+    )
+    cache_repository = FakeKnowledgeFetchCacheRepository()
+    service = KnowledgeBaseService(
+        connection_factory=lambda: connection,
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result=None
+        ),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        knowledge_fetch_cache_repository=cache_repository,
+        object_storage=storage,
+        cache_root=tmp_path,
+        cache_ttl_seconds=24 * 60 * 60,
+    )
+    knowledge_fs_entry_repository.get_current_file_version_by_entry_id = (
+        lambda cursor, *, fs_entry_id: {
+            "knowledge_base_id": 7,
+            "knowledge_item_id": 10,
+            "knowledge_item_version_id": 22,
+            "kb_code": "hr-policy",
+            "full_path": "dir1/doc.pdf",
+            "version": "v1",
+            "bucket_name": "knowledge-base",
+            "object_key": "kb/7/item/10/version/v1/original",
+            "markdown_bucket_name": "knowledge-base-markdown",
+            "markdown_object_key": "kb/7/item/10/version/v1/markdown",
+            "checksum": "abc123",
+        }
+    )
+    knowledge_fs_entry_repository.child_nodes_by_parent["kb_7.d1_a"] = [
+        {
+            "kid": 71,
+            "kb_code": "hr-policy",
+            "name": "doc.pdf",
+            "full_path": "doc.pdf",
+            "type": "file",
+            "size": 128,
+            "path_ltree": "kb_7.d1_a.f2_doc",
+        }
+    ]
+
+    response = service.download_file(
+        KnowledgeItemDownloadRequest(
+            kb_codes=["hr-policy"],
+            path="人力制度知识库/dir1/doc.pdf",
+        )
+    )
+
+    assert response == {
+        "filename": "doc.pdf",
+        "media_type": "application/pdf",
+        "content": b"%PDF-1.4 binary payload",
+    }
+    assert storage.downloaded == [
+        ("kb/7/item/10/version/v1/original", "knowledge-base")
+    ]
     assert cache_repository.calls == []
 
 

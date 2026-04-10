@@ -4,8 +4,12 @@
 
 本文档描述 `by_qa` 开源仓库当前已经实现并对外暴露的知识库 API。
 
+补充说明：
+
+- 若某接口标注为“计划新增”或“待实现”，表示本文档已经先定义接口契约，但当前开源仓库代码可能尚未提供对应路由实现
+
 - Base URL：`/api/v1`
-- 协议：`HTTP + JSON`
+- 协议：`HTTP`，绝大多数接口使用 `JSON`
 - 当前实现入口：`src/by_qa/main.py`
 - 路由定义：`src/by_qa/knowledge_base/api/routes.py`
 - 请求/响应模型：`src/by_qa/knowledge_base/api/schemas.py`
@@ -104,6 +108,7 @@
 | `POST` | `/api/v1/list_dir` | 列出虚拟目录 |
 | `POST` | `/api/v1/glob` | 按路径模式匹配文件或目录 |
 | `POST` | `/api/v1/read-file` | 读取原文件访问地址或 Markdown 内容 |
+| `POST` | `/api/v1/download-file` | 下载原文件流 |
 
 ## 创建知识库
 
@@ -1225,6 +1230,105 @@
 
 - `KB_FILE_NOT_FOUND`
 - `KB_READ_FILE_INVALID`
+- `KB_RUNTIME_CONFIG_ERROR`
+
+## 下载原文件
+
+### `POST /api/v1/download-file`
+
+根据路径直接下载原始文件内容。
+
+当前行为：
+
+- 与 `read-file` 不同，该接口成功时直接返回文件流，不使用统一 JSON 成功信封
+- 该接口只用于下载原始文件，不支持 Markdown 行窗口读取
+
+接口语义：
+
+- 根据 `kb_codes + path` 解析当前生效版本
+- 返回对象存储中的原始文件二进制内容
+- 响应头中携带 `Content-Disposition: attachment`
+- 对 ASCII 文件名直接返回 `filename="..."`；对非 ASCII 文件名返回 ASCII 回退名加 `filename*`
+- 保留对象对应的 MIME 类型；当前实现对 `.md/.markdown` 显式返回 `text/markdown`，无法可靠识别时回退为 `application/octet-stream`
+
+### 请求体
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `kb_codes` | string[] | 是 | 查询的知识库编码列表 |
+| `path` | string | 是 | 文件路径 |
+
+### 请求示例
+
+```json
+{
+  "kb_codes": ["hr-policy"],
+  "path": "/考勤制度/异常考勤处理办法.pdf"
+}
+```
+
+### 成功响应
+
+成功时返回文件流，典型响应头如下：
+
+| 响应头 | 说明 |
+| --- | --- |
+| `Content-Type` | 原文件 MIME 类型，未知时可为 `application/octet-stream` |
+| `Content-Disposition` | ASCII 文件名时为 `attachment; filename="异常考勤处理办法.pdf"`；非 ASCII 文件名时会额外带 `filename*` |
+| `Content-Length` | 文件字节长度，可选 |
+
+响应体为原文件二进制字节流，不是 JSON。
+
+### 成功响应示例
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/pdf
+Content-Disposition: attachment; filename="异常考勤处理办法.pdf"
+Content-Length: 204800
+
+%PDF-1.4 ...
+```
+
+中文文件名示例：
+
+```http
+HTTP/1.1 200 OK
+Content-Type: text/markdown
+Content-Disposition: attachment; filename="download.md"; filename*=UTF-8''%E5%BC%80%E6%BA%90%E9%A1%B9%E7%9B%AE%E6%9C%80%E4%BD%B3%E5%AE%9E%E8%B7%B5%E6%B1%87%E6%8A%A5.md
+
+# ...
+```
+
+### 失败响应
+
+失败时继续使用统一错误信封。
+
+### 失败响应示例
+
+文件不存在：
+
+```json
+{
+  "code": 404,
+  "message": "error",
+  "data": null,
+  "error": {
+    "type": "not_found",
+    "error_code": "KB_FILE_NOT_FOUND",
+    "error_message": "file not found: /考勤制度/异常考勤处理办法.pdf",
+    "details": {
+      "path": "/考勤制度/异常考勤处理办法.pdf",
+      "kb_codes": ["hr-policy"]
+    }
+  }
+}
+```
+
+### 典型错误码
+
+- `KB_FILE_NOT_FOUND`
+- `KB_DOWNLOAD_FILE_INVALID`
 - `KB_RUNTIME_CONFIG_ERROR`
 
 ## 修改文件信息

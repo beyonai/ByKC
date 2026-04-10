@@ -1682,6 +1682,113 @@ def test_read_file_rejects_invalid_markdown_line_windows(monkeypatch, tmp_path):
 
 
 @pytest.mark.integration
+def test_download_file_returns_original_bytes_with_non_ascii_filename(
+    monkeypatch, tmp_path
+):
+    """Download-file should return original bytes and a safe header for non-ASCII names."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+
+    kb_code = f"kb-{uuid4().hex[:8]}"
+    kb_name = "DEMO知识库"
+    file_name = "开源项目最佳实践汇报.md"
+    file_path = f"考勤制度/{file_name}"
+    virtual_path = f"{kb_name}/{file_path}"
+    original_content = "# 最佳实践\n\n第一条：保持接口清晰。\n"
+
+    with TestClient(main_module.app) as client:
+        _create_kb(client, kb_code, kb_name)
+        _create_directory(
+            client,
+            kb_code=kb_code,
+            directory_code=f"dir-{uuid4().hex[:6]}",
+            directory_path="/考勤制度",
+        )
+        _import_markdown_file(
+            client,
+            kb_code=kb_code,
+            file_code=f"file-{uuid4().hex[:8]}",
+            file_path=file_path,
+            markdown_content=original_content,
+        )
+
+        response = client.post(
+            "/api/v1/download-file",
+            json={
+                "kb_codes": [kb_code],
+                "path": virtual_path,
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.content == original_content.encode("utf-8")
+    assert response.headers["content-type"].startswith("text/markdown")
+    assert (
+        response.headers["content-disposition"]
+        == 'attachment; filename="download.md"; '
+        "filename*=UTF-8''%E5%BC%80%E6%BA%90%E9%A1%B9%E7%9B%AE%E6%9C%80%E4%BD%B3%E5%AE%9E%E8%B7%B5%E6%B1%87%E6%8A%A5.md"
+    )
+
+
+@pytest.mark.integration
+def test_download_file_returns_binary_pdf_bytes(monkeypatch, tmp_path):
+    """Download-file should return original binary bytes and PDF headers."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch,
+        FakeDocumentChunkingService(markdown_text="# PDF\n\nbinary content\n"),
+    )
+
+    kb_code = f"kb-{uuid4().hex[:8]}"
+    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    original_bytes = b"%PDF-1.4 binary handbook bytes"
+
+    with TestClient(main_module.app) as client:
+        _create_kb(client, kb_code, kb_name)
+        _create_directory(
+            client,
+            kb_code=kb_code,
+            directory_code=f"dir-{uuid4().hex[:6]}",
+            directory_path="/Policies",
+        )
+        markdown_content = _build_markdown_via_api(
+            client, original_bytes=original_bytes
+        )
+        chunks = _build_chunks_via_api(client, markdown_content=markdown_content)
+        import_response = client.post(
+            "/api/v1/knowledge-items/import",
+            json={
+                "kb_code": kb_code,
+                "file_code": f"file-{uuid4().hex[:8]}",
+                "file_path": "Policies/handbook.pdf",
+                "file_description": "binary handbook",
+                "file_content": base64.b64encode(original_bytes).decode("ascii"),
+                "version": "v1",
+                "source_code": "integration",
+                "status": "ACTIVE",
+                "markdown_content": markdown_content,
+                "chunks": chunks,
+            },
+        )
+        response = client.post(
+            "/api/v1/download-file",
+            json={
+                "kb_codes": [kb_code],
+                "path": f"{kb_name}/Policies/handbook.pdf",
+            },
+        )
+
+    assert import_response.status_code == 200, import_response.text
+    assert response.status_code == 200
+    assert response.content == original_bytes
+    assert response.headers["content-type"].startswith("application/pdf")
+    assert (
+        response.headers["content-disposition"] == 'attachment; filename="handbook.pdf"'
+    )
+
+
+@pytest.mark.integration
 def test_search_returns_hits_for_content_imported_from_real_build_outputs(
     monkeypatch, tmp_path
 ):

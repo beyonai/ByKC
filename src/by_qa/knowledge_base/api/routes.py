@@ -1,7 +1,11 @@
 """Route registration for knowledge base APIs."""
 
+import mimetypes
+from pathlib import PurePosixPath
 from typing import Any, Optional
+from urllib.parse import quote
 
+from fastapi import Response
 from fastapi.responses import JSONResponse
 
 from by_qa.core import logger
@@ -11,6 +15,7 @@ from by_qa.knowledge_base.api.schemas import (
     DeleteDirectoryRequest,
     DeleteKnowledgeBaseRequest,
     DeleteKnowledgeItemRequest,
+    KnowledgeItemDownloadRequest,
     KnowledgeItemFetchRequest,
     KnowledgeItemGlobRequest,
     KnowledgeItemImportRequest,
@@ -76,6 +81,20 @@ def _ensure_leading_slash(path: str) -> str:
     if not normalized:
         return "/"
     return normalized if normalized.startswith("/") else f"/{normalized}"
+
+
+def _build_content_disposition(filename: str) -> str:
+    """Build a Content-Disposition header that is safe for non-ASCII filenames."""
+    normalized = PurePosixPath(filename or "download").name or "download"
+    safe_ascii = normalized.encode("ascii", "ignore").decode("ascii")
+    if not safe_ascii or safe_ascii.startswith("."):
+        suffix = PurePosixPath(normalized).suffix
+        safe_ascii = f"download{suffix}" if suffix else "download"
+    safe_ascii = safe_ascii.replace('"', "")
+    if safe_ascii == normalized:
+        return f'attachment; filename="{safe_ascii}"'
+    encoded = quote(normalized, safe="")
+    return f"attachment; filename=\"{safe_ascii}\"; filename*=UTF-8''{encoded}"
 
 
 def _map_create_knowledge_base_validation_error(
@@ -540,6 +559,30 @@ def _map_read_file_validation_error(
         status_code=422,
         error_type="business_validation",
         error_code="KB_READ_FILE_INVALID",
+        error_message=message,
+        details={"path": path, "kb_codes": kb_codes},
+    )
+
+
+def _map_download_file_validation_error(
+    *, exc: KnowledgeBaseValidationError, path: str, kb_codes: list[str]
+) -> JSONResponse:
+    """Map download-file validation errors to the standardized protocol."""
+    message = str(exc)
+    if message.startswith("file not found:") or message.startswith(
+        "current version not found:"
+    ):
+        return _error_response(
+            status_code=404,
+            error_type="not_found",
+            error_code="KB_FILE_NOT_FOUND",
+            error_message=message,
+            details={"path": path, "kb_codes": kb_codes},
+        )
+    return _error_response(
+        status_code=422,
+        error_type="business_validation",
+        error_code="KB_DOWNLOAD_FILE_INVALID",
         error_message=message,
         details={"path": path, "kb_codes": kb_codes},
     )
@@ -1170,6 +1213,66 @@ def register_routes(
         payload = result.model_dump(exclude_none=True)
         payload["path"] = _ensure_leading_slash(str(payload.get("path", "")))
         return _success_response(data=payload)
+
+    @app.post("/api/v1/download-file")
+    async def download_file(request: KnowledgeItemDownloadRequest):
+        logger.info(
+            "download_file request received: path=%s, kb_code_count=%s",
+            request.path,
+            len(request.kb_codes),
+        )
+        try:
+            service = get_knowledge_base_service()
+            logger.info(
+                "download_file resolved service: service_class=%s",
+                service.__class__.__name__,
+            )
+            result = service.download_file(request)
+            logger.info(
+                "download_file service call succeeded: path=%s, returned_bytes=%s",
+                request.path,
+                len(result["content"]),
+            )
+        except KnowledgeBaseConfigurationError as exc:
+            logger.warning(
+                "download_file configuration failed: path=%s, error=%s",
+                request.path,
+                exc,
+            )
+            return _error_response(
+                status_code=503,
+                error_type="configuration_error",
+                error_code="KB_RUNTIME_CONFIG_ERROR",
+                error_message=str(exc),
+                details={"path": request.path, "kb_codes": request.kb_codes},
+            )
+        except KnowledgeBaseValidationError as exc:
+            logger.warning(
+                "download_file validation failed: path=%s, error=%s",
+                request.path,
+                exc,
+            )
+            return _map_download_file_validation_error(
+                exc=exc,
+                path=request.path,
+                kb_codes=request.kb_codes,
+            )
+
+        logger.info(
+            "download_file response ready: code=200, path=%s, filename=%s, returned_bytes=%s",
+            request.path,
+            result["filename"],
+            len(result["content"]),
+        )
+        quoted_filename = PurePosixPath(result["filename"]).name.replace('"', "")
+        media_type = result["media_type"] or mimetypes.guess_type(quoted_filename)[0]
+        return Response(
+            content=result["content"],
+            media_type=media_type or "application/octet-stream",
+            headers={
+                "Content-Disposition": _build_content_disposition(quoted_filename)
+            },
+        )
 
 
 def _require_form_value(form, key: str) -> str:

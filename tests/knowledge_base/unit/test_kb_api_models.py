@@ -75,6 +75,35 @@ def test_delete_directory_request_requires_kb_code_and_directory_code():
     assert request.directory_code == "attendance-archive"
 
 
+def test_update_directory_request_accepts_partial_fields():
+    """Update-directory requests should allow partial updates."""
+    from by_qa.knowledge_base.api.schemas import UpdateDirectoryRequest
+
+    request = UpdateDirectoryRequest(
+        kb_code="hr-policy",
+        directory_code="attendance-archive",
+        directory_name="历史归档",
+        metadata={"owner": "HR"},
+    )
+
+    assert request.kb_code == "hr-policy"
+    assert request.directory_code == "attendance-archive"
+    assert request.directory_name == "历史归档"
+    assert request.directory_description is None
+
+
+def test_update_directory_request_rejects_path_like_directory_name():
+    """Directory rename should only accept a single path segment, not a path."""
+    from by_qa.knowledge_base.api.schemas import UpdateDirectoryRequest
+
+    with pytest.raises(ValidationError):
+        UpdateDirectoryRequest(
+            kb_code="hr-policy",
+            directory_code="attendance-archive",
+            directory_name="/demo",
+        )
+
+
 def test_delete_knowledge_item_request_requires_kb_code_and_file_code():
     """Delete-knowledge-item requests should require kb_code and file_code."""
     from by_qa.knowledge_base.api.schemas import DeleteKnowledgeItemRequest

@@ -232,3 +232,40 @@ class KnowledgeItemRepository:
                 "fs_entry_ids": fs_entry_ids,
             },
         )
+
+    def update_knowledge_item(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        item_code: str,
+        updates: dict[str, Any],
+    ) -> None:
+        """Update mutable business fields for one knowledge item."""
+        assignments: list[str] = []
+        params: dict[str, Any] = {
+            "knowledge_base_id": knowledge_base_id,
+            "item_code": item_code,
+        }
+
+        if "description" in updates:
+            assignments.append("description = %(description)s")
+            params["description"] = updates["description"]
+        if "metadata" in updates:
+            assignments.append("metadata = %(metadata)s::jsonb")
+            params["metadata"] = json.dumps(updates["metadata"] or {})
+
+        if not assignments:
+            return
+
+        cursor.execute(
+            f"""
+            UPDATE knowledge_item
+            SET {", ".join(assignments)},
+                updated_at = NOW()
+            WHERE knowledge_base_id = %(knowledge_base_id)s
+              AND item_code = %(item_code)s
+              AND is_deleted = FALSE
+            """,
+            params,
+        )

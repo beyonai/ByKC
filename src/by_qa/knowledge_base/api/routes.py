@@ -16,6 +16,7 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemImportRequest,
     KnowledgeItemListDirRequest,
     KnowledgeItemSearchRequest,
+    UpdateDirectoryRequest,
     UpdateKnowledgeBaseRequest,
     WriteFileRequest,
     WriteIndexRequest,
@@ -240,6 +241,47 @@ def _map_delete_directory_validation_error(
         status_code=422,
         error_type="business_validation",
         error_code="KB_DIRECTORY_DELETE_INVALID",
+        error_message=message,
+        details={"kb_code": kb_code, "directory_code": directory_code},
+    )
+
+
+def _map_update_directory_validation_error(
+    *,
+    exc: KnowledgeBaseValidationError,
+    kb_code: str,
+    directory_code: str,
+) -> JSONResponse:
+    """Map update-directory validation errors to the standardized protocol."""
+    message = str(exc)
+    if message.startswith("knowledge base not found:"):
+        return _error_response(
+            status_code=404,
+            error_type="not_found",
+            error_code="KB_NOT_FOUND",
+            error_message=message,
+            details={"kb_code": kb_code},
+        )
+    if message.startswith("directory not found:"):
+        return _error_response(
+            status_code=404,
+            error_type="not_found",
+            error_code="KB_DIRECTORY_NOT_FOUND",
+            error_message=message,
+            details={"kb_code": kb_code, "directory_code": directory_code},
+        )
+    if message.startswith("directory name already exists under parent:"):
+        return _error_response(
+            status_code=409,
+            error_type="conflict",
+            error_code="KB_DIRECTORY_NAME_CONFLICT",
+            error_message=message,
+            details={"kb_code": kb_code, "directory_code": directory_code},
+        )
+    return _error_response(
+        status_code=422,
+        error_type="business_validation",
+        error_code="KB_DIRECTORY_UPDATE_INVALID",
         error_message=message,
         details={"kb_code": kb_code, "directory_code": directory_code},
     )
@@ -611,6 +653,38 @@ def register_routes(
             )
         except KnowledgeBaseValidationError as exc:
             return _map_delete_directory_validation_error(
+                exc=exc,
+                kb_code=request.kb_code,
+                directory_code=request.directory_code,
+            )
+        return _success_response(data=result.model_dump())
+
+    @app.post("/api/v1/directories/update")
+    async def update_directory(request: UpdateDirectoryRequest):
+        logger.info(
+            "update_directory request received: kb_code=%s, directory_code=%s, has_name=%s, has_description=%s, has_metadata=%s",
+            request.kb_code,
+            request.directory_code,
+            "directory_name" in request.model_fields_set,
+            "directory_description" in request.model_fields_set,
+            "metadata" in request.model_fields_set,
+        )
+        try:
+            service = get_knowledge_base_service()
+            result = service.update_directory(request)
+        except KnowledgeBaseConfigurationError as exc:
+            return _error_response(
+                status_code=503,
+                error_type="configuration_error",
+                error_code="KB_RUNTIME_CONFIG_ERROR",
+                error_message=str(exc),
+                details={
+                    "kb_code": request.kb_code,
+                    "directory_code": request.directory_code,
+                },
+            )
+        except KnowledgeBaseValidationError as exc:
+            return _map_update_directory_validation_error(
                 exc=exc,
                 kb_code=request.kb_code,
                 directory_code=request.directory_code,

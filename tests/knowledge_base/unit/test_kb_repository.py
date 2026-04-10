@@ -210,6 +210,27 @@ def test_soft_delete_knowledge_item_by_fs_entry_ids_updates_is_deleted_flag():
     assert params == {"knowledge_base_id": 7, "fs_entry_ids": [81, 82, 83]}
 
 
+def test_update_knowledge_item_only_updates_provided_fields():
+    """Directory metadata updates should only emit assignments for provided fields."""
+    repo = KnowledgeItemRepository()
+    cursor = FakeCursor()
+
+    repo.update_knowledge_item(
+        cursor,
+        knowledge_base_id=7,
+        item_code="attendance-archive",
+        updates={"description": "更新后的目录说明", "metadata": {"owner": "HR"}},
+    )
+
+    sql, params = cursor.executed[0]
+    lowered = sql.lower()
+    assert "update knowledge_item" in lowered
+    assert "description = %(description)s" in sql
+    assert "metadata = %(metadata)s::jsonb" in sql
+    assert params["knowledge_base_id"] == 7
+    assert params["item_code"] == "attendance-archive"
+
+
 def test_get_knowledge_base_by_code_filters_deleted_rows():
     """Knowledge base lookup should ignore logically deleted rows in SQL."""
     repo = KnowledgeBaseRepository()

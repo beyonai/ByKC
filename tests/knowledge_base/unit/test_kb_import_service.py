@@ -16,6 +16,7 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemImportManifest,
     KnowledgeItemImportRequest,
     KnowledgeItemListDirRequest,
+    UpdateDirectoryRequest,
     UpdateKnowledgeBaseRequest,
     WriteFileRequest,
     WriteIndexRequest,
@@ -212,10 +213,27 @@ class FakeKnowledgeFsEntryRepository:
         ]
         self.directory_entry = {
             "kid": 80,
+            "knowledge_base_id": 7,
+            "parent_entry_id": 70,
+            "name": "dir1",
             "entry_type": "DIRECTORY",
             "full_path": "人力制度知识库/dir1",
             "path_ltree": "kb_7.d1_a",
         }
+        self.entry_by_id = {
+            80: self.directory_entry,
+            70: {
+                "kid": 70,
+                "knowledge_base_id": 7,
+                "parent_entry_id": None,
+                "name": "人力制度知识库",
+                "entry_type": "DIRECTORY",
+                "path_ltree": "kb_7",
+                "is_root": True,
+                "depth": 0,
+            },
+        }
+        self.child_entry_by_parent_and_name = {}
         self.directory_children = [
             {
                 "kb_code": "hr-policy",
@@ -305,6 +323,9 @@ class FakeKnowledgeFsEntryRepository:
         self.calls.append(
             ("rename_entry", {"entry_id": entry_id, "new_name": new_name})
         )
+        entry = self.entry_by_id.get(entry_id)
+        if entry is not None:
+            entry["name"] = new_name
 
     def create_directory_entry(
         self, cursor, *, knowledge_base_id, root_entry_id, full_path
@@ -398,6 +419,31 @@ class FakeKnowledgeFsEntryRepository:
         self.calls.append(("get_directory_by_path", {"full_path": full_path}))
         if full_path == self.directory_entry["full_path"]:
             return self.directory_entry
+        return None
+
+    def get_entry_by_id(self, cursor, *, entry_id):
+        self.calls.append(("get_entry_by_id", {"entry_id": entry_id}))
+        return self.entry_by_id.get(entry_id)
+
+    def get_child_entry(self, cursor, *, knowledge_base_id, parent_entry_id, name):
+        self.calls.append(
+            (
+                "get_child_entry",
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "parent_entry_id": parent_entry_id,
+                    "name": name,
+                },
+            )
+        )
+        return self.child_entry_by_parent_and_name.get(
+            (knowledge_base_id, parent_entry_id, name)
+        )
+
+    def get_virtual_path_by_entry_id(self, cursor, *, entry_id):
+        self.calls.append(("get_virtual_path_by_entry_id", {"entry_id": entry_id}))
+        if entry_id == 80:
+            return "考勤制度/历史归档"
         return None
 
     def list_children(self, cursor, *, parent_path_ltree):
@@ -539,6 +585,20 @@ class FakeKnowledgeItemRepository:
                 },
             )
         )
+
+    def update_knowledge_item(self, cursor, *, knowledge_base_id, item_code, updates):
+        self.calls.append(
+            (
+                "update_knowledge_item",
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "item_code": item_code,
+                    "updates": updates,
+                },
+            )
+        )
+        if self.existing is not None:
+            self.existing.update(updates)
 
 
 class FakeKnowledgeItemVersionRepository:
@@ -1234,6 +1294,182 @@ def test_delete_directory_rejects_missing_directory():
         )
     except KnowledgeBaseValidationError as exc:
         assert str(exc) == "directory not found: attendance-archive"
+    else:
+        raise AssertionError("expected KnowledgeBaseValidationError")
+
+    assert connection.rolled_back is True
+
+
+def test_update_directory_renames_directory_and_updates_metadata():
+    """Updating a directory should rename the entry and update business metadata."""
+    connection = FakeConnection()
+    knowledge_item_repository = FakeKnowledgeItemRepository()
+    knowledge_item_repository.existing = {
+        "kid": 10,
+        "knowledge_base_id": 7,
+        "fs_entry_id": 80,
+        "item_code": "attendance-archive",
+        "item_kind": "DIRECTORY",
+        "description": "旧目录说明",
+        "metadata": {"owner": "old"},
+        "status": "ACTIVE",
+        "is_deleted": False,
+    }
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    service = KnowledgeBaseService(
+        connection_factory=lambda: connection,
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={
+                "kid": 7,
+                "kb_code": "hr-policy",
+                "kb_name": "人力制度知识库",
+                "status": "ACTIVE",
+                "is_deleted": False,
+                "root_entry_id": 70,
+                "metadata": {},
+            }
+        ),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        knowledge_item_repository=knowledge_item_repository,
+    )
+
+    response = service.update_directory(
+        UpdateDirectoryRequest(
+            kb_code="hr-policy",
+            directory_code="attendance-archive",
+            directory_name="历史归档",
+            directory_description="更新后的目录说明",
+            metadata={"owner": "HR"},
+        )
+    )
+
+    assert response.kb_code == "hr-policy"
+    assert response.directory_code == "attendance-archive"
+    assert response.directory_path == "/考勤制度/历史归档"
+    assert response.directory_description == "更新后的目录说明"
+    assert response.metadata == {"owner": "HR"}
+    assert connection.committed is True
+    assert (
+        "rename_entry",
+        {"entry_id": 80, "new_name": "历史归档"},
+    ) in knowledge_fs_entry_repository.calls
+    assert (
+        "update_knowledge_item",
+        {
+            "knowledge_base_id": 7,
+            "item_code": "attendance-archive",
+            "updates": {
+                "description": "更新后的目录说明",
+                "metadata": {"owner": "HR"},
+            },
+        },
+    ) in knowledge_item_repository.calls
+
+
+def test_update_directory_keeps_omitted_fields_unchanged():
+    """Omitted directory fields should keep their previous values."""
+    connection = FakeConnection()
+    knowledge_item_repository = FakeKnowledgeItemRepository()
+    knowledge_item_repository.existing = {
+        "kid": 10,
+        "knowledge_base_id": 7,
+        "fs_entry_id": 80,
+        "item_code": "attendance-archive",
+        "item_kind": "DIRECTORY",
+        "description": "旧目录说明",
+        "metadata": {"owner": "old"},
+        "status": "ACTIVE",
+        "is_deleted": False,
+    }
+    service = KnowledgeBaseService(
+        connection_factory=lambda: connection,
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={
+                "kid": 7,
+                "kb_code": "hr-policy",
+                "kb_name": "人力制度知识库",
+                "status": "ACTIVE",
+                "is_deleted": False,
+                "root_entry_id": 70,
+                "metadata": {},
+            }
+        ),
+        knowledge_fs_entry_repository=FakeKnowledgeFsEntryRepository(),
+        knowledge_item_repository=knowledge_item_repository,
+    )
+
+    response = service.update_directory(
+        UpdateDirectoryRequest(
+            kb_code="hr-policy",
+            directory_code="attendance-archive",
+            directory_name="历史归档",
+        )
+    )
+
+    assert response.directory_description == "旧目录说明"
+    assert response.metadata == {"owner": "old"}
+    assert (
+        "update_knowledge_item",
+        {
+            "knowledge_base_id": 7,
+            "item_code": "attendance-archive",
+            "updates": {},
+        },
+    ) in knowledge_item_repository.calls
+
+
+def test_update_directory_rejects_sibling_name_conflict():
+    """Updating a directory should reject sibling name conflicts."""
+    connection = FakeConnection()
+    knowledge_item_repository = FakeKnowledgeItemRepository()
+    knowledge_item_repository.existing = {
+        "kid": 10,
+        "knowledge_base_id": 7,
+        "fs_entry_id": 80,
+        "item_code": "attendance-archive",
+        "item_kind": "DIRECTORY",
+        "description": "旧目录说明",
+        "metadata": {"owner": "old"},
+        "status": "ACTIVE",
+        "is_deleted": False,
+    }
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    knowledge_fs_entry_repository.child_entry_by_parent_and_name[
+        (7, 70, "历史归档")
+    ] = {
+        "kid": 82,
+        "knowledge_base_id": 7,
+        "parent_entry_id": 70,
+        "name": "历史归档",
+        "entry_type": "DIRECTORY",
+    }
+    service = KnowledgeBaseService(
+        connection_factory=lambda: connection,
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={
+                "kid": 7,
+                "kb_code": "hr-policy",
+                "kb_name": "人力制度知识库",
+                "status": "ACTIVE",
+                "is_deleted": False,
+                "root_entry_id": 70,
+                "metadata": {},
+            }
+        ),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        knowledge_item_repository=knowledge_item_repository,
+    )
+
+    try:
+        service.update_directory(
+            UpdateDirectoryRequest(
+                kb_code="hr-policy",
+                directory_code="attendance-archive",
+                directory_name="历史归档",
+            )
+        )
+    except KnowledgeBaseValidationError as exc:
+        assert str(exc) == "directory name already exists under parent: 历史归档"
     else:
         raise AssertionError("expected KnowledgeBaseValidationError")
 

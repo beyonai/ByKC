@@ -100,6 +100,36 @@ class DeleteDirectoryResponse(BaseModel):
     is_deleted: bool
 
 
+class UpdateDirectoryRequest(BaseModel):
+    """Request body for updating one directory without moving it."""
+
+    kb_code: str = Field(min_length=1)
+    directory_code: str = Field(min_length=1)
+    directory_name: str | None = None
+    directory_description: str | None = None
+    metadata: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_directory_name(self) -> "UpdateDirectoryRequest":
+        """Directory names must be a single segment, not a path."""
+        if self.directory_name is None:
+            return self
+        normalized = self.directory_name.strip()
+        if not normalized or "/" in normalized or normalized in {".", ".."}:
+            raise ValueError("directory_name must be a single valid path segment")
+        return self
+
+
+class UpdateDirectoryResponse(BaseModel):
+    """Business response for updating one directory."""
+
+    kb_code: str
+    directory_code: str
+    directory_path: str
+    directory_description: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
 class WriteFileRequest(BaseModel):
     """Request body for writing a file into a knowledge base."""
 

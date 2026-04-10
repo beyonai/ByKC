@@ -609,6 +609,54 @@ class KnowledgeFsEntryRepository:
             },
         )
 
+    def get_entry_by_id(self, cursor: Any, *, entry_id: int) -> dict[str, Any] | None:
+        """Fetch one filesystem entry by id."""
+        return self._get_entry_by_id(cursor, entry_id=entry_id)
+
+    def get_child_entry(
+        self, cursor: Any, *, knowledge_base_id: int, parent_entry_id: int, name: str
+    ) -> dict[str, Any] | None:
+        """Fetch one direct child entry by parent and name."""
+        return self._get_child_entry(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            parent_entry_id=parent_entry_id,
+            name=name,
+        )
+
+    def get_virtual_path_by_entry_id(self, cursor: Any, *, entry_id: int) -> str | None:
+        """Build the virtual path for one filesystem entry, excluding the KB root name."""
+        cursor.execute(
+            """
+            WITH RECURSIVE item_path AS (
+                SELECT kid, parent_entry_id, name, depth, is_root
+                FROM knowledge_fs_entry
+                WHERE kid = %(entry_id)s
+                  AND is_deleted = FALSE
+              UNION ALL
+                SELECT parent.kid, parent.parent_entry_id, parent.name, parent.depth, parent.is_root
+                FROM knowledge_fs_entry parent
+                JOIN item_path child ON child.parent_entry_id = parent.kid
+                WHERE parent.is_deleted = FALSE
+            )
+            SELECT COALESCE(string_agg(name, '/' ORDER BY depth), '')
+            FROM item_path
+            WHERE is_root = FALSE
+            """,
+            {"entry_id": entry_id},
+        )
+        fetchone = getattr(cursor, "fetchone", None)
+        row = fetchone() if callable(fetchone) else None
+        if row is None:
+            return None
+        if isinstance(row, dict):
+            return (
+                row.get("coalesce")
+                or row.get("full_path")
+                or next(iter(row.values()), None)
+            )
+        return str(row[0]) if row else None
+
     def rename_entry(self, cursor: Any, *, entry_id: int, new_name: str) -> None:
         """Rename one filesystem entry without moving it."""
         cursor.execute(

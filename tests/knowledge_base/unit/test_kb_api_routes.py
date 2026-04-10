@@ -17,6 +17,7 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemSearchHit,
     KnowledgeItemSearchMeta,
     KnowledgeItemSearchResponse,
+    UpdateDirectoryResponse,
     UpdateKnowledgeBaseResponse,
     WriteFileResponse,
     WriteIndexResponse,
@@ -62,6 +63,15 @@ class FakeKBService:
             kb_code=request.kb_code,
             directory_code=request.directory_code,
             is_deleted=True,
+        )
+
+    def update_directory(self, request):
+        return UpdateDirectoryResponse(
+            kb_code=request.kb_code,
+            directory_code=request.directory_code,
+            directory_path="/考勤制度/历史归档",
+            directory_description=request.directory_description,
+            metadata=request.metadata,
         )
 
     def delete_knowledge_base(self, request):
@@ -407,6 +417,83 @@ def test_delete_directory_route_maps_missing_directory_to_404(monkeypatch):
 
     assert response.status_code == 404
     assert response.json()["error"]["error_code"] == "KB_DIRECTORY_NOT_FOUND"
+
+
+def test_update_directory_route_returns_business_response(monkeypatch):
+    """Update-directory route should delegate to the KB service."""
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/directories/update",
+        json={
+            "kb_code": "hr-policy",
+            "directory_code": "attendance-archive",
+            "directory_name": "历史归档",
+            "directory_description": "更新后的目录说明",
+            "metadata": {"owner": "HR"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "code": 200,
+        "message": "success",
+        "error": None,
+        "data": {
+            "kb_code": "hr-policy",
+            "directory_code": "attendance-archive",
+            "directory_path": "/考勤制度/历史归档",
+            "directory_description": "更新后的目录说明",
+            "metadata": {"owner": "HR"},
+        },
+    }
+
+
+def test_update_directory_route_maps_name_conflict_to_409(monkeypatch):
+    """Update-directory should return 409 for sibling name conflicts."""
+
+    class BrokenKBService(FakeKBService):
+        def update_directory(self, request):
+            raise KnowledgeBaseValidationError(
+                f"directory name already exists under parent: {request.directory_name}"
+            )
+
+    client = make_test_client(monkeypatch, BrokenKBService())
+    response = client.post(
+        "/api/v1/directories/update",
+        json={
+            "kb_code": "hr-policy",
+            "directory_code": "attendance-archive",
+            "directory_name": "历史归档",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["error_code"] == "KB_DIRECTORY_NAME_CONFLICT"
+
+
+def test_update_directory_route_maps_request_validation_to_standard_error(monkeypatch):
+    """Update-directory validation should use the standard error envelope."""
+    client = make_test_client(monkeypatch, FakeKBService())
+
+    response = client.post(
+        "/api/v1/directories/update",
+        json={
+            "kb_code": "hr-policy",
+            "directory_code": "attendance-archive",
+            "directory_name": "/考勤制度",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == 422
+    assert response.json()["message"] == "error"
+    assert response.json()["data"] is None
+    assert response.json()["error"]["type"] == "request_invalid"
+    assert response.json()["error"]["error_code"] == "REQUEST_VALIDATION_FAILED"
+    assert response.json()["error"]["error_message"] == "request validation failed"
+    assert response.json()["error"]["details"]["errors"]
 
 
 def test_delete_knowledge_item_route_returns_business_response(monkeypatch):

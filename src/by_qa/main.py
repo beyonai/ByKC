@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from importlib import import_module
 from importlib.util import find_spec
+from json import dumps
 from typing import Any, Callable
 
 from by_qa.config import get_settings
@@ -267,8 +268,23 @@ def create_app():
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
         """Return a standardized validation envelope for API requests."""
+
+        def _json_safe(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {str(key): _json_safe(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [_json_safe(item) for item in value]
+            if isinstance(value, tuple):
+                return [_json_safe(item) for item in value]
+            try:
+                dumps(value)
+            except TypeError:
+                return str(value)
+            return value
+
+        errors = _json_safe(exc.errors())
         if not request.url.path.startswith("/api/v1/"):
-            return JSONResponse(status_code=422, content={"detail": exc.errors()})
+            return JSONResponse(status_code=422, content={"detail": errors})
         return JSONResponse(
             status_code=422,
             content={
@@ -279,7 +295,7 @@ def create_app():
                     "type": "request_invalid",
                     "error_code": "REQUEST_VALIDATION_FAILED",
                     "error_message": "request validation failed",
-                    "details": {"errors": exc.errors()},
+                    "details": {"errors": errors},
                 },
             },
         )

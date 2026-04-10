@@ -565,6 +565,50 @@ class KnowledgeFsEntryRepository:
             {"knowledge_base_id": knowledge_base_id, "fs_entry_id": fs_entry_id},
         )
 
+    def list_subtree_entry_ids(
+        self, cursor: Any, *, knowledge_base_id: int, root_fs_entry_id: int
+    ) -> list[int]:
+        """List filesystem entry ids within one directory subtree, including the root."""
+        cursor.execute(
+            """
+            SELECT fs.kid
+            FROM knowledge_fs_entry fs
+            JOIN knowledge_fs_entry root
+              ON root.kid = %(root_fs_entry_id)s
+            WHERE fs.knowledge_base_id = %(knowledge_base_id)s
+              AND fs.is_deleted = FALSE
+              AND fs.path_ltree <@ root.path_ltree
+            ORDER BY fs.kid
+            """,
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "root_fs_entry_id": root_fs_entry_id,
+            },
+        )
+        return [int(row["kid"]) for row in self._fetchall(cursor)]
+
+    def soft_delete_subtree(
+        self, cursor: Any, *, knowledge_base_id: int, root_fs_entry_id: int
+    ) -> None:
+        """Logically delete one directory subtree, including the root entry."""
+        cursor.execute(
+            """
+            UPDATE knowledge_fs_entry fs
+            SET is_deleted = TRUE,
+                updated_at = NOW()
+            WHERE fs.knowledge_base_id = %(knowledge_base_id)s
+              AND fs.path_ltree <@ (
+                  SELECT path_ltree
+                  FROM knowledge_fs_entry
+                  WHERE kid = %(root_fs_entry_id)s
+              )::ltree
+            """,
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "root_fs_entry_id": root_fs_entry_id,
+            },
+        )
+
     def rename_entry(self, cursor: Any, *, entry_id: int, new_name: str) -> None:
         """Rename one filesystem entry without moving it."""
         cursor.execute(

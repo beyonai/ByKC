@@ -8,6 +8,7 @@ from by_qa.core import logger
 from by_qa.knowledge_base.api.schemas import (
     CreateDirectoryRequest,
     CreateKnowledgeBaseRequest,
+    DeleteDirectoryRequest,
     DeleteKnowledgeBaseRequest,
     DeleteKnowledgeItemRequest,
     KnowledgeItemFetchRequest,
@@ -333,6 +334,29 @@ class FakeKnowledgeFsEntryRepository:
             ),
         }
 
+    def list_subtree_entry_ids(self, cursor, *, knowledge_base_id, root_fs_entry_id):
+        self.calls.append(
+            (
+                "list_subtree_entry_ids",
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "root_fs_entry_id": root_fs_entry_id,
+                },
+            )
+        )
+        return [81, 82, 83]
+
+    def soft_delete_subtree(self, cursor, *, knowledge_base_id, root_fs_entry_id):
+        self.calls.append(
+            (
+                "soft_delete_subtree",
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "root_fs_entry_id": root_fs_entry_id,
+                },
+            )
+        )
+
     def ensure_file_entry(self, cursor, *, knowledge_base_id, root_entry_id, full_path):
         self.calls.append(
             (
@@ -505,6 +529,17 @@ class FakeKnowledgeItemRepository:
             )
         )
 
+    def soft_delete_by_fs_entry_ids(self, cursor, *, knowledge_base_id, fs_entry_ids):
+        self.calls.append(
+            (
+                "soft_delete_by_fs_entry_ids",
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "fs_entry_ids": fs_entry_ids,
+                },
+            )
+        )
+
 
 class FakeKnowledgeItemVersionRepository:
     """Repository double for knowledge item versions."""
@@ -560,6 +595,9 @@ class FakeRetrievalProjectionRepository:
 
     def delete_for_item(self, cursor, **kwargs):
         self.calls.append(("delete_for_item", kwargs))
+
+    def delete_for_fs_entry_ids(self, cursor, **kwargs):
+        self.calls.append(("delete_for_fs_entry_ids", kwargs))
 
 
 class FakeObjectStorage:
@@ -1094,6 +1132,108 @@ def test_create_directory_rejects_missing_parent_directory():
         )
     except KnowledgeBaseValidationError as exc:
         assert str(exc) == "parent directory not found: missing-dir"
+    else:
+        raise AssertionError("expected KnowledgeBaseValidationError")
+
+    assert connection.rolled_back is True
+
+
+def test_delete_directory_marks_subtree_deleted_and_clears_projection():
+    """Deleting a directory should logically delete its subtree and retrieval rows."""
+    connection = FakeConnection()
+    knowledge_item_repository = FakeKnowledgeItemRepository()
+    knowledge_item_repository.existing = {
+        "kid": 10,
+        "knowledge_base_id": 7,
+        "fs_entry_id": 81,
+        "item_code": "attendance-archive",
+        "item_kind": "DIRECTORY",
+        "status": "ACTIVE",
+        "is_deleted": False,
+    }
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    retrieval_projection_repository = FakeRetrievalProjectionRepository()
+    service = KnowledgeBaseService(
+        connection_factory=lambda: connection,
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={
+                "kid": 7,
+                "kb_code": "hr-policy",
+                "kb_name": "人力制度知识库",
+                "status": "ACTIVE",
+                "is_deleted": False,
+                "root_entry_id": 70,
+                "metadata": {},
+            }
+        ),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        knowledge_item_repository=knowledge_item_repository,
+        retrieval_projection_repository=retrieval_projection_repository,
+    )
+
+    response = service.delete_directory(
+        DeleteDirectoryRequest(
+            kb_code="hr-policy",
+            directory_code="attendance-archive",
+        )
+    )
+
+    assert response.kb_code == "hr-policy"
+    assert response.directory_code == "attendance-archive"
+    assert response.is_deleted is True
+    assert connection.committed is True
+    assert (
+        "list_subtree_entry_ids",
+        {"knowledge_base_id": 7, "root_fs_entry_id": 81},
+    ) in knowledge_fs_entry_repository.calls
+    assert (
+        "soft_delete_subtree",
+        {"knowledge_base_id": 7, "root_fs_entry_id": 81},
+    ) in knowledge_fs_entry_repository.calls
+    assert (
+        "soft_delete_by_fs_entry_ids",
+        {"knowledge_base_id": 7, "fs_entry_ids": [81, 82, 83]},
+    ) in knowledge_item_repository.calls
+    assert retrieval_projection_repository.calls == [
+        (
+            "delete_for_fs_entry_ids",
+            {"knowledge_base_id": 7, "fs_entry_ids": [81, 82, 83]},
+        )
+    ]
+
+
+def test_delete_directory_rejects_missing_directory():
+    """Deleting a directory should fail when the business code does not exist."""
+    connection = FakeConnection()
+    knowledge_item_repository = FakeKnowledgeItemRepository()
+    knowledge_item_repository.existing = None
+    service = KnowledgeBaseService(
+        connection_factory=lambda: connection,
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={
+                "kid": 7,
+                "kb_code": "hr-policy",
+                "kb_name": "人力制度知识库",
+                "status": "ACTIVE",
+                "is_deleted": False,
+                "root_entry_id": 70,
+                "metadata": {},
+            }
+        ),
+        knowledge_fs_entry_repository=FakeKnowledgeFsEntryRepository(),
+        knowledge_item_repository=knowledge_item_repository,
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+    )
+
+    try:
+        service.delete_directory(
+            DeleteDirectoryRequest(
+                kb_code="hr-policy",
+                directory_code="attendance-archive",
+            )
+        )
+    except KnowledgeBaseValidationError as exc:
+        assert str(exc) == "directory not found: attendance-archive"
     else:
         raise AssertionError("expected KnowledgeBaseValidationError")
 

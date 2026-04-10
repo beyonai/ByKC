@@ -8,6 +8,7 @@ from by_qa.core import logger
 from by_qa.knowledge_base.api.schemas import (
     CreateDirectoryRequest,
     CreateKnowledgeBaseRequest,
+    DeleteDirectoryRequest,
     DeleteKnowledgeBaseRequest,
     DeleteKnowledgeItemRequest,
     KnowledgeItemFetchRequest,
@@ -208,6 +209,39 @@ def _map_create_directory_validation_error(
             "directory_code": directory_code,
             "directory_path": directory_path,
         },
+    )
+
+
+def _map_delete_directory_validation_error(
+    *,
+    exc: KnowledgeBaseValidationError,
+    kb_code: str,
+    directory_code: str,
+) -> JSONResponse:
+    """Map delete-directory validation errors to the standardized protocol."""
+    message = str(exc)
+    if message.startswith("knowledge base not found:"):
+        return _error_response(
+            status_code=404,
+            error_type="not_found",
+            error_code="KB_NOT_FOUND",
+            error_message=message,
+            details={"kb_code": kb_code},
+        )
+    if message.startswith("directory not found:"):
+        return _error_response(
+            status_code=404,
+            error_type="not_found",
+            error_code="KB_DIRECTORY_NOT_FOUND",
+            error_message=message,
+            details={"kb_code": kb_code, "directory_code": directory_code},
+        )
+    return _error_response(
+        status_code=422,
+        error_type="business_validation",
+        error_code="KB_DIRECTORY_DELETE_INVALID",
+        error_message=message,
+        details={"kb_code": kb_code, "directory_code": directory_code},
     )
 
 
@@ -551,6 +585,35 @@ def register_routes(
                 kb_code=request.kb_code,
                 directory_code=request.directory_code,
                 directory_path=request.directory_path,
+            )
+        return _success_response(data=result.model_dump())
+
+    @app.post("/api/v1/directories/delete")
+    async def delete_directory(request: DeleteDirectoryRequest):
+        logger.info(
+            "delete_directory request received: kb_code=%s, directory_code=%s",
+            request.kb_code,
+            request.directory_code,
+        )
+        try:
+            service = get_knowledge_base_service()
+            result = service.delete_directory(request)
+        except KnowledgeBaseConfigurationError as exc:
+            return _error_response(
+                status_code=503,
+                error_type="configuration_error",
+                error_code="KB_RUNTIME_CONFIG_ERROR",
+                error_message=str(exc),
+                details={
+                    "kb_code": request.kb_code,
+                    "directory_code": request.directory_code,
+                },
+            )
+        except KnowledgeBaseValidationError as exc:
+            return _map_delete_directory_validation_error(
+                exc=exc,
+                kb_code=request.kb_code,
+                directory_code=request.directory_code,
             )
         return _success_response(data=result.model_dump())
 

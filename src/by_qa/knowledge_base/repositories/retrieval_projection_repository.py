@@ -111,3 +111,19 @@ class RetrievalProjectionRepository:
             """,
             {"knowledge_item_id": knowledge_item_id},
         )
+
+    def delete_for_fs_entry_ids(
+        self, cursor: Any, *, knowledge_base_id: int, fs_entry_ids: list[int]
+    ) -> None:
+        """Delete retrieval projection rows for one filesystem subtree."""
+        cursor.execute(
+            """
+            DELETE FROM knowledge_item_chunk_retrieval_mv
+            WHERE knowledge_base_id = %(knowledge_base_id)s
+              AND fs_entry_id = ANY(%(fs_entry_ids)s)
+            """,
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "fs_entry_ids": fs_entry_ids,
+            },
+        )

@@ -178,6 +178,38 @@ def test_create_directory_entry_executes_insert_sql():
     assert params["name"] == "归档"
 
 
+def test_soft_delete_directory_subtree_updates_descendants():
+    """Directory subtree deletion should update all descendant filesystem entries."""
+    repo = KnowledgeFsEntryRepository()
+    cursor = FakeCursor()
+
+    repo.soft_delete_subtree(cursor, knowledge_base_id=7, root_fs_entry_id=81)
+
+    sql, params = cursor.executed[0]
+    lowered = sql.lower()
+    assert "update knowledge_fs_entry" in lowered
+    assert "path_ltree <@" in lowered
+    assert params == {"knowledge_base_id": 7, "root_fs_entry_id": 81}
+
+
+def test_soft_delete_knowledge_item_by_fs_entry_ids_updates_is_deleted_flag():
+    """Batch directory deletion should soft-delete knowledge items by fs_entry ids."""
+    repo = KnowledgeItemRepository()
+    cursor = FakeCursor()
+
+    repo.soft_delete_by_fs_entry_ids(
+        cursor,
+        knowledge_base_id=7,
+        fs_entry_ids=[81, 82, 83],
+    )
+
+    sql, params = cursor.executed[0]
+    lowered = sql.lower()
+    assert "update knowledge_item" in lowered
+    assert "fs_entry_id = any(%(fs_entry_ids)s)" in lowered
+    assert params == {"knowledge_base_id": 7, "fs_entry_ids": [81, 82, 83]}
+
+
 def test_get_knowledge_base_by_code_filters_deleted_rows():
     """Knowledge base lookup should ignore logically deleted rows in SQL."""
     repo = KnowledgeBaseRepository()
@@ -638,6 +670,25 @@ def test_delete_retrieval_projection_for_item_executes_targeted_delete():
     assert "delete from knowledge_item_chunk_retrieval_mv" in lowered
     assert "knowledge_item_id = %(knowledge_item_id)s" in sql
     assert params == {"knowledge_item_id": 10}
+
+
+def test_delete_retrieval_projection_for_fs_entry_ids_executes_targeted_delete():
+    """Directory deletion should clear projection rows for the subtree fs_entry ids."""
+    repo = RetrievalProjectionRepository()
+    cursor = FakeCursor()
+
+    repo.delete_for_fs_entry_ids(
+        cursor,
+        knowledge_base_id=7,
+        fs_entry_ids=[81, 82, 83],
+    )
+
+    sql, params = cursor.executed[0]
+    lowered = sql.lower()
+    assert "delete from knowledge_item_chunk_retrieval_mv" in lowered
+    assert "knowledge_base_id = %(knowledge_base_id)s" in sql
+    assert "fs_entry_id = any(%(fs_entry_ids)s)" in lowered
+    assert params == {"knowledge_base_id": 7, "fs_entry_ids": [81, 82, 83]}
 
 
 def test_replace_chunks_clears_existing_embeddings_before_deleting_old_chunks():

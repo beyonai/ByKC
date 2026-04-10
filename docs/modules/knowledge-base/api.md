@@ -93,6 +93,7 @@
 | `POST` | `/api/v1/knowledge-bases/delete` | 删除知识库 |
 | `POST` | `/api/v1/knowledge-bases/update` | 修改知识库名称、描述、元数据 |
 | `POST` | `/api/v1/directories/create` | 按完整路径创建目录 |
+| `POST` | `/api/v1/directories/delete` | 逻辑删除目录，可删除非空目录 |
 | `POST` | `/api/v1/write-file` | 写入原始文件 |
 | `POST` | `/api/v1/write-index` | 写入 Markdown sidecar 与 chunk 索引 |
 | `POST` | `/api/v1/knowledge-items/import` | 原子导入原始文件、Markdown 与索引 |
@@ -118,7 +119,6 @@
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `POST` | `/api/v1/directories/update` | 修改目录名称、描述、元数据 |
-| `POST` | `/api/v1/directories/delete` | 逻辑删除目录，可删除非空目录 |
 | `POST` | `/api/v1/files/update` | 修改文件名称、描述、元数据 |
 
 ## 创建知识库
@@ -487,6 +487,65 @@
 - `KB_DIRECTORY_PARENT_NOT_FOUND`
 - `KB_DIRECTORY_PATH_CONFLICT`
 - `KB_DIRECTORY_CREATE_INVALID`
+
+## 删除目录
+
+### `POST /api/v1/directories/delete`
+
+逻辑删除目录，可删除非空目录。
+
+补充语义：
+
+- 删除语义为整棵目录子树逻辑删除
+- 会递归逻辑删除目录子树中的 `knowledge_fs_entry`
+- 会递归逻辑删除目录子树中的 `knowledge_item`
+- 会清理受影响的检索投影数据
+- 文件历史版本、chunk 记录与对象存储内容不会在该接口中立即物理删除
+
+### 请求体
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `kb_code` | string | 是 | 知识库编码 |
+| `directory_code` | string | 是 | 目录编码 |
+
+### 请求示例
+
+```json
+{
+  "kb_code": "hr-policy",
+  "directory_code": "attendance-archive"
+}
+```
+
+### 成功响应 `data`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `kb_code` | string | 知识库编码 |
+| `directory_code` | string | 目录编码 |
+| `is_deleted` | boolean | 删除后的逻辑删除标记 |
+
+### 成功响应示例
+
+```json
+{
+  "code": 200,
+  "message": "success",
+  "error": null,
+  "data": {
+    "kb_code": "hr-policy",
+    "directory_code": "attendance-archive",
+    "is_deleted": true
+  }
+}
+```
+
+### 典型错误码
+
+- `KB_NOT_FOUND`
+- `KB_DIRECTORY_NOT_FOUND`
+- `KB_DIRECTORY_DELETE_INVALID`
 
 ## 写入索引
 
@@ -1163,50 +1222,6 @@
 - `KB_DIRECTORY_NOT_FOUND`
 - `KB_DIRECTORY_NAME_CONFLICT`
 - `KB_DIRECTORY_UPDATE_INVALID`
-
-## 删除目录
-
-### `POST /api/v1/directories/delete`
-
-逻辑删除目录，可删除非空目录。
-
-补充语义：
-
-- 删除语义为整棵目录子树逻辑删除
-- 应递归逻辑删除目录子树中的 `knowledge_fs_entry`
-- 应递归逻辑删除目录子树中的 `knowledge_item`
-- 应清理或重建受影响的检索投影数据
-- 文件历史版本、chunk 记录与对象存储内容不要求在该接口内立即物理删除
-
-### 请求体
-
-| 字段 | 类型 | 必填 | 说明 |
-| --- | --- | --- | --- |
-| `kb_code` | string | 是 | 知识库编码 |
-| `directory_code` | string | 是 | 目录编码 |
-
-### 请求示例
-
-```json
-{
-  "kb_code": "hr-policy",
-  "directory_code": "attendance-archive"
-}
-```
-
-### 成功响应 `data`
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `kb_code` | string | 知识库编码 |
-| `directory_code` | string | 目录编码 |
-| `is_deleted` | boolean | 删除后的逻辑删除标记 |
-
-### 典型错误码
-
-- `KB_NOT_FOUND`
-- `KB_DIRECTORY_NOT_FOUND`
-- `KB_DIRECTORY_DELETE_INVALID`
 
 ## 修改文件信息
 

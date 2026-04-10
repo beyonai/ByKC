@@ -85,6 +85,21 @@ class CreateDirectoryResponse(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
+class DeleteDirectoryRequest(BaseModel):
+    """Request body for logically deleting one directory subtree."""
+
+    kb_code: str = Field(min_length=1)
+    directory_code: str = Field(min_length=1)
+
+
+class DeleteDirectoryResponse(BaseModel):
+    """Business response for logically deleting one directory subtree."""
+
+    kb_code: str
+    directory_code: str
+    is_deleted: bool
+
+
 class WriteFileRequest(BaseModel):
     """Request body for writing a file into a knowledge base."""
 

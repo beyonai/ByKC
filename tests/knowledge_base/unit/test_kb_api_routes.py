@@ -6,6 +6,7 @@ from by_qa.knowledge_base.api import routes
 from by_qa.knowledge_base.api.schemas import (
     CreateDirectoryResponse,
     CreateKnowledgeBaseResponse,
+    DeleteDirectoryResponse,
     DeleteKnowledgeBaseResponse,
     DeleteKnowledgeItemResponse,
     KnowledgeItemFetchResponse,
@@ -54,6 +55,13 @@ class FakeKBService:
             directory_description=request.directory_description,
             status=request.status,
             metadata=request.metadata,
+        )
+
+    def delete_directory(self, request):
+        return DeleteDirectoryResponse(
+            kb_code=request.kb_code,
+            directory_code=request.directory_code,
+            is_deleted=True,
         )
 
     def delete_knowledge_base(self, request):
@@ -351,6 +359,54 @@ def test_create_directory_route_returns_business_response(monkeypatch):
             "metadata": {"owner": "HR"},
         },
     }
+
+
+def test_delete_directory_route_returns_business_response(monkeypatch):
+    """Delete-directory route should delegate to the KB service."""
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/directories/delete",
+        json={
+            "kb_code": "hr-policy",
+            "directory_code": "attendance-archive",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "code": 200,
+        "message": "success",
+        "error": None,
+        "data": {
+            "kb_code": "hr-policy",
+            "directory_code": "attendance-archive",
+            "is_deleted": True,
+        },
+    }
+
+
+def test_delete_directory_route_maps_missing_directory_to_404(monkeypatch):
+    """Delete-directory should return 404 when the directory does not exist."""
+
+    class BrokenKBService(FakeKBService):
+        def delete_directory(self, request):
+            raise KnowledgeBaseValidationError(
+                f"directory not found: {request.directory_code}"
+            )
+
+    client = make_test_client(monkeypatch, BrokenKBService())
+    response = client.post(
+        "/api/v1/directories/delete",
+        json={
+            "kb_code": "hr-policy",
+            "directory_code": "attendance-archive",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["error_code"] == "KB_DIRECTORY_NOT_FOUND"
 
 
 def test_delete_knowledge_item_route_returns_business_response(monkeypatch):

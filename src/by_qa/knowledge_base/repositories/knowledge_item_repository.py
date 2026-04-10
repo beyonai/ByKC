@@ -145,7 +145,7 @@ class KnowledgeItemRepository:
         """Fetch a knowledge item by knowledge base and business item_code."""
         cursor.execute(
             """
-            SELECT kid, knowledge_base_id, fs_entry_id, item_code, current_version_id, status, type_code, is_deleted
+            SELECT kid, knowledge_base_id, fs_entry_id, item_code, item_kind, current_version_id, status, type_code, is_deleted
             FROM knowledge_item
             WHERE knowledge_base_id = %(knowledge_base_id)s
               AND item_code = %(item_code)s
@@ -162,7 +162,7 @@ class KnowledgeItemRepository:
         """Fetch a knowledge item by business item_code including logically deleted rows."""
         cursor.execute(
             """
-            SELECT kid, knowledge_base_id, fs_entry_id, item_code, current_version_id, status, type_code, is_deleted
+            SELECT kid, knowledge_base_id, fs_entry_id, item_code, item_kind, current_version_id, status, type_code, is_deleted
             FROM knowledge_item
             WHERE knowledge_base_id = %(knowledge_base_id)s
               AND item_code = %(item_code)s
@@ -213,4 +213,22 @@ class KnowledgeItemRepository:
               AND item_code = %(item_code)s
             """,
             {"knowledge_base_id": knowledge_base_id, "item_code": item_code},
+        )
+
+    def soft_delete_by_fs_entry_ids(
+        self, cursor: Any, *, knowledge_base_id: int, fs_entry_ids: list[int]
+    ) -> None:
+        """Logically delete knowledge items mapped to one filesystem subtree."""
+        cursor.execute(
+            """
+            UPDATE knowledge_item
+            SET is_deleted = TRUE,
+                updated_at = NOW()
+            WHERE knowledge_base_id = %(knowledge_base_id)s
+              AND fs_entry_id = ANY(%(fs_entry_ids)s)
+            """,
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "fs_entry_ids": fs_entry_ids,
+            },
         )

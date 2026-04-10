@@ -14,6 +14,8 @@ from by_qa.knowledge_base.api.schemas import (
     CreateDirectoryResponse,
     CreateKnowledgeBaseRequest,
     CreateKnowledgeBaseResponse,
+    DeleteDirectoryRequest,
+    DeleteDirectoryResponse,
     DeleteKnowledgeBaseRequest,
     DeleteKnowledgeBaseResponse,
     KnowledgeItemFetchRequest,
@@ -311,6 +313,74 @@ class KnowledgeBaseService:
                 directory_description=request.directory_description,
                 status=request.status,
                 metadata=request.metadata,
+            )
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def delete_directory(
+        self, request: DeleteDirectoryRequest
+    ) -> DeleteDirectoryResponse:
+        """Logically delete one directory subtree and its retrieval projection rows."""
+        logger.info(
+            "knowledge_base_service.delete_directory started: kb_code=%s, directory_code=%s",
+            request.kb_code,
+            request.directory_code,
+        )
+        if (
+            self.knowledge_item_repository is None
+            or self.retrieval_projection_repository is None
+        ):
+            raise KnowledgeBaseValidationError(
+                "delete directory runtime is not configured"
+            )
+
+        connection = self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            kb_row = self.knowledge_base_repository.get_by_code(cursor, request.kb_code)
+            if not kb_row:
+                raise KnowledgeBaseValidationError(
+                    f"knowledge base not found: {request.kb_code}"
+                )
+            knowledge_base_id = self._row_id(kb_row)
+            item_row = self.knowledge_item_repository.get_by_item_code(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                item_code=request.directory_code,
+            )
+            if item_row is None or item_row.get("item_kind") not in (None, "DIRECTORY"):
+                raise KnowledgeBaseValidationError(
+                    f"directory not found: {request.directory_code}"
+                )
+            root_fs_entry_id = int(item_row["fs_entry_id"])
+            fs_entry_ids = self.knowledge_fs_entry_repository.list_subtree_entry_ids(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                root_fs_entry_id=root_fs_entry_id,
+            )
+            self.knowledge_fs_entry_repository.soft_delete_subtree(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                root_fs_entry_id=root_fs_entry_id,
+            )
+            self.knowledge_item_repository.soft_delete_by_fs_entry_ids(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                fs_entry_ids=fs_entry_ids,
+            )
+            self.retrieval_projection_repository.delete_for_fs_entry_ids(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                fs_entry_ids=fs_entry_ids,
+            )
+            connection.commit()
+            return DeleteDirectoryResponse(
+                kb_code=request.kb_code,
+                directory_code=request.directory_code,
+                is_deleted=True,
             )
         except Exception:
             connection.rollback()

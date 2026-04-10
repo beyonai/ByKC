@@ -715,7 +715,7 @@ class KnowledgeBaseService:
             )
             return KnowledgeItemFetchResponse(
                 kb_code=str(version_row["kb_code"]),
-                path=request.path,
+                path=self._ensure_leading_slash(normalized_virtual_path),
                 content_type="original",
                 url=access_url,
             )
@@ -737,7 +737,7 @@ class KnowledgeBaseService:
             )
             return KnowledgeItemFetchResponse(
                 kb_code=str(version_row["kb_code"]),
-                path=request.path,
+                path=self._ensure_leading_slash(normalized_virtual_path),
                 content_type="original",
                 url=access_url,
             )
@@ -827,7 +827,7 @@ class KnowledgeBaseService:
         )
         return KnowledgeItemFetchResponse(
             kb_code=str(version_row["kb_code"]),
-            path=normalized_virtual_path,
+            path=self._ensure_leading_slash(normalized_virtual_path),
             content_type="markdown",
             start_line=start_line,
             end_line=end_line,
@@ -880,7 +880,7 @@ class KnowledgeBaseService:
             cursor, normalized_virtual_path, kb_codes=kb_codes
         )
         if node is None:
-            return []
+            raise KnowledgeBaseValidationError(f"directory not found: {path}")
         if node["type"] == "directory":
             return self._expand_directory_contents(cursor, [node])
         return [self._project_node(node)]

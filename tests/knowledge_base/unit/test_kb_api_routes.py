@@ -1044,6 +1044,28 @@ def test_list_dir_route_maps_validation_error_to_standard_error(monkeypatch):
     assert response.json()["error"]["details"] == {"path": "../secret"}
 
 
+def test_list_dir_route_maps_missing_directory_to_404(monkeypatch):
+    """List-dir missing paths should map to the standardized not-found response."""
+
+    class BrokenKBService(FakeKBService):
+        def list_dir(self, request):
+            raise KnowledgeBaseValidationError(f"directory not found: {request.path}")
+
+    client = make_test_client(monkeypatch, BrokenKBService())
+    response = client.post(
+        "/api/v1/list_dir",
+        json={
+            "kb_codes": ["integration-kb"],
+            "path": "missing-dir",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["type"] == "not_found"
+    assert response.json()["error"]["error_code"] == "KB_DIRECTORY_NOT_FOUND"
+    assert response.json()["error"]["details"] == {"path": "missing-dir"}
+
+
 def test_list_dir_route_maps_configuration_error_to_503(monkeypatch):
     """List-dir configuration failures should use the standardized error envelope."""
 
@@ -1169,7 +1191,7 @@ def test_read_file_route_returns_requested_text(monkeypatch):
     assert response.status_code == 200
     assert response.json()["data"] == {
         "kb_code": "hr-policy",
-        "path": "Integration KB/dir1/doc.md",
+        "path": "/Integration KB/dir1/doc.md",
         "content_type": "markdown",
         "start_line": 1,
         "end_line": 2,
@@ -1203,7 +1225,7 @@ def test_read_file_route_returns_access_url_for_binary_files(monkeypatch):
     assert response.status_code == 200
     assert response.json()["data"] == {
         "kb_code": "hr-policy",
-        "path": "Integration KB/dir1/doc.pdf",
+        "path": "/Integration KB/dir1/doc.pdf",
         "content_type": "original",
         "url": "https://minio.example/knowledge-base/7/dir1/doc.pdf/v1/doc.pdf?ttl=3600",
     }

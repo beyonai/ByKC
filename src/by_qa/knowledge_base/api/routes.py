@@ -70,6 +70,14 @@ def _error_response(
     )
 
 
+def _ensure_leading_slash(path: str) -> str:
+    """Normalize outward-facing paths to the canonical slash-prefixed form."""
+    normalized = str(path or "").strip()
+    if not normalized:
+        return "/"
+    return normalized if normalized.startswith("/") else f"/{normalized}"
+
+
 def _map_create_knowledge_base_validation_error(
     *,
     exc: KnowledgeBaseValidationError,
@@ -482,11 +490,20 @@ def _map_list_dir_validation_error(
     *, exc: KnowledgeBaseValidationError, path: str
 ) -> JSONResponse:
     """Map list-dir validation errors to the standardized protocol."""
+    message = str(exc)
+    if message.startswith("directory not found:"):
+        return _error_response(
+            status_code=404,
+            error_type="not_found",
+            error_code="KB_DIRECTORY_NOT_FOUND",
+            error_message=message,
+            details={"path": path},
+        )
     return _error_response(
         status_code=422,
         error_type="business_validation",
         error_code="KB_LIST_DIR_INVALID",
-        error_message=str(exc),
+        error_message=message,
         details={"path": path},
     )
 
@@ -1150,7 +1167,9 @@ def register_routes(
                 request.path,
                 len((result.data or "").encode("utf-8")),
             )
-        return _success_response(data=result.model_dump(exclude_none=True))
+        payload = result.model_dump(exclude_none=True)
+        payload["path"] = _ensure_leading_slash(str(payload.get("path", "")))
+        return _success_response(data=payload)
 
 
 def _require_form_value(form, key: str) -> str:

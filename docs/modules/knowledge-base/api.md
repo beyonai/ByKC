@@ -995,6 +995,7 @@
 
 - `path` 默认值为 `/`
 - 返回结构中的 `data` 是数组，不是包裹在 `items` 对象中的结果
+- 当 `path` 对应的目录不存在时，返回 `KB_DIRECTORY_NOT_FOUND`
 
 ### 请求体
 
@@ -1050,6 +1051,7 @@
 
 ### 典型错误码
 
+- `KB_DIRECTORY_NOT_FOUND`
 - `KB_LIST_DIR_INVALID`
 - `KB_RUNTIME_CONFIG_ERROR`
 
@@ -1127,6 +1129,7 @@
 - `content_type=markdown` 且提供 `start_line/end_line`：返回行区间文本
 - `content_type=markdown` 且不提供行区间：返回完整 Markdown 内容
 - `start_line` 和 `end_line` 需要成对出现
+- 响应中的 `path` 统一返回为带前导 `/` 的规范形式
 
 ### 请求体
 

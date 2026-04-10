@@ -2797,8 +2797,8 @@ def test_list_dir_directory_path_returns_direct_children_only():
     ]
 
 
-def test_list_dir_literal_missing_path_returns_empty():
-    """List-dir should treat wildcard-like input as a literal path after capability split."""
+def test_list_dir_literal_missing_path_raises_not_found():
+    """List-dir should raise not-found when the requested literal path does not exist."""
     connection = FakeConnection()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeBaseService(
@@ -2809,11 +2809,15 @@ def test_list_dir_literal_missing_path_returns_empty():
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
     )
 
-    response = service.list_dir(
-        KnowledgeItemListDirRequest(kb_codes=["hr-policy"], path="*.md")
-    )
+    try:
+        service.list_dir(
+            KnowledgeItemListDirRequest(kb_codes=["hr-policy"], path="*.md")
+        )
+    except KnowledgeBaseValidationError as exc:
+        assert str(exc) == "directory not found: *.md"
+    else:
+        raise AssertionError("expected KnowledgeBaseValidationError")
 
-    assert response.model_dump()["items"] == []
     assert knowledge_fs_entry_repository.calls == [
         ("list_root_nodes", {"kb_codes": ["hr-policy"]})
     ]
@@ -3127,7 +3131,7 @@ def test_fetch_returns_access_url_for_binary_files(tmp_path):
 
     assert response.model_dump(exclude_none=True) == {
         "kb_code": "hr-policy",
-        "path": "人力制度知识库/dir1/doc.md",
+        "path": "/人力制度知识库/dir1/doc.md",
         "content_type": "original",
         "url": "https://minio.example/knowledge-base/kb/7/item/10/version/v1/original?ttl=3600",
     }
@@ -3163,7 +3167,7 @@ def test_fetch_returns_full_markdown_when_line_window_is_omitted(tmp_path):
 
     assert response.model_dump(exclude_none=True) == {
         "kb_code": "hr-policy",
-        "path": "人力制度知识库/dir1/doc.md",
+        "path": "/人力制度知识库/dir1/doc.md",
         "content_type": "markdown",
         "data": "line1\nline2\nline3\n",
         "reached_eof": True,
@@ -3216,7 +3220,7 @@ def test_fetch_markdown_request_falls_back_to_original_url_when_sidecar_missing(
 
     assert response.model_dump(exclude_none=True) == {
         "kb_code": "hr-policy",
-        "path": "人力制度知识库/dir1/doc.md",
+        "path": "/人力制度知识库/dir1/doc.md",
         "content_type": "original",
         "url": "https://minio.example/knowledge-base/kb/7/item/10/version/v1/original?ttl=3600",
     }

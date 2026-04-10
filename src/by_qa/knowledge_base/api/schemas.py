@@ -130,6 +130,36 @@ class UpdateDirectoryResponse(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
+class UpdateFileRequest(BaseModel):
+    """Request body for updating one file without moving or rewriting it."""
+
+    kb_code: str = Field(min_length=1)
+    file_code: str = Field(min_length=1)
+    file_name: str | None = None
+    file_description: str | None = None
+    metadata: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_file_name(self) -> "UpdateFileRequest":
+        """File names must be a single segment, not a path."""
+        if self.file_name is None:
+            return self
+        normalized = self.file_name.strip()
+        if not normalized or "/" in normalized or normalized in {".", ".."}:
+            raise ValueError("file_name must be a single valid path segment")
+        return self
+
+
+class UpdateFileResponse(BaseModel):
+    """Business response for updating one file."""
+
+    kb_code: str
+    file_code: str
+    file_path: str
+    file_description: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
 class WriteFileRequest(BaseModel):
     """Request body for writing a file into a knowledge base."""
 

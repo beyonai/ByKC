@@ -18,6 +18,7 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemSearchMeta,
     KnowledgeItemSearchResponse,
     UpdateDirectoryResponse,
+    UpdateFileResponse,
     UpdateKnowledgeBaseResponse,
     WriteFileResponse,
     WriteIndexResponse,
@@ -71,6 +72,15 @@ class FakeKBService:
             directory_code=request.directory_code,
             directory_path="/考勤制度/历史归档",
             directory_description=request.directory_description,
+            metadata=request.metadata,
+        )
+
+    def update_file(self, request):
+        return UpdateFileResponse(
+            kb_code=request.kb_code,
+            file_code=request.file_code,
+            file_path="/考勤制度/异常考勤处理办法（正式版）.pdf",
+            file_description=request.file_description,
             metadata=request.metadata,
         )
 
@@ -483,6 +493,83 @@ def test_update_directory_route_maps_request_validation_to_standard_error(monkey
             "kb_code": "hr-policy",
             "directory_code": "attendance-archive",
             "directory_name": "/考勤制度",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == 422
+    assert response.json()["message"] == "error"
+    assert response.json()["data"] is None
+    assert response.json()["error"]["type"] == "request_invalid"
+    assert response.json()["error"]["error_code"] == "REQUEST_VALIDATION_FAILED"
+    assert response.json()["error"]["error_message"] == "request validation failed"
+    assert response.json()["error"]["details"]["errors"]
+
+
+def test_update_file_route_returns_business_response(monkeypatch):
+    """Update-file route should delegate to the KB service."""
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/knowledge-items/update",
+        json={
+            "kb_code": "hr-policy",
+            "file_code": "attendance-policy-pdf",
+            "file_name": "异常考勤处理办法（正式版）.pdf",
+            "file_description": "更新后的文件说明",
+            "metadata": {"owner": "HR"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "code": 200,
+        "message": "success",
+        "error": None,
+        "data": {
+            "kb_code": "hr-policy",
+            "file_code": "attendance-policy-pdf",
+            "file_path": "/考勤制度/异常考勤处理办法（正式版）.pdf",
+            "file_description": "更新后的文件说明",
+            "metadata": {"owner": "HR"},
+        },
+    }
+
+
+def test_update_file_route_maps_name_conflict_to_409(monkeypatch):
+    """Update-file should return 409 for sibling name conflicts."""
+
+    class BrokenKBService(FakeKBService):
+        def update_file(self, request):
+            raise KnowledgeBaseValidationError(
+                f"file name already exists under parent: {request.file_name}"
+            )
+
+    client = make_test_client(monkeypatch, BrokenKBService())
+    response = client.post(
+        "/api/v1/knowledge-items/update",
+        json={
+            "kb_code": "hr-policy",
+            "file_code": "attendance-policy-pdf",
+            "file_name": "异常考勤处理办法（正式版）.pdf",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["error_code"] == "KB_FILE_NAME_CONFLICT"
+
+
+def test_update_file_route_maps_request_validation_to_standard_error(monkeypatch):
+    """Update-file validation should use the standard error envelope."""
+    client = make_test_client(monkeypatch, FakeKBService())
+
+    response = client.post(
+        "/api/v1/knowledge-items/update",
+        json={
+            "kb_code": "hr-policy",
+            "file_code": "attendance-policy-pdf",
+            "file_name": "/demo.pdf",
         },
     )
 

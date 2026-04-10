@@ -17,6 +17,7 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemImportRequest,
     KnowledgeItemListDirRequest,
     UpdateDirectoryRequest,
+    UpdateFileRequest,
     UpdateKnowledgeBaseRequest,
     WriteFileRequest,
     WriteIndexRequest,
@@ -442,8 +443,13 @@ class FakeKnowledgeFsEntryRepository:
 
     def get_virtual_path_by_entry_id(self, cursor, *, entry_id):
         self.calls.append(("get_virtual_path_by_entry_id", {"entry_id": entry_id}))
+        entry = self.entry_by_id.get(entry_id)
+        if entry is None:
+            return None
         if entry_id == 80:
-            return "考勤制度/历史归档"
+            return f"考勤制度/{entry['name']}"
+        if entry_id == 71:
+            return f"考勤制度/{entry['name']}"
         return None
 
     def list_children(self, cursor, *, parent_path_ltree):
@@ -1470,6 +1476,213 @@ def test_update_directory_rejects_sibling_name_conflict():
         )
     except KnowledgeBaseValidationError as exc:
         assert str(exc) == "directory name already exists under parent: 历史归档"
+    else:
+        raise AssertionError("expected KnowledgeBaseValidationError")
+
+    assert connection.rolled_back is True
+
+
+def test_update_file_renames_file_and_updates_metadata():
+    """Updating a file should rename the fs entry and persist item metadata fields."""
+    connection = FakeConnection()
+    knowledge_item_repository = FakeKnowledgeItemRepository()
+    knowledge_item_repository.existing = {
+        "kid": 11,
+        "knowledge_base_id": 7,
+        "fs_entry_id": 71,
+        "item_code": "attendance-policy-pdf",
+        "item_kind": "FILE",
+        "description": "旧文件说明",
+        "metadata": {"owner": "old"},
+        "status": "ACTIVE",
+        "type_code": "pdf",
+        "is_deleted": False,
+    }
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    knowledge_fs_entry_repository.entry_by_id[71] = {
+        "kid": 71,
+        "knowledge_base_id": 7,
+        "parent_entry_id": 70,
+        "name": "异常考勤处理办法.pdf",
+        "entry_type": "FILE",
+        "path_ltree": "kb_7.f1_doc",
+        "is_root": False,
+        "depth": 1,
+    }
+    service = KnowledgeBaseService(
+        connection_factory=lambda: connection,
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={
+                "id": 7,
+                "kb_code": "hr-policy",
+                "kb_name": "人力制度知识库",
+                "status": "ACTIVE",
+                "is_deleted": False,
+            }
+        ),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        knowledge_item_repository=knowledge_item_repository,
+    )
+
+    response = service.update_file(
+        UpdateFileRequest(
+            kb_code="hr-policy",
+            file_code="attendance-policy-pdf",
+            file_name="异常考勤处理办法（正式版）.pdf",
+            file_description="新文件说明",
+            metadata={"owner": "HR"},
+        )
+    )
+
+    assert response.kb_code == "hr-policy"
+    assert response.file_code == "attendance-policy-pdf"
+    assert response.file_path == "/考勤制度/异常考勤处理办法（正式版）.pdf"
+    assert response.file_description == "新文件说明"
+    assert response.metadata == {"owner": "HR"}
+    assert connection.committed is True
+    assert (
+        knowledge_fs_entry_repository.entry_by_id[71]["name"]
+        == "异常考勤处理办法（正式版）.pdf"
+    )
+    assert (
+        "rename_entry",
+        {"entry_id": 71, "new_name": "异常考勤处理办法（正式版）.pdf"},
+    ) in knowledge_fs_entry_repository.calls
+    assert (
+        "update_knowledge_item",
+        {
+            "knowledge_base_id": 7,
+            "item_code": "attendance-policy-pdf",
+            "updates": {"description": "新文件说明", "metadata": {"owner": "HR"}},
+        },
+    ) in knowledge_item_repository.calls
+
+
+def test_update_file_keeps_omitted_fields_unchanged():
+    """Omitted file fields should remain unchanged during partial updates."""
+    connection = FakeConnection()
+    knowledge_item_repository = FakeKnowledgeItemRepository()
+    knowledge_item_repository.existing = {
+        "kid": 11,
+        "knowledge_base_id": 7,
+        "fs_entry_id": 71,
+        "item_code": "attendance-policy-pdf",
+        "item_kind": "FILE",
+        "description": "旧文件说明",
+        "metadata": {"owner": "old"},
+        "status": "ACTIVE",
+        "type_code": "pdf",
+        "is_deleted": False,
+    }
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    knowledge_fs_entry_repository.entry_by_id[71] = {
+        "kid": 71,
+        "knowledge_base_id": 7,
+        "parent_entry_id": 70,
+        "name": "异常考勤处理办法.pdf",
+        "entry_type": "FILE",
+        "path_ltree": "kb_7.f1_doc",
+        "is_root": False,
+        "depth": 1,
+    }
+    service = KnowledgeBaseService(
+        connection_factory=lambda: connection,
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={
+                "id": 7,
+                "kb_code": "hr-policy",
+                "kb_name": "人力制度知识库",
+                "status": "ACTIVE",
+                "is_deleted": False,
+            }
+        ),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        knowledge_item_repository=knowledge_item_repository,
+    )
+
+    response = service.update_file(
+        UpdateFileRequest(
+            kb_code="hr-policy",
+            file_code="attendance-policy-pdf",
+            metadata={"owner": "HR"},
+        )
+    )
+
+    assert response.file_path == "/考勤制度/异常考勤处理办法.pdf"
+    assert response.file_description == "旧文件说明"
+    assert response.metadata == {"owner": "HR"}
+    assert (
+        knowledge_fs_entry_repository.calls.count(
+            (
+                "rename_entry",
+                {"entry_id": 71, "new_name": "异常考勤处理办法（正式版）.pdf"},
+            )
+        )
+        == 0
+    )
+
+
+def test_update_file_rejects_sibling_name_conflict():
+    """Updating a file should reject sibling name conflicts."""
+    connection = FakeConnection()
+    knowledge_item_repository = FakeKnowledgeItemRepository()
+    knowledge_item_repository.existing = {
+        "kid": 11,
+        "knowledge_base_id": 7,
+        "fs_entry_id": 71,
+        "item_code": "attendance-policy-pdf",
+        "item_kind": "FILE",
+        "description": "旧文件说明",
+        "metadata": {"owner": "old"},
+        "status": "ACTIVE",
+        "type_code": "pdf",
+        "is_deleted": False,
+    }
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    knowledge_fs_entry_repository.entry_by_id[71] = {
+        "kid": 71,
+        "knowledge_base_id": 7,
+        "parent_entry_id": 70,
+        "name": "异常考勤处理办法.pdf",
+        "entry_type": "FILE",
+        "path_ltree": "kb_7.f1_doc",
+        "is_root": False,
+        "depth": 1,
+    }
+    knowledge_fs_entry_repository.child_entry_by_parent_and_name[
+        (7, 70, "历史归档.pdf")
+    ] = {
+        "kid": 72,
+        "knowledge_base_id": 7,
+        "parent_entry_id": 70,
+        "name": "历史归档.pdf",
+        "entry_type": "FILE",
+    }
+    service = KnowledgeBaseService(
+        connection_factory=lambda: connection,
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={
+                "id": 7,
+                "kb_code": "hr-policy",
+                "kb_name": "人力制度知识库",
+                "status": "ACTIVE",
+                "is_deleted": False,
+            }
+        ),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        knowledge_item_repository=knowledge_item_repository,
+    )
+
+    try:
+        service.update_file(
+            UpdateFileRequest(
+                kb_code="hr-policy",
+                file_code="attendance-policy-pdf",
+                file_name="历史归档.pdf",
+            )
+        )
+    except KnowledgeBaseValidationError as exc:
+        assert str(exc) == "file name already exists under parent: 历史归档.pdf"
     else:
         raise AssertionError("expected KnowledgeBaseValidationError")
 

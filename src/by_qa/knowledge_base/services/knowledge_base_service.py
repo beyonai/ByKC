@@ -25,6 +25,8 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemListDirResponse,
     UpdateDirectoryRequest,
     UpdateDirectoryResponse,
+    UpdateFileRequest,
+    UpdateFileResponse,
     UpdateKnowledgeBaseRequest,
     UpdateKnowledgeBaseResponse,
 )
@@ -482,6 +484,106 @@ class KnowledgeBaseService:
                 directory_description=(
                     request.directory_description
                     if "directory_description" in request.model_fields_set
+                    else item_row.get("description")
+                ),
+                metadata=(
+                    request.metadata
+                    if "metadata" in request.model_fields_set
+                    else item_row.get("metadata")
+                ),
+            )
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def update_file(self, request: UpdateFileRequest) -> UpdateFileResponse:
+        """Update one file's display name and metadata without moving or rewriting it."""
+        logger.info(
+            "knowledge_base_service.update_file started: kb_code=%s, file_code=%s, has_name=%s, has_description=%s, has_metadata=%s",
+            request.kb_code,
+            request.file_code,
+            "file_name" in request.model_fields_set,
+            "file_description" in request.model_fields_set,
+            "metadata" in request.model_fields_set,
+        )
+        if self.knowledge_item_repository is None:
+            raise KnowledgeBaseValidationError("update file runtime is not configured")
+
+        connection = self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            kb_row = self.knowledge_base_repository.get_by_code(cursor, request.kb_code)
+            if not kb_row:
+                raise KnowledgeBaseValidationError(
+                    f"knowledge base not found: {request.kb_code}"
+                )
+            knowledge_base_id = self._row_id(kb_row)
+            item_row = self.knowledge_item_repository.get_by_item_code(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                item_code=request.file_code,
+            )
+            if item_row is None or item_row.get("item_kind") != "FILE":
+                raise KnowledgeBaseValidationError(
+                    f"knowledge item not found: {request.file_code}"
+                )
+
+            fs_entry_id = int(item_row["fs_entry_id"])
+            fs_entry_row = self.knowledge_fs_entry_repository.get_entry_by_id(
+                cursor,
+                entry_id=fs_entry_id,
+            )
+            if fs_entry_row is None or fs_entry_row.get("entry_type") != "FILE":
+                raise KnowledgeBaseValidationError(
+                    f"knowledge item not found: {request.file_code}"
+                )
+
+            if (
+                "file_name" in request.model_fields_set
+                and request.file_name is not None
+            ):
+                sibling = self.knowledge_fs_entry_repository.get_child_entry(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    parent_entry_id=int(fs_entry_row["parent_entry_id"]),
+                    name=request.file_name,
+                )
+                if sibling is not None and int(sibling["kid"]) != fs_entry_id:
+                    raise KnowledgeBaseValidationError(
+                        f"file name already exists under parent: {request.file_name}"
+                    )
+                self.knowledge_fs_entry_repository.rename_entry(
+                    cursor,
+                    entry_id=fs_entry_id,
+                    new_name=request.file_name,
+                )
+
+            updates: dict[str, Any] = {}
+            if "file_description" in request.model_fields_set:
+                updates["description"] = request.file_description
+            if "metadata" in request.model_fields_set:
+                updates["metadata"] = request.metadata
+            self.knowledge_item_repository.update_knowledge_item(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                item_code=request.file_code,
+                updates=updates,
+            )
+
+            file_path = self.knowledge_fs_entry_repository.get_virtual_path_by_entry_id(
+                cursor,
+                entry_id=fs_entry_id,
+            )
+            connection.commit()
+            return UpdateFileResponse(
+                kb_code=request.kb_code,
+                file_code=request.file_code,
+                file_path=self._ensure_leading_slash(str(file_path or "")),
+                file_description=(
+                    request.file_description
+                    if "file_description" in request.model_fields_set
                     else item_row.get("description")
                 ),
                 metadata=(

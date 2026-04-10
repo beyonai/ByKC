@@ -104,6 +104,35 @@ def test_update_directory_request_rejects_path_like_directory_name():
         )
 
 
+def test_update_file_request_accepts_partial_fields():
+    """Update-file requests should allow partial updates."""
+    from by_qa.knowledge_base.api.schemas import UpdateFileRequest
+
+    request = UpdateFileRequest(
+        kb_code="hr-policy",
+        file_code="attendance-policy-pdf",
+        file_name="异常考勤处理办法（正式版）.pdf",
+        metadata={"owner": "HR"},
+    )
+
+    assert request.kb_code == "hr-policy"
+    assert request.file_code == "attendance-policy-pdf"
+    assert request.file_name == "异常考勤处理办法（正式版）.pdf"
+    assert request.file_description is None
+
+
+def test_update_file_request_rejects_path_like_file_name():
+    """File rename should only accept a single path segment, not a path."""
+    from by_qa.knowledge_base.api.schemas import UpdateFileRequest
+
+    with pytest.raises(ValidationError):
+        UpdateFileRequest(
+            kb_code="hr-policy",
+            file_code="attendance-policy-pdf",
+            file_name="/demo.pdf",
+        )
+
+
 def test_delete_knowledge_item_request_requires_kb_code_and_file_code():
     """Delete-knowledge-item requests should require kb_code and file_code."""
     from by_qa.knowledge_base.api.schemas import DeleteKnowledgeItemRequest

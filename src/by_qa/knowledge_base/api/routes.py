@@ -17,6 +17,7 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemListDirRequest,
     KnowledgeItemSearchRequest,
     UpdateDirectoryRequest,
+    UpdateFileRequest,
     UpdateKnowledgeBaseRequest,
     WriteFileRequest,
     WriteIndexRequest,
@@ -318,6 +319,47 @@ def _map_write_file_validation_error(
         error_code="KB_WRITE_FILE_INVALID",
         error_message=message,
         details={"file_code": file_code, "version": version, "file_path": file_path},
+    )
+
+
+def _map_update_file_validation_error(
+    *,
+    exc: KnowledgeBaseValidationError,
+    kb_code: str,
+    file_code: str,
+) -> JSONResponse:
+    """Map update-file validation errors to the standardized protocol."""
+    message = str(exc)
+    if message.startswith("knowledge base not found:"):
+        return _error_response(
+            status_code=404,
+            error_type="not_found",
+            error_code="KB_NOT_FOUND",
+            error_message=message,
+            details={"kb_code": kb_code},
+        )
+    if message.startswith("knowledge item not found:"):
+        return _error_response(
+            status_code=404,
+            error_type="not_found",
+            error_code="KB_FILE_NOT_FOUND",
+            error_message=message,
+            details={"kb_code": kb_code, "file_code": file_code},
+        )
+    if message.startswith("file name already exists under parent:"):
+        return _error_response(
+            status_code=409,
+            error_type="conflict",
+            error_code="KB_FILE_NAME_CONFLICT",
+            error_message=message,
+            details={"kb_code": kb_code, "file_code": file_code},
+        )
+    return _error_response(
+        status_code=422,
+        error_type="business_validation",
+        error_code="KB_FILE_UPDATE_INVALID",
+        error_message=message,
+        details={"kb_code": kb_code, "file_code": file_code},
     )
 
 
@@ -688,6 +730,35 @@ def register_routes(
                 exc=exc,
                 kb_code=request.kb_code,
                 directory_code=request.directory_code,
+            )
+        return _success_response(data=result.model_dump())
+
+    @app.post("/api/v1/knowledge-items/update")
+    async def update_file(request: UpdateFileRequest):
+        logger.info(
+            "update_file request received: kb_code=%s, file_code=%s, has_name=%s, has_description=%s, has_metadata=%s",
+            request.kb_code,
+            request.file_code,
+            "file_name" in request.model_fields_set,
+            "file_description" in request.model_fields_set,
+            "metadata" in request.model_fields_set,
+        )
+        try:
+            service = get_knowledge_base_service()
+            result = service.update_file(request)
+        except KnowledgeBaseConfigurationError as exc:
+            return _error_response(
+                status_code=503,
+                error_type="configuration_error",
+                error_code="KB_RUNTIME_CONFIG_ERROR",
+                error_message=str(exc),
+                details={"kb_code": request.kb_code, "file_code": request.file_code},
+            )
+        except KnowledgeBaseValidationError as exc:
+            return _map_update_file_validation_error(
+                exc=exc,
+                kb_code=request.kb_code,
+                file_code=request.file_code,
             )
         return _success_response(data=result.model_dump())
 

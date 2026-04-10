@@ -100,26 +100,10 @@
 | `POST` | `/api/v1/knowledge-items/import` | 原子导入原始文件、Markdown 与索引 |
 | `POST` | `/api/v1/knowledge-items/delete` | 删除知识库文档 |
 | `POST` | `/api/v1/knowledge-items/search` | chunk 级混合检索 |
+| `POST` | `/api/v1/knowledge-items/update` | 修改文件名称、描述、元数据 |
 | `POST` | `/api/v1/list_dir` | 列出虚拟目录 |
 | `POST` | `/api/v1/glob` | 按路径模式匹配文件或目录 |
 | `POST` | `/api/v1/read-file` | 读取原文件访问地址或 Markdown 内容 |
-
-## 规划中的新增管理接口
-
-以下接口为下一阶段计划补充的管理能力设计稿，当前开源仓库尚未实现。
-
-这些接口的设计约束如下：
-
-- `kb_code`、`file_code`、`directory_code` 都是稳定标识，不允许修改
-- 目录和文件都应有对应的业务实体记录，目录无内容版本
-- 目录必须显式创建，不允许通过写文件或导入文件自动补建
-- 文件信息修改只允许修改文件名、描述、元数据
-- 目录信息修改暂不支持移动到其他父目录
-- 目录删除支持非空目录，语义为整棵子树逻辑删除
-
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| `POST` | `/api/v1/files/update` | 修改文件名称、描述、元数据 |
 
 ## 创建知识库
 
@@ -1240,13 +1224,9 @@
 - `KB_READ_FILE_INVALID`
 - `KB_RUNTIME_CONFIG_ERROR`
 
-## 规划中的新增管理接口说明
-
-以下内容描述计划新增但当前尚未落地实现的接口草案，用于后续开发与联调对齐。
-
 ## 修改文件信息
 
-### `POST /api/v1/files/update`
+### `POST /api/v1/knowledge-items/update`
 
 修改文件名称、描述、元数据。
 

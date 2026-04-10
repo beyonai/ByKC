@@ -145,7 +145,7 @@ class KnowledgeItemRepository:
         """Fetch a knowledge item by knowledge base and business item_code."""
         cursor.execute(
             """
-            SELECT kid, knowledge_base_id, fs_entry_id, item_code, item_kind, current_version_id, status, type_code, is_deleted
+            SELECT kid, knowledge_base_id, fs_entry_id, item_code, item_kind, current_version_id, description, status, type_code, metadata, is_deleted
             FROM knowledge_item
             WHERE knowledge_base_id = %(knowledge_base_id)s
               AND item_code = %(item_code)s
@@ -162,7 +162,7 @@ class KnowledgeItemRepository:
         """Fetch a knowledge item by business item_code including logically deleted rows."""
         cursor.execute(
             """
-            SELECT kid, knowledge_base_id, fs_entry_id, item_code, item_kind, current_version_id, status, type_code, is_deleted
+            SELECT kid, knowledge_base_id, fs_entry_id, item_code, item_kind, current_version_id, description, status, type_code, metadata, is_deleted
             FROM knowledge_item
             WHERE knowledge_base_id = %(knowledge_base_id)s
               AND item_code = %(item_code)s

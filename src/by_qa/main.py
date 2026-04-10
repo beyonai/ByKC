@@ -10,6 +10,9 @@ from importlib.util import find_spec
 from json import dumps
 from typing import Any, Callable
 
+from by_framework.core.discovery import ServiceRegistry
+from redis.asyncio import Redis
+
 from by_qa.config import get_settings
 from by_qa.core import logger
 
@@ -64,6 +67,121 @@ API_MODULES = (
         },
     ),
 )
+
+
+def _get_startup_configuration_summary() -> dict[str, Any]:
+    """Build a safe startup configuration summary for logging."""
+    return {
+        "service_name": settings.service_name,
+        "host": settings.host,
+        "port": settings.port,
+        "host_machine": settings.host_machine,
+        "checkpointer_backend": settings.checkpointer_backend,
+        "agent_data_path": str(settings.agent_data_path),
+        "knowledge_base_configured": bool(
+            settings.kb_opengauss_dsn and settings.embedding_model_name
+        ),
+        "knowledge_build_configured": bool(
+            settings.embedding_model_name and settings.embedding_base_url
+        ),
+        "qa_llm_configured": bool(settings.llm_base_url and settings.llm_api_key),
+    }
+
+
+def _get_startup_configuration_gaps() -> list[str]:
+    """Return the names of key startup settings that are currently missing."""
+    missing: list[str] = []
+
+    if not settings.kb_opengauss_dsn:
+        missing.append("KB_OPENGAUSS_DSN")
+    if not settings.embedding_model_name:
+        missing.append("EMBEDDING_MODEL_NAME")
+    if not settings.llm_api_key:
+        missing.append("LLM_API_KEY")
+
+    return missing
+
+
+def _log_startup_configuration() -> None:
+    """Log a safe startup configuration summary and any key gaps."""
+    summary = _get_startup_configuration_summary()
+    logger.info(
+        "application startup configuration: service_name=%s, host=%s, port=%s, "
+        "host_machine=%s, checkpointer_backend=%s, agent_data_path=%s, "
+        "knowledge_base_configured=%s, knowledge_build_configured=%s, "
+        "qa_llm_configured=%s",
+        summary["service_name"],
+        summary["host"],
+        summary["port"],
+        summary["host_machine"],
+        summary["checkpointer_backend"],
+        summary["agent_data_path"],
+        summary["knowledge_base_configured"],
+        summary["knowledge_build_configured"],
+        summary["qa_llm_configured"],
+    )
+
+    missing = _get_startup_configuration_gaps()
+    if missing:
+        logger.warning(
+            "application startup configuration gaps: missing=%s",
+            ",".join(missing),
+        )
+
+
+def _build_service_registry_client() -> Redis:
+    """Build the Redis client used by the service registry."""
+    redis_kwargs: dict[str, Any] = {
+        "host": settings.redis_host,
+        "port": settings.redis_port,
+        "db": settings.redis_database,
+        "password": settings.redis_password or None,
+        "decode_responses": True,
+    }
+    if settings.redis_username:
+        redis_kwargs["username"] = settings.redis_username
+    return Redis(**redis_kwargs)
+
+
+async def _register_service(application) -> None:
+    """Register the running service instance in the service registry."""
+    redis_client = _build_service_registry_client()
+    registry = ServiceRegistry(redis_client=redis_client)
+    metadata = {"version": "0.1.1"}
+    await registry.register(
+        service_name=settings.service_name,
+        host=settings.host_machine,
+        port=settings.port,
+        weight=10,
+        metadata=metadata,
+    )
+    application.state.service_registry = registry
+    logger.info(
+        "service registry registered: service_name=%s, host=%s, port=%s, metadata=%s",
+        settings.service_name,
+        settings.host_machine,
+        settings.port,
+        metadata,
+    )
+    logger.info(
+        "service registry redis configured: host=%s, port=%s, db=%s, username_set=%s, password_set=%s",
+        settings.redis_host,
+        settings.redis_port,
+        settings.redis_database,
+        bool(settings.redis_username),
+        bool(settings.redis_password),
+    )
+
+
+async def _unregister_service(application) -> None:
+    """Unregister the running service instance from the service registry."""
+    registry = getattr(application.state, "service_registry", None)
+    if registry is None:
+        return
+
+    await registry.unregister()
+    logger.info("service registry unregistered: service_name=%s", settings.service_name)
+    application.state.service_registry = None
 
 
 def get_adapter() -> None:
@@ -231,6 +349,8 @@ async def lifespan(application):
     """Application lifecycle hooks."""
     settings.ensure_directories()
     enabled_modules = getattr(application.state, "enabled_modules", [])
+    _log_startup_configuration()
+    await _register_service(application)
     logger.info(
         "application startup: enabled_modules=%s",
         ",".join(enabled_modules) if enabled_modules else "none",
@@ -240,6 +360,7 @@ async def lifespan(application):
     yield
 
     _shutdown_knowledge_base_runtime(enabled_modules)
+    await _unregister_service(application)
 
 
 def create_app():

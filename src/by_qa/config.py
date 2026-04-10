@@ -1,5 +1,6 @@
 """Configuration for the open-source knowledge-base service."""
 
+import socket
 from functools import lru_cache
 from pathlib import Path
 
@@ -8,6 +9,26 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 ENV_FILE = PROJECT_ROOT / ".env"
+
+
+def _detect_host_machine_ip() -> str:
+    """Detect a non-loopback local IPv4 address without depending on internet access."""
+    try:
+        addresses = socket.getaddrinfo(
+            socket.gethostname(),
+            None,
+            family=socket.AF_INET,
+            type=socket.SOCK_DGRAM,
+        )
+    except OSError:
+        return "127.0.0.1"
+
+    for _, _, _, _, sockaddr in addresses:
+        ip_address = sockaddr[0]
+        if not ip_address.startswith("127."):
+            return ip_address
+
+    return "127.0.0.1"
 
 
 class Settings(BaseSettings):
@@ -21,6 +42,16 @@ class Settings(BaseSettings):
 
     host: str = Field(default="0.0.0.0", alias="HOST")
     port: int = Field(default=8000, alias="PORT")
+    service_name: str = Field(default="by-qa-manager", alias="SERVICE_NAME")
+    host_machine: str = Field(
+        default_factory=lambda: _detect_host_machine_ip(),
+        alias="HOST_MACHINE",
+    )
+    redis_host: str = Field(default="localhost", alias="REDIS_HOST")
+    redis_port: int = Field(default=6379, alias="REDIS_PORT")
+    redis_username: str = Field(default="", alias="REDIS_USERNAME")
+    redis_password: str = Field(default="", alias="REDIS_PASSWORD")
+    redis_database: int = Field(default=0, alias="REDIS_DATABASE")
 
     agent_data_path: Path = Field(default=Path("agent_data"), alias="AGENT_DATA_PATH")
 

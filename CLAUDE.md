@@ -40,6 +40,9 @@ bash scripts/knowledge_build/run_unit_tests.sh
 bash scripts/qa/run_unit_tests.sh
 bash scripts/knowledge_base/run_integration_tests.sh  # requires docker stack
 
+# Run stateful API integration tests (in-process, no docker needed)
+uv run python -m pytest tests/knowledge_base/integration/test_kb_api_stateful_integration.py -v
+
 # Run a single test
 uv run python -m pytest tests/path/to/test.py::test_name -v
 

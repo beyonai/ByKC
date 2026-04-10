@@ -89,6 +89,22 @@
 }
 ```
 
+### 路径参数约定
+
+为避免混淆，本文统一使用两类路径语义：
+
+- `directory_path`、`file_path`：
+  表示知识库根目录下的逻辑路径，不包含 `kb_name`。例如 `Policies/handbook.pdf` 或 `/Policies/handbook.pdf`。
+- `path`：
+  表示虚拟文件树路径。对 `list_dir`、`glob`、`read-file`、`download-file` 来说，除根路径 `/` 外，通常都需要包含知识库根节点名称，也就是 `kb_name`。本文中的 `path` 示例统一写成带前导 `/` 的形式，例如 `/人力制度知识库/Policies/handbook.pdf`。
+
+响应中的路径字段也分两类：
+
+- `file_path`、`directory_path`：
+  表示知识库内部逻辑路径，不用于跨知识库定位。
+- `name`、`path`：
+  表示虚拟文件树路径，返回时会带前导 `/`，并包含知识库根节点名称。
+
 ## 接口总览
 
 | 方法 | 路径 | 说明 |
@@ -309,6 +325,7 @@
 
 补充语义：
 
+- `file_path` 表示知识库根目录下的文件路径，不包含 `kb_name`
 - `file_path` 中的父目录必须已经存在于知识库文件树中
 - 当前实现不会根据 `file_path` 自动创建缺失目录
 - 若父目录不存在，接口返回业务校验错误
@@ -319,7 +336,7 @@
 | --- | --- | --- | --- | --- |
 | `kb_code` | string | 是 | - | 知识库编码 |
 | `file_code` | string | 是 | - | 文件编码 |
-| `file_path` | string | 是 | - | 文件完整路径 |
+| `file_path` | string | 是 | - | 知识库根目录下的文件路径，不包含 `kb_name` |
 | `file_description` | string \| null | 否 | `null` | 文件描述 |
 | `file_content` | string | 是 | - | 原始文件内容，base64 编码 |
 | `version` | string | 是 | - | 文档版本 |
@@ -333,7 +350,7 @@
 {
   "kb_code": "hr-policy",
   "file_code": "attendance-policy-pdf",
-  "file_path": "/考勤制度/异常考勤处理办法.pdf",
+  "file_path": "Policies/异常考勤处理办法.pdf",
   "file_description": "异常考勤制度原文",
   "file_content": "JVBERi0xLjQKJcfs...",
   "version": "v1",
@@ -348,7 +365,7 @@
 
 说明：
 
-- `file_path` 仍然表示知识库内的逻辑路径
+- `file_path` 仍然表示知识库内的逻辑路径，不包含 `kb_name`
 - 但对象存储键不再依赖 `file_path`
 - 写文件前应先确保目录已经通过独立目录管理流程创建完成
 
@@ -359,7 +376,7 @@
 | `kb_code` | string | 知识库编码 |
 | `file_code` | string | 文件编码 |
 | `type_code` | string | 文件类型编码，通常来自扩展名小写 |
-| `file_path` | string | 文件路径 |
+| `file_path` | string | 知识库根目录下的文件路径，不包含 `kb_name` |
 | `file_description` | string \| null | 文件描述 |
 | `version` | string | 文件版本 |
 | `status` | string | 文件状态 |
@@ -376,7 +393,7 @@
     "kb_code": "hr-policy",
     "file_code": "attendance-policy-pdf",
     "type_code": "pdf",
-    "file_path": "/考勤制度/异常考勤处理办法.pdf",
+    "file_path": "Policies/异常考勤处理办法.pdf",
     "file_description": "异常考勤制度原文",
     "version": "v1",
     "status": "ACTIVE",
@@ -403,7 +420,7 @@
 
 补充语义：
 
-- `directory_path` 使用知识库内的完整逻辑路径，例如 `/考勤制度/归档`
+- `directory_path` 表示知识库根目录下的目录路径，不包含 `kb_name`，例如 `/Policies/Archive`
 - `directory_path` 的最后一段即目录名称
 - 父目录必须已经存在
 - 当前实现不会根据 `directory_path` 自动补建缺失中间目录
@@ -416,7 +433,7 @@
 | --- | --- | --- | --- |
 | `kb_code` | string | 是 | 知识库编码 |
 | `directory_code` | string | 是 | 目录编码，不可修改 |
-| `directory_path` | string | 是 | 目录完整路径 |
+| `directory_path` | string | 是 | 知识库根目录下的目录路径，不包含 `kb_name` |
 | `directory_description` | string \| null | 否 | 目录描述 |
 | `source_code` | string | 是 | 来源系统编码 |
 | `status` | `ACTIVE` \| `INACTIVE` | 否 | 目录状态 |
@@ -428,7 +445,7 @@
 {
   "kb_code": "hr-policy",
   "directory_code": "attendance-archive",
-  "directory_path": "/考勤制度/归档",
+  "directory_path": "/Policies/Archive",
   "directory_description": "考勤制度历史归档目录",
   "source_code": "manual",
   "status": "ACTIVE",
@@ -444,7 +461,7 @@
 | --- | --- | --- |
 | `kb_code` | string | 知识库编码 |
 | `directory_code` | string | 目录编码 |
-| `directory_path` | string | 当前目录完整路径 |
+| `directory_path` | string | 知识库根目录下的当前目录路径 |
 | `directory_description` | string \| null | 当前目录描述 |
 | `status` | string | 当前目录状态 |
 | `metadata` | object \| null | 当前元数据 |
@@ -459,7 +476,7 @@
   "data": {
     "kb_code": "hr-policy",
     "directory_code": "attendance-archive",
-    "directory_path": "/考勤制度/归档",
+    "directory_path": "/Policies/Archive",
     "directory_description": "考勤制度历史归档目录",
     "status": "ACTIVE",
     "metadata": {
@@ -582,7 +599,7 @@
 | --- | --- | --- |
 | `kb_code` | string | 知识库编码 |
 | `directory_code` | string | 目录编码 |
-| `directory_path` | string | 修改后的完整路径 |
+| `directory_path` | string | 知识库根目录下的修改后目录路径 |
 | `directory_description` | string \| null | 当前目录描述 |
 | `metadata` | object \| null | 当前元数据 |
 
@@ -596,7 +613,7 @@
   "data": {
     "kb_code": "hr-policy",
     "directory_code": "attendance-archive",
-    "directory_path": "/考勤制度/历史归档",
+    "directory_path": "/Policies/历史归档",
     "directory_description": "更新后的目录说明",
     "metadata": {
       "owner_dept": "HR",
@@ -722,6 +739,7 @@
 补充语义：
 
 - `file_path` 中的父目录必须已经存在于知识库文件树中
+- `file_path` 表示知识库根目录下的文件路径，不包含 `kb_name`
 - 当前实现不会在导入时自动补建目录
 - 若父目录不存在，接口返回业务校验错误
 
@@ -731,7 +749,7 @@
 | --- | --- | --- | --- | --- |
 | `kb_code` | string | 是 | - | 知识库编码 |
 | `file_code` | string | 是 | - | 文件编码 |
-| `file_path` | string | 是 | - | 文件路径 |
+| `file_path` | string | 是 | - | 知识库根目录下的文件路径，不包含 `kb_name` |
 | `file_description` | string \| null | 否 | `null` | 文件描述 |
 | `file_content` | string | 是 | - | 原始文件内容，base64 编码 |
 | `version` | string | 是 | - | 文档版本 |
@@ -747,7 +765,7 @@
 {
   "kb_code": "hr-policy",
   "file_code": "attendance-policy-pdf",
-  "file_path": "/考勤制度/异常考勤处理办法.pdf",
+  "file_path": "Policies/异常考勤处理办法.pdf",
   "file_description": "异常考勤制度原文",
   "file_content": "JVBERi0xLjQKJcfs...",
   "version": "v1",
@@ -788,7 +806,7 @@
 | `kb_code` | string | 知识库编码 |
 | `file_code` | string | 文件编码 |
 | `type_code` | string | 文件类型编码 |
-| `file_path` | string | 文件路径 |
+| `file_path` | string | 知识库根目录下的文件路径，不包含 `kb_name` |
 | `file_description` | string \| null | 文件描述 |
 | `version` | string | 文档版本 |
 | `status` | string | 文档状态 |
@@ -806,7 +824,7 @@
     "kb_code": "hr-policy",
     "file_code": "attendance-policy-pdf",
     "type_code": "pdf",
-    "file_path": "/考勤制度/异常考勤处理办法.pdf",
+    "file_path": "Policies/异常考勤处理办法.pdf",
     "file_description": "异常考勤制度原文",
     "version": "v1",
     "status": "ACTIVE",
@@ -926,7 +944,7 @@
 | `vector_score` | number \| null | 向量召回得分 |
 | `source_code` | string | 来源系统编码 |
 | `type_code` | string | 文件类型编码 |
-| `file_path` | string | 文件路径 |
+| `file_path` | string | 知识库根目录下的文件路径，不包含 `kb_name` |
 
 ### 成功响应 `data.meta`
 
@@ -958,7 +976,7 @@
         "vector_score": 0.88,
         "source_code": "oa",
         "type_code": "pdf",
-        "file_path": "/考勤制度/异常考勤处理办法.pdf"
+        "file_path": "Policies/异常考勤处理办法.pdf"
       },
       {
         "kb_code": "hr-policy",
@@ -971,7 +989,7 @@
         "vector_score": 0.83,
         "source_code": "oa",
         "type_code": "docx",
-        "file_path": "/请假制度/员工请假管理办法.docx"
+        "file_path": "Policies/员工请假管理办法.docx"
       }
     ],
     "meta": {
@@ -999,6 +1017,7 @@
 说明：
 
 - `path` 默认值为 `/`
+- 当 `path=/` 时列出知识库根节点；其他情况下 `path` 应写成包含 `kb_name` 的虚拟路径
 - 返回结构中的 `data` 是数组，不是包裹在 `items` 对象中的结果
 - 当 `path` 对应的目录不存在时，返回 `KB_DIRECTORY_NOT_FOUND`
 
@@ -1007,7 +1026,7 @@
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- | --- |
 | `kb_codes` | string[] | 是 | - | 知识库编码列表 |
-| `path` | string | 否 | `/` | 目录路径 |
+| `path` | string | 否 | `/` | 虚拟目录路径；非根路径时通常包含 `kb_name` |
 | `source_codes` | string[] \| null | 否 | `null` | 来源过滤 |
 | `type_codes` | string[] \| null | 否 | `null` | 文件类型过滤 |
 
@@ -1016,7 +1035,7 @@
 ```json
 {
   "kb_codes": ["hr-policy"],
-  "path": "/考勤制度",
+  "path": "/人力制度知识库/Policies",
   "source_codes": ["oa"],
   "type_codes": ["pdf", "docx"]
 }
@@ -1040,13 +1059,13 @@
   "data": [
     {
       "kb_code": "hr-policy",
-      "name": "/考勤制度/异常考勤处理办法.pdf",
+      "name": "/人力制度知识库/Policies/异常考勤处理办法.pdf",
       "type": "file",
       "size": 204800
     },
     {
       "kb_code": "hr-policy",
-      "name": "/考勤制度/归档",
+      "name": "/人力制度知识库/Policies/Archive",
       "type": "directory",
       "size": 0
     }
@@ -1068,6 +1087,7 @@
 
 说明：
 
+- `path` 使用虚拟文件树路径，通常包含 `kb_name`
 - 返回结构中的 `data` 是数组，不是包裹在 `items` 对象中的结果
 - 当前实现支持多层路径模式匹配，适合做虚拟文件树下的按层检索
 
@@ -1076,7 +1096,7 @@
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `kb_codes` | string[] | 是 | 知识库编码列表 |
-| `path` | string | 是 | 路径模式 |
+| `path` | string | 是 | 虚拟文件树路径模式，通常包含 `kb_name` |
 | `source_codes` | string[] \| null | 否 | 来源过滤 |
 | `type_codes` | string[] \| null | 否 | 文件类型过滤 |
 
@@ -1085,7 +1105,7 @@
 ```json
 {
   "kb_codes": ["hr-policy"],
-  "path": "/考勤制度/*.pdf",
+  "path": "/人力制度知识库/Policies/*.pdf",
   "source_codes": ["oa"],
   "type_codes": ["pdf"]
 }
@@ -1109,7 +1129,7 @@
   "data": [
     {
       "kb_code": "hr-policy",
-      "name": "/考勤制度/异常考勤处理办法.pdf",
+      "name": "/人力制度知识库/Policies/异常考勤处理办法.pdf",
       "type": "file",
       "size": 204800
     }
@@ -1130,6 +1150,7 @@
 
 读取规则：
 
+- `path` 使用虚拟文件树路径，除根节点特殊场景外通常包含 `kb_name`
 - `content_type=original`：返回原文件访问 `url`
 - `content_type=markdown` 且提供 `start_line/end_line`：返回行区间文本
 - `content_type=markdown` 且不提供行区间：返回完整 Markdown 内容
@@ -1141,7 +1162,7 @@
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- | --- |
 | `kb_codes` | string[] | 是 | - | 查询的知识库编码列表 |
-| `path` | string | 是 | - | 文件路径 |
+| `path` | string | 是 | - | 虚拟文件树路径，通常包含 `kb_name` |
 | `content_type` | `original` \| `markdown` | 否 | `markdown` | 读取内容类型 |
 | `start_line` | integer \| null | 否 | `null` | Markdown 起始行 |
 | `end_line` | integer \| null | 否 | `null` | Markdown 结束行 |
@@ -1153,7 +1174,7 @@
 ```json
 {
   "kb_codes": ["hr-policy"],
-  "path": "/考勤制度/异常考勤处理办法.pdf",
+  "path": "/人力制度知识库/Policies/异常考勤处理办法.pdf",
   "content_type": "markdown",
   "start_line": 1,
   "end_line": 5
@@ -1165,7 +1186,7 @@
 ```json
 {
   "kb_codes": ["hr-policy"],
-  "path": "/考勤制度/异常考勤处理办法.pdf",
+  "path": "/人力制度知识库/Policies/异常考勤处理办法.pdf",
   "content_type": "original"
 }
 ```
@@ -1191,7 +1212,7 @@
   "error": null,
   "data": {
     "kb_code": "hr-policy",
-    "path": "/考勤制度/异常考勤处理办法.pdf",
+    "path": "/人力制度知识库/Policies/异常考勤处理办法.pdf",
     "content_type": "markdown",
     "start_line": 1,
     "end_line": 5,
@@ -1219,7 +1240,7 @@
   "error": null,
   "data": {
     "kb_code": "hr-policy",
-    "path": "/考勤制度/异常考勤处理办法.pdf",
+    "path": "/人力制度知识库/Policies/异常考勤处理办法.pdf",
     "content_type": "original",
     "url": "https://minio.example/knowledge-base/hr-policy/%E8%80%83%E5%8B%A4%E5%88%B6%E5%BA%A6/%E5%BC%82%E5%B8%B8%E8%80%83%E5%8B%A4%E5%A4%84%E7%90%86%E5%8A%9E%E6%B3%95.pdf?ttl=3600"
   }
@@ -1256,14 +1277,14 @@
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `kb_codes` | string[] | 是 | 查询的知识库编码列表 |
-| `path` | string | 是 | 文件路径 |
+| `path` | string | 是 | 虚拟文件树路径，通常包含 `kb_name` |
 
 ### 请求示例
 
 ```json
 {
   "kb_codes": ["hr-policy"],
-  "path": "/考勤制度/异常考勤处理办法.pdf"
+  "path": "/人力制度知识库/Policies/异常考勤处理办法.pdf"
 }
 ```
 
@@ -1274,7 +1295,7 @@
 | 响应头 | 说明 |
 | --- | --- |
 | `Content-Type` | 原文件 MIME 类型，未知时可为 `application/octet-stream` |
-| `Content-Disposition` | ASCII 文件名时为 `attachment; filename="异常考勤处理办法.pdf"`；非 ASCII 文件名时会额外带 `filename*` |
+| `Content-Disposition` | ASCII 文件名时为 `attachment; filename="handbook.pdf"`；非 ASCII 文件名时会额外带 `filename*` |
 | `Content-Length` | 文件字节长度，可选 |
 
 响应体为原文件二进制字节流，不是 JSON。
@@ -1284,7 +1305,7 @@
 ```http
 HTTP/1.1 200 OK
 Content-Type: application/pdf
-Content-Disposition: attachment; filename="异常考勤处理办法.pdf"
+Content-Disposition: attachment; filename="handbook.pdf"
 Content-Length: 204800
 
 %PDF-1.4 ...
@@ -1316,9 +1337,9 @@ Content-Disposition: attachment; filename="download.md"; filename*=UTF-8''%E5%BC
   "error": {
     "type": "not_found",
     "error_code": "KB_FILE_NOT_FOUND",
-    "error_message": "file not found: /考勤制度/异常考勤处理办法.pdf",
+    "error_message": "file not found: 人力制度知识库/Policies/异常考勤处理办法.pdf",
     "details": {
-      "path": "/考勤制度/异常考勤处理办法.pdf",
+      "path": "/人力制度知识库/Policies/异常考勤处理办法.pdf",
       "kb_codes": ["hr-policy"]
     }
   }
@@ -1379,7 +1400,7 @@ Content-Disposition: attachment; filename="download.md"; filename*=UTF-8''%E5%BC
 | --- | --- | --- |
 | `kb_code` | string | 知识库编码 |
 | `file_code` | string | 文件编码 |
-| `file_path` | string | 修改后的完整路径 |
+| `file_path` | string | 知识库根目录下的修改后文件路径 |
 | `file_description` | string \| null | 当前文件描述 |
 | `metadata` | object \| null | 当前元数据 |
 

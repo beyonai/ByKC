@@ -437,6 +437,138 @@ def test_write_file_and_write_index_make_markdown_and_original_readable(
 
 
 @pytest.mark.integration
+def test_success_responses_follow_documented_path_contract(monkeypatch, tmp_path):
+    """Successful responses should follow the documented path semantics."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_search_service(monkeypatch, settings)
+
+    kb_code = f"kb-{uuid4().hex[:8]}"
+    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    file_code = f"file-{uuid4().hex[:8]}"
+    file_path = "Policies/manual.md"
+    virtual_path = f"/{kb_name}/{file_path}"
+    markdown_content = "line1\nline2\nline3\n"
+
+    with TestClient(main_module.app) as client:
+        _create_kb(client, kb_code, kb_name)
+        create_directory = client.post(
+            "/api/v1/directories/create",
+            json={
+                "kb_code": kb_code,
+                "directory_code": f"dir-{uuid4().hex[:6]}",
+                "directory_path": "/Policies",
+                "directory_description": "Policies",
+                "source_code": "integration",
+                "status": "ACTIVE",
+            },
+        )
+        write_file = client.post(
+            "/api/v1/write-file",
+            json={
+                "kb_code": kb_code,
+                "file_code": file_code,
+                "file_path": file_path,
+                "file_description": "policy file",
+                "file_content": base64.b64encode(
+                    markdown_content.encode("utf-8")
+                ).decode("ascii"),
+                "version": "v1",
+                "source_code": "integration",
+                "status": "ACTIVE",
+            },
+        )
+        write_index = client.post(
+            "/api/v1/write-index",
+            json={
+                "kb_code": kb_code,
+                "file_code": file_code,
+                "version": "v1",
+                "markdown_content": markdown_content,
+                "chunks": [
+                    {
+                        "chunk_no": 1,
+                        "start_line": 1,
+                        "end_line": 3,
+                        "chunk_text": "line1\nline2\nline3",
+                        "embedding": [0.1, 0.2, 0.3],
+                    }
+                ],
+            },
+        )
+        list_response = client.post(
+            "/api/v1/list_dir",
+            json={"kb_codes": [kb_code], "path": f"/{kb_name}/Policies"},
+        )
+        glob_response = client.post(
+            "/api/v1/glob",
+            json={"kb_codes": [kb_code], "path": f"/{kb_name}/Policies/*.md"},
+        )
+        read_response = client.post(
+            "/api/v1/read-file",
+            json={
+                "kb_codes": [kb_code],
+                "path": virtual_path,
+                "content_type": "markdown",
+                "start_line": 1,
+                "end_line": 2,
+            },
+        )
+        download_response = client.post(
+            "/api/v1/download-file",
+            json={"kb_codes": [kb_code], "path": virtual_path},
+        )
+        search_response = client.post(
+            "/api/v1/knowledge-items/search",
+            json={"query": "line2", "kb_codes": [kb_code], "top_k": 5},
+        )
+
+    assert create_directory.status_code == 200, create_directory.text
+    assert create_directory.json()["data"]["directory_path"] == "/Policies"
+    assert kb_name not in create_directory.json()["data"]["directory_path"]
+
+    assert write_file.status_code == 200, write_file.text
+    assert write_file.json()["data"]["file_path"] == "Policies/manual.md"
+    assert kb_name not in write_file.json()["data"]["file_path"]
+
+    assert write_index.status_code == 200, write_index.text
+
+    assert list_response.status_code == 200, list_response.text
+    assert list_response.json()["data"] == [
+        {
+            "kb_code": kb_code,
+            "name": f"/{kb_name}/Policies/manual.md",
+            "type": "file",
+            "size": len(markdown_content.encode("utf-8")),
+        }
+    ]
+
+    assert glob_response.status_code == 200, glob_response.text
+    assert glob_response.json()["data"] == [
+        {
+            "kb_code": kb_code,
+            "name": f"/{kb_name}/Policies/manual.md",
+            "type": "file",
+            "size": len(markdown_content.encode("utf-8")),
+        }
+    ]
+
+    assert read_response.status_code == 200, read_response.text
+    assert read_response.json()["data"]["path"] == f"/{kb_name}/Policies/manual.md"
+    assert read_response.json()["data"]["data"] == "line1\nline2\n"
+
+    assert download_response.status_code == 200
+    assert download_response.content == markdown_content.encode("utf-8")
+    assert download_response.headers["content-type"].startswith("text/markdown")
+
+    assert search_response.status_code == 200, search_response.text
+    assert (
+        search_response.json()["data"]["items"][0]["file_path"] == "Policies/manual.md"
+    )
+    assert kb_name not in search_response.json()["data"]["items"][0]["file_path"]
+
+
+@pytest.mark.integration
 def test_write_index_returns_not_found_when_file_does_not_exist(monkeypatch):
     """Indexing a nonexistent file should fail cleanly for the content admin."""
     settings = _kb_settings()

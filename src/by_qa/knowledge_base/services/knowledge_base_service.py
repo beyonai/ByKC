@@ -457,6 +457,25 @@ class KnowledgeBaseService:
                     entry_id=fs_entry_id,
                     new_name=request.directory_name,
                 )
+                if self.retrieval_projection_repository is not None:
+                    subtree_ids = (
+                        self.knowledge_fs_entry_repository.list_subtree_entry_ids(
+                            cursor,
+                            knowledge_base_id=knowledge_base_id,
+                            root_fs_entry_id=fs_entry_id,
+                        )
+                    )
+                    for sid in subtree_ids:
+                        item_row = self.knowledge_item_repository.get_by_fs_entry_id(
+                            cursor,
+                            knowledge_base_id=knowledge_base_id,
+                            fs_entry_id=sid,
+                        )
+                        if item_row is not None:
+                            self.retrieval_projection_repository.refresh_for_item(
+                                cursor,
+                                knowledge_item_id=int(item_row["kid"]),
+                            )
 
             updates: dict[str, Any] = {}
             if "directory_description" in request.model_fields_set:

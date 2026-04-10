@@ -33,7 +33,8 @@ class FakeDocumentChunkingService:
         assert file_type == "pdf"
         return self.markdown_text
 
-    def chunk_and_embed(self, file_bytes: bytes, *, _filename: str) -> list[dict]:
+    def chunk_and_embed(self, file_bytes: bytes, *, filename: str) -> list[dict]:
+        assert isinstance(filename, str)
         content = file_bytes.decode("utf-8")
         line_count = max(1, content.count("\n"))
         return [

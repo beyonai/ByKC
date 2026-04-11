@@ -122,6 +122,20 @@ wheels = [
 ]
 
 [[package]]
+name = "by-framework"
+version = "0.1.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "redis" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d2/e1/e9efcd415682602a6499a99858ef9dfabba1f825d0d1d82fe6265ed66742/by_framework-0.1.8.tar.gz", hash = "sha256:daaa42bbe28f0d7567eebc3849fb9d008040362f79f77a709c1275e8bd0692e2", size = 179703, upload-time = "2026-04-09T04:10:21.706Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d0/aa/a1ede4c5d11c576e94ce312414a8f6df3acc7b7392d64225f8b63c80a979/by_framework-0.1.8-py3-none-any.whl", hash = "sha256:368eed114f1a7bb084b6f76903c7bd15713122bd4a4ab3fc6d85b62ebe56838c", size = 109091, upload-time = "2026-04-09T04:10:20.301Z" },
+]
+
+[[package]]
 name = "by-qa"
 version = "0.1.0"
 source = { editable = "." }
@@ -135,6 +149,7 @@ dependencies = [
 [package.optional-dependencies]
 all = [
     { name = "aiosqlite" },
+    { name = "by-framework" },
     { name = "fastapi" },
     { name = "langchain" },
     { name = "langchain-core" },
@@ -161,6 +176,7 @@ dev = [
     { name = "ruff" },
 ]
 knowledge = [
+    { name = "by-framework" },
     { name = "fastapi" },
     { name = "langchain-openai" },
     { name = "langchain-text-splitters" },
@@ -174,6 +190,7 @@ knowledge = [
     { name = "uvicorn", extra = ["standard"] },
 ]
 knowledge-build = [
+    { name = "by-framework" },
     { name = "fastapi" },
     { name = "langchain-text-splitters" },
     { name = "openpyxl" },
@@ -184,6 +201,7 @@ knowledge-build = [
 ]
 qa = [
     { name = "aiosqlite" },
+    { name = "by-framework" },
     { name = "langchain" },
     { name = "langchain-core" },
     { name = "langchain-openai" },
@@ -197,6 +215,10 @@ qa = [
 requires-dist = [
     { name = "aiosqlite", marker = "extra == 'all'", specifier = ">=0.20.0" },
     { name = "aiosqlite", marker = "extra == 'qa'", specifier = ">=0.20.0" },
+    { name = "by-framework", marker = "extra == 'all'", specifier = "==0.1.8" },
+    { name = "by-framework", marker = "extra == 'knowledge'", specifier = "==0.1.8" },
+    { name = "by-framework", marker = "extra == 'knowledge-build'", specifier = "==0.1.8" },
+    { name = "by-framework", marker = "extra == 'qa'", specifier = "==0.1.8" },
     { name = "fastapi", marker = "extra == 'all'", specifier = ">=0.115.0" },
     { name = "fastapi", marker = "extra == 'knowledge'", specifier = ">=0.115.0" },
     { name = "fastapi", marker = "extra == 'knowledge-build'", specifier = ">=0.115.0" },
@@ -1687,6 +1709,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/da/92/1446574745d74df0c92e6aa4a7b0b3130706a4142b2d1a5869f2eaa423c6/pyyaml-6.0.3-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:16249ee61e95f858e83976573de0f5b2893b3677ba71c9dd36b9cf8be9ac6d65", size = 829923, upload-time = "2025-09-25T21:32:54.537Z" },
     { url = "https://files.pythonhosted.org/packages/f0/7a/1c7270340330e575b92f397352af856a8c06f230aa3e76f86b39d01b416a/pyyaml-6.0.3-cp314-cp314t-win_amd64.whl", hash = "sha256:4ad1906908f2f5ae4e5a8ddfce73c320c2a1429ec52eafd27138b7f1cbe341c9", size = 174062, upload-time = "2025-09-25T21:32:55.767Z" },
     { url = "https://files.pythonhosted.org/packages/f1/12/de94a39c2ef588c7e6455cfbe7343d3b2dc9d6b6b2f40c4c6565744c873d/pyyaml-6.0.3-cp314-cp314t-win_arm64.whl", hash = "sha256:ebc55a14a21cb14062aa4162f906cd962b28e2e9ea38f9b4391244cd8de4ae0b", size = 149341, upload-time = "2025-09-25T21:32:56.828Z" },
+]
+
+[[package]]
+name = "redis"
+version = "7.4.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/7b/7f/3759b1d0d72b7c92f0d70ffd9dc962b7b7b5ee74e135f9d7d8ab06b8a318/redis-7.4.0.tar.gz", hash = "sha256:64a6ea7bf567ad43c964d2c30d82853f8df927c5c9017766c55a1d1ed95d18ad", size = 4943913, upload-time = "2026-03-24T09:14:37.53Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/74/3a/95deec7db1eb53979973ebd156f3369a72732208d1391cd2e5d127062a32/redis-7.4.0-py3-none-any.whl", hash = "sha256:a9c74a5c893a5ef8455a5adb793a31bb70feb821c86eccb62eebef5a19c429ec", size = 409772, upload-time = "2026-03-24T09:14:35.968Z" },
 ]
 
 [[package]]

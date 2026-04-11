@@ -40,6 +40,27 @@ def _kb_settings() -> Settings:
     )
 
 
+def _create_directory(
+    client: TestClient,
+    *,
+    kb_code: str,
+    directory_code: str,
+    directory_path: str,
+) -> None:
+    response = client.post(
+        "/api/v1/directories/create",
+        json={
+            "kb_code": kb_code,
+            "directory_code": directory_code,
+            "directory_path": directory_path,
+            "directory_description": f"{directory_code} description",
+            "source_code": "integration",
+            "status": "ACTIVE",
+        },
+    )
+    assert response.status_code == 200, response.text
+
+
 class CountingObjectStorage:
     """Wrapper that counts downloads while delegating to real object storage."""
 
@@ -80,6 +101,12 @@ def test_kb_api_end_to_end_persists_to_opengauss_and_minio(monkeypatch):
             },
         )
         assert kb_response.status_code == 200
+        _create_directory(
+            client,
+            kb_code=kb_code,
+            directory_code=f"dir-{uuid4().hex[:8]}",
+            directory_path="/dir1",
+        )
 
         import_response = client.post(
             "/api/v1/knowledge-items/import",
@@ -120,13 +147,12 @@ def test_kb_api_end_to_end_persists_to_opengauss_and_minio(monkeypatch):
                     c.chunk_text
                 FROM knowledge_base kb
                 JOIN knowledge_item ki ON ki.knowledge_base_id = kb.kid
-                JOIN knowledge_fs_entry fs ON fs.kid = ki.fs_entry_id
                 JOIN knowledge_item_version kv ON kv.kid = ki.current_version_id
                 JOIN knowledge_item_chunk c ON c.knowledge_item_version_id = kv.kid
                 WHERE kb.kb_code = %(kb_code)s
-                  AND fs.full_path = %(item_code)s
+                  AND ki.item_code = %(item_code)s
                 """,
-                {"kb_code": kb_code, "item_code": f"dir1/{item_code}.md"},
+                {"kb_code": kb_code, "item_code": item_code},
             )
             row = cursor.fetchone()
             assert row is not None
@@ -178,6 +204,12 @@ def test_kb_api_rejects_invalid_embedding_without_persisting_document(monkeypatc
             },
         )
         assert kb_response.status_code == 200
+        _create_directory(
+            client,
+            kb_code=kb_code,
+            directory_code=f"dir-{uuid4().hex[:8]}",
+            directory_path="/dir1",
+        )
 
         import_response = client.post(
             "/api/v1/knowledge-items/import",
@@ -213,11 +245,10 @@ def test_kb_api_rejects_invalid_embedding_without_persisting_document(monkeypatc
                 SELECT COUNT(*) AS item_count
                 FROM knowledge_base kb
                 JOIN knowledge_item ki ON ki.knowledge_base_id = kb.kid
-                JOIN knowledge_fs_entry fs ON fs.kid = ki.fs_entry_id
                 WHERE kb.kb_code = %(kb_code)s
-                  AND fs.full_path = %(item_code)s
+                  AND ki.item_code = %(item_code)s
                 """,
-                {"kb_code": kb_code, "item_code": f"dir1/{item_code}.md"},
+                {"kb_code": kb_code, "item_code": item_code},
             )
             row = cursor.fetchone()
             assert row["item_count"] == 0
@@ -249,6 +280,12 @@ def test_fetch_api_caches_download_and_reuses_fresh_file(monkeypatch, tmp_path):
                 },
             ).status_code
             == 200
+        )
+        _create_directory(
+            client,
+            kb_code=kb_code,
+            directory_code=f"dir-{uuid4().hex[:8]}",
+            directory_path="/dir1",
         )
         assert (
             client.post(
@@ -359,6 +396,12 @@ def test_fetch_api_refreshes_expired_cache_and_rewrites_metadata(monkeypatch, tm
                 },
             ).status_code
             == 200
+        )
+        _create_directory(
+            client,
+            kb_code=kb_code,
+            directory_code=f"dir-{uuid4().hex[:8]}",
+            directory_path="/dir1",
         )
         assert (
             client.post(

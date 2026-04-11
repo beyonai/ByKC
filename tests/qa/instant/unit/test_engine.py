@@ -58,7 +58,8 @@ async def test_stream_search_passes_runtime_context_into_langgraph():
                             "kb_code": "hr-policy",
                             "kb_name": "人力制度知识库",
                             "kb_description": "公司人事制度与流程",
-                            "kb_url": "http://kb-a/api/v1/knowledge-items/search",
+                            "service_name": "kb-search-service-a",
+                            "path": "/api/v1/knowledge-items/search",
                         }
                     ]
                 }
@@ -94,7 +95,8 @@ async def test_stream_search_passes_runtime_context_into_langgraph():
             kb_code="hr-policy",
             kb_name="人力制度知识库",
             kb_description="公司人事制度与流程",
-            kb_url="http://kb-a/api/v1/knowledge-items/search",
+            service_name="kb-search-service-a",
+            path="/api/v1/knowledge-items/search",
         )
     ]
 

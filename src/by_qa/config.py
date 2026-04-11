@@ -4,7 +4,7 @@ import socket
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -113,6 +113,16 @@ class Settings(BaseSettings):
     kb_fetch_cache_cleanup_interval_seconds: int = Field(
         default=10 * 60, alias="KB_FETCH_CACHE_CLEANUP_INTERVAL_SECONDS"
     )
+
+    @field_validator("host_machine", mode="before")
+    @classmethod
+    def _normalize_host_machine(cls, value: str | None) -> str:
+        """Treat blank HOST_MACHINE as unset and fall back to auto-detection."""
+        if value is None:
+            return _detect_host_machine_ip()
+        if isinstance(value, str) and not value.strip():
+            return _detect_host_machine_ip()
+        return value
 
     @property
     def logs_path(self) -> Path:

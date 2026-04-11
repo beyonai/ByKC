@@ -145,6 +145,23 @@ def test_settings_detect_host_machine_when_env_is_missing():
     assert settings.host_machine == "192.168.1.10"
 
 
+def test_settings_detect_host_machine_when_env_is_blank():
+    """Blank HOST_MACHINE should fall back to the detected local machine IP."""
+    with patch("by_qa.config.socket.getaddrinfo") as fake_getaddrinfo:
+        fake_getaddrinfo.return_value = [
+            (
+                2,
+                2,
+                17,
+                "",
+                ("192.168.1.11", 0),
+            ),
+        ]
+        settings = Settings(HOST_MACHINE="")
+
+    assert settings.host_machine == "192.168.1.11"
+
+
 def test_settings_fallback_to_loopback_when_only_loopback_is_available():
     """HOST_MACHINE should fall back to loopback when no non-loopback IPv4 is found."""
     with patch("by_qa.config.socket.getaddrinfo", return_value=[]):

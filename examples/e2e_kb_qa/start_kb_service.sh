@@ -43,10 +43,14 @@ PORT="${PORT:-}"
 required_env_vars=(
   "HOST"
   "PORT"
+  "SERVICE_NAME"
   "EMBEDDING_BASE_URL"
   "EMBEDDING_API_KEY"
   "EMBEDDING_MODEL_NAME"
   "EMBEDDING_DIMENSION"
+  "REDIS_HOST"
+  "REDIS_PORT"
+  "REDIS_DATABASE"
   "KB_OPENGAUSS_DSN"
   "KB_MINIO_ENDPOINT"
   "KB_MINIO_ACCESS_KEY"
@@ -67,6 +71,13 @@ mkdir -p "${RUNTIME_DIR}/agent_data"
 
 export HOST
 export PORT
+export SERVICE_NAME
+export HOST_MACHINE
+export REDIS_HOST
+export REDIS_PORT
+export REDIS_USERNAME
+export REDIS_PASSWORD
+export REDIS_DATABASE
 export AGENT_DATA_PATH
 export COMPOSE_PROJECT_NAME
 
@@ -76,7 +87,7 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 
 echo "Starting openGauss and MinIO from ${COMPOSE_FILE}..."
-docker compose -f "${COMPOSE_FILE}" up -d --build opengauss minio
+docker compose -f "${COMPOSE_FILE}" up -d --build opengauss minio redis
 
 echo "Running stack initialization..."
 docker compose -f "${COMPOSE_FILE}" --profile init up --abort-on-container-exit opengauss-init minio-init

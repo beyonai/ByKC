@@ -8,6 +8,7 @@ from by_qa.core.exceptions import (
     SearchError,
     ValidationError,
 )
+from by_qa.core.framework_client import post_discovered_json, request_discovered_json
 from by_qa.core.logger import (
     clear_context,
     debug,
@@ -38,4 +39,6 @@ __all__ = [
     "ConfigurationError",
     "RetrievalError",
     "GenerationError",
+    "request_discovered_json",
+    "post_discovered_json",
 ]

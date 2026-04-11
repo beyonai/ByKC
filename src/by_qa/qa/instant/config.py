@@ -10,7 +10,8 @@ class KnowledgeBaseConfig:
 
     kb_code: str
     kb_name: str
-    kb_url: str
+    service_name: str
+    path: str
     kb_description: str | None = None
 
 
@@ -38,10 +39,12 @@ class InstantQARetrievalConfig:
                 "knowledge_bases entries must be dict or KnowledgeBaseConfig"
             )
         for knowledge_base in normalized_knowledge_bases:
-            if not knowledge_base.kb_url:
+            if not knowledge_base.service_name:
                 raise ValueError(
-                    "knowledge_bases entries must define a non-empty kb_url"
+                    "knowledge_bases entries must define a non-empty service_name"
                 )
+            if not knowledge_base.path:
+                raise ValueError("knowledge_bases entries must define a non-empty path")
         self.knowledge_bases = normalized_knowledge_bases
 
 

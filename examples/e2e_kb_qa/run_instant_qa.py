@@ -9,7 +9,6 @@ import os
 from common import (
     ExampleError,
     example_kb_identity,
-    normalized_base_url,
     pretty_print,
     require_environment,
     runtime_dir,
@@ -85,11 +84,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory used by the example scripts for saved state and checkpoints.",
     )
     parser.add_argument(
-        "--base-url",
-        default=None,
-        help="Base URL for the running by-qa service.",
-    )
-    parser.add_argument(
         "--query",
         required=True,
         help="Question to ask through InstantQAEngine.",
@@ -116,7 +110,6 @@ def build_parser() -> argparse.ArgumentParser:
 async def _run_async(args: argparse.Namespace) -> None:
     """Create the engine and stream one answer."""
     root = runtime_dir(args.runtime_dir)
-    base_url = normalized_base_url(args.base_url)
     kb_code, kb_name = example_kb_identity()
 
     require_environment(["LLM_API_KEY"])
@@ -141,7 +134,8 @@ async def _run_async(args: argparse.Namespace) -> None:
                         "kb_code": kb_code,
                         "kb_name": kb_name,
                         "kb_description": "Packaged end-to-end example knowledge base.",
-                        "kb_url": f"{base_url}/api/v1/knowledge-items/search",
+                        "service_name": os.getenv("SERVICE_NAME", "by-qa-manager"),
+                        "path": "/api/v1/knowledge-items/search",
                     }
                 ],
                 "top_k": args.top_k,

@@ -3,13 +3,10 @@
 import asyncio
 from typing import Any, Dict, List
 
-import httpx
-
+from by_qa.core import post_discovered_json
 from by_qa.core.logger import error, info
 from by_qa.qa.instant.config import KnowledgeBaseConfig
 from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
-
-DEFAULT_REMOTE_SEARCH_TIMEOUT = 30.0
 
 
 def _format_search_hit(item: dict[str, Any]) -> Dict[str, Any]:
@@ -36,16 +33,17 @@ def _get_kb_field(knowledge_base: KnowledgeBaseConfig, field_name: str) -> Any:
 
 
 async def _search_remote_knowledge_base(
-    *, url: str, request_payload: dict[str, Any]
+    *,
+    service_name: str,
+    path: str,
+    request_payload: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Call one remote knowledge-base search API and return raw items."""
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            url, json=request_payload, timeout=DEFAULT_REMOTE_SEARCH_TIMEOUT
-        )
-        response.raise_for_status()
-
-    payload = response.json()
+    """Call one discovered knowledge-base search API and return raw items."""
+    payload = await post_discovered_json(
+        service_name=service_name,
+        path=path,
+        json=request_payload,
+    )
     response_data = payload.get("data", {})
     items = response_data.get("items", [])
     if not isinstance(items, list):
@@ -56,25 +54,26 @@ async def _search_remote_knowledge_base(
 def _build_remote_search_requests(
     query: str,
     runtime_context: InstantSearchRuntimeContext,
-) -> list[tuple[str, dict[str, Any]]]:
-    """Build one API request per distinct kb_url, grouped by kb_codes."""
+) -> list[tuple[tuple[str, str], dict[str, Any]]]:
+    """Build one API request per distinct service+path, grouped by kb_codes."""
     retrieval = runtime_context.retrieval
-    grouped_kb_codes: dict[str, list[str]] = {}
+    grouped_kb_codes: dict[tuple[str, str], list[str]] = {}
 
     for knowledge_base in retrieval.knowledge_bases:
         kb_code = _get_kb_field(knowledge_base, "kb_code")
-        kb_url = _get_kb_field(knowledge_base, "kb_url")
-        if not kb_code or not kb_url:
+        service_name = _get_kb_field(knowledge_base, "service_name")
+        path = _get_kb_field(knowledge_base, "path")
+        if not kb_code or not service_name or not path:
             continue
-        grouped_codes = grouped_kb_codes.setdefault(kb_url, [])
+        grouped_codes = grouped_kb_codes.setdefault((service_name, path), [])
         if kb_code not in grouped_codes:
             grouped_codes.append(kb_code)
 
-    requests: list[tuple[str, dict[str, Any]]] = []
-    for kb_url, kb_codes in grouped_kb_codes.items():
+    requests: list[tuple[tuple[str, str], dict[str, Any]]] = []
+    for service_target, kb_codes in grouped_kb_codes.items():
         requests.append(
             (
-                kb_url,
+                service_target,
                 {
                     "query": query,
                     "kb_codes": kb_codes,
@@ -105,18 +104,23 @@ async def search_knowledge_items(
 
     responses = await asyncio.gather(
         *[
-            _search_remote_knowledge_base(url=kb_url, request_payload=request_payload)
-            for kb_url, request_payload in requests
+            _search_remote_knowledge_base(
+                service_name=service_name,
+                path=path,
+                request_payload=request_payload,
+            )
+            for (service_name, path), request_payload in requests
         ],
         return_exceptions=True,
     )
 
     aggregated_results: list[dict[str, Any]] = []
-    for (kb_url, request_payload), items in zip(requests, responses):
+    for ((service_name, path), request_payload), items in zip(requests, responses):
         if isinstance(items, Exception):
             error(
-                "[instant_search.retrieval] remote KB search failed: url=%s, kb_codes=%s, error=%s",
-                kb_url,
+                "[instant_search.retrieval] remote KB search failed: service_name=%s, path=%s, kb_codes=%s, error=%s",
+                service_name,
+                path,
                 request_payload["kb_codes"],
                 items,
             )

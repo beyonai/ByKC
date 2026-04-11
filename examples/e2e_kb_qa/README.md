@@ -32,11 +32,17 @@ cp ../../.env.example .env
 
 - `HOST`
 - `PORT`
+- `SERVICE_NAME`
 - `EMBEDDING_BASE_URL`
 - `EMBEDDING_API_KEY`
 - `EMBEDDING_MODEL_NAME`
 - `EMBEDDING_DIMENSION`
 - `LLM_API_KEY`
+- `REDIS_HOST`
+- `REDIS_PORT`
+- `REDIS_USERNAME`
+- `REDIS_PASSWORD`
+- `REDIS_DATABASE`
 - `KB_OPENGAUSS_DSN`
 - `KB_MINIO_ENDPOINT`
 - `KB_MINIO_ACCESS_KEY`
@@ -71,6 +77,7 @@ bash ./start_kb_service.sh \
 - 构建并启动 openGauss / MinIO
 - 执行初始化脚本
 - 启动 `by-qa` FastAPI 服务
+- 在应用生命周期里输出启动配置摘要并完成服务注册
 
 ## 5. 执行知识构建、入库与目录查询
 

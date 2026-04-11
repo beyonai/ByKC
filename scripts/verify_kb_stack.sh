@@ -16,6 +16,9 @@ docker compose -f "${compose_file}" ps
 echo "Checking MinIO health endpoint..."
 curl -fsS "http://127.0.0.1:${minio_api_port}/minio/health/live" >/dev/null
 
+echo "Checking Redis ping..."
+docker compose -f "${compose_file}" exec -T redis redis-cli ping
+
 echo "Checking AGE extension..."
 docker compose -f "${compose_file}" exec -T opengauss \
   /bin/bash -lc "source /home/omm/.bashrc >/dev/null 2>&1 || true; source /etc/profile >/dev/null 2>&1 || true; gsql -h 127.0.0.1 -p 5432 -d '${db}' -U '${user}' -W '${password}' -At -c \"SELECT extname FROM pg_extension WHERE extname = 'age';\""

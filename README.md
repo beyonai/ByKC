@@ -139,15 +139,15 @@ cp .env.example .env
 - embedding 配置
 - 即时问答模型与运行时配置
 
-如果只使用 `knowledge_build`，通常只需要 embedding 相关配置；如果使用 `knowledge_base`，还需要 openGauss、MinIO 等运行配置。
+如果只使用 `knowledge_build`，通常只需要 embedding 相关配置；如果运行完整的 `by-qa` 服务，还需要 openGauss、MinIO 和 Redis 等运行配置。其中 Redis 是必需项，因为项目依赖 `by-framework` 提供运行时基础能力。
 
 ## 中间件依赖
 
 不同模块依赖的中间件不同：
 
-- `knowledge_build`：只依赖 embedding 服务，不依赖 openGauss 或 MinIO
-- `knowledge_base`：依赖 openGauss、MinIO 和 embedding 服务
-- `qa.instant`：当前是代码级能力入口，不直接依赖 openGauss、MinIO，但如果结合知识检索使用，通常仍会依赖 `knowledge_base`
+- `knowledge_build`：只依赖 embedding 服务，不依赖 openGauss、MinIO 或 Redis
+- `knowledge_base`：依赖 openGauss、MinIO、Redis 和 embedding 服务
+- `qa.instant`：当前是代码级能力入口，本身不直接操作 openGauss 或 MinIO，但服务运行仍依赖 `by-framework`，因此 Redis 仍是必需中间件；如果结合知识检索使用，通常也会依赖 `knowledge_base`
 
 ### openGauss
 
@@ -190,6 +190,15 @@ cp .env.example .env
 - MinIO 初始化脚本：`docker/minio/init/init-minio.sh`
 - 编排文件：`docker-compose.kb-stack.yml`
 
+### Redis
+
+仓库默认编排提供 Redis。Redis 是必需中间件，因为项目依赖 `by-framework` 提供服务注册等运行时基础能力。
+
+相关文件：
+
+- 编排文件：`docker-compose.kb-stack.yml`
+- 环境变量示例：`.env.example`
+
 ### 构建 openGauss 自定义镜像
 
 如果你要本地运行知识库，推荐直接使用仓库提供的 compose 配置构建镜像：
@@ -211,10 +220,10 @@ docker build \
 
 ### 启动知识库中间件
 
-启动 openGauss 和 MinIO：
+启动 openGauss、MinIO 和 Redis：
 
 ```bash
-docker compose -f docker-compose.kb-stack.yml up -d opengauss minio
+docker compose -f docker-compose.kb-stack.yml up -d opengauss minio redis
 ```
 
 执行初始化：

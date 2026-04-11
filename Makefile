@@ -19,7 +19,7 @@ opengauss-down:
 	docker compose -f $(COMPOSE_FILE) stop opengauss
 
 kb-stack-up:
-	docker compose -f $(COMPOSE_FILE) up -d opengauss minio
+	docker compose -f $(COMPOSE_FILE) up -d opengauss minio redis
 	docker compose -f $(COMPOSE_FILE) run --rm opengauss-init
 	docker compose -f $(COMPOSE_FILE) run --rm minio-init
 

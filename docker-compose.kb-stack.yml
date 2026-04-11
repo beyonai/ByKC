@@ -79,3 +79,13 @@ services:
       - ./docker/minio/init:/init:ro
     entrypoint: ["/bin/sh", "/init/init-minio.sh"]
     restart: "no"
+
+  redis:
+    image: redis:${REDIS_IMAGE_TAG:-7-alpine}
+    container_name: by-qa-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-16379}:6379"
+    volumes:
+      - ./data/redis:/data

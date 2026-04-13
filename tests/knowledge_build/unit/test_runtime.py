@@ -1,7 +1,10 @@
 """Tests for knowledge-build runtime wiring."""
 
 from by_qa.config import Settings
-from by_qa.knowledge_build.runtime import validate_knowledge_build_settings
+from by_qa.knowledge_build.runtime import (
+    build_document_chunking_service,
+    validate_knowledge_build_settings,
+)
 
 
 def test_validate_knowledge_build_settings_only_requires_embedding_config():
@@ -13,3 +16,17 @@ def test_validate_knowledge_build_settings_only_requires_embedding_config():
     )
 
     validate_knowledge_build_settings(settings)
+
+
+def test_build_document_chunking_service_uses_embedding_batch_max_texts_setting():
+    """Runtime wiring should pass the embedding batch size limit into the service."""
+    settings = Settings(
+        EMBEDDING_MODEL_NAME="bge-m3",
+        EMBEDDING_BASE_URL="https://embedding.example.com",
+        EMBEDDING_DIMENSION=1024,
+        EMBEDDING_BATCH_MAX_TEXTS=7,
+    )
+
+    service = build_document_chunking_service(settings)
+
+    assert service.embedding_batch_max_texts == 7

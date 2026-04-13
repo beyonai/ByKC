@@ -146,3 +146,33 @@ def test_file_to_markdown_index_route_combines_parse_and_chunk(monkeypatch):
     body = response.json()
     assert body["data"]["md_content"] == "# Extracted\n\nbytes=16"
     assert body["data"]["chunks"][0]["chunk_text"] == "# Extracted\n\nbytes=16"
+
+
+def test_file_to_markdown_index_route_emits_stage_logs(monkeypatch):
+    """file-to-markdown-index should log stage boundaries for parse and index building."""
+    info_messages = []
+    client = make_test_client(monkeypatch, FakeDocumentChunkingService())
+    payload = base64.b64encode(b"fake-pdf-content").decode("utf-8")
+
+    monkeypatch.setattr(
+        routes.logger,
+        "info",
+        lambda message, *args, **kwargs: info_messages.append(
+            message % args if args else message
+        ),
+    )
+
+    response = client.post(
+        "/api/v1/file-to-markdown-index",
+        json={"content": payload, "type": "pdf"},
+    )
+
+    assert response.status_code == 200
+    assert info_messages == [
+        "file_to_markdown_index request received: type=pdf, content_length=24",
+        "file_to_markdown_index stage started: stage=file_to_markdown, type=pdf",
+        "file_to_markdown_index stage completed: stage=file_to_markdown, type=pdf, md_content_length=21",
+        "file_to_markdown_index stage started: stage=build_markdown_index, md_content_length=21",
+        "file_to_markdown_index stage completed: stage=build_markdown_index, md_content_length=21, chunk_count=1",
+        "file_to_markdown_index response ready: code=200, type=pdf, md_content_length=21, chunk_count=1",
+    ]

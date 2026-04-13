@@ -32,4 +32,5 @@ def build_document_chunking_service(settings: Settings) -> DocumentChunkingServi
         embedding_api_key=settings.embedding_api_key,
         embedding_model_name=settings.embedding_model_name,
         embedding_dimension=settings.embedding_dimension,
+        embedding_batch_max_texts=settings.embedding_batch_max_texts,
     )

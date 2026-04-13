@@ -257,13 +257,31 @@ def register_routes(
             request.type,
             len(request.content),
         )
+        logger.info(
+            "file_to_markdown_index stage started: stage=file_to_markdown, type=%s",
+            request.type,
+        )
         markdown_result = _parse_file_to_markdown(request.content, request.type)
         if isinstance(markdown_result, JSONResponse):
             return markdown_result
+        logger.info(
+            "file_to_markdown_index stage completed: stage=file_to_markdown, type=%s, md_content_length=%s",
+            request.type,
+            len(markdown_result),
+        )
 
+        logger.info(
+            "file_to_markdown_index stage started: stage=build_markdown_index, md_content_length=%s",
+            len(markdown_result),
+        )
         chunks_result = _build_chunks(markdown_result)
         if isinstance(chunks_result, JSONResponse):
             return chunks_result
+        logger.info(
+            "file_to_markdown_index stage completed: stage=build_markdown_index, md_content_length=%s, chunk_count=%s",
+            len(markdown_result),
+            len(chunks_result),
+        )
 
         logger.info(
             "file_to_markdown_index response ready: code=200, type=%s, md_content_length=%s, chunk_count=%s",

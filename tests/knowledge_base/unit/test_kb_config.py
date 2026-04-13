@@ -21,6 +21,7 @@ def test_settings_accept_kb_ingestion_env_vars():
         EMBEDDING_API_KEY="secret",
         EMBEDDING_DIMENSION=1024,
         EMBEDDING_DISTANCE_METRIC="cosine",
+        EMBEDDING_BATCH_MAX_TEXTS=12,
     )
 
     assert settings.kb_opengauss_dsn.startswith("postgresql://")
@@ -29,6 +30,21 @@ def test_settings_accept_kb_ingestion_env_vars():
     assert settings.kb_minio_markdown_bucket == "knowledge-base-markdown"
     assert settings.embedding_model_name == "bge-m3"
     assert settings.embedding_dimension == 1024
+    assert settings.embedding_batch_max_texts == 12
+
+
+def test_settings_expose_embedding_batch_max_texts_default():
+    """Embedding batch size should default to a conservative multi-input request size."""
+    settings = Settings()
+
+    assert settings.embedding_batch_max_texts == 10
+
+
+def test_settings_accept_minus_one_embedding_batch_max_texts():
+    """Embedding batch size should accept -1 as the non-batching sentinel."""
+    settings = Settings(EMBEDDING_BATCH_MAX_TEXTS=-1)
+
+    assert settings.embedding_batch_max_texts == -1
 
 
 def test_validate_knowledge_base_settings_rejects_missing_runtime_config():

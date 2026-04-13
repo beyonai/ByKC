@@ -31,13 +31,18 @@ class EmbeddingQueryService:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        response = httpx.post(
-            f"{self.base_url}/embeddings",
-            headers=headers,
-            json={"model": self.model_name, "input": query},
-            timeout=self.timeout,
-        )
-        response.raise_for_status()
+        try:
+            response = httpx.post(
+                f"{self.base_url}/embeddings",
+                headers=headers,
+                json={"model": self.model_name, "input": query},
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise KnowledgeBaseConfigurationError(
+                f"embedding service request failed: {exc}"
+            ) from exc
         payload: dict[str, Any] = response.json()
         data = payload.get("data") or []
         if not data or "embedding" not in data[0]:

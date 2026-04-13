@@ -96,6 +96,9 @@ class Settings(BaseSettings):
     embedding_distance_metric: str = Field(
         default="cosine", alias="EMBEDDING_DISTANCE_METRIC"
     )
+    embedding_batch_max_texts: int = Field(
+        default=10, alias="EMBEDDING_BATCH_MAX_TEXTS"
+    )
 
     llm_base_url: str = Field(default="https://api.openai.com/v1", alias="LLM_BASE_URL")
     llm_api_key: str = Field(default="", alias="LLM_API_KEY")
@@ -147,6 +150,14 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return _detect_host_machine_ip()
         return value
+
+    @field_validator("embedding_batch_max_texts")
+    @classmethod
+    def _validate_embedding_batch_max_texts(cls, value: int) -> int:
+        """Allow positive batch sizes or -1 to disable batching."""
+        if value == -1 or value > 0:
+            return value
+        raise ValueError("EMBEDDING_BATCH_MAX_TEXTS must be greater than 0 or -1")
 
     @property
     def logs_path(self) -> Path:

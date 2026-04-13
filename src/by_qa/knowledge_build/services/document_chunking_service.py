@@ -9,6 +9,7 @@ from pathlib import PurePosixPath
 
 import httpx
 
+from by_qa.core import logger
 from by_qa.knowledge_build.services.heading_patterns import (
     DEFAULT_HEADING_PATTERNS,
     HeadingPattern,
@@ -54,6 +55,7 @@ class DocumentChunkingService:
     embedding_api_key: str
     embedding_model_name: str
     embedding_dimension: int
+    embedding_batch_max_texts: int = 10
     chunk_size: int = 512
     chunk_overlap: int = 64
     embedding_timeout: float = 60.0
@@ -96,8 +98,18 @@ class DocumentChunkingService:
         chunks = self._split_text(text, ext)
         if not chunks:
             raise ValueError("document produced no chunks after splitting")
+        logger.info(
+            "document_chunking markdown chunking completed: filename=%s, chunk_count=%s",
+            filename,
+            len(chunks),
+        )
 
         embeddings = self._batch_embed([c["chunk_text"] for c in chunks])
+        logger.info(
+            "document_chunking embedding completed: filename=%s, chunk_count=%s",
+            filename,
+            len(embeddings),
+        )
         return [
             KnowledgeItemChunkPayload(
                 chunk_no=c["chunk_no"],
@@ -603,26 +615,50 @@ class DocumentChunkingService:
         )
 
     def _batch_embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
         if not self.embedding_base_url:
             raise KnowledgeConfigurationError(
                 "EMBEDDING_BASE_URL is required for server-side embedding"
             )
+        if self.embedding_batch_max_texts == -1:
+            return self._request_embeddings(texts)
+        if self.embedding_batch_max_texts <= 0:
+            raise KnowledgeConfigurationError(
+                "embedding batch max texts must be greater than 0 or -1"
+            )
 
+        embeddings: list[list[float]] = []
+        for batch_start in range(0, len(texts), self.embedding_batch_max_texts):
+            embeddings.extend(
+                self._request_embeddings(
+                    texts[batch_start : batch_start + self.embedding_batch_max_texts]
+                )
+            )
+        return embeddings
+
+    def _request_embeddings(self, texts: list[str]) -> list[list[float]]:
+        """Request one embedding batch from the configured endpoint."""
         headers = {"Content-Type": "application/json"}
         if self.embedding_api_key:
             headers["Authorization"] = f"Bearer {self.embedding_api_key}"
 
-        response = httpx.post(
-            f"{self.embedding_base_url.rstrip('/')}/embeddings",
-            headers=headers,
-            json={
-                "model": self.embedding_model_name,
-                "input": texts,
-                "dimensions": self.embedding_dimension,
-            },
-            timeout=self.embedding_timeout,
-        )
-        response.raise_for_status()
+        try:
+            response = httpx.post(
+                f"{self.embedding_base_url.rstrip('/')}/embeddings",
+                headers=headers,
+                json={
+                    "model": self.embedding_model_name,
+                    "input": texts,
+                    "dimensions": self.embedding_dimension,
+                },
+                timeout=self.embedding_timeout,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise KnowledgeConfigurationError(
+                f"embedding service request failed: {exc}"
+            ) from exc
         payload = response.json()
         data = payload.get("data") or []
         if len(data) != len(texts):

@@ -2,8 +2,10 @@
 
 import json
 
+import httpx
 import pytest
 
+from by_qa.core import logger as core_logger
 from by_qa.knowledge_build.services.document_chunking_service import (
     DocumentChunkingService,
 )
@@ -11,6 +13,7 @@ from by_qa.knowledge_build.services.heading_patterns import (
     HeadingPattern,
     load_heading_patterns,
 )
+from by_qa.knowledge_common.exceptions import KnowledgeConfigurationError
 
 
 def _make_service() -> DocumentChunkingService:
@@ -346,3 +349,189 @@ def test_load_heading_patterns_reads_json_configuration(
     assert [pattern.name for pattern in patterns] == ["part_style", "numeric_dot"]
     assert patterns[0].regex == "^第[一二三四五六七八九十]+编"
     assert patterns[1].reject_if_contains_colon is True
+
+
+def test_batch_embed_splits_requests_by_configured_max_texts(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Embedding requests should be split into stable batches when text volume exceeds the limit."""
+    service = DocumentChunkingService(
+        embedding_base_url="http://example.com",
+        embedding_api_key="test-key",
+        embedding_model_name="test-model",
+        embedding_dimension=3,
+        embedding_batch_max_texts=2,
+    )
+    seen_inputs: list[list[str]] = []
+
+    class _FakeResponse:
+        def __init__(self, texts: list[str]) -> None:
+            self._texts = texts
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "data": [
+                    {
+                        "index": index,
+                        "embedding": [float(len(text)), float(index), 3.0],
+                    }
+                    for index, text in enumerate(self._texts)
+                ]
+            }
+
+    def _fake_post(url: str, *, headers: dict, json_body: dict, timeout: float):
+        del url, headers, timeout
+        texts = json_body["input"]
+        seen_inputs.append(texts)
+        return _FakeResponse(texts)
+
+    monkeypatch.setattr(
+        "by_qa.knowledge_build.services.document_chunking_service.httpx.post",
+        _fake_post,
+    )
+
+    embeddings = service._batch_embed(["a", "bb", "ccc", "dddd", "eeeee"])
+
+    assert seen_inputs == [["a", "bb"], ["ccc", "dddd"], ["eeeee"]]
+    assert embeddings == [
+        [1.0, 0.0, 3.0],
+        [2.0, 1.0, 3.0],
+        [3.0, 0.0, 3.0],
+        [4.0, 1.0, 3.0],
+        [5.0, 0.0, 3.0],
+    ]
+
+
+def test_batch_embed_supports_minus_one_for_single_request(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A batch size of -1 should send all texts in one embedding request."""
+    service = DocumentChunkingService(
+        embedding_base_url="http://example.com",
+        embedding_api_key="test-key",
+        embedding_model_name="test-model",
+        embedding_dimension=3,
+        embedding_batch_max_texts=-1,
+    )
+    seen_inputs: list[list[str]] = []
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "data": [
+                    {"index": 0, "embedding": [0.1, 0.2, 0.3]},
+                    {"index": 1, "embedding": [0.4, 0.5, 0.6]},
+                    {"index": 2, "embedding": [0.7, 0.8, 0.9]},
+                ]
+            }
+
+    def _fake_post(url: str, *, headers: dict, json_body: dict, timeout: float):
+        del url, headers, timeout
+        seen_inputs.append(json_body["input"])
+        return _FakeResponse()
+
+    monkeypatch.setattr(
+        "by_qa.knowledge_build.services.document_chunking_service.httpx.post",
+        _fake_post,
+    )
+
+    embeddings = service._batch_embed(["a", "bb", "ccc"])
+
+    assert seen_inputs == [["a", "bb", "ccc"]]
+    assert embeddings == [
+        [0.1, 0.2, 0.3],
+        [0.4, 0.5, 0.6],
+        [0.7, 0.8, 0.9],
+    ]
+
+
+def test_batch_embed_rejects_invalid_negative_batch_size():
+    """Only -1 is allowed as the non-batching sentinel value."""
+    service = DocumentChunkingService(
+        embedding_base_url="http://example.com",
+        embedding_api_key="test-key",
+        embedding_model_name="test-model",
+        embedding_dimension=3,
+        embedding_batch_max_texts=-2,
+    )
+
+    with pytest.raises(KnowledgeConfigurationError, match="greater than 0 or -1"):
+        service._batch_embed(["a"])
+
+
+def test_batch_embed_wraps_http_errors_as_configuration_errors(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """HTTP failures from the embedding service should surface as knowledge config errors."""
+    service = _make_service()
+
+    def _fake_post(url: str, *, headers: dict, json_body: dict, timeout: float):
+        del url, headers, json_body, timeout
+        raise httpx.HTTPError("connection failed")
+
+    monkeypatch.setattr(
+        "by_qa.knowledge_build.services.document_chunking_service.httpx.post",
+        _fake_post,
+    )
+
+    with pytest.raises(
+        KnowledgeConfigurationError, match="embedding service request failed"
+    ):
+        service._batch_embed(["a"])
+
+
+def test_chunk_and_embed_emits_chunking_and_embedding_stage_logs(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Chunking should log markdown splitting and embedding completion summaries."""
+    service = _make_service()
+    info_messages: list[str] = []
+    chunks = [
+        {
+            "chunk_no": 1,
+            "start_line": 1,
+            "end_line": 1,
+            "chunk_text": "chunk one",
+            "char_start": 0,
+            "char_end": 9,
+        },
+        {
+            "chunk_no": 2,
+            "start_line": 2,
+            "end_line": 2,
+            "chunk_text": "chunk two",
+            "char_start": 10,
+            "char_end": 19,
+        },
+    ]
+
+    monkeypatch.setattr(
+        service, "_extract_text", lambda file_bytes, ext: "# Title\n\nBody"
+    )
+    monkeypatch.setattr(service, "_split_text", lambda text, ext: chunks)
+    monkeypatch.setattr(
+        service,
+        "_batch_embed",
+        lambda texts: [[0.1, 0.2, 0.3] for _ in texts],
+    )
+    monkeypatch.setattr(
+        core_logger,
+        "info",
+        lambda message, *args, **kwargs: info_messages.append(
+            message % args if args else message
+        ),
+    )
+
+    payloads = service.chunk_and_embed(b"# Title\n\nBody", filename="input.md")
+
+    assert len(payloads) == 2
+    assert info_messages == [
+        "document_chunking markdown chunking completed: filename=input.md, chunk_count=2",
+        "document_chunking embedding completed: filename=input.md, chunk_count=2",
+    ]

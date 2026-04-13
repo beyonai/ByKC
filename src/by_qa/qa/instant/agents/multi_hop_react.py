@@ -4,7 +4,7 @@ import json
 from typing import Annotated, Any, Dict, List
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain.tools import InjectedToolCallId, ToolRuntime, tool
 from langchain_core.messages import (
     AIMessage,
@@ -198,6 +198,11 @@ class MultiHopMiddleware(AgentMiddleware):
         del state_unused
         del runtime_unused
         return None
+
+    async def awrap_model_call(self, request: ModelRequest, handler) -> ModelResponse:
+        model_settings = dict(request.model_settings)
+        model_settings["parallel_tool_calls"] = False
+        return await handler(request.override(model_settings=model_settings))
 
 
 DEFAULT_MULTI_HOP_SYSTEM_PROMPT = """你是一个智能的多跳问题求解助手。

@@ -4,7 +4,7 @@ import json
 from typing import Any, Dict, List
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import SystemMessage, ToolMessage
 from langgraph.types import Command
@@ -83,6 +83,11 @@ class SingleHopMiddleware(AgentMiddleware):
         del state_unused
         del runtime_unused
         return None
+
+    async def awrap_model_call(self, request: ModelRequest, handler) -> ModelResponse:
+        model_settings = dict(request.model_settings)
+        model_settings["parallel_tool_calls"] = False
+        return await handler(request.override(model_settings=model_settings))
 
 
 DEFAULT_SINGLE_HOP_SYSTEM_PROMPT = """你是一个智能的单跳检索问答助手。

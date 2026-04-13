@@ -1,6 +1,6 @@
 """Tests for document chunking service file type handling."""
 
-import json
+import json as json_lib
 
 import httpx
 import pytest
@@ -327,7 +327,7 @@ def test_load_heading_patterns_reads_json_configuration(
     """Heading templates should be loadable from a JSON config list."""
     config_path = tmp_path / "heading_patterns.json"
     config_path.write_text(
-        json.dumps(
+        json_lib.dumps(
             [
                 {
                     "name": "part_style",
@@ -382,9 +382,9 @@ def test_batch_embed_splits_requests_by_configured_max_texts(
                 ]
             }
 
-    def _fake_post(url: str, *, headers: dict, json_body: dict, timeout: float):
+    def _fake_post(url: str, *, headers: dict, json: dict, timeout: float):
         del url, headers, timeout
-        texts = json_body["input"]
+        texts = json["input"]
         seen_inputs.append(texts)
         return _FakeResponse(texts)
 
@@ -431,9 +431,9 @@ def test_batch_embed_supports_minus_one_for_single_request(
                 ]
             }
 
-    def _fake_post(url: str, *, headers: dict, json_body: dict, timeout: float):
+    def _fake_post(url: str, *, headers: dict, json: dict, timeout: float):
         del url, headers, timeout
-        seen_inputs.append(json_body["input"])
+        seen_inputs.append(json["input"])
         return _FakeResponse()
 
     monkeypatch.setattr(
@@ -471,8 +471,8 @@ def test_batch_embed_wraps_http_errors_as_configuration_errors(
     """HTTP failures from the embedding service should surface as knowledge config errors."""
     service = _make_service()
 
-    def _fake_post(url: str, *, headers: dict, json_body: dict, timeout: float):
-        del url, headers, json_body, timeout
+    def _fake_post(url: str, *, headers: dict, json: dict, timeout: float):
+        del url, headers, json, timeout
         raise httpx.HTTPError("connection failed")
 
     monkeypatch.setattr(

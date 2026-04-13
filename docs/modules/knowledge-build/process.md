@@ -1,5 +1,12 @@
 # 知识构建处理流程
 
+相关文档：
+
+- [api.md](./api.md)
+- [framework.md](./framework.md)
+- [design.md](./design.md)
+- [process.md](./process.md)
+
 ## 总流程
 
 ```mermaid
@@ -27,10 +34,14 @@ flowchart TD
     B --> C["base64 解码"]
     C --> D["DocumentChunkingService.extract_text_from_file"]
     D --> E{"文件类型"}
+    E -->|txt/md| F0["UTF-8 解码"]
+    E -->|csv| F1["csv reader"]
     E -->|pdf| F["PyMuPDF"]
     E -->|docx| G["python-docx"]
     E -->|pptx| H["python-pptx"]
     E -->|xlsx| I["openpyxl"]
+    F0 --> J["markdown/text"]
+    F1 --> J
     F --> J["markdown/text"]
     G --> J
     H --> J

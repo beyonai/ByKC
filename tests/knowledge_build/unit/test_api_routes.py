@@ -12,7 +12,7 @@ class FakeDocumentChunkingService:
     """Service double used by knowledge build route tests."""
 
     def extract_text_from_file(self, file_bytes, file_type):
-        assert file_type == "pdf"
+        assert file_type in {"pdf", "txt", "md", "csv"}
         return f"# Extracted\n\nbytes={len(file_bytes)}"
 
     def chunk_and_embed(self, file_bytes, *, filename):
@@ -53,6 +53,42 @@ def test_file_to_markdown_route_returns_business_response(monkeypatch):
         "error": None,
         "data": {"md_content": "# Extracted\n\nbytes=16"},
     }
+
+
+def test_file_to_markdown_route_accepts_text_file_types_case_insensitively(monkeypatch):
+    """file-to-markdown should accept added text file types without case sensitivity."""
+    client = make_test_client(monkeypatch, FakeDocumentChunkingService())
+    payload = base64.b64encode(b"name,age\nalice,18\n").decode("utf-8")
+
+    response = client.post(
+        "/api/v1/file-to-markdown",
+        json={"content": payload, "type": "CSV"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["md_content"] == "# Extracted\n\nbytes=18"
+
+
+def test_file_to_markdown_route_maps_markdown_type_to_md(monkeypatch):
+    """file-to-markdown should normalize markdown requests to the md type label."""
+    seen_file_types = []
+
+    class RecordingDocumentChunkingService(FakeDocumentChunkingService):
+        def extract_text_from_file(self, file_bytes, file_type):
+            seen_file_types.append(file_type)
+            assert file_type == "md"
+            return super().extract_text_from_file(file_bytes, file_type)
+
+    client = make_test_client(monkeypatch, RecordingDocumentChunkingService())
+    payload = base64.b64encode(b"# title\n\nbody").decode("utf-8")
+
+    response = client.post(
+        "/api/v1/file-to-markdown",
+        json={"content": payload, "type": "markdown"},
+    )
+
+    assert response.status_code == 200
+    assert seen_file_types == ["md"]
 
 
 def test_file_to_markdown_route_emits_summary_logs(monkeypatch):

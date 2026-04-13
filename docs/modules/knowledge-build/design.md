@@ -13,6 +13,7 @@
 
 相关文档：
 
+- [api.md](./api.md)
 - [framework.md](./framework.md)
 - [design.md](./design.md)
 - [process.md](./process.md)
@@ -61,10 +62,15 @@
 
 支持的输入文件类型包括：
 
+- `txt`
+- `md`
+- `csv`
 - `pdf`
 - `docx`
 - `pptx`
 - `xlsx`
+
+其中 `markdown` 请求类型会在服务端统一映射为 `md`。
 
 markdown 和纯文本切片统一由 `DocumentChunkingService` 完成。
 

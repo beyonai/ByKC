@@ -75,9 +75,33 @@ def test_file_to_markdown_supports_success_and_common_failures(monkeypatch):
     assert success.status_code == 200
     assert success.json()["data"]["md_content"] == "# Extracted\n\ncontent"
 
+    text_payload = base64.b64encode(b"plain text content").decode("ascii")
+    txt_success = success_client.post(
+        "/api/v1/file-to-markdown",
+        json={"content": text_payload, "type": "TXT"},
+    )
+    assert txt_success.status_code == 200
+    assert txt_success.json()["data"]["md_content"] == "# Extracted\n\ncontent"
+
+    markdown_payload = base64.b64encode(b"# Title\n\nbody").decode("ascii")
+    markdown_success = success_client.post(
+        "/api/v1/file-to-markdown",
+        json={"content": markdown_payload, "type": "Md"},
+    )
+    assert markdown_success.status_code == 200
+    assert markdown_success.json()["data"]["md_content"] == "# Extracted\n\ncontent"
+
+    csv_payload = base64.b64encode(b"name,age\nalice,18\n").decode("ascii")
+    csv_success = success_client.post(
+        "/api/v1/file-to-markdown",
+        json={"content": csv_payload, "type": "csv"},
+    )
+    assert csv_success.status_code == 200
+    assert csv_success.json()["data"]["md_content"] == "# Extracted\n\ncontent"
+
     unsupported = success_client.post(
         "/api/v1/file-to-markdown",
-        json={"content": payload, "type": "txt"},
+        json={"content": payload, "type": "exe"},
     )
     assert unsupported.status_code == 422
     assert unsupported.json()["error"]["error_code"] == "FILE_TYPE_UNSUPPORTED"

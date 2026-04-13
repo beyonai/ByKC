@@ -16,7 +16,23 @@ from by_qa.knowledge_build.api.schemas import (
 )
 from by_qa.knowledge_common.exceptions import KnowledgeConfigurationError
 
-SUPPORTED_FILE_TYPES = {"pdf", "docx", "pptx", "xlsx"}
+SUPPORTED_FILE_TYPES = {
+    "pdf",
+    "docx",
+    "pptx",
+    "xlsx",
+    "txt",
+    "md",
+    "csv",
+}
+
+
+def _normalize_file_type(file_type: str) -> str:
+    """Normalize request file types for case-insensitive validation."""
+    normalized = file_type.strip().lower()
+    if normalized == "markdown":
+        return "md"
+    return normalized
 
 
 def _success_response(
@@ -70,7 +86,8 @@ def register_routes(
 
     def _parse_file_to_markdown(b64_content: str, file_type: str) -> str | JSONResponse:
         """Decode base64 and parse a document into markdown."""
-        if file_type not in SUPPORTED_FILE_TYPES:
+        normalized_file_type = _normalize_file_type(file_type)
+        if normalized_file_type not in SUPPORTED_FILE_TYPES:
             return _error_response(
                 status_code=422,
                 error_type="business_validation",
@@ -99,7 +116,9 @@ def register_routes(
                 raise KnowledgeConfigurationError(
                     "document chunking service is not configured"
                 )
-            return chunking_service.extract_text_from_file(file_bytes, file_type)
+            return chunking_service.extract_text_from_file(
+                file_bytes, normalized_file_type
+            )
         except KnowledgeConfigurationError as exc:
             logger.warning(
                 "file_to_markdown configuration failed: type=%s, error=%s",

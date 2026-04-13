@@ -47,6 +47,9 @@ class DocumentChunkingService:
     )
 
     FILE_TYPE_TO_EXT = {
+        "txt": ".txt",
+        "md": ".md",
+        "csv": ".csv",
         "pdf": ".pdf",
         "docx": ".docx",
         "pptx": ".pptx",
@@ -55,7 +58,10 @@ class DocumentChunkingService:
 
     def extract_text_from_file(self, file_bytes: bytes, file_type: str) -> str:
         """Extract text from a file given its type label."""
-        ext = self.FILE_TYPE_TO_EXT.get(file_type)
+        normalized_file_type = file_type.strip().lower()
+        if normalized_file_type == "markdown":
+            normalized_file_type = "md"
+        ext = self.FILE_TYPE_TO_EXT.get(normalized_file_type)
         if ext is None:
             supported = ", ".join(sorted(self.FILE_TYPE_TO_EXT))
             raise ValueError(

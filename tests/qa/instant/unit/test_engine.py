@@ -36,9 +36,7 @@ async def test_stream_search_emits_answer_event_for_final_answer_node():
     engine._graph = mock_graph
 
     events = []
-    async for event in engine.stream_search(
-        CoreInput(query="Test question", dataset_ids=[])
-    ):
+    async for event in engine.stream_search(CoreInput(query="Test question")):
         events.append(event)
 
     answer_events = [event for event in events if event.type == StreamEventType.ANSWER]
@@ -84,9 +82,7 @@ async def test_stream_search_passes_runtime_context_into_langgraph():
     engine._graph = mock_graph
 
     events = []
-    async for event in engine.stream_search(
-        CoreInput(query="Test question", dataset_ids=[])
-    ):
+    async for event in engine.stream_search(CoreInput(query="Test question")):
         events.append(event)
 
     runtime_context = captured["context"]
@@ -126,7 +122,7 @@ async def test_stream_search_uses_prefixed_thread_id_for_checkpointer():
     engine._graph = mock_graph
 
     async for unused_event in engine.stream_search(
-        CoreInput(query="Test", session_id="session-42", dataset_ids=[])
+        CoreInput(query="Test", session_id="session-42")
     ):
         del unused_event
 

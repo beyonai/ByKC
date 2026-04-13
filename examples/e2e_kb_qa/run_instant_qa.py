@@ -144,7 +144,7 @@ async def _run_async(args: argparse.Namespace) -> None:
             }
         }
     )
-    request = CoreInput(query=args.query, dataset_ids=[])
+    request = CoreInput(query=args.query)
     async for event in engine.stream_search(request):
         renderer.render(event)
     renderer.finish()

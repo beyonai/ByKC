@@ -57,8 +57,6 @@ class SingleHopState(TypedDict):
     """State for single-hop subgraph."""
 
     sub_query: dict[str, Any]
-    dataset_ids: Annotated[list[int], overwrite_value]
-    beyond_token: Annotated[str, overwrite_value]
     cited_indices: list[str]
     result_counter: int
     retrieval_results: Annotated[list[dict[str, Any]], merge_list_with_mode]
@@ -70,8 +68,6 @@ class MultiHopState(TypedDict):
     """State for multi-hop subgraph."""
 
     sub_query: dict[str, Any]
-    dataset_ids: Annotated[list[int], overwrite_value]
-    beyond_token: Annotated[str, overwrite_value]
     messages: Annotated[Messages, add_messages]
     reasoning_plan: list[str]
     current_step: int
@@ -88,8 +84,6 @@ class InstantQAState(TypedDict):
     """Instant QA graph state."""
 
     original_query: str
-    dataset_ids: Annotated[list[int], overwrite_value]
-    beyond_token: Annotated[str, overwrite_value]
     sub_queries: list[SubQuery]
     decomposition_metadata: Optional[dict[str, Any]]
     routing_path: Optional[Literal["single_worker_path", "subgraph_parallel_path"]]

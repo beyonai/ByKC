@@ -53,8 +53,6 @@ class SearchRequest(BaseModel):
     filters: SearchFilters | None = None
     stream: bool = False
     context: dict[str, Any] | None = None
-    dataset_ids: list[int] | None = Field(default=None, alias="datasetIds")
-    beyond_token: str | None = Field(default=None, alias="beyondToken")
 
 
 CoreInput = SearchRequest

@@ -16,8 +16,6 @@ from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
 def dispatch_subgraph_workers(state: InstantSearchState):
     """Dispatch worker graphs for the subgraph-parallel execution path."""
     sub_queries = state.get("sub_queries", [])
-    dataset_ids = state.get("dataset_ids", [])
-    beyond_token = state.get("beyond_token", "")
     original_query = state.get("original_query", "")
 
     sends = []
@@ -25,8 +23,6 @@ def dispatch_subgraph_workers(state: InstantSearchState):
         query_type = sq.get("query_type", "single-hop")
         payload = {
             "sub_query": sq,
-            "dataset_ids": dataset_ids,
-            "beyond_token": beyond_token,
             "original_query": original_query,
             "sub_answers": [],
             "retrieval_results": [],

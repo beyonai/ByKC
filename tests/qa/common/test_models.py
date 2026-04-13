@@ -24,7 +24,7 @@ def test_stream_event_done_uses_camel_case_payload():
     assert datetime.fromisoformat(payload["timestamp"])
 
 
-def test_search_request_accepts_dataset_ids_alias():
+def test_search_request_ignores_deprecated_dataset_and_beyond_fields():
     request = SearchRequest.model_validate(
         {
             "query": "员工请假制度",
@@ -32,9 +32,11 @@ def test_search_request_accepts_dataset_ids_alias():
             "beyondToken": "token",
         }
     )
+    payload = request.model_dump(by_alias=True, exclude_none=True)
 
-    assert request.dataset_ids == [1, 2]
-    assert request.beyond_token == "token"
+    assert request.query == "员工请假制度"
+    assert "datasetIds" not in payload
+    assert "beyondToken" not in payload
 
 
 def test_configuration_error_preserves_details():

@@ -134,8 +134,6 @@ class InstantQAEngine:
         try:
             initial_state = InstantSearchState(
                 original_query=input_data.query,
-                dataset_ids=input_data.dataset_ids or [],
-                beyond_token=input_data.beyond_token or "",
                 sub_queries=[],
                 sub_answers={"mode": "RESET", "data": []},
                 retrieval_results={"mode": "RESET", "data": []},

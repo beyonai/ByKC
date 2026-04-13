@@ -145,6 +145,40 @@ def test_settings_detect_host_machine_when_env_is_missing():
     assert settings.host_machine == "192.168.1.10"
 
 
+def test_settings_prefer_default_outbound_ip_over_hostname_resolution():
+    """HOST_MACHINE should prefer the default outbound LAN address when available."""
+
+    class FakeSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def connect(self, address):
+            self.address = address
+
+        def getsockname(self):
+            return ("10.0.0.10", 43210)
+
+    with (
+        patch("by_qa.config.socket.socket", return_value=FakeSocket()),
+        patch("by_qa.config.socket.getaddrinfo") as fake_getaddrinfo,
+    ):
+        fake_getaddrinfo.return_value = [
+            (
+                2,
+                2,
+                17,
+                "",
+                ("192.168.56.10", 0),
+            ),
+        ]
+        settings = Settings()
+
+    assert settings.host_machine == "10.0.0.10"
+
+
 def test_settings_detect_host_machine_when_env_is_blank():
     """Blank HOST_MACHINE should fall back to the detected local machine IP."""
     with patch("by_qa.config.socket.getaddrinfo") as fake_getaddrinfo:

@@ -1,5 +1,6 @@
 """Configuration for the open-source knowledge-base service."""
 
+import ipaddress
 import socket
 from functools import lru_cache
 from pathlib import Path
@@ -12,7 +13,17 @@ ENV_FILE = PROJECT_ROOT / ".env"
 
 
 def _detect_host_machine_ip() -> str:
-    """Detect a non-loopback local IPv4 address without depending on internet access."""
+    """Detect the LAN IPv4 address that the host would use for outbound traffic."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as outbound_socket:
+            # UDP connect selects the default route without requiring a reachable peer.
+            outbound_socket.connect(("192.0.2.1", 80))
+            ip_address = outbound_socket.getsockname()[0]
+            if _is_usable_ipv4_address(ip_address):
+                return ip_address
+    except OSError:
+        pass
+
     try:
         addresses = socket.getaddrinfo(
             socket.gethostname(),
@@ -25,10 +36,23 @@ def _detect_host_machine_ip() -> str:
 
     for _, _, _, _, sockaddr in addresses:
         ip_address = sockaddr[0]
-        if not ip_address.startswith("127."):
+        if _is_usable_ipv4_address(ip_address):
             return ip_address
 
     return "127.0.0.1"
+
+
+def _is_usable_ipv4_address(ip_address: str) -> bool:
+    """Return whether an IPv4 address is suitable for LAN access."""
+    try:
+        address = ipaddress.ip_address(ip_address)
+    except ValueError:
+        return False
+
+    if address.version != 4:
+        return False
+
+    return not (address.is_loopback or address.is_unspecified or address.is_link_local)
 
 
 class Settings(BaseSettings):

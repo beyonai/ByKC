@@ -22,7 +22,7 @@ class InstantQARetrievalConfig:
     knowledge_bases: list[KnowledgeBaseConfig] = field(default_factory=list)
     source_codes: list[str] | None = None
     type_codes: list[str] | None = None
-    top_k: int = 10
+    top_k: int = 20
     vector_top_k: int = 40
     text_top_k: int = 30
 

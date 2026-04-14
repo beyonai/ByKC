@@ -149,7 +149,7 @@ async def test_search_knowledge_items_uses_framework_client():
             "kb_codes": ["hr-policy"],
             "source_codes": ["oa"],
             "type_codes": ["pdf"],
-            "top_k": 10,
+            "top_k": 20,
             "vector_top_k": 40,
             "text_top_k": 30,
         },

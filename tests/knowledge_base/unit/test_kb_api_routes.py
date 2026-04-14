@@ -41,11 +41,9 @@ class FakeKBService:
     def create_knowledge_base(self, request):
         self.created_requests.append(request)
         return CreateKnowledgeBaseResponse(
-            kb_code=request.kb_code,
+            kb_code="7",
             kb_name=request.kb_name,
             kb_description=request.kb_description,
-            status=request.status,
-            metadata=request.metadata,
         )
 
     def create_directory(self, request):
@@ -228,22 +226,27 @@ def make_test_client(monkeypatch, service):
 
 
 def test_create_knowledge_base_route_returns_business_response(monkeypatch):
-    """POST /api/v1/knowledge-bases/create should delegate to the KB service."""
+    """POST /api/v1/knowledgeBases/create should delegate to the KB service."""
     service = FakeKBService()
     client = make_test_client(monkeypatch, service)
     response = client.post(
-        "/api/v1/knowledge-bases/create",
+        "/api/v1/knowledgeBases/create",
         json={
-            "kb_code": "hr-policy",
-            "kb_name": "人力制度知识库",
-            "status": "ACTIVE",
+            "knName": "人力制度知识库",
+            "knDescription": "公司人事制度与流程文档",
         },
     )
 
     assert response.status_code == 200
-    assert "request_id" not in response.json()
-    assert response.json()["error"] is None
-    assert response.json()["data"]["kb_code"] == "hr-policy"
+    assert response.json() == {
+        "resultCode": "0",
+        "resultMsg": "success",
+        "resultObject": {
+            "knCode": "7",
+            "knName": "人力制度知识库",
+            "knDescription": "公司人事制度与流程文档",
+        },
+    }
     assert service.created_requests[0].kb_name == "人力制度知识库"
 
 
@@ -262,21 +265,62 @@ def test_create_knowledge_base_route_emits_summary_logs(monkeypatch):
     client = make_test_client(monkeypatch, service)
 
     response = client.post(
-        "/api/v1/knowledge-bases/create",
+        "/api/v1/knowledgeBases/create",
         json={
-            "kb_code": "hr-policy",
-            "kb_name": "人力制度知识库",
-            "status": "ACTIVE",
+            "knName": "人力制度知识库",
+            "knDescription": "公司人事制度与流程文档",
         },
     )
 
     assert response.status_code == 200
     assert info_messages == [
-        "create_knowledge_base request received: kb_code=hr-policy, kb_name=人力制度知识库, status=ACTIVE, has_metadata=False",
+        "create_knowledge_base request received: kb_name=人力制度知识库, has_description=True",
         "create_knowledge_base resolved service: service_class=FakeKBService",
-        "create_knowledge_base service call succeeded: kb_code=hr-policy, status=ACTIVE",
-        "create_knowledge_base response ready: code=200, kb_code=hr-policy, status=ACTIVE",
+        "create_knowledge_base service call succeeded: kb_code=7",
+        "create_knowledge_base response ready: code=200, kb_code=7",
     ]
+
+
+def test_create_knowledge_base_route_maps_request_validation_to_documented_error(
+    monkeypatch,
+):
+    """Create-knowledge-base validation should use the documented error envelope."""
+    client = make_test_client(monkeypatch, FakeKBService())
+
+    response = client.post(
+        "/api/v1/knowledgeBases/create",
+        json={"knDescription": "公司人事制度与流程文档"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["resultCode"] == "-1"
+    assert response.json()["resultMsg"] == "request validation failed"
+    assert response.json()["resultObject"]["errors"]
+
+
+def test_create_knowledge_base_route_maps_duplicate_name_to_documented_error(
+    monkeypatch,
+):
+    """Create-knowledge-base duplicate names should use the documented error envelope."""
+
+    class DuplicateNameKBService(FakeKBService):
+        def create_knowledge_base(self, request):
+            raise KnowledgeBaseValidationError(
+                f"knowledge base name already exists: {request.kb_name}"
+            )
+
+    client = make_test_client(monkeypatch, DuplicateNameKBService())
+    response = client.post(
+        "/api/v1/knowledgeBases/create",
+        json={"knName": "人力制度知识库"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "knowledge base name already exists: 人力制度知识库",
+        "resultObject": {},
+    }
 
 
 def test_delete_knowledge_base_route_returns_business_response(monkeypatch):
@@ -285,7 +329,7 @@ def test_delete_knowledge_base_route_returns_business_response(monkeypatch):
     client = make_test_client(monkeypatch, service)
 
     response = client.post(
-        "/api/v1/knowledge-bases/delete",
+        "/api/v1/knowledgeBases/delete",
         json={"kb_code": "hr-policy"},
     )
 
@@ -304,7 +348,7 @@ def test_update_knowledge_base_route_returns_business_response(monkeypatch):
     client = make_test_client(monkeypatch, service)
 
     response = client.post(
-        "/api/v1/knowledge-bases/update",
+        "/api/v1/knowledgeBases/update",
         json={
             "kb_code": "hr-policy",
             "kb_name": "新知识库名称",
@@ -682,25 +726,6 @@ def test_write_file_route_maps_duplicate_version_to_409(monkeypatch):
     assert response.json()["data"] is None
     assert response.json()["error"]["type"] == "conflict"
     assert response.json()["error"]["error_code"] == "KB_FILE_VERSION_CONFLICT"
-
-
-def test_create_knowledge_base_route_maps_soft_deleted_code_to_409(monkeypatch):
-    """Soft-deleted kb_code conflicts should return a standard business conflict response."""
-
-    class BrokenKBService(FakeKBService):
-        def create_knowledge_base(self, request):
-            raise KnowledgeBaseValidationError(
-                f"kb_code is occupied by a soft-deleted knowledge base: {request.kb_code}"
-            )
-
-    client = make_test_client(monkeypatch, BrokenKBService())
-    response = client.post(
-        "/api/v1/knowledge-bases/create",
-        json={"kb_code": "demo", "kb_name": "Demo KB", "status": "ACTIVE"},
-    )
-
-    assert response.status_code == 409
-    assert response.json()["error"]["error_code"] == "KB_CODE_SOFT_DELETED_CONFLICT"
 
 
 def test_write_file_route_maps_soft_deleted_file_code_to_409(monkeypatch):
@@ -1395,50 +1420,18 @@ def test_create_knowledge_base_route_maps_configuration_error_to_503(monkeypatch
 
     client = make_test_client(monkeypatch, MisconfiguredKBService())
     response = client.post(
-        "/api/v1/knowledge-bases/create",
+        "/api/v1/knowledgeBases/create",
         json={
-            "kb_code": "hr-policy",
-            "kb_name": "人力制度知识库",
-            "status": "ACTIVE",
+            "knName": "人力制度知识库",
         },
     )
 
     assert response.status_code == 503
-    assert "request_id" not in response.json()
-    assert response.json()["code"] == 503
-    assert response.json()["message"] == "error"
-    assert response.json()["data"] is None
-    assert response.json()["error"]["type"] == "configuration_error"
-    assert response.json()["error"]["error_code"] == "KB_RUNTIME_CONFIG_ERROR"
-    assert "KB_OPENGAUSS_DSN" in response.json()["error"]["error_message"]
-
-
-def test_create_knowledge_base_route_maps_duplicate_code_to_409(monkeypatch):
-    """Duplicate kb_code should surface as a conflict response."""
-
-    class DuplicateKBService(FakeKBService):
-        def create_knowledge_base(self, request):
-            raise KnowledgeBaseValidationError(
-                f"kb_code already exists: {request.kb_code}"
-            )
-
-    client = make_test_client(monkeypatch, DuplicateKBService())
-    response = client.post(
-        "/api/v1/knowledge-bases/create",
-        json={
-            "kb_code": "hr-policy",
-            "kb_name": "人力制度知识库",
-            "status": "ACTIVE",
-        },
-    )
-
-    assert response.status_code == 409
-    assert "request_id" not in response.json()
-    assert response.json()["code"] == 409
-    assert response.json()["message"] == "error"
-    assert response.json()["data"] is None
-    assert response.json()["error"]["type"] == "conflict"
-    assert response.json()["error"]["error_code"] == "KB_CODE_CONFLICT"
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "KB_OPENGAUSS_DSN is required",
+        "resultObject": {},
+    }
 
 
 def test_create_knowledge_base_route_maps_unexpected_exception_to_standard_500(
@@ -1463,21 +1456,15 @@ def test_create_knowledge_base_route_maps_unexpected_exception_to_standard_500(
     monkeypatch.setattr("by_qa.main.get_instant_search_engine", lambda: object())
     client = TestClient(app, raise_server_exceptions=False)
     response = client.post(
-        "/api/v1/knowledge-bases/create",
-        json={"kb_code": "demo", "kb_name": "Demo KB", "status": "ACTIVE"},
+        "/api/v1/knowledgeBases/create",
+        json={"knName": "Demo KB"},
     )
 
     assert response.status_code == 500
     assert response.json() == {
-        "code": 500,
-        "message": "error",
-        "data": None,
-        "error": {
-            "type": "internal_error",
-            "error_code": "KB_INTERNAL_ERROR",
-            "error_message": "duplicate key value violates unique constraint",
-            "details": {},
-        },
+        "resultCode": "-1",
+        "resultMsg": "duplicate key value violates unique constraint",
+        "resultObject": {},
     }
 
 

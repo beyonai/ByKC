@@ -53,9 +53,9 @@
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `POST` | `/api/v1/knowledge-bases/create` | 创建知识库 |
-| `POST` | `/api/v1/knowledge-bases/update` | 修改知识库 |
-| `POST` | `/api/v1/knowledge-bases/delete` | 删除知识库 |
+| `POST` | `/api/v1/knowledgeBases/create` | 创建知识库 |
+| `POST` | `/api/v1/knowledgeBases/update` | 修改知识库 |
+| `POST` | `/api/v1/knowledgeBases/delete` | 删除知识库 |
 | `POST` | `/api/v1/directories/create` | 创建目录 |
 | `POST` | `/api/v1/directories/update` | 修改目录 |
 | `POST` | `/api/v1/directories/delete` | 删除目录 |
@@ -70,7 +70,7 @@
 
 ## 知识库管理
 
-### `POST /api/v1/knowledge-bases/create`
+### `POST /api/v1/knowledgeBases/create`
 
 创建知识库。
 
@@ -104,7 +104,7 @@
 }
 ```
 
-### `POST /api/v1/knowledge-bases/update`
+### `POST /api/v1/knowledgeBases/update`
 
 修改知识库名称或描述。
 
@@ -135,7 +135,7 @@
 }
 ```
 
-### `POST /api/v1/knowledge-bases/delete`
+### `POST /api/v1/knowledgeBases/delete`
 
 删除指定知识库。
 

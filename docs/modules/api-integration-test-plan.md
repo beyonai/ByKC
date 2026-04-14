@@ -26,7 +26,7 @@
 
 | 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| D1 | 目录管理员 | 创建三级目录树 | `knowledge-bases/create -> create /A -> create /A/B -> create /A/B/C -> list_dir(kb root) -> list_dir(/A) -> list_dir(/A/B)` | 每层只返回直接子节点；祖先层级可逐级展开；路径结构稳定 | 已写 |
+| D1 | 目录管理员 | 创建三级目录树 | `knowledgeBases/create -> create /A -> create /A/B -> create /A/B/C -> list_dir(kb root) -> list_dir(/A) -> list_dir(/A/B)` | 每层只返回直接子节点；祖先层级可逐级展开；路径结构稳定 | 已写 |
 | D2 | 目录管理员 | 在多级目录最深层导入文件 | `create /A/B/C -> knowledge-items/import(/A/B/C/file.md) -> list_dir(/A/B/C) -> glob(A/**)` | 深层文件能被准确列出和匹配，祖先层路径解析正常 | 已写 |
 | D3 | 目录管理员 | 重命名中间层目录并联动整棵子树 | `create /A/B/C -> import file -> rename B to B2 -> list_dir(/A) -> list_dir(/A/B2) -> list_dir(/A/B2/C) -> read-file old/new -> glob old/new` | 中间层改名后，所有后代路径同步变化；旧路径全失效；新路径全生效 | 已写 |
 | D4 | 目录管理员 | 删除中间层目录并删除整棵子树 | `create /A/B/C -> import files -> delete B -> list_dir(/A) -> list_dir(/A/B) -> read-file -> search` | 删除中间层后，`B` 及其所有后代一起消失 | 已写 |
@@ -37,16 +37,16 @@
 
 | 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| 1 | 知识库管理员 | 创建空知识库 | `knowledge-bases/create -> list_dir(/)` | 创建后根层级可见；重复创建冲突；非法请求报标准错误 | 已写 |
-| 2 | 知识库管理员 | 修改知识库基础信息 | `knowledge-bases/create -> knowledge-bases/update -> list_dir(/)` | 修改 `kb_name` 后根目录名称同步变化；旧名称路径失效 | 已写 |
-| 3 | 知识库管理员 | 删除知识库 | `knowledge-bases/create -> directories/create -> knowledge-items/import -> knowledge-bases/delete -> list_dir(/) -> read-file -> search` | 删除后根层级不可见；文件不可读；内容不可检索 | 已写 |
-| 4 | 目录管理员 | 创建单层目录 | `knowledge-bases/create -> directories/create -> list_dir(kb root)` | 父层级能看到新目录；重复路径冲突；父目录缺失时报错 | 已写 |
+| 1 | 知识库管理员 | 创建空知识库 | `knowledgeBases/create -> list_dir(/)` | 创建后根层级可见；重复创建冲突；非法请求报标准错误 | 已写 |
+| 2 | 知识库管理员 | 修改知识库基础信息 | `knowledgeBases/create -> knowledgeBases/update -> list_dir(/)` | 修改 `kb_name` 后根目录名称同步变化；旧名称路径失效 | 已写 |
+| 3 | 知识库管理员 | 删除知识库 | `knowledgeBases/create -> directories/create -> knowledge-items/import -> knowledgeBases/delete -> list_dir(/) -> read-file -> search` | 删除后根层级不可见；文件不可读；内容不可检索 | 已写 |
+| 4 | 目录管理员 | 创建单层目录 | `knowledgeBases/create -> directories/create -> list_dir(kb root)` | 父层级能看到新目录；重复路径冲突；父目录缺失时报错 | 已写 |
 | 5 | 目录管理员 | 创建多层目录树 | `create /A -> create /A/B -> create /A/B/C -> list_dir(/A) -> list_dir(/A/B) -> glob(A/*)` | 每层只返回直接子节点；`glob` 与目录结构一致 | 已写 |
 | 6 | 目录管理员 | 目录改名影响整棵子树 | `create parent -> create child -> import file -> update child name -> list_dir/glob/read-file old&new` | 新路径生效；旧路径失效；子文件随目录路径变化 | 已写 |
 | 7 | 目录管理员 | 删除非空目录 | `create dir -> import file -> directories/delete -> list_dir -> glob -> read-file -> search` | 整个子树从浏览、读取、检索里一起消失 | 已写 |
 | 8 | 目录管理员 | 目录同级重名冲突 | `create /A/B1 -> create /A/B2 -> update B2 to B1 -> list_dir(/A)` | 返回 `KB_DIRECTORY_NAME_CONFLICT`；目录树保持不变 | 已写 |
-| 9 | 内容管理员 | 用真实知识构建结果原子导入单文件 | `file-to-markdown -> build-markdown-index -> knowledge-bases/create -> directories/create -> knowledge-items/import -> list_dir -> read-file(markdown) -> read-file(original) -> search` | `knowledge_build` 产出的 markdown/chunks 可被 `knowledge-items/import` 正常消费；导入后目录可见、可读、可检索，元数据一致 | 已写 |
-| 10 | 内容管理员 | 用真实知识构建结果分步写入单文件 | `file-to-markdown -> knowledge-bases/create -> directories/create -> write-file -> build-markdown-index(md_content) -> write-index -> read-file(markdown/original) -> search` | 先可读原文件，后可用构建出的 markdown/chunks 完成索引，最终读取与检索一致 | 已写 |
+| 9 | 内容管理员 | 用真实知识构建结果原子导入单文件 | `file-to-markdown -> build-markdown-index -> knowledgeBases/create -> directories/create -> knowledge-items/import -> list_dir -> read-file(markdown) -> read-file(original) -> search` | `knowledge_build` 产出的 markdown/chunks 可被 `knowledge-items/import` 正常消费；导入后目录可见、可读、可检索，元数据一致 | 已写 |
+| 10 | 内容管理员 | 用真实知识构建结果分步写入单文件 | `file-to-markdown -> knowledgeBases/create -> directories/create -> write-file -> build-markdown-index(md_content) -> write-index -> read-file(markdown/original) -> search` | 先可读原文件，后可用构建出的 markdown/chunks 完成索引，最终读取与检索一致 | 已写 |
 | 11 | 内容管理员 | 比较原子导入与分步写入的最终行为 | `file-to-markdown-index -> knowledge-items/import` 对比 `file-to-markdown -> write-file -> build-markdown-index -> write-index -> read-file -> search` | 两条链路最终在 `list_dir/read-file/search` 上表现一致 | 已写 |
 | 12 | 内容管理员 | 路径绑定冲突 | `import A:/x.md -> import B:/x.md` | 第二次写入失败；原绑定不变 | 已写 |
 | 13 | 内容管理员 | 删除单文件 | `import -> list_dir -> read-file -> knowledge-items/delete -> list_dir -> read-file -> search` | 删除后目录不可见、文件不可读、内容不可检索 | 已写 |

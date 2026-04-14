@@ -51,20 +51,33 @@ class FakeCursor:
 def test_create_knowledge_base_executes_insert_sql():
     """Knowledge base creation should emit a plain insert statement."""
     repo = KnowledgeBaseRepository()
-    cursor = FakeCursor()
+    cursor = FakeCursor(fetchone_results=[{"kid": 7}])
 
     repo.create_knowledge_base(
         cursor,
-        kb_code="hr-policy",
         kb_name="人力制度知识库",
         kb_description=None,
-        status="ACTIVE",
-        metadata={"owner": "HR"},
     )
 
     assert "insert into knowledge_base" in cursor.executed[0][0].lower()
     assert "merge into" not in cursor.executed[0][0].lower()
-    assert cursor.executed[0][1]["kb_code"] == "hr-policy"
+    assert "kb_code" not in cursor.executed[0][1]
+    assert "returning kid" in cursor.executed[0][0].lower()
+
+
+def test_get_knowledge_base_by_name_queries_active_row():
+    """Knowledge base name lookup should only target active rows."""
+    repo = KnowledgeBaseRepository()
+    cursor = FakeCursor(fetchone_results=[{"kid": 7, "kb_name": "人力制度知识库"}])
+
+    repo.get_by_name(cursor, "人力制度知识库")
+
+    sql, params = cursor.executed[0]
+    lowered = sql.lower()
+    assert "from knowledge_base" in lowered
+    assert "where kb_name = %(kb_name)s" in lowered
+    assert "and is_deleted = false" in lowered
+    assert params == {"kb_name": "人力制度知识库"}
 
 
 def test_soft_delete_knowledge_base_updates_is_deleted_flag():
@@ -412,7 +425,7 @@ def test_update_current_version_executes_targeted_update():
 
 
 def test_ensure_root_entry_targets_knowledge_fs_entry_tree():
-    """Root entry bootstrap should go through knowledge_fs_entry and update the KB root pointer."""
+    """Root entry bootstrap should only manage the filesystem tree."""
     repo = KnowledgeFsEntryRepository()
     cursor = FakeCursor(fetchone_results=[None, {"kid": 70}])
 
@@ -420,8 +433,7 @@ def test_ensure_root_entry_targets_knowledge_fs_entry_tree():
 
     combined_sql = "\n".join(sql for sql, _ in cursor.executed).lower()
     assert "knowledge_fs_entry" in combined_sql
-    assert "root_entry_id" in combined_sql
-    assert "knowledge_base" in combined_sql
+    assert "root_entry_id" not in combined_sql
 
 
 def test_list_root_entries_queries_root_directories():

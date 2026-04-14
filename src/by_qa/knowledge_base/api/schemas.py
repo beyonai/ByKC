@@ -4,7 +4,14 @@ import json
 from pathlib import PurePosixPath
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    model_validator,
+)
 
 from by_qa.knowledge_common.schemas import KnowledgeItemChunkPayload
 
@@ -14,21 +21,26 @@ Status = Literal["ACTIVE", "INACTIVE"]
 class CreateKnowledgeBaseRequest(BaseModel):
     """Request body for creating a knowledge base."""
 
-    kb_code: str
-    kb_name: str
-    kb_description: str | None = None
-    status: Status = "ACTIVE"
-    metadata: dict[str, Any] | None = None
+    model_config = ConfigDict(populate_by_name=True)
+
+    kb_name: str = Field(validation_alias=AliasChoices("knName", "kb_name"))
+    kb_description: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("knDescription", "kb_description"),
+    )
 
 
 class CreateKnowledgeBaseResponse(BaseModel):
     """Business response for knowledge base creation."""
 
-    kb_code: str
-    kb_name: str
-    kb_description: str | None = None
-    status: Status
-    metadata: dict[str, Any] | None = None
+    model_config = ConfigDict(populate_by_name=True)
+
+    kb_code: str = Field(serialization_alias="knCode")
+    kb_name: str = Field(serialization_alias="knName")
+    kb_description: str | None = Field(
+        default=None,
+        serialization_alias="knDescription",
+    )
 
 
 class DeleteKnowledgeBaseRequest(BaseModel):

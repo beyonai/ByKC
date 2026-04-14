@@ -4,19 +4,17 @@ import pytest
 from pydantic import ValidationError
 
 
-def test_create_knowledge_base_request_accepts_active_status():
-    """Knowledge base requests should accept the documented fields."""
+def test_create_knowledge_base_request_accepts_documented_field_names():
+    """Knowledge base creation should accept documented knName fields."""
     from by_qa.knowledge_base.api.schemas import CreateKnowledgeBaseRequest
 
     request = CreateKnowledgeBaseRequest(
-        kb_code="hr-policy",
-        kb_name="人力制度知识库",
-        status="ACTIVE",
-        metadata={"owner": "HR"},
+        knName="人力制度知识库",
+        knDescription="公司人事制度与流程文档",
     )
 
-    assert request.kb_code == "hr-policy"
-    assert request.status == "ACTIVE"
+    assert request.kb_name == "人力制度知识库"
+    assert request.kb_description == "公司人事制度与流程文档"
 
 
 def test_delete_knowledge_base_request_requires_kb_code():

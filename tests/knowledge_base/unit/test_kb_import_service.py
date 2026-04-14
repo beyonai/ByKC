@@ -57,18 +57,22 @@ class FakeKnowledgeBaseRepository:
     def __init__(self, *, default_lookup_result=None):
         self.calls = []
         self.existing_by_code = {}
+        self.existing_by_name = {}
         self.default_lookup_result = default_lookup_result
 
     def create_knowledge_base(self, cursor, **kwargs):
         self.calls.append(("create_knowledge_base", kwargs))
-        self.existing_by_code[kwargs["kb_code"]] = {
+        row = {
             "kid": 7,
-            "kb_code": kwargs["kb_code"],
             "kb_name": kwargs["kb_name"],
             "kb_description": kwargs.get("kb_description"),
-            "status": kwargs["status"],
-            "root_entry_id": None,
         }
+        self.default_lookup_result = row
+        return row
+
+    def get_by_name(self, cursor, kb_name):
+        self.calls.append(("get_by_name", {"kb_name": kb_name}))
+        return self.existing_by_name.get(kb_name)
 
     def get_by_code(self, cursor, kb_code):
         self.calls.append(("get_by_code", {"kb_code": kb_code}))
@@ -790,7 +794,7 @@ def build_manifest() -> KnowledgeItemImportManifest:
 
 
 def test_create_knowledge_base_commits_and_returns_business_fields():
-    """Knowledge base creation should commit and return only business fields."""
+    """Knowledge base creation should generate kb_code from the persisted row id."""
     connection = FakeConnection()
     knowledge_base_repository = FakeKnowledgeBaseRepository(default_lookup_result=None)
     service = KnowledgeBaseService(
@@ -801,92 +805,53 @@ def test_create_knowledge_base_commits_and_returns_business_fields():
 
     response = service.create_knowledge_base(
         CreateKnowledgeBaseRequest(
-            kb_code="hr-policy",
             kb_name="人力制度知识库",
-            status="ACTIVE",
-            metadata={"owner": "HR"},
+            kb_description="公司人事制度与流程文档",
         )
     )
 
-    assert response.kb_code == "hr-policy"
+    assert response.kb_code == "7"
+    assert response.kb_description == "公司人事制度与流程文档"
     assert connection.committed is True
-    assert knowledge_base_repository.calls[0][0] == "get_by_code"
-    assert knowledge_base_repository.calls[1][0] == "get_any_by_code"
-    assert knowledge_base_repository.calls[2][0] == "create_knowledge_base"
-
-
-def test_create_knowledge_base_rejects_duplicate_kb_code():
-    """Creating a KB should fail when kb_code already exists."""
-    connection = FakeConnection()
-    knowledge_base_repository = FakeKnowledgeBaseRepository(
-        default_lookup_result={
-            "id": 7,
-            "kb_code": "hr-policy",
-            "kb_name": "人力制度知识库",
-            "status": "ACTIVE",
-        }
+    assert knowledge_base_repository.calls[0] == (
+        "get_by_name",
+        {"kb_name": "人力制度知识库"},
     )
-    knowledge_base_repository.existing_by_code["hr-policy"] = {
-        "id": 7,
-        "kb_code": "hr-policy",
-        "kb_name": "人力制度知识库",
-        "status": "ACTIVE",
-    }
-    service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
-        knowledge_base_repository=knowledge_base_repository,
-        knowledge_fs_entry_repository=FakeKnowledgeFsEntryRepository(),
-    )
-
-    try:
-        service.create_knowledge_base(
-            CreateKnowledgeBaseRequest(
-                kb_code="hr-policy",
-                kb_name="人力制度知识库",
-                status="ACTIVE",
-                metadata={"owner": "HR"},
-            )
-        )
-    except KnowledgeBaseValidationError as exc:
-        assert "kb_code already exists" in str(exc)
-    else:
-        raise AssertionError("expected KnowledgeBaseValidationError")
-
-    assert connection.rolled_back is True
+    assert knowledge_base_repository.calls[1][0] == "create_knowledge_base"
 
 
-def test_create_knowledge_base_rejects_soft_deleted_kb_code():
-    """Creating a KB should fail with a business error when a soft-deleted row still occupies the code."""
+def test_create_knowledge_base_rejects_duplicate_name():
+    """Knowledge base creation should reject duplicate kb names."""
     connection = FakeConnection()
     knowledge_base_repository = FakeKnowledgeBaseRepository(default_lookup_result=None)
-    knowledge_base_repository.existing_by_code["demo"] = {
-        "id": 7,
-        "kb_code": "demo",
-        "kb_name": "旧知识库",
-        "status": "INACTIVE",
-        "is_deleted": True,
+    knowledge_base_repository.existing_by_name["人力制度知识库"] = {
+        "kid": 9,
+        "kb_name": "人力制度知识库",
     }
+    fs_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeBaseService(
         connection_factory=lambda: connection,
         knowledge_base_repository=knowledge_base_repository,
-        knowledge_fs_entry_repository=FakeKnowledgeFsEntryRepository(),
+        knowledge_fs_entry_repository=fs_repository,
     )
 
     try:
         service.create_knowledge_base(
             CreateKnowledgeBaseRequest(
-                kb_code="demo",
-                kb_name="新知识库",
-                status="ACTIVE",
-                metadata=None,
+                kb_name="人力制度知识库",
+                kb_description="公司人事制度与流程文档",
             )
         )
-    except KnowledgeBaseValidationError as exc:
-        assert str(exc) == "kb_code is occupied by a soft-deleted knowledge base: demo"
-    else:
         raise AssertionError("expected KnowledgeBaseValidationError")
+    except KnowledgeBaseValidationError as exc:
+        assert str(exc) == "knowledge base name already exists: 人力制度知识库"
 
+    assert connection.committed is False
     assert connection.rolled_back is True
+    assert knowledge_base_repository.calls == [
+        ("get_by_name", {"kb_name": "人力制度知识库"})
+    ]
+    assert fs_repository.calls == []
 
 
 def test_delete_knowledge_base_marks_kb_and_descendants_deleted():
@@ -1746,7 +1711,7 @@ def test_delete_knowledge_item_marks_item_and_fs_entry_deleted():
 
 
 def test_create_knowledge_base_emits_internal_key_node_logs(monkeypatch):
-    """Knowledge base creation should log connection, duplicate check, and commit steps."""
+    """Knowledge base creation should log persistence and commit steps."""
     connection = FakeConnection()
     knowledge_base_repository = FakeKnowledgeBaseRepository(default_lookup_result=None)
     service = KnowledgeBaseService(
@@ -1766,19 +1731,16 @@ def test_create_knowledge_base_emits_internal_key_node_logs(monkeypatch):
 
     response = service.create_knowledge_base(
         CreateKnowledgeBaseRequest(
-            kb_code="hr-policy",
             kb_name="人力制度知识库",
-            status="ACTIVE",
-            metadata={"owner": "HR"},
+            kb_description=None,
         )
     )
 
-    assert response.kb_code == "hr-policy"
+    assert response.kb_code == "7"
     assert info_messages == [
-        "knowledge_base_service.create_knowledge_base started: kb_code=hr-policy, status=ACTIVE, has_metadata=True",
-        "knowledge_base_service duplicate check finished: kb_code=hr-policy, exists=False, deleted_exists=False",
-        "knowledge_base_service persistence finished: kb_code=hr-policy, status=ACTIVE",
-        "knowledge_base_service transaction committed: kb_code=hr-policy",
+        "knowledge_base_service.create_knowledge_base started: kb_name=人力制度知识库, has_description=False",
+        "knowledge_base_service persistence finished: knowledge_base_id=7",
+        "knowledge_base_service transaction committed: knowledge_base_id=7",
     ]
 
 

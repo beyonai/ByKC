@@ -93,7 +93,7 @@ def test_kb_api_end_to_end_persists_to_opengauss_and_minio(monkeypatch):
 
     with TestClient(main_module.app) as client:
         kb_response = client.post(
-            "/api/v1/knowledge-bases/create",
+            "/api/v1/knowledgeBases/create",
             json={
                 "kb_code": kb_code,
                 "kb_name": "Integration KB",
@@ -196,7 +196,7 @@ def test_kb_api_rejects_invalid_embedding_without_persisting_document(monkeypatc
 
     with TestClient(main_module.app) as client:
         kb_response = client.post(
-            "/api/v1/knowledge-bases/create",
+            "/api/v1/knowledgeBases/create",
             json={
                 "kb_code": kb_code,
                 "kb_name": "Integration KB",
@@ -272,7 +272,7 @@ def test_fetch_api_caches_download_and_reuses_fresh_file(monkeypatch, tmp_path):
     with TestClient(main_module.app) as client:
         assert (
             client.post(
-                "/api/v1/knowledge-bases/create",
+                "/api/v1/knowledgeBases/create",
                 json={
                     "kb_code": kb_code,
                     "kb_name": "Integration KB",
@@ -388,7 +388,7 @@ def test_fetch_api_refreshes_expired_cache_and_rewrites_metadata(monkeypatch, tm
     with TestClient(main_module.app) as client:
         assert (
             client.post(
-                "/api/v1/knowledge-bases/create",
+                "/api/v1/knowledgeBases/create",
                 json={
                     "kb_code": kb_code,
                     "kb_name": "Integration KB",

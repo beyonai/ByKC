@@ -55,73 +55,51 @@ class KnowledgeBaseService:
     ) -> CreateKnowledgeBaseResponse:
         """Create a knowledge base."""
         logger.info(
-            "knowledge_base_service.create_knowledge_base started: kb_code=%s, status=%s, has_metadata=%s",
-            request.kb_code,
-            request.status,
-            request.metadata is not None,
+            "knowledge_base_service.create_knowledge_base started: kb_name=%s, has_description=%s",
+            request.kb_name,
+            request.kb_description is not None,
         )
         connection = self.connection_factory()
         try:
             cursor = connection.cursor()
-            existing = self.knowledge_base_repository.get_by_code(
-                cursor, request.kb_code
+            existing = self.knowledge_base_repository.get_by_name(
+                cursor, request.kb_name
             )
-            deleted_existing = self.knowledge_base_repository.get_any_by_code(
-                cursor, request.kb_code
-            )
-            logger.info(
-                "knowledge_base_service duplicate check finished: kb_code=%s, exists=%s, deleted_exists=%s",
-                request.kb_code,
-                existing is not None,
-                deleted_existing is not None
-                and deleted_existing.get("is_deleted") is True,
-            )
-            if existing:
+            if existing is not None:
                 raise KnowledgeBaseValidationError(
-                    f"kb_code already exists: {request.kb_code}"
+                    f"knowledge base name already exists: {request.kb_name}"
                 )
-            if deleted_existing and deleted_existing.get("is_deleted") is True:
-                raise KnowledgeBaseValidationError(
-                    f"kb_code is occupied by a soft-deleted knowledge base: {request.kb_code}"
-                )
-            self.knowledge_base_repository.create_knowledge_base(
+            created = self.knowledge_base_repository.create_knowledge_base(
                 cursor,
-                kb_code=request.kb_code,
                 kb_name=request.kb_name,
                 kb_description=request.kb_description,
-                status=request.status,
-                metadata=request.metadata,
             )
-            created = self.knowledge_base_repository.get_by_code(
-                cursor, request.kb_code
-            )
+            if created is None:
+                raise KnowledgeBaseValidationError("failed to create knowledge base")
             self.knowledge_fs_entry_repository.ensure_root_entry(
                 cursor,
                 knowledge_base_id=self._row_id(created),
                 kb_name=request.kb_name,
             )
             logger.info(
-                "knowledge_base_service persistence finished: kb_code=%s, status=%s",
-                request.kb_code,
-                request.status,
+                "knowledge_base_service persistence finished: knowledge_base_id=%s",
+                self._row_id(created),
             )
             connection.commit()
             logger.info(
-                "knowledge_base_service transaction committed: kb_code=%s",
-                request.kb_code,
+                "knowledge_base_service transaction committed: knowledge_base_id=%s",
+                self._row_id(created),
             )
             return CreateKnowledgeBaseResponse(
-                kb_code=request.kb_code,
+                kb_code=str(self._row_id(created)),
                 kb_name=request.kb_name,
                 kb_description=request.kb_description,
-                status=request.status,
-                metadata=request.metadata,
             )
         except Exception:
             connection.rollback()
             logger.warning(
-                "knowledge_base_service transaction rolled back: kb_code=%s",
-                request.kb_code,
+                "knowledge_base_service transaction rolled back: kb_name=%s",
+                request.kb_name,
             )
             raise
         finally:

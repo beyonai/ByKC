@@ -123,7 +123,7 @@ def _disable_kb_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _create_kb(client: TestClient, kb_code: str, kb_name: str) -> None:
     response = client.post(
-        "/api/v1/knowledge-bases/create",
+        "/api/v1/knowledgeBases/create",
         json={"kb_code": kb_code, "kb_name": kb_name, "status": "ACTIVE"},
     )
     assert response.status_code == 200, response.text
@@ -266,7 +266,7 @@ def test_create_empty_knowledge_base_exposes_root_and_rejects_duplicate_code(
 
     with TestClient(main_module.app) as client:
         first = client.post(
-            "/api/v1/knowledge-bases/create",
+            "/api/v1/knowledgeBases/create",
             json={"kb_code": kb_code, "kb_name": kb_name, "status": "ACTIVE"},
         )
         root = client.post(
@@ -274,7 +274,7 @@ def test_create_empty_knowledge_base_exposes_root_and_rejects_duplicate_code(
             json={"kb_codes": [kb_code], "path": "/"},
         )
         duplicate = client.post(
-            "/api/v1/knowledge-bases/create",
+            "/api/v1/knowledgeBases/create",
             json={"kb_code": kb_code, "kb_name": kb_name, "status": "ACTIVE"},
         )
 
@@ -1455,7 +1455,7 @@ def test_updating_kb_name_renames_the_root_path_for_follow_up_queries(
             json={"kb_codes": [kb_code], "path": "/"},
         )
         update_response = client.post(
-            "/api/v1/knowledge-bases/update",
+            "/api/v1/knowledgeBases/update",
             json={"kb_code": kb_code, "kb_name": new_name},
         )
         root_after = client.post(
@@ -2404,7 +2404,7 @@ def test_deleting_a_knowledge_base_removes_root_visibility_readability_and_searc
             json={"query": "removal search", "kb_codes": [kb_code]},
         )
         delete_response = client.post(
-            "/api/v1/knowledge-bases/delete",
+            "/api/v1/knowledgeBases/delete",
             json={"kb_code": kb_code},
         )
         root_after = client.post(
@@ -3201,7 +3201,7 @@ def test_create_kb_returns_configuration_error_when_runtime_settings_are_incompl
 
     with TestClient(main_module.app) as client:
         response = client.post(
-            "/api/v1/knowledge-bases/create",
+            "/api/v1/knowledgeBases/create",
             json={
                 "kb_code": f"kb-{uuid4().hex[:8]}",
                 "kb_name": "Broken Config KB",

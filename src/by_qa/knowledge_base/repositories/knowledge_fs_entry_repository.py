@@ -27,11 +27,6 @@ class KnowledgeFsEntryRepository:
         fetchone = getattr(cursor, "fetchone", None)
         existing = fetchone() if callable(fetchone) else None
         if existing is not None:
-            self._update_knowledge_base_root(
-                cursor,
-                knowledge_base_id=knowledge_base_id,
-                root_entry_id=self._row_id(existing),
-            )
             return existing
 
         cursor.execute(
@@ -44,8 +39,15 @@ class KnowledgeFsEntryRepository:
                 name,
                 path_ltree,
                 depth,
-                status,
-                metadata,
+                description,
+                file_bucket_name,
+                file_object_key,
+                markdown_bucket_name,
+                markdown_object_key,
+                file_size,
+                mime_type,
+                checksum,
+                line_count,
                 created_at,
                 updated_at
             )
@@ -57,8 +59,15 @@ class KnowledgeFsEntryRepository:
                 %(name)s,
                 %(path_ltree)s::ltree,
                 0,
-                'ACTIVE',
-                %(metadata)s::jsonb,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
                 NOW(),
                 NOW()
             )
@@ -68,16 +77,9 @@ class KnowledgeFsEntryRepository:
                 "knowledge_base_id": knowledge_base_id,
                 "name": kb_name,
                 "path_ltree": f"kb_{knowledge_base_id}",
-                "metadata": json.dumps({}),
             },
         )
         created = fetchone() if callable(fetchone) else None
-        if created is not None:
-            self._update_knowledge_base_root(
-                cursor,
-                knowledge_base_id=knowledge_base_id,
-                root_entry_id=self._row_id(created),
-            )
         return created
 
     def ensure_file_entry(
@@ -668,20 +670,6 @@ class KnowledgeFsEntryRepository:
               AND is_deleted = FALSE
             """,
             {"entry_id": entry_id, "new_name": new_name},
-        )
-
-    def _update_knowledge_base_root(
-        self, cursor: Any, *, knowledge_base_id: int, root_entry_id: int
-    ) -> None:
-        cursor.execute(
-            """
-            UPDATE knowledge_base
-            SET root_entry_id = %(root_entry_id)s,
-                updated_at = NOW()
-            WHERE kid = %(knowledge_base_id)s
-              AND (root_entry_id IS NULL OR root_entry_id <> %(root_entry_id)s)
-            """,
-            {"knowledge_base_id": knowledge_base_id, "root_entry_id": root_entry_id},
         )
 
     def _fetchall(self, cursor: Any) -> list[dict[str, Any]]:

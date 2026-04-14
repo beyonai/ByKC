@@ -5,8 +5,9 @@ from pathlib import PurePosixPath
 from typing import Any, Optional
 from urllib.parse import quote
 
-from fastapi import Response
+from fastapi import Body, Response
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
 from by_qa.core import logger
 from by_qa.knowledge_base.api.schemas import (
@@ -46,6 +47,39 @@ def _success_response(
             "message": "success",
             "error": None,
             "data": data,
+        },
+    )
+
+
+def _documented_success_response(
+    *,
+    result_object: dict[str, Any] | None = None,
+    status_code: int = 200,
+) -> JSONResponse:
+    """Return the documented success envelope."""
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "resultCode": "0",
+            "resultMsg": "success",
+            "resultObject": result_object or {},
+        },
+    )
+
+
+def _documented_error_response(
+    *,
+    result_msg: str,
+    result_object: dict[str, Any] | None = None,
+    status_code: int = 422,
+) -> JSONResponse:
+    """Return the documented error envelope."""
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "resultCode": "-1",
+            "resultMsg": result_msg,
+            "resultObject": result_object or {},
         },
     )
 
@@ -597,14 +631,21 @@ def register_routes(
 ):
     """Register knowledge base API routes on the FastAPI app."""
 
-    @app.post("/api/v1/knowledge-bases/create")
-    async def create_knowledge_base(request: CreateKnowledgeBaseRequest):
+    @app.post("/api/v1/knowledgeBases/create")
+    async def create_knowledge_base(body: dict[str, Any] = Body(...)):
+        try:
+            request = CreateKnowledgeBaseRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": exc.errors()},
+                status_code=422,
+            )
+
         logger.info(
-            "create_knowledge_base request received: kb_code=%s, kb_name=%s, status=%s, has_metadata=%s",
-            request.kb_code,
+            "create_knowledge_base request received: kb_name=%s, has_description=%s",
             request.kb_name,
-            request.status,
-            request.metadata is not None,
+            request.kb_description is not None,
         )
         try:
             service = get_knowledge_base_service()
@@ -614,42 +655,52 @@ def register_routes(
             )
             result = service.create_knowledge_base(request)
             logger.info(
-                "create_knowledge_base service call succeeded: kb_code=%s, status=%s",
+                "create_knowledge_base service call succeeded: kb_code=%s",
                 result.kb_code,
-                result.status,
             )
         except KnowledgeBaseConfigurationError as exc:
             logger.warning(
-                "create_knowledge_base configuration failed: kb_code=%s, error=%s",
-                request.kb_code,
+                "create_knowledge_base configuration failed: kb_name=%s, error=%s",
+                request.kb_name,
                 exc,
             )
-            return _error_response(
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
                 status_code=503,
-                error_type="configuration_error",
-                error_code="KB_RUNTIME_CONFIG_ERROR",
-                error_message=str(exc),
-                details={"kb_code": request.kb_code},
             )
         except KnowledgeBaseValidationError as exc:
             logger.warning(
-                "create_knowledge_base validation failed: kb_code=%s, error=%s",
-                request.kb_code,
+                "create_knowledge_base validation failed: kb_name=%s, error=%s",
+                request.kb_name,
                 exc,
             )
-            return _map_create_knowledge_base_validation_error(
-                exc=exc,
-                kb_code=request.kb_code,
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=409,
+            )
+        except Exception as exc:
+            logger.exception(
+                "create_knowledge_base unexpected error: kb_name=%s, error=%s",
+                request.kb_name,
+                exc,
+            )
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error",
+                result_object={},
+                status_code=500,
             )
 
         logger.info(
-            "create_knowledge_base response ready: code=200, kb_code=%s, status=%s",
+            "create_knowledge_base response ready: code=200, kb_code=%s",
             result.kb_code,
-            result.status,
         )
-        return _success_response(data=result.model_dump())
+        return _documented_success_response(
+            result_object=result.model_dump(by_alias=True)
+        )
 
-    @app.post("/api/v1/knowledge-bases/delete")
+    @app.post("/api/v1/knowledgeBases/delete")
     async def delete_knowledge_base(request: DeleteKnowledgeBaseRequest):
         logger.info(
             "delete_knowledge_base request received: kb_code=%s", request.kb_code
@@ -671,7 +722,7 @@ def register_routes(
             )
         return _success_response(data=result.model_dump())
 
-    @app.post("/api/v1/knowledge-bases/update")
+    @app.post("/api/v1/knowledgeBases/update")
     async def update_knowledge_base(request: UpdateKnowledgeBaseRequest):
         logger.info(
             "update_knowledge_base request received: kb_code=%s, has_kb_name=%s, has_description=%s, has_metadata=%s",

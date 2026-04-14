@@ -602,6 +602,56 @@ class KnowledgeItemSearchResponse(BaseModel):
     meta: KnowledgeItemSearchMeta
 
 
+class SearchRequest(BaseModel):
+    """Request body for chunk-level retrieval (documented spec)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    query: str = Field(min_length=1)
+    kb_codes: list[str] = Field(
+        min_length=1,
+        validation_alias=AliasChoices("knCodeList", "kb_codes"),
+    )
+    top_k: int = Field(
+        validation_alias=AliasChoices("topK", "top_k"),
+    )
+    file_type_list: Optional[list[str]] = Field(
+        default=None,
+        validation_alias=AliasChoices("fileTypeList", "file_type_list"),
+    )
+    search_mode: str = Field(
+        validation_alias=AliasChoices("searchMode", "search_mode"),
+    )
+
+    @model_validator(mode="after")
+    def validate_fields(self) -> "SearchRequest":
+        """Validate topK and searchMode."""
+        if self.top_k <= 0:
+            raise ValueError("topK must be greater than 0")
+        allowed_modes = {"fullTextRecall", "embedding", "mixedRecall"}
+        if self.search_mode not in allowed_modes:
+            raise ValueError(
+                f"searchMode must be one of {', '.join(sorted(allowed_modes))}"
+            )
+        return self
+
+
+class SearchHit(BaseModel):
+    """Single chunk hit returned by the documented search API."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kn_code: str = Field(serialization_alias="knCode")
+    file_path: str = Field(serialization_alias="filePath")
+    chunk_no: int = Field(serialization_alias="chunkNo")
+    chunk_id: int = Field(serialization_alias="chunkId")
+    chunk_text: str = Field(serialization_alias="chunkText")
+    score: float
+    image_path: str = Field(default="", serialization_alias="imagePath")
+    start_line: int = Field(serialization_alias="startLine")
+    end_line: int = Field(serialization_alias="endLine")
+
+
 def build_knowledge_item_import_manifest(
     *,
     kb_code: str,

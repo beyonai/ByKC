@@ -449,3 +449,15 @@
 - `_map_read_file_validation_error` 已删除。
 - 旧的 `fetch` 方法和 `KnowledgeItemFetchRequest` / `KnowledgeItemFetchResponse` 暂时保留，因其他 integration test 仍通过旧 import 链路间接使用。待旧 import 链路迁移完成后可一并删除。
 - 所有旧的"知识库名作为虚拟根目录"链路（`_resolve_virtual_path`、`_normalize_virtual_path`、`_with_virtual_full_path`、`list_root_nodes`、`list_root_entries`）已无生产路由调用，可进入移除范围。
+
+在"知识检索"接口完成后，新增确认：
+
+- `knowledgeItems/search` 路由已从 `/api/v1/knowledge-items/search` 改为 `/api/v1/knowledgeItems/search`。
+- 入参已改为 `query`、`knCodeList`、`topK`、`fileTypeList`、`searchMode`，不再保留 `kb_codes`、`top_k`、`vector_top_k`、`text_top_k`、`source_codes`、`type_codes` 旧字段。
+- `searchMode` 参数已接受（`fullTextRecall`、`embedding`、`mixedRecall`），但当前始终执行混合检索。
+- 返回已改为文档化信封（`resultCode` / `resultMsg` / `resultObject`），命中项字段为 `knCode`、`filePath`、`chunkNo`、`chunkId`、`chunkText`、`score`、`imagePath`、`startLine`、`endLine`。
+- 底层查询已从旧表 `knowledge_item_chunk_retrieval_mv` 切换到新表 `knowledge_chunk_retrieval_mv` + join `knowledge_base`。
+- `_map_search_validation_error` 已删除。
+- `KnowledgeItemSearchRepository` 新增 `search_text_v2`、`search_vector_v2` 方法；旧的 `search_text`、`search_vector` 方法已无生产调用，可进入移除范围。
+- `KnowledgeItemSearchService` 新增 `search_v2` 方法；旧的 `search` 方法已无生产路由调用，仅 integration test 通过旧链路间接使用。
+- `KnowledgeItemSearchRequest`、`KnowledgeItemSearchResponse`、`KnowledgeItemSearchHit`、`KnowledgeItemSearchMeta` 旧 schema 已无生产路由使用，待旧 integration test 迁移后可删除。

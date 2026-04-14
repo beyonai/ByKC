@@ -11,6 +11,8 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemSearchMeta,
     KnowledgeItemSearchRequest,
     KnowledgeItemSearchResponse,
+    SearchHit,
+    SearchRequest,
 )
 
 
@@ -144,3 +146,63 @@ class KnowledgeItemSearchService:
         return sorted(
             merged.values(), key=lambda item: (-item["score"], -item["chunk_id"])
         )
+
+    def search_v2(self, request: SearchRequest) -> list[SearchHit]:
+        """Execute hybrid retrieval and return documented search results."""
+        logger.info(
+            "knowledge_item_search_service.search_v2 started: query=%s, kb_code_count=%s, top_k=%s, search_mode=%s",
+            request.query,
+            len(request.kb_codes),
+            request.top_k,
+            request.search_mode,
+        )
+        query_embedding = self.embedding_query_service.embed_query(request.query)
+        logger.info(
+            "knowledge_item_search_service.search_v2 embedding finished: embedding_dimension=%s",
+            len(query_embedding),
+        )
+        connection = self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            text_hits = self.search_repository.search_text_v2(
+                cursor,
+                query=request.query,
+                kb_codes=request.kb_codes,
+                file_type_list=request.file_type_list,
+                limit=request.top_k * 3,
+            )
+            vector_hits = self.search_repository.search_vector_v2(
+                cursor,
+                query_embedding=query_embedding,
+                kb_codes=request.kb_codes,
+                file_type_list=request.file_type_list,
+                limit=request.top_k * 4,
+            )
+            logger.info(
+                "knowledge_item_search_service.search_v2 retrieval finished: text_hit_count=%s, vector_hit_count=%s",
+                len(text_hits),
+                len(vector_hits),
+            )
+        finally:
+            connection.close()
+
+        merged = self._merge_hits(text_hits=text_hits, vector_hits=vector_hits)
+        items = [
+            SearchHit(
+                kn_code=item["kb_code"],
+                file_path="/" + item["full_path"],
+                chunk_no=item["chunk_no"],
+                chunk_id=item["chunk_id"],
+                chunk_text=item["chunk_text"],
+                score=item["score"],
+                image_path="",
+                start_line=item["start_line"],
+                end_line=item["end_line"],
+            )
+            for item in merged[: request.top_k]
+        ]
+        logger.info(
+            "knowledge_item_search_service.search_v2 finished: returned_count=%s",
+            len(items),
+        )
+        return items

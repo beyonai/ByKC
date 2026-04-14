@@ -635,7 +635,7 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
 
 ## 知识检索
 
-### `POST /api/v1/knowledge-items/search`
+### `POST /api/v1/knowledgeItems/search`
 
 根据用户提问召回对应的知识切片。
 

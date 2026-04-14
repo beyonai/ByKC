@@ -18,6 +18,7 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemSearchMeta,
     KnowledgeItemSearchResponse,
     KnowledgeItemUploadResponse,
+    SearchHit,
     UpdateDirectoryResponse,
     UpdateFileResponse,
     UpdateKnowledgeBaseResponse,
@@ -177,6 +178,21 @@ class FakeKBService:
                 returned_count=1,
             ),
         )
+
+    def search_v2(self, request):
+        return [
+            SearchHit(
+                kn_code="hr-policy",
+                file_path="/employee-handbook.md",
+                chunk_no=1,
+                chunk_id=42,
+                chunk_text="员工请假应至少提前一天提交申请。",
+                score=0.91,
+                image_path="",
+                start_line=1,
+                end_line=3,
+            )
+        ]
 
     def list_dir(self, request):
         return KnowledgeItemListDirResponse(
@@ -1512,22 +1528,28 @@ def test_search_route_returns_chunk_oriented_business_response(monkeypatch):
     client = make_test_client(monkeypatch, service)
 
     response = client.post(
-        "/api/v1/knowledge-items/search",
+        "/api/v1/knowledgeItems/search",
         json={
             "query": "员工请假制度怎么规定",
-            "kb_codes": ["hr-policy"],
-            "top_k": 10,
-            "vector_top_k": 40,
-            "text_top_k": 30,
+            "knCodeList": ["hr-policy"],
+            "topK": 10,
+            "searchMode": "mixedRecall",
         },
     )
 
     assert response.status_code == 200
     body = response.json()
-    assert body["error"] is None
-    assert body["data"]["items"][0]["file_code"] == "item-1"
-    assert body["data"]["items"][0]["file_path"] == "/employee-handbook.md"
-    assert body["data"]["meta"]["returned_count"] == 1
+    assert body["resultCode"] == "0"
+    assert body["resultMsg"] == "success"
+    hit = body["resultObject"]["data"][0]
+    assert hit["knCode"] == "hr-policy"
+    assert hit["filePath"] == "/employee-handbook.md"
+    assert hit["chunkNo"] == 1
+    assert hit["chunkId"] == 42
+    assert hit["score"] == 0.91
+    assert hit["imagePath"] == ""
+    assert hit["startLine"] == 1
+    assert hit["endLine"] == 3
 
 
 def test_search_route_emits_summary_logs(monkeypatch):
@@ -1545,70 +1567,111 @@ def test_search_route_emits_summary_logs(monkeypatch):
     client = make_test_client(monkeypatch, service)
 
     response = client.post(
-        "/api/v1/knowledge-items/search",
+        "/api/v1/knowledgeItems/search",
         json={
             "query": "员工请假制度怎么规定",
-            "kb_codes": ["hr-policy"],
-            "top_k": 10,
-            "vector_top_k": 40,
-            "text_top_k": 30,
+            "knCodeList": ["hr-policy"],
+            "topK": 10,
+            "searchMode": "mixedRecall",
         },
     )
 
     assert response.status_code == 200
     assert info_messages == [
-        "search_knowledge_items request received: query=员工请假制度怎么规定, kb_code_count=1, top_k=10, vector_top_k=40, text_top_k=30, source_code_count=0, type_code_count=0",
-        "search_knowledge_items resolved service: service_class=FakeKBService",
+        "search_knowledge_items request received: query=员工请假制度怎么规定, kb_code_count=1, top_k=10, search_mode=mixedRecall",
         "search_knowledge_items service call succeeded: returned_count=1, top_k=10",
         "search_knowledge_items response ready: code=200, returned_count=1",
     ]
 
 
-def test_search_route_maps_validation_error_to_standard_error(monkeypatch):
-    """Search business validation should use the standardized error envelope."""
+def test_search_route_maps_validation_error_to_documented_error(monkeypatch):
+    """Search business validation should use the documented error envelope."""
 
     class BrokenSearchService(FakeKBService):
-        def search(self, request):
-            raise KnowledgeBaseValidationError("kb_codes must not be empty")
+        def search_v2(self, request):
+            raise KnowledgeBaseValidationError("knCodeList must not be empty")
 
     client = make_test_client(monkeypatch, BrokenSearchService())
     response = client.post(
-        "/api/v1/knowledge-items/search",
+        "/api/v1/knowledgeItems/search",
         json={
             "query": "员工请假制度怎么规定",
-            "kb_codes": ["hr-policy"],
+            "knCodeList": ["hr-policy"],
+            "topK": 5,
+            "searchMode": "mixedRecall",
         },
     )
 
     assert response.status_code == 422
-    assert response.json()["code"] == 422
-    assert response.json()["message"] == "error"
-    assert response.json()["data"] is None
-    assert response.json()["error"]["type"] == "business_validation"
-    assert response.json()["error"]["error_code"] == "KB_SEARCH_INVALID"
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "knCodeList must not be empty",
+        "resultObject": {},
+    }
 
 
 def test_search_route_maps_configuration_error_to_503(monkeypatch):
-    """Search configuration failures should use the standardized error envelope."""
+    """Search configuration failures should use the documented error envelope."""
 
     class BrokenSearchService(FakeKBService):
-        def search(self, request):
+        def search_v2(self, request):
             raise KnowledgeBaseConfigurationError(
                 "EMBEDDING_BASE_URL is required for retrieval"
             )
 
     client = make_test_client(monkeypatch, BrokenSearchService())
     response = client.post(
-        "/api/v1/knowledge-items/search",
+        "/api/v1/knowledgeItems/search",
         json={
             "query": "员工请假制度怎么规定",
-            "kb_codes": ["hr-policy"],
+            "knCodeList": ["hr-policy"],
+            "topK": 5,
+            "searchMode": "mixedRecall",
         },
     )
 
     assert response.status_code == 503
-    assert response.json()["error"]["type"] == "configuration_error"
-    assert response.json()["error"]["error_code"] == "KB_RUNTIME_CONFIG_ERROR"
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "EMBEDDING_BASE_URL is required for retrieval",
+        "resultObject": {},
+    }
+
+
+def test_search_route_rejects_invalid_search_mode(monkeypatch):
+    """Search should reject requests with invalid searchMode."""
+    client = make_test_client(monkeypatch, FakeKBService())
+    response = client.post(
+        "/api/v1/knowledgeItems/search",
+        json={
+            "query": "test",
+            "knCodeList": ["kb1"],
+            "topK": 5,
+            "searchMode": "invalidMode",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["resultCode"] == "-1"
+    assert response.json()["resultMsg"] == "request validation failed"
+
+
+def test_search_route_rejects_non_positive_top_k(monkeypatch):
+    """Search should reject requests with topK <= 0."""
+    client = make_test_client(monkeypatch, FakeKBService())
+    response = client.post(
+        "/api/v1/knowledgeItems/search",
+        json={
+            "query": "test",
+            "knCodeList": ["kb1"],
+            "topK": 0,
+            "searchMode": "mixedRecall",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["resultCode"] == "-1"
+    assert response.json()["resultMsg"] == "request validation failed"
 
 
 # ---------------------------------------------------------------------------

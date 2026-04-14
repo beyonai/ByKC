@@ -22,9 +22,9 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemGlobRequest,
     KnowledgeItemImportRequest,
     KnowledgeItemListDirRequest,
-    KnowledgeItemSearchRequest,
     KnowledgeItemUploadRequest,
     ReadFileRequest,
+    SearchRequest,
     UpdateDirectoryRequest,
     UpdateFileRequest,
     UpdateKnowledgeBaseRequest,
@@ -495,17 +495,6 @@ def _map_import_validation_error(
         error_code="KB_IMPORT_INVALID",
         error_message=message,
         details={"file_code": file_code, "version": version, "file_path": file_path},
-    )
-
-
-def _map_search_validation_error(*, exc: KnowledgeBaseValidationError) -> JSONResponse:
-    """Map search validation/runtime errors to the standardized protocol."""
-    return _error_response(
-        status_code=422,
-        error_type="business_validation",
-        error_code="KB_SEARCH_INVALID",
-        error_message=str(exc),
-        details={},
     )
 
 
@@ -1175,48 +1164,53 @@ def register_routes(
         )
         return _documented_success_response()
 
-    @app.post("/api/v1/knowledge-items/search")
-    async def search_knowledge_items(request: KnowledgeItemSearchRequest):
+    @app.post("/api/v1/knowledgeItems/search")
+    async def search_knowledge_items(body: dict[str, Any] = Body(...)):
+        try:
+            request = SearchRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
         logger.info(
-            "search_knowledge_items request received: query=%s, kb_code_count=%s, top_k=%s, vector_top_k=%s, text_top_k=%s, source_code_count=%s, type_code_count=%s",
+            "search_knowledge_items request received: query=%s, kb_code_count=%s, top_k=%s, search_mode=%s",
             request.query,
             len(request.kb_codes),
             request.top_k,
-            request.vector_top_k,
-            request.text_top_k,
-            len(request.source_codes or []),
-            len(request.type_codes or []),
+            request.search_mode,
         )
         try:
             service = get_knowledge_item_search_service()
-            logger.info(
-                "search_knowledge_items resolved service: service_class=%s",
-                service.__class__.__name__,
-            )
-            result = service.search(request)
+            items = service.search_v2(request)
             logger.info(
                 "search_knowledge_items service call succeeded: returned_count=%s, top_k=%s",
-                result.meta.returned_count,
-                result.meta.top_k,
+                len(items),
+                request.top_k,
             )
         except KnowledgeBaseConfigurationError as exc:
             logger.warning("search_knowledge_items configuration failed: error=%s", exc)
-            return _error_response(
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
                 status_code=503,
-                error_type="configuration_error",
-                error_code="KB_RUNTIME_CONFIG_ERROR",
-                error_message=str(exc),
-                details={},
             )
         except KnowledgeBaseValidationError as exc:
             logger.warning("search_knowledge_items validation failed: error=%s", exc)
-            return _map_search_validation_error(exc=exc)
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=422,
+            )
 
         logger.info(
             "search_knowledge_items response ready: code=200, returned_count=%s",
-            result.meta.returned_count,
+            len(items),
         )
-        return _success_response(data=result.model_dump())
+        return _documented_success_response(
+            result_object={"data": [item.model_dump(by_alias=True) for item in items]}
+        )
 
     @app.post("/api/v1/listDir")
     async def list_dir(body: dict[str, Any] = Body(...)):

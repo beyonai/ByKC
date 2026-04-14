@@ -6,7 +6,7 @@ from pathlib import PurePosixPath
 from typing import Any, Optional
 from urllib.parse import quote
 
-from fastapi import Body, Response
+from fastapi import Body, File, Form, Response, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
@@ -23,6 +23,7 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemImportRequest,
     KnowledgeItemListDirRequest,
     KnowledgeItemSearchRequest,
+    KnowledgeItemUploadRequest,
     UpdateDirectoryRequest,
     UpdateFileRequest,
     UpdateKnowledgeBaseRequest,
@@ -957,6 +958,71 @@ def register_routes(
                 file_code=request.file_code,
             )
         return _success_response(data=result.model_dump())
+
+    @app.post("/api/v1/knowledgeItems/import")
+    async def upload_file(
+        kn_code: str | None = Form(None, alias="knCode"),
+        file_path: str | None = Form(None, alias="filePath"),
+        file_description: str | None = Form(None, alias="fileDescription"),
+        file_content: UploadFile | None = File(None, alias="fileContent"),
+    ):
+        try:
+            payload = await file_content.read() if file_content is not None else None
+            request = KnowledgeItemUploadRequest.model_validate(
+                {
+                    "knCode": kn_code,
+                    "filePath": file_path,
+                    "fileDescription": file_description,
+                    "fileContent": payload,
+                    "fileName": file_content.filename
+                    if file_content is not None
+                    else None,
+                    "contentType": (
+                        file_content.content_type if file_content is not None else None
+                    ),
+                }
+            )
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        logger.info(
+            "upload_file request received: kb_code=%s, file_path=%s, has_description=%s, file_name=%s",
+            request.kb_code,
+            request.file_path,
+            request.file_description is not None,
+            request.file_name,
+        )
+        try:
+            service = get_knowledge_item_ingestion_service()
+            service.upload_file(request)
+        except KnowledgeBaseConfigurationError as exc:
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=503,
+            )
+        except KnowledgeBaseValidationError as exc:
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=422,
+            )
+        except Exception as exc:
+            logger.exception(
+                "upload_file unexpected error: kb_code=%s, file_path=%s, error=%s",
+                request.kb_code,
+                request.file_path,
+                exc,
+            )
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error",
+                result_object={},
+                status_code=500,
+            )
+        return _documented_success_response(result_object={})
 
     @app.post("/api/v1/knowledge-items/import")
     async def import_knowledge_item(request: KnowledgeItemImportRequest):

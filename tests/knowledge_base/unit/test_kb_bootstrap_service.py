@@ -18,8 +18,8 @@ def test_normalize_embedding_table_name_rewrites_unsafe_characters():
     )
 
 
-def test_build_schema_statements_include_current_version_and_projection():
-    """Bootstrap DDL should contain the latest-version pointer and retrieval projection."""
+def test_build_schema_statements_include_current_chunk_and_projection_tables():
+    """Bootstrap DDL should contain the current chunk, retrieval, cache, and embedding tables."""
     service = KnowledgeBaseSchemaBootstrapService(
         embedding_model_name="bge-m3",
         embedding_dimension=1024,
@@ -27,11 +27,9 @@ def test_build_schema_statements_include_current_version_and_projection():
 
     ddl = "\n".join(service.build_schema_statements())
 
-    assert "current_version_id" in ddl
-    assert "knowledge_item_chunk_retrieval_mv" in ddl
+    assert "create table if not exists knowledge_chunk" in ddl.lower()
+    assert "knowledge_chunk_retrieval_mv" in ddl
     assert "knowledge_fetch_cache_index" in ddl
-    assert "knowledge_base_status" in ddl
-    assert "knowledge_item_status" in ddl
     assert "chunk_embedding_bge_m3" in ddl
     assert "vector(1024)" in ddl
 

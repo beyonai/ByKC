@@ -279,6 +279,25 @@ def test_import_request_rejects_duplicate_chunk_numbers():
         )
 
 
+def test_upload_request_accepts_documented_form_fields():
+    """Multipart upload requests should accept documented field names."""
+    from by_qa.knowledge_base.api.schemas import KnowledgeItemUploadRequest
+
+    request = KnowledgeItemUploadRequest(
+        knCode="hr-policy",
+        filePath="/dir1/item-1.pdf",
+        fileDescription="操作手册",
+        fileContent=b"hello",
+        fileName="item-1.pdf",
+        contentType="application/pdf",
+    )
+
+    assert request.kb_code == "hr-policy"
+    assert request.file_path == "/dir1/item-1.pdf"
+    assert request.file_description == "操作手册"
+    assert request.file_content == b"hello"
+
+
 def test_import_response_serializes_combined_file_and_chunk_summary():
     """Combined import responses should expose file metadata and chunk summary."""
     from by_qa.knowledge_base.api.schemas import KnowledgeItemImportFileResponse

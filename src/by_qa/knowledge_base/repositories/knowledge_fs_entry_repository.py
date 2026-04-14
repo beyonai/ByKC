@@ -250,6 +250,159 @@ class KnowledgeFsEntryRepository:
             description=directory_description,
         )
 
+    def create_file_entry(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        full_path: str,
+        file_description: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Create one file entry under an existing parent directory."""
+        normalized_path = full_path.strip("/")
+        if not normalized_path:
+            raise ValueError("full_path must not be empty")
+
+        current_parent_id: int | None = None
+        current_path_ltree: str | None = None
+        path_segments = normalized_path.split("/")
+
+        for index, segment in enumerate(path_segments[:-1], start=1):
+            existing = self._get_child_entry(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                parent_entry_id=current_parent_id,
+                name=segment,
+            )
+            if existing is not None:
+                if existing.get("entry_type") != "DIRECTORY":
+                    missing_directory_path = "/".join(path_segments[:index])
+                    raise ValueError(
+                        f"parent directory not found: {missing_directory_path}"
+                    )
+                current_parent_id = self._row_id(existing)
+                current_path_ltree = self._row_value(existing, "path_ltree")
+                continue
+
+            parent_directory = self._insert_directory_entry(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                parent_entry_id=current_parent_id,
+                parent_path_ltree=current_path_ltree,
+                name=segment,
+                depth=index,
+                description=None,
+            )
+            current_parent_id = self._row_id(parent_directory)
+            current_path_ltree = self._row_value(parent_directory, "path_ltree")
+
+        existing_file = self._get_child_entry(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            parent_entry_id=current_parent_id,
+            name=path_segments[-1],
+        )
+        if existing_file is not None:
+            raise ValueError(f"file path already exists: /{normalized_path}")
+
+        fetchone = getattr(cursor, "fetchone", None)
+        label = self._path_label("f", len(path_segments), path_segments[-1])
+        path_ltree = (
+            f"{current_path_ltree}.{label}" if current_path_ltree is not None else label
+        )
+        cursor.execute(
+            """
+            INSERT INTO knowledge_fs_entry (
+                knowledge_base_id,
+                parent_entry_id,
+                entry_type,
+                is_root,
+                name,
+                path_ltree,
+                depth,
+                description,
+                file_bucket_name,
+                file_object_key,
+                markdown_bucket_name,
+                markdown_object_key,
+                file_size,
+                mime_type,
+                checksum,
+                line_count,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                %(knowledge_base_id)s,
+                %(parent_entry_id)s,
+                'FILE',
+                FALSE,
+                %(name)s,
+                %(path_ltree)s::ltree,
+                %(depth)s,
+                %(description)s,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                NOW(),
+                NOW()
+            )
+            RETURNING kid, knowledge_base_id, parent_entry_id, path_ltree, name, entry_type, is_root, depth
+            """,
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "parent_entry_id": current_parent_id,
+                "name": path_segments[-1],
+                "path_ltree": path_ltree,
+                "depth": len(path_segments),
+                "description": file_description,
+            },
+        )
+        return fetchone() if callable(fetchone) else None
+
+    def update_file_entry_storage(
+        self,
+        cursor: Any,
+        *,
+        fs_entry_id: int,
+        file_description: str | None,
+        file_bucket_name: str,
+        file_object_key: str,
+        file_size: int,
+        mime_type: str,
+        checksum: str,
+    ) -> None:
+        """Persist uploaded file object metadata on one file entry."""
+        cursor.execute(
+            """
+            UPDATE knowledge_fs_entry
+            SET description = %(description)s,
+                file_bucket_name = %(file_bucket_name)s,
+                file_object_key = %(file_object_key)s,
+                file_size = %(file_size)s,
+                mime_type = %(mime_type)s,
+                checksum = %(checksum)s,
+                updated_at = NOW()
+            WHERE kid = %(fs_entry_id)s
+              AND entry_type = 'FILE'
+              AND is_deleted = FALSE
+            """,
+            {
+                "fs_entry_id": fs_entry_id,
+                "description": file_description,
+                "file_bucket_name": file_bucket_name,
+                "file_object_key": file_object_key,
+                "file_size": file_size,
+                "mime_type": mime_type,
+                "checksum": checksum,
+            },
+        )
+
     def _insert_directory_entry(
         self,
         cursor: Any,

@@ -95,7 +95,7 @@
   - `import_knowledge_item`
   - `_map_import_validation_error`
   - 对应路径：`/api/v1/knowledge-items/import`
-  - 原因：当前文档中的上传接口是 `/api/v1/knowledgeItems/import`，且要求 `multipart/form-data`；现有这条实现仍是旧的 JSON 导入模型。
+  - 原因：当前文档中的上传接口已经实现为 `/api/v1/knowledgeItems/import`，且请求体为 `multipart/form-data`；现有这条旧路由仍是 JSON 导入模型，后续可删除。
 
 ### 3. 无生产引用的旧根节点辅助查询
 
@@ -180,6 +180,14 @@
   - 当前文档只保留了路径模型，不再暴露版本化写入接口，也不再暴露文档业务编码。
   - 需要等 `knowledgeItems/import`、`knowledgeItems/delete`、`readFile`、`downloadFile`、`fileToMarkdownIndex`、`search` 都迁移到新模型后再统一删除。
 
+- `src/by_qa/knowledge_base/repositories/knowledge_fs_entry_repository.py`
+  - `ensure_file_entry`
+
+- 原因：
+  - 该函数仍依赖旧的 root-entry 模型和旧列写入方式。
+  - 当前公开上传接口已经切到 `create_file_entry + update_file_entry_storage` 新链路。
+  - 等旧导入链路移除后，这个函数可以一起删除。
+
 ### 3. 旧字段驱动的目录接口实现
 
 - `src/by_qa/knowledge_base/services/knowledge_base_service.py`
@@ -217,7 +225,9 @@
   - 当前路径模型已经不再把知识库作为文件树中的一层目录。
   - 顶层目录和顶层文件现在统一由 `parent_entry_id = NULL` 表达。
   - `knowledge_base_id` 已经足以表达库归属，`is_root` 不再承担主模型语义。
-  - 该字段目前仍被旧的 root-node 链路引用，待 `ensure_root_entry`、`list_root_entries`、`list_root_nodes` 和旧导入/读取链路迁移完成后可删除。
+  - 该字段当前仅因旧的 root-node 链路尚未完全移除而临时保留。
+  - 它不是“可选保留字段”，而是“明确待移除字段”。
+  - 待 `ensure_root_entry`、`list_root_entries`、`list_root_nodes`、`ensure_file_entry` 和旧导入/读取链路迁移完成后，应直接从 SQL、代码和测试中删除。
 
 ## 暂保留
 
@@ -254,6 +264,7 @@
   - `path_ltree` 不再带 `kb_<id>` 前缀
 - `ensure_root_entry` 的使用范围已进一步缩小到旧的文件导入 / 写入链路。
 - `knowledge_fs_entry.is_root` 已确认不再属于目标模型字段，后续可随 root-node 旧链路一起移除。
+- `knowledge_fs_entry.is_root` 的状态现已明确为“必须移除”，不再作为候选字段保留。
 - “修改目录”接口已经按 `knCode + directoryPath + directoryName` 收口，不再依赖 `directory_code`。
 - `knowledge_base_service.update_directory` 已经脱离 `knowledge_item_repository`，只基于 `knowledge_fs_entry` 路径模型完成目录重命名。
 - 目录修改链路里的 `directory_description`、`metadata` 旧语义已确认废弃。
@@ -264,6 +275,17 @@
   - 直接删除 `knowledge_chunk_retrieval_mv` 中对应 `fs_entry_id` 的检索投影
 - `knowledge_fs_entry.rename_entry` 现已确认必须同步更新整棵子树的 `path_ltree` 前缀。
   - 否则会出现“目录改名后再创建旧名称目录，两个目录共享同一 `path_ltree` 前缀”的冲突问题。
+- `knowledgeItems/import` 已按新规范实现：
+  - 路由为 `/api/v1/knowledgeItems/import`
+  - 请求体为 `multipart/form-data`
+  - 仅上传原始文件并写入 `knowledge_fs_entry` 的文件对象元信息
+  - 不再依赖 `knowledge_item_repository`、`knowledge_item_version_repository`、`knowledge_item_chunk_repository`
+- `knowledge_fs_entry` 新增并启用了两条当前主链路方法：
+  - `create_file_entry`
+  - `update_file_entry_storage`
+- `create_file_entry` 现已与 `create_directory_entry` 保持一致，支持递归创建缺失父目录。
+- 包内 SQL 已同步适配当前路径模型：
+  - `knowledge_fs_entry` 顶层节点允许 `parent_entry_id = NULL` 且 `depth = 1`
 
 - 新增名称重复校验后，`knowledgeBases/create` 已不再需要旧的 `kb_code` 创建语义。
 - `list_root_entries` / `list_root_nodes` / `list_all_root_nodes` 不符合当前文档路径模型，应进入后续删除范围。

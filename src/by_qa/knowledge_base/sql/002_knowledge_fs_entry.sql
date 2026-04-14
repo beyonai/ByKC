@@ -25,7 +25,14 @@ CREATE TABLE IF NOT EXISTS knowledge_fs_entry (
         CHECK (
             (is_root = true AND parent_entry_id IS NULL AND depth = 0)
             OR
-            (is_root = false AND depth >= 1)
+            (
+                is_root = false
+                AND (
+                    (parent_entry_id IS NULL AND depth = 1)
+                    OR
+                    (parent_entry_id IS NOT NULL AND depth >= 1)
+                )
+            )
         )
 );
 

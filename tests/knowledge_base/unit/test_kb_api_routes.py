@@ -17,6 +17,7 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemSearchHit,
     KnowledgeItemSearchMeta,
     KnowledgeItemSearchResponse,
+    KnowledgeItemUploadResponse,
     UpdateDirectoryResponse,
     UpdateFileResponse,
     UpdateKnowledgeBaseResponse,
@@ -116,6 +117,14 @@ class FakeKBService:
             status=request.status,
             metadata=request.metadata,
             chunks={"count": len(request.chunks)},
+        )
+
+    def upload_file(self, request):
+        self.import_calls.append(request)
+        return KnowledgeItemUploadResponse(
+            kb_code=request.kb_code,
+            file_path=request.file_path,
+            file_description=request.file_description,
         )
 
     def write_file(self, request):
@@ -844,125 +853,75 @@ def test_write_index_route_maps_missing_file_to_404(monkeypatch):
     assert response.json()["error"]["details"] == {"file_code": "file-001"}
 
 
-def test_import_knowledge_item_route_returns_business_response(monkeypatch):
-    """Combined import route should delegate to the ingestion service."""
+def test_upload_file_route_returns_documented_business_response(monkeypatch):
+    """Multipart upload route should delegate to the ingestion service."""
     service = FakeKBService()
     client = make_test_client(monkeypatch, service)
 
     response = client.post(
-        "/api/v1/knowledge-items/import",
-        json={
-            "kb_code": "hr-policy",
-            "file_code": "file-001",
-            "file_path": "/考勤制度/异常考勤处理办法.pdf",
-            "file_description": "异常考勤制度原文",
-            "file_content": "ZmFrZS1iYXNlNjQ=",
-            "version": "V1",
-            "source_code": "oa",
-            "status": "ACTIVE",
-            "metadata": {"owner_dept": "HR"},
-            "markdown_content": "# 异常考勤处理办法",
-            "chunks": [
-                {
-                    "chunk_no": 1,
-                    "start_line": 1,
-                    "end_line": 100,
-                    "chunk_text": "xxxxx",
-                    "embedding": [0.1, 0.2],
-                    "char_start": 1,
-                    "char_end": 732,
-                }
-            ],
+        "/api/v1/knowledgeItems/import",
+        data={
+            "knCode": "hr-policy",
+            "filePath": "/考勤制度/异常考勤处理办法.pdf",
+            "fileDescription": "异常考勤制度原文",
+        },
+        files={
+            "fileContent": ("异常考勤处理办法.pdf", b"pdf-bytes", "application/pdf")
         },
     )
 
     assert response.status_code == 200
     assert response.json() == {
-        "code": 200,
-        "message": "success",
-        "error": None,
-        "data": {
-            "kb_code": "hr-policy",
-            "file_code": "file-001",
-            "type_code": "pdf",
-            "file_path": "/考勤制度/异常考勤处理办法.pdf",
-            "file_description": "异常考勤制度原文",
-            "version": "V1",
-            "status": "ACTIVE",
-            "metadata": {"owner_dept": "HR"},
-            "chunks": {"count": 1},
-        },
+        "resultCode": "0",
+        "resultMsg": "success",
+        "resultObject": {},
     }
 
 
-def test_import_knowledge_item_route_maps_duplicate_version_to_409(monkeypatch):
-    """Combined import route should surface version conflicts as 409."""
+def test_upload_file_route_maps_duplicate_path_to_documented_error(monkeypatch):
+    """Multipart upload route should surface duplicate file paths with documented envelope."""
 
     class BrokenKBService(FakeKBService):
-        def import_knowledge_item(self, request):
+        def upload_file(self, request):
             raise KnowledgeBaseValidationError(
-                f"item_code/version already exists: {request.file_code}/{request.version}"
+                f"file path already exists: {request.file_path}"
             )
 
     client = make_test_client(monkeypatch, BrokenKBService())
     response = client.post(
-        "/api/v1/knowledge-items/import",
-        json={
-            "kb_code": "hr-policy",
-            "file_code": "file-001",
-            "file_path": "/考勤制度/异常考勤处理办法.pdf",
-            "file_content": "ZmFrZS1iYXNlNjQ=",
-            "version": "V1",
-            "source_code": "oa",
-            "status": "ACTIVE",
-            "markdown_content": "# 异常考勤处理办法",
-            "chunks": [
-                {
-                    "chunk_no": 1,
-                    "start_line": 1,
-                    "end_line": 100,
-                    "chunk_text": "xxxxx",
-                    "embedding": [0.1, 0.2],
-                }
-            ],
+        "/api/v1/knowledgeItems/import",
+        data={
+            "knCode": "hr-policy",
+            "filePath": "/考勤制度/异常考勤处理办法.pdf",
         },
-    )
-
-    assert response.status_code == 409
-    assert response.json()["error"]["type"] == "conflict"
-    assert response.json()["error"]["error_code"] == "KB_FILE_VERSION_CONFLICT"
-    assert response.json()["error"]["details"] == {
-        "file_code": "file-001",
-        "version": "V1",
-    }
-
-
-def test_import_knowledge_item_route_maps_request_validation_to_standard_error(
-    monkeypatch,
-):
-    """Combined import request validation should use the standard error envelope."""
-    client = make_test_client(monkeypatch, FakeKBService())
-
-    response = client.post(
-        "/api/v1/knowledge-items/import",
-        json={
-            "kb_code": "hr-policy",
-            "file_path": "/考勤制度/异常考勤处理办法.pdf",
-            "file_content": "ZmFrZS1iYXNlNjQ=",
-            "version": "V1",
-            "source_code": "oa",
-            "markdown_content": "# 异常考勤处理办法",
+        files={
+            "fileContent": ("异常考勤处理办法.pdf", b"pdf-bytes", "application/pdf")
         },
     )
 
     assert response.status_code == 422
-    assert response.json()["code"] == 422
-    assert response.json()["message"] == "error"
-    assert response.json()["data"] is None
-    assert response.json()["error"]["type"] == "request_invalid"
-    assert response.json()["error"]["error_code"] == "REQUEST_VALIDATION_FAILED"
-    assert response.json()["error"]["error_message"] == "request validation failed"
-    assert response.json()["error"]["details"]["errors"]
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "file path already exists: /考勤制度/异常考勤处理办法.pdf",
+        "resultObject": {},
+    }
+
+
+def test_upload_file_route_maps_request_validation_to_documented_error(
+    monkeypatch,
+):
+    """Multipart upload request validation should use the documented error envelope."""
+    client = make_test_client(monkeypatch, FakeKBService())
+
+    response = client.post(
+        "/api/v1/knowledgeItems/import",
+        data={"knCode": "hr-policy", "filePath": "/考勤制度/异常考勤处理办法.pdf"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["resultCode"] == "-1"
+    assert response.json()["resultMsg"] == "request validation failed"
+    assert response.json()["resultObject"]["errors"]
 
 
 def test_list_dir_route_returns_filesystem_entries(monkeypatch):

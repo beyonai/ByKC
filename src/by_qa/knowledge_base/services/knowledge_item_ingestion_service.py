@@ -3,6 +3,7 @@
 import base64
 import binascii
 import hashlib
+import mimetypes
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, Callable
@@ -15,6 +16,8 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemImportManifest,
     KnowledgeItemImportRequest,
     KnowledgeItemImportResponse,
+    KnowledgeItemUploadRequest,
+    KnowledgeItemUploadResponse,
     WriteFileRequest,
     WriteFileResponse,
     WriteIndexRequest,
@@ -36,6 +39,94 @@ class KnowledgeItemIngestionService:
     retrieval_projection_repository: Any
     object_storage: Any
     embedding_dimension: int
+
+    def upload_file(
+        self, request: KnowledgeItemUploadRequest
+    ) -> KnowledgeItemUploadResponse:
+        """Upload one original file and register its storage metadata on the file entry."""
+        logger.info(
+            "knowledge_item_ingestion_service.upload_file started: kb_code=%s, file_path=%s, file_size=%s",
+            request.kb_code,
+            request.file_path,
+            len(request.file_content),
+        )
+        normalized_file_path = request.file_path.strip()
+        if not normalized_file_path:
+            raise KnowledgeBaseValidationError("file_path must not be empty")
+        normalized_object_path = normalized_file_path.strip("/")
+        if not normalized_object_path:
+            raise KnowledgeBaseValidationError("file_path must not be root")
+
+        mime_type = (
+            request.content_type
+            or mimetypes.guess_type(normalized_object_path)[0]
+            or "application/octet-stream"
+        )
+        checksum = hashlib.sha256(request.file_content).hexdigest()
+
+        connection = self.connection_factory()
+        temp_object_key: str | None = None
+        try:
+            cursor = connection.cursor()
+            kb_row = self.knowledge_base_repository.get_by_code(cursor, request.kb_code)
+            if not kb_row:
+                raise KnowledgeBaseValidationError(
+                    f"knowledge base not found: {request.kb_code}"
+                )
+            knowledge_base_id = self._row_id(kb_row)
+
+            try:
+                file_entry_row = self.knowledge_fs_entry_repository.create_file_entry(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    full_path=normalized_object_path,
+                    file_description=request.file_description,
+                )
+            except ValueError as exc:
+                raise KnowledgeBaseValidationError(str(exc)) from exc
+
+            fs_entry_id = self._row_id(file_entry_row)
+            temp_object_key = self.object_storage.upload_temp_object(
+                f"upload-{knowledge_base_id}-{fs_entry_id}",
+                request.file_content,
+                content_type=mime_type,
+                bucket_name=self.object_storage.bucket_name,
+            )
+            suffix = PurePosixPath(normalized_object_path).suffix
+            final_object_key = (
+                f"kb/{knowledge_base_id}/fs-entry/{fs_entry_id}/original{suffix}"
+            )
+            self.knowledge_fs_entry_repository.update_file_entry_storage(
+                cursor,
+                fs_entry_id=fs_entry_id,
+                file_description=request.file_description,
+                file_bucket_name=self.object_storage.bucket_name,
+                file_object_key=final_object_key,
+                file_size=len(request.file_content),
+                mime_type=mime_type,
+                checksum=checksum,
+            )
+            connection.commit()
+            self.object_storage.promote_temp_object(
+                temp_object_key,
+                final_object_key,
+                bucket_name=self.object_storage.bucket_name,
+            )
+            return KnowledgeItemUploadResponse(
+                kb_code=request.kb_code,
+                file_path=normalized_file_path,
+                file_description=request.file_description,
+            )
+        except Exception:
+            connection.rollback()
+            if temp_object_key is not None:
+                self.object_storage.delete_object_quietly(
+                    temp_object_key,
+                    bucket_name=self.object_storage.bucket_name,
+                )
+            raise
+        finally:
+            connection.close()
 
     def delete_knowledge_item(
         self, request: DeleteKnowledgeItemRequest

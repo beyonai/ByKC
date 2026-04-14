@@ -320,6 +320,45 @@ class KnowledgeItemImportFileResponse(BaseModel):
     chunks: ChunkSummary
 
 
+class KnowledgeItemUploadRequest(BaseModel):
+    """Request body for multipart file upload aligned with the public API."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kb_code: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("knCode", "kb_code"),
+    )
+    file_path: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("filePath", "file_path"),
+    )
+    file_description: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("fileDescription", "file_description"),
+    )
+    file_content: bytes = Field(
+        min_length=1,
+        validation_alias=AliasChoices("fileContent", "file_content"),
+    )
+    file_name: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("fileName", "file_name"),
+    )
+    content_type: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("contentType", "content_type"),
+    )
+
+
+class KnowledgeItemUploadResponse(BaseModel):
+    """Business response for public file upload."""
+
+    kb_code: str
+    file_path: str
+    file_description: str | None = None
+
+
 class KnowledgeItemDocumentPayload(BaseModel):
     """Document metadata carried in the import manifest."""
 

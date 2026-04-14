@@ -234,6 +234,144 @@ def test_create_directory_entry_recursively_creates_missing_parents():
     assert insert_statements[1][1]["parent_entry_id"] == 80
 
 
+def test_create_file_entry_inserts_file_row_without_old_status_columns():
+    """File creation should insert a FILE entry without old status/metadata columns."""
+    repo = KnowledgeFsEntryRepository()
+    cursor = FakeCursor(
+        fetchone_results=[
+            {
+                "kid": 80,
+                "knowledge_base_id": 7,
+                "parent_entry_id": None,
+                "path_ltree": "d1_5f95f5aa",
+                "name": "考勤制度",
+                "entry_type": "DIRECTORY",
+                "is_root": False,
+                "depth": 1,
+            },
+            None,
+            {
+                "kid": 81,
+                "knowledge_base_id": 7,
+                "parent_entry_id": 80,
+                "path_ltree": "d1_5f95f5aa.f2_4100c4d4",
+                "name": "考勤制度.pdf",
+                "entry_type": "FILE",
+                "is_root": False,
+                "depth": 2,
+            },
+        ]
+    )
+
+    repo.create_file_entry(
+        cursor,
+        knowledge_base_id=7,
+        full_path="考勤制度/考勤制度.pdf",
+        file_description="原始文件",
+    )
+
+    insert_sql, params = cursor.executed[-1]
+    lowered = insert_sql.lower()
+    assert "insert into knowledge_fs_entry" in lowered
+    assert "'file'" in lowered
+    assert "description" in lowered
+    assert "status" not in lowered
+    assert "metadata" not in lowered
+    assert params["knowledge_base_id"] == 7
+    assert params["parent_entry_id"] == 80
+    assert params["name"] == "考勤制度.pdf"
+    assert params["description"] == "原始文件"
+
+
+def test_create_file_entry_recursively_creates_missing_parents():
+    """File creation should support recursive parent-directory creation."""
+    repo = KnowledgeFsEntryRepository()
+    cursor = FakeCursor(
+        fetchone_results=[
+            None,
+            {
+                "kid": 80,
+                "knowledge_base_id": 7,
+                "parent_entry_id": None,
+                "path_ltree": "d1_5f95f5aa",
+                "name": "考勤制度",
+                "entry_type": "DIRECTORY",
+                "is_root": False,
+                "depth": 1,
+            },
+            None,
+            {
+                "kid": 81,
+                "knowledge_base_id": 7,
+                "parent_entry_id": 80,
+                "path_ltree": "d1_5f95f5aa.d2_4100c4d4",
+                "name": "归档",
+                "entry_type": "DIRECTORY",
+                "is_root": False,
+                "depth": 2,
+            },
+            None,
+            {
+                "kid": 82,
+                "knowledge_base_id": 7,
+                "parent_entry_id": 81,
+                "path_ltree": "d1_5f95f5aa.d2_4100c4d4.f3_12345678",
+                "name": "考勤制度.pdf",
+                "entry_type": "FILE",
+                "is_root": False,
+                "depth": 3,
+            },
+        ]
+    )
+
+    repo.create_file_entry(
+        cursor,
+        knowledge_base_id=7,
+        full_path="考勤制度/归档/考勤制度.pdf",
+        file_description="原始文件",
+    )
+
+    insert_statements = [
+        (sql, params)
+        for sql, params in cursor.executed
+        if "insert into knowledge_fs_entry" in sql.lower()
+    ]
+    assert len(insert_statements) == 3
+    assert insert_statements[0][1]["name"] == "考勤制度"
+    assert insert_statements[1][1]["name"] == "归档"
+    assert insert_statements[2][1]["name"] == "考勤制度.pdf"
+    assert insert_statements[2][1]["parent_entry_id"] == 81
+
+
+def test_update_file_entry_storage_updates_new_storage_columns():
+    """File upload should persist object-storage metadata on the fs entry row."""
+    repo = KnowledgeFsEntryRepository()
+    cursor = FakeCursor()
+
+    repo.update_file_entry_storage(
+        cursor,
+        fs_entry_id=81,
+        file_description="原始文件",
+        file_bucket_name="knowledge-base",
+        file_object_key="kb/7/fs-entry/81/original.pdf",
+        file_size=128,
+        mime_type="application/pdf",
+        checksum="abc123",
+    )
+
+    sql, params = cursor.executed[0]
+    lowered = sql.lower()
+    assert "update knowledge_fs_entry" in lowered
+    assert "description = %(description)s" in sql
+    assert "file_bucket_name = %(file_bucket_name)s" in sql
+    assert "file_object_key = %(file_object_key)s" in sql
+    assert "file_size = %(file_size)s" in sql
+    assert "mime_type = %(mime_type)s" in sql
+    assert "checksum = %(checksum)s" in sql
+    assert params["fs_entry_id"] == 81
+    assert params["file_bucket_name"] == "knowledge-base"
+
+
 def test_soft_delete_directory_subtree_updates_descendants():
     """Directory subtree deletion should update all descendant filesystem entries."""
     repo = KnowledgeFsEntryRepository()

@@ -17,6 +17,7 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemImportManifest,
     KnowledgeItemImportRequest,
     KnowledgeItemListDirRequest,
+    KnowledgeItemUploadRequest,
     UpdateDirectoryRequest,
     UpdateFileRequest,
     UpdateKnowledgeBaseRequest,
@@ -370,6 +371,37 @@ class FakeKnowledgeFsEntryRepository:
                 [segment for segment in full_path.strip("/").split("/") if segment]
             ),
         }
+
+    def create_file_entry(
+        self, cursor, *, knowledge_base_id, full_path, file_description=None
+    ):
+        self.calls.append(
+            (
+                "create_file_entry",
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "full_path": full_path,
+                    "file_description": file_description,
+                },
+            )
+        )
+        if self.raise_missing_parent_directory:
+            parent_path = full_path.strip("/").rsplit("/", 1)[0]
+            raise ValueError(f"parent directory not found: {parent_path}")
+        return {
+            "kid": 71,
+            "knowledge_base_id": knowledge_base_id,
+            "parent_entry_id": None,
+            "entry_type": "FILE",
+            "name": full_path.strip("/").split("/")[-1],
+            "path_ltree": "d1_file.f2_doc",
+            "depth": len(
+                [segment for segment in full_path.strip("/").split("/") if segment]
+            ),
+        }
+
+    def update_file_entry_storage(self, cursor, **kwargs):
+        self.calls.append(("update_file_entry_storage", kwargs))
 
     def list_subtree_entry_ids(self, cursor, *, knowledge_base_id, root_fs_entry_id):
         self.calls.append(
@@ -2644,6 +2676,124 @@ def test_import_knowledge_item_rejects_missing_parent_directory():
         raise AssertionError("expected KnowledgeBaseValidationError")
 
     assert connection.rolled_back is True
+
+
+def test_upload_file_commits_object_and_updates_fs_entry_storage():
+    """Multipart upload should only persist original file metadata on the fs entry."""
+    connection = FakeConnection()
+    storage = FakeObjectStorage()
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    service = KnowledgeItemIngestionService(
+        connection_factory=lambda: connection,
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={
+                "id": 7,
+                "kb_code": "hr-policy",
+                "kb_name": "人力制度知识库",
+            }
+        ),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        knowledge_item_repository=FakeKnowledgeItemRepository(),
+        knowledge_item_version_repository=FakeKnowledgeItemVersionRepository(),
+        knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        object_storage=storage,
+        embedding_dimension=2,
+    )
+
+    response = service.upload_file(
+        KnowledgeItemUploadRequest(
+            knCode="hr-policy",
+            filePath="/dir1/item-1.pdf",
+            fileDescription="操作手册",
+            fileContent=b"pdf-bytes",
+            fileName="item-1.pdf",
+            contentType="application/pdf",
+        )
+    )
+
+    assert response.model_dump() == {
+        "kb_code": "hr-policy",
+        "file_path": "/dir1/item-1.pdf",
+        "file_description": "操作手册",
+    }
+    assert connection.committed is True
+    assert (
+        "create_file_entry",
+        {
+            "knowledge_base_id": 7,
+            "full_path": "dir1/item-1.pdf",
+            "file_description": "操作手册",
+        },
+    ) in knowledge_fs_entry_repository.calls
+    storage_call = [
+        call
+        for call in knowledge_fs_entry_repository.calls
+        if call[0] == "update_file_entry_storage"
+    ][0]
+    assert storage_call[1]["fs_entry_id"] == 71
+    assert storage_call[1]["file_bucket_name"] == "knowledge-base"
+    assert storage_call[1]["file_size"] == len(b"pdf-bytes")
+    assert storage_call[1]["mime_type"] == "application/pdf"
+    assert storage.promoted == [
+        (
+            "tmp/upload-7-71/content.md",
+            "kb/7/fs-entry/71/original.pdf",
+            "knowledge-base",
+        )
+    ]
+
+
+def test_upload_file_recursively_creates_missing_parent_directories():
+    """Multipart upload should recursively create missing parent directories."""
+    connection = FakeConnection()
+    storage = FakeObjectStorage()
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    service = KnowledgeItemIngestionService(
+        connection_factory=lambda: connection,
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={
+                "id": 7,
+                "kb_code": "hr-policy",
+                "kb_name": "人力制度知识库",
+            }
+        ),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        knowledge_item_repository=FakeKnowledgeItemRepository(),
+        knowledge_item_version_repository=FakeKnowledgeItemVersionRepository(),
+        knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        object_storage=storage,
+        embedding_dimension=2,
+    )
+
+    response = service.upload_file(
+        KnowledgeItemUploadRequest(
+            knCode="hr-policy",
+            filePath="/missing-dir/item-1.pdf",
+            fileContent=b"pdf-bytes",
+            fileName="item-1.pdf",
+            contentType="application/pdf",
+        )
+    )
+
+    assert response.file_path == "/missing-dir/item-1.pdf"
+    assert connection.committed is True
+    assert (
+        "create_file_entry",
+        {
+            "knowledge_base_id": 7,
+            "full_path": "missing-dir/item-1.pdf",
+            "file_description": None,
+        },
+    ) in knowledge_fs_entry_repository.calls
+    assert storage.promoted == [
+        (
+            "tmp/upload-7-71/content.md",
+            "kb/7/fs-entry/71/original.pdf",
+            "knowledge-base",
+        )
+    ]
 
 
 def test_import_document_rejects_missing_parent_directory():

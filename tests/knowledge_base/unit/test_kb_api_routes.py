@@ -50,11 +50,8 @@ class FakeKBService:
         self.created_directory_requests.append(request)
         return CreateDirectoryResponse(
             kb_code=request.kb_code,
-            directory_code=request.directory_code,
             directory_path=request.directory_path,
             directory_description=request.directory_description,
-            status=request.status,
-            metadata=request.metadata,
         )
 
     def delete_directory(self, request):
@@ -410,33 +407,6 @@ def test_update_knowledge_base_route_maps_unexpected_exception_to_documented_500
     }
 
 
-def test_create_directory_route_maps_missing_parent_to_404(monkeypatch):
-    """Create-directory should return 404 when the parent directory is missing."""
-
-    class BrokenKBService(FakeKBService):
-        def create_directory(self, request):
-            raise KnowledgeBaseValidationError(
-                "parent directory not found: missing-dir"
-            )
-
-    client = make_test_client(monkeypatch, BrokenKBService())
-    response = client.post(
-        "/api/v1/directories/create",
-        json={
-            "kb_code": "hr-policy",
-            "directory_code": "attendance-archive",
-            "directory_path": "/missing-dir/归档",
-            "directory_description": None,
-            "source_code": "manual",
-            "status": "ACTIVE",
-            "metadata": None,
-        },
-    )
-
-    assert response.status_code == 404
-    assert response.json()["error"]["error_code"] == "KB_DIRECTORY_PARENT_NOT_FOUND"
-
-
 def test_create_directory_route_returns_business_response(monkeypatch):
     """Create-directory route should delegate to the KB service."""
     service = FakeKBService()
@@ -445,29 +415,17 @@ def test_create_directory_route_returns_business_response(monkeypatch):
     response = client.post(
         "/api/v1/directories/create",
         json={
-            "kb_code": "hr-policy",
-            "directory_code": "attendance-archive",
-            "directory_path": "/考勤制度/归档",
-            "directory_description": "考勤制度归档目录",
-            "source_code": "manual",
-            "status": "ACTIVE",
-            "metadata": {"owner": "HR"},
+            "knCode": "hr-policy",
+            "directoryPath": "/考勤制度/归档",
+            "directoryDescription": "考勤制度归档目录",
         },
     )
 
     assert response.status_code == 200
     assert response.json() == {
-        "code": 200,
-        "message": "success",
-        "error": None,
-        "data": {
-            "kb_code": "hr-policy",
-            "directory_code": "attendance-archive",
-            "directory_path": "/考勤制度/归档",
-            "directory_description": "考勤制度归档目录",
-            "status": "ACTIVE",
-            "metadata": {"owner": "HR"},
-        },
+        "resultCode": "0",
+        "resultMsg": "success",
+        "resultObject": {},
     }
 
 

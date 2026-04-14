@@ -344,15 +344,15 @@ class FakeKnowledgeFsEntryRepository:
             entry["name"] = new_name
 
     def create_directory_entry(
-        self, cursor, *, knowledge_base_id, root_entry_id, full_path
+        self, cursor, *, knowledge_base_id, full_path, directory_description=None
     ):
         self.calls.append(
             (
                 "create_directory_entry",
                 {
                     "knowledge_base_id": knowledge_base_id,
-                    "root_entry_id": root_entry_id,
                     "full_path": full_path,
+                    "directory_description": directory_description,
                 },
             )
         )
@@ -362,7 +362,7 @@ class FakeKnowledgeFsEntryRepository:
         return {
             "kid": 81,
             "knowledge_base_id": knowledge_base_id,
-            "parent_entry_id": root_entry_id,
+            "parent_entry_id": 70,
             "entry_type": "DIRECTORY",
             "name": full_path.strip("/").split("/")[-1],
             "path_ltree": "kb_7.d1_archive",
@@ -807,10 +807,11 @@ def test_create_knowledge_base_commits_and_returns_business_fields():
     """Knowledge base creation should generate kb_code from the persisted row id."""
     connection = FakeConnection()
     knowledge_base_repository = FakeKnowledgeBaseRepository(default_lookup_result=None)
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeBaseService(
         connection_factory=lambda: connection,
         knowledge_base_repository=knowledge_base_repository,
-        knowledge_fs_entry_repository=FakeKnowledgeFsEntryRepository(),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
     )
 
     response = service.create_knowledge_base(
@@ -828,6 +829,7 @@ def test_create_knowledge_base_commits_and_returns_business_fields():
         {"kb_name": "人力制度知识库"},
     )
     assert knowledge_base_repository.calls[1][0] == "create_knowledge_base"
+    assert knowledge_fs_entry_repository.calls == []
 
 
 def test_create_knowledge_base_rejects_duplicate_name():
@@ -1102,69 +1104,42 @@ def test_create_directory_commits_and_returns_business_fields():
             "kb_code": "hr-policy",
             "kb_name": "人力制度知识库",
             "kb_description": None,
-            "status": "ACTIVE",
             "is_deleted": False,
-            "root_entry_id": 70,
-            "metadata": {},
         }
     )
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
-    knowledge_item_repository = FakeKnowledgeItemRepository()
     service = KnowledgeBaseService(
         connection_factory=lambda: connection,
         knowledge_base_repository=knowledge_base_repository,
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
-        knowledge_item_repository=knowledge_item_repository,
     )
 
     response = service.create_directory(
         CreateDirectoryRequest(
-            kb_code="hr-policy",
-            directory_code="attendance-archive",
-            directory_path="/考勤制度/归档",
-            directory_description="考勤制度归档目录",
-            source_code="manual",
-            status="ACTIVE",
-            metadata={"owner": "HR"},
+            knCode="hr-policy",
+            directoryPath="/考勤制度/归档",
+            directoryDescription="考勤制度归档目录",
         )
     )
 
     assert response.kb_code == "hr-policy"
-    assert response.directory_code == "attendance-archive"
     assert response.directory_path == "/考勤制度/归档"
     assert response.directory_description == "考勤制度归档目录"
-    assert response.status == "ACTIVE"
-    assert response.metadata == {"owner": "HR"}
     assert connection.committed is True
     assert (
         "create_directory_entry",
         {
             "knowledge_base_id": 7,
-            "root_entry_id": 70,
             "full_path": "考勤制度/归档",
+            "directory_description": "考勤制度归档目录",
         },
     ) in knowledge_fs_entry_repository.calls
-    assert (
-        "upsert",
-        {
-            "knowledge_base_id": 7,
-            "fs_entry_id": 81,
-            "item_code": "attendance-archive",
-            "item_kind": "DIRECTORY",
-            "description": "考勤制度归档目录",
-            "status": "ACTIVE",
-            "source_code": "manual",
-            "type_code": "DIRECTORY",
-            "metadata": {"owner": "HR"},
-        },
-    ) in knowledge_item_repository.calls
 
 
-def test_create_directory_rejects_missing_parent_directory():
-    """Directory creation should fail when the parent directory is missing."""
+def test_create_directory_supports_recursive_creation():
+    """Directory creation should support recursive parent creation."""
     connection = FakeConnection()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
-    knowledge_fs_entry_repository.raise_missing_parent_directory = True
     service = KnowledgeBaseService(
         connection_factory=lambda: connection,
         knowledge_base_repository=FakeKnowledgeBaseRepository(
@@ -1173,34 +1148,22 @@ def test_create_directory_rejects_missing_parent_directory():
                 "kb_code": "hr-policy",
                 "kb_name": "人力制度知识库",
                 "kb_description": None,
-                "status": "ACTIVE",
                 "is_deleted": False,
-                "root_entry_id": 70,
-                "metadata": {},
             }
         ),
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
-        knowledge_item_repository=FakeKnowledgeItemRepository(),
     )
 
-    try:
-        service.create_directory(
-            CreateDirectoryRequest(
-                kb_code="hr-policy",
-                directory_code="attendance-archive",
-                directory_path="/missing-dir/归档",
-                directory_description=None,
-                source_code="manual",
-                status="ACTIVE",
-                metadata=None,
-            )
+    response = service.create_directory(
+        CreateDirectoryRequest(
+            knCode="hr-policy",
+            directoryPath="/missing-dir/归档",
+            directoryDescription=None,
         )
-    except KnowledgeBaseValidationError as exc:
-        assert str(exc) == "parent directory not found: missing-dir"
-    else:
-        raise AssertionError("expected KnowledgeBaseValidationError")
+    )
 
-    assert connection.rolled_back is True
+    assert response.directory_path == "/missing-dir/归档"
+    assert connection.committed is True
 
 
 def test_delete_directory_marks_subtree_deleted_and_clears_projection():
@@ -1770,6 +1733,7 @@ def test_create_knowledge_base_emits_internal_key_node_logs(monkeypatch):
     )
 
     assert response.kb_code == "7"
+    assert service.knowledge_fs_entry_repository.calls == []
     assert info_messages == [
         "knowledge_base_service.create_knowledge_base started: kb_name=人力制度知识库, has_description=False",
         "knowledge_base_service persistence finished: knowledge_base_id=7",

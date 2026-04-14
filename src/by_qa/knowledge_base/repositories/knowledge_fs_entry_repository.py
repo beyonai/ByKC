@@ -111,13 +111,27 @@ class KnowledgeFsEntryRepository:
                 parent_entry_id=current_parent_id,
                 name=segment,
             )
-            if existing is None or existing.get("entry_type") != "DIRECTORY":
-                missing_directory_path = "/".join(path_segments[:index])
-                raise ValueError(
-                    f"parent directory not found: {missing_directory_path}"
-                )
-            current_parent_id = self._row_id(existing)
-            current_path_ltree = self._row_value(existing, "path_ltree")
+            if existing is not None:
+                if existing.get("entry_type") != "DIRECTORY":
+                    missing_directory_path = "/".join(path_segments[:index])
+                    raise ValueError(
+                        f"parent directory not found: {missing_directory_path}"
+                    )
+                current_parent_id = self._row_id(existing)
+                current_path_ltree = self._row_value(existing, "path_ltree")
+                continue
+
+            parent_directory = self._insert_directory_entry(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                parent_entry_id=current_parent_id,
+                parent_path_ltree=current_path_ltree,
+                name=segment,
+                depth=index,
+                description=None,
+            )
+            current_parent_id = self._row_id(parent_directory)
+            current_path_ltree = self._row_value(parent_directory, "path_ltree")
 
         existing_file = self._get_child_entry(
             cursor,
@@ -176,21 +190,16 @@ class KnowledgeFsEntryRepository:
         cursor: Any,
         *,
         knowledge_base_id: int,
-        root_entry_id: int,
         full_path: str,
+        directory_description: str | None = None,
     ) -> dict[str, Any] | None:
-        """Create one directory node when its parent directory already exists."""
+        """Create one directory node within one knowledge base path tree."""
         normalized_path = full_path.strip("/")
         if not normalized_path:
             raise ValueError("full_path must not be empty")
 
-        fetchone = getattr(cursor, "fetchone", None)
-        root_entry = self._get_entry_by_id(cursor, entry_id=root_entry_id)
-        if root_entry is None:
-            raise ValueError(f"root entry not found: {root_entry_id}")
-
-        current_parent_id = self._row_id(root_entry)
-        current_path_ltree = self._row_value(root_entry, "path_ltree")
+        current_parent_id: int | None = None
+        current_path_ltree: str | None = None
         path_segments = normalized_path.split("/")
 
         for index, segment in enumerate(path_segments[:-1], start=1):
@@ -200,13 +209,27 @@ class KnowledgeFsEntryRepository:
                 parent_entry_id=current_parent_id,
                 name=segment,
             )
-            if existing is None or existing.get("entry_type") != "DIRECTORY":
-                missing_directory_path = "/".join(path_segments[:index])
-                raise ValueError(
-                    f"parent directory not found: {missing_directory_path}"
-                )
-            current_parent_id = self._row_id(existing)
-            current_path_ltree = self._row_value(existing, "path_ltree")
+            if existing is not None:
+                if existing.get("entry_type") != "DIRECTORY":
+                    missing_directory_path = "/".join(path_segments[:index])
+                    raise ValueError(
+                        f"parent directory not found: {missing_directory_path}"
+                    )
+                current_parent_id = self._row_id(existing)
+                current_path_ltree = self._row_value(existing, "path_ltree")
+                continue
+
+            parent_directory = self._insert_directory_entry(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                parent_entry_id=current_parent_id,
+                parent_path_ltree=current_path_ltree,
+                name=segment,
+                depth=index,
+                description=None,
+            )
+            current_parent_id = self._row_id(parent_directory)
+            current_path_ltree = self._row_value(parent_directory, "path_ltree")
 
         existing_directory = self._get_child_entry(
             cursor,
@@ -217,8 +240,33 @@ class KnowledgeFsEntryRepository:
         if existing_directory is not None:
             raise ValueError(f"directory path already exists: {normalized_path}")
 
-        directory_name = path_segments[-1]
-        path_ltree = f"{current_path_ltree}.{self._path_label('d', len(path_segments), directory_name)}"
+        return self._insert_directory_entry(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            parent_entry_id=current_parent_id,
+            parent_path_ltree=current_path_ltree,
+            name=path_segments[-1],
+            depth=len(path_segments),
+            description=directory_description,
+        )
+
+    def _insert_directory_entry(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        parent_entry_id: int | None,
+        parent_path_ltree: str | None,
+        name: str,
+        depth: int,
+        description: str | None,
+    ) -> dict[str, Any] | None:
+        """Insert one directory node under an existing parent."""
+        fetchone = getattr(cursor, "fetchone", None)
+        label = self._path_label("d", depth, name)
+        path_ltree = (
+            f"{parent_path_ltree}.{label}" if parent_path_ltree is not None else label
+        )
         cursor.execute(
             """
             INSERT INTO knowledge_fs_entry (
@@ -229,8 +277,7 @@ class KnowledgeFsEntryRepository:
                 name,
                 path_ltree,
                 depth,
-                status,
-                metadata,
+                description,
                 created_at,
                 updated_at
             )
@@ -242,8 +289,7 @@ class KnowledgeFsEntryRepository:
                 %(name)s,
                 %(path_ltree)s::ltree,
                 %(depth)s,
-                'ACTIVE',
-                %(metadata)s::jsonb,
+                %(description)s,
                 NOW(),
                 NOW()
             )
@@ -251,11 +297,11 @@ class KnowledgeFsEntryRepository:
             """,
             {
                 "knowledge_base_id": knowledge_base_id,
-                "parent_entry_id": current_parent_id,
-                "name": directory_name,
+                "parent_entry_id": parent_entry_id,
+                "name": name,
                 "path_ltree": path_ltree,
-                "depth": len(path_segments),
-                "metadata": json.dumps({}),
+                "depth": depth,
+                "description": description,
             },
         )
         return fetchone() if callable(fetchone) else None
@@ -502,23 +548,44 @@ class KnowledgeFsEntryRepository:
         return fetchone() if callable(fetchone) else None
 
     def _get_child_entry(
-        self, cursor: Any, *, knowledge_base_id: int, parent_entry_id: int, name: str
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        parent_entry_id: int | None,
+        name: str,
     ) -> dict[str, Any] | None:
-        cursor.execute(
-            """
-            SELECT kid, knowledge_base_id, parent_entry_id, path_ltree, name, entry_type, is_root, depth
-            FROM knowledge_fs_entry
-            WHERE knowledge_base_id = %(knowledge_base_id)s
-              AND parent_entry_id = %(parent_entry_id)s
-              AND name = %(name)s
-              AND is_deleted = FALSE
-            """,
-            {
-                "knowledge_base_id": knowledge_base_id,
-                "parent_entry_id": parent_entry_id,
-                "name": name,
-            },
-        )
+        if parent_entry_id is None:
+            cursor.execute(
+                """
+                SELECT kid, knowledge_base_id, parent_entry_id, path_ltree, name, entry_type, is_root, depth
+                FROM knowledge_fs_entry
+                WHERE knowledge_base_id = %(knowledge_base_id)s
+                  AND parent_entry_id IS NULL
+                  AND name = %(name)s
+                  AND is_deleted = FALSE
+                """,
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "name": name,
+                },
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT kid, knowledge_base_id, parent_entry_id, path_ltree, name, entry_type, is_root, depth
+                FROM knowledge_fs_entry
+                WHERE knowledge_base_id = %(knowledge_base_id)s
+                  AND parent_entry_id = %(parent_entry_id)s
+                  AND name = %(name)s
+                  AND is_deleted = FALSE
+                """,
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "parent_entry_id": parent_entry_id,
+                    "name": name,
+                },
+            )
         fetchone = getattr(cursor, "fetchone", None)
         return fetchone() if callable(fetchone) else None
 
@@ -616,7 +683,12 @@ class KnowledgeFsEntryRepository:
         return self._get_entry_by_id(cursor, entry_id=entry_id)
 
     def get_child_entry(
-        self, cursor: Any, *, knowledge_base_id: int, parent_entry_id: int, name: str
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        parent_entry_id: int | None,
+        name: str,
     ) -> dict[str, Any] | None:
         """Fetch one direct child entry by parent and name."""
         return self._get_child_entry(

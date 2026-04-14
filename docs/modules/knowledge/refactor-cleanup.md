@@ -51,6 +51,11 @@
   - 现状：`knowledgeBases/delete` 已切到文档化返回信封后，不再调用该函数。
   - 原因：删除知识库已经不再走旧的标准错误信封，也不再使用旧的业务错误码映射。
 
+- `src/by_qa/knowledge_base/api/routes.py`
+  - `_map_create_directory_validation_error`
+  - 现状：`directories/create` 已切到文档化返回信封后，不再调用该函数。
+  - 原因：创建目录已经不再走旧的标准错误信封，也不再使用 `directory_code` 相关的旧业务错误码映射。
+
 - `src/by_qa/knowledge_base/repositories/retrieval_projection_repository.py`
   - `delete_for_knowledge_base`
   - 现状：删除知识库链路已改为直接操作 `knowledge_chunk_retrieval_mv`，不再调用该函数。
@@ -185,6 +190,17 @@
   - 这些接口仍有保留价值，但当前实现还带着 `directory_code`、`source_code`、虚拟根路径等旧约束。
   - 它们不是“直接删除”，而是“等对应接口重写后，删旧实现、留新实现”。
 
+### 4. 可删除的旧表字段
+
+- `src/by_qa/knowledge_base/sql/`
+  - `knowledge_fs_entry.is_root`
+
+- 原因：
+  - 当前路径模型已经不再把知识库作为文件树中的一层目录。
+  - 顶层目录和顶层文件现在统一由 `parent_entry_id = NULL` 表达。
+  - `knowledge_base_id` 已经足以表达库归属，`is_root` 不再承担主模型语义。
+  - 该字段目前仍被旧的 root-node 链路引用，待 `ensure_root_entry`、`list_root_entries`、`list_root_nodes` 和旧导入/读取链路迁移完成后可删除。
+
 ## 暂保留
 
 这些函数虽然不属于对外接口概念，但在当前实现阶段仍然承担内部职责，暂时不能删。
@@ -195,9 +211,9 @@
   - `ensure_root_entry`
 
 - 原因：
-  - 当前创建知识库与导入文档流程仍依赖它来保证目录树根节点存在。
-  - 虽然现行接口文档不暴露“根目录节点”概念，但在内部存储实现里它暂时还是必要的。
-  - 等我们把根目录存在性改为更直接的初始化机制后，再考虑合并或删除。
+  - `knowledgeBases/create` 与 `directories/create` 已经不再依赖它。
+  - 当前仍只有旧的文件导入 / 写入链路在使用它来保证目录树根节点存在。
+  - 虽然现行接口文档不暴露“根目录节点”概念，但在这些旧链路未迁移完成前，它暂时还不能删。
 
 ### 2. 现有知识库查询接口
 
@@ -213,6 +229,13 @@
 ## 本轮新增结论
 
 本轮在“创建知识库”接口完成后，已确认：
+
+- “创建目录”接口已经不再依赖知识库 root 节点。
+- `knowledge_fs_entry.create_directory_entry` 现已按“库内相对路径”建树：
+  - 顶层目录直接使用 `parent_entry_id = NULL`
+  - `path_ltree` 不再带 `kb_<id>` 前缀
+- `ensure_root_entry` 的使用范围已进一步缩小到旧的文件导入 / 写入链路。
+- `knowledge_fs_entry.is_root` 已确认不再属于目标模型字段，后续可随 root-node 旧链路一起移除。
 
 - 新增名称重复校验后，`knowledgeBases/create` 已不再需要旧的 `kb_code` 创建语义。
 - `list_root_entries` / `list_root_nodes` / `list_all_root_nodes` 不符合当前文档路径模型，应进入后续删除范围。
@@ -230,3 +253,10 @@
 - `_map_delete_knowledge_base_validation_error` 已进入可直接删除范围。
 - 删除知识库链路已不再依赖 `knowledge_item_repository`，也不再调用 `retrieval_projection_repository.delete_for_knowledge_base`。
 - 删除知识库当前直接清理 `knowledge_chunk_retrieval_mv`，说明旧 `knowledge_item` 主链路已不再是这条接口的运行前提。
+
+在“创建目录”接口完成后，新增确认：
+
+- `directories/create` 已改为仅处理 `knCode`、`directoryPath`、`directoryDescription`。
+- `_map_create_directory_validation_error` 已进入可直接删除范围。
+- 创建目录链路已不再依赖 `knowledge_item_repository`，目录元数据直接落到 `knowledge_fs_entry`。
+- `create_directory_entry` 已开始适配新表结构，去除了对 `status`、`metadata` 列的依赖。

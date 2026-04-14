@@ -142,20 +142,10 @@ def test_create_directory_entry_executes_insert_sql():
     cursor = FakeCursor(
         fetchone_results=[
             {
-                "kid": 70,
-                "knowledge_base_id": 7,
-                "parent_entry_id": None,
-                "path_ltree": "kb_7",
-                "name": "root",
-                "entry_type": "DIRECTORY",
-                "is_root": True,
-                "depth": 0,
-            },
-            {
                 "kid": 80,
                 "knowledge_base_id": 7,
-                "parent_entry_id": 70,
-                "path_ltree": "kb_7.d1_attendance",
+                "parent_entry_id": None,
+                "path_ltree": "d1_5f95f5aa",
                 "name": "考勤制度",
                 "entry_type": "DIRECTORY",
                 "is_root": False,
@@ -166,7 +156,7 @@ def test_create_directory_entry_executes_insert_sql():
                 "kid": 81,
                 "knowledge_base_id": 7,
                 "parent_entry_id": 80,
-                "path_ltree": "kb_7.d1_attendance.d2_archive",
+                "path_ltree": "d1_5f95f5aa.d2_4100c4d4",
                 "name": "归档",
                 "entry_type": "DIRECTORY",
                 "is_root": False,
@@ -178,16 +168,70 @@ def test_create_directory_entry_executes_insert_sql():
     repo.create_directory_entry(
         cursor,
         knowledge_base_id=7,
-        root_entry_id=70,
         full_path="考勤制度/归档",
+        directory_description=None,
     )
 
     insert_sql, params = cursor.executed[-1]
     lowered = insert_sql.lower()
     assert "insert into knowledge_fs_entry" in lowered
     assert "'directory'" in lowered
+    assert "description" in lowered
+    assert "status" not in lowered
+    assert "metadata" not in lowered
     assert params["knowledge_base_id"] == 7
+    assert params["parent_entry_id"] == 80
     assert params["name"] == "归档"
+
+
+def test_create_directory_entry_recursively_creates_missing_parents():
+    """Directory creation should support recursive parent creation."""
+    repo = KnowledgeFsEntryRepository()
+    cursor = FakeCursor(
+        fetchone_results=[
+            None,
+            {
+                "kid": 80,
+                "knowledge_base_id": 7,
+                "parent_entry_id": None,
+                "path_ltree": "d1_5f95f5aa",
+                "name": "考勤制度",
+                "entry_type": "DIRECTORY",
+                "is_root": False,
+                "depth": 1,
+            },
+            None,
+            {
+                "kid": 81,
+                "knowledge_base_id": 7,
+                "parent_entry_id": 80,
+                "path_ltree": "d1_5f95f5aa.d2_4100c4d4",
+                "name": "归档",
+                "entry_type": "DIRECTORY",
+                "is_root": False,
+                "depth": 2,
+            },
+        ]
+    )
+
+    repo.create_directory_entry(
+        cursor,
+        knowledge_base_id=7,
+        full_path="考勤制度/归档",
+        directory_description="递归创建目录",
+    )
+
+    insert_statements = [
+        (sql, params)
+        for sql, params in cursor.executed
+        if "insert into knowledge_fs_entry" in sql.lower()
+    ]
+    assert len(insert_statements) == 2
+    assert insert_statements[0][1]["name"] == "考勤制度"
+    assert insert_statements[0][1]["parent_entry_id"] is None
+    assert insert_statements[0][1]["path_ltree"].startswith("d1_")
+    assert insert_statements[1][1]["name"] == "归档"
+    assert insert_statements[1][1]["parent_entry_id"] == 80
 
 
 def test_soft_delete_directory_subtree_updates_descendants():

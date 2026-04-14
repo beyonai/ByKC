@@ -788,38 +788,52 @@ def register_routes(
         return _documented_success_response(result_object={})
 
     @app.post("/api/v1/directories/create")
-    async def create_directory(request: CreateDirectoryRequest):
+    async def create_directory(body: dict[str, Any] = Body(...)):
+        try:
+            request = CreateDirectoryRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": exc.errors()},
+                status_code=422,
+            )
         logger.info(
-            "create_directory request received: kb_code=%s, directory_code=%s, directory_path=%s, status=%s, has_metadata=%s",
+            "create_directory request received: kb_code=%s, directory_path=%s, has_description=%s",
             request.kb_code,
-            request.directory_code,
             request.directory_path,
-            request.status,
-            request.metadata is not None,
+            request.directory_description is not None,
         )
         try:
             service = get_knowledge_base_service()
-            result = service.create_directory(request)
+            service.create_directory(request)
         except KnowledgeBaseConfigurationError as exc:
-            return _error_response(
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
                 status_code=503,
-                error_type="configuration_error",
-                error_code="KB_RUNTIME_CONFIG_ERROR",
-                error_message=str(exc),
-                details={
-                    "kb_code": request.kb_code,
-                    "directory_code": request.directory_code,
-                    "directory_path": request.directory_path,
-                },
             )
         except KnowledgeBaseValidationError as exc:
-            return _map_create_directory_validation_error(
-                exc=exc,
-                kb_code=request.kb_code,
-                directory_code=request.directory_code,
-                directory_path=request.directory_path,
+            message = str(exc)
+            return _documented_error_response(
+                result_msg=message,
+                result_object={},
+                status_code=404
+                if message.startswith("parent directory not found:")
+                else 422,
             )
-        return _success_response(data=result.model_dump())
+        except Exception as exc:
+            logger.exception(
+                "create_directory unexpected error: kb_code=%s, directory_path=%s, error=%s",
+                request.kb_code,
+                request.directory_path,
+                exc,
+            )
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error",
+                result_object={},
+                status_code=500,
+            )
+        return _documented_success_response(result_object={})
 
     @app.post("/api/v1/directories/delete")
     async def delete_directory(request: DeleteDirectoryRequest):

@@ -45,13 +45,9 @@ def test_create_directory_request_accepts_documented_fields():
     from by_qa.knowledge_base.api.schemas import CreateDirectoryRequest
 
     request = CreateDirectoryRequest(
-        kb_code="hr-policy",
-        directory_code="attendance-archive",
-        directory_path="/考勤制度/归档",
-        directory_description="考勤制度归档目录",
-        source_code="manual",
-        status="ACTIVE",
-        metadata={"owner": "HR"},
+        knCode="hr-policy",
+        directoryPath="/考勤制度/归档",
+        directoryDescription="考勤制度归档目录",
     )
 
     assert request.kb_code == "hr-policy"

@@ -1252,10 +1252,10 @@ def test_download_file_route_returns_binary_stream(monkeypatch):
     client = make_test_client(monkeypatch, service)
 
     response = client.post(
-        "/api/v1/download-file",
+        "/api/v1/downloadFile",
         json={
-            "kb_codes": ["hr-policy"],
-            "path": "Integration KB/dir1/doc.pdf",
+            "knCode": "hr-policy",
+            "filePath": "/dir1/doc.pdf",
         },
     )
 
@@ -1278,10 +1278,10 @@ def test_download_file_route_supports_non_ascii_filename(monkeypatch):
 
     client = make_test_client(monkeypatch, UnicodeFilenameKBService())
     response = client.post(
-        "/api/v1/download-file",
+        "/api/v1/downloadFile",
         json={
-            "kb_codes": ["demo"],
-            "path": "DEMO知识库/考勤制度/开源项目最佳实践汇报.md",
+            "knCode": "demo",
+            "filePath": "/考勤制度/开源项目最佳实践汇报.md",
         },
     )
 
@@ -1293,6 +1293,27 @@ def test_download_file_route_supports_non_ascii_filename(monkeypatch):
         == 'attachment; filename="download.md"; '
         "filename*=UTF-8''%E5%BC%80%E6%BA%90%E9%A1%B9%E7%9B%AE%E6%9C%80%E4%BD%B3%E5%AE%9E%E8%B7%B5%E6%B1%87%E6%8A%A5.md"
     )
+
+
+def test_download_file_route_maps_validation_error_to_documented_error(monkeypatch):
+    """Download-file validation errors should use the documented JSON envelope."""
+
+    class BrokenKBService(FakeKBService):
+        def download_file(self, request):
+            raise KnowledgeBaseValidationError(f"file not found: {request.file_path}")
+
+    client = make_test_client(monkeypatch, BrokenKBService())
+    response = client.post(
+        "/api/v1/downloadFile",
+        json={"knCode": "hr-policy", "filePath": "/missing.pdf"},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "file not found: /missing.pdf",
+        "resultObject": {},
+    }
 
 
 def test_read_file_route_requires_kb_codes(monkeypatch):

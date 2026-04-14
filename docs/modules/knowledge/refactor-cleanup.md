@@ -76,6 +76,11 @@
   - 现状：`glob` 已切到文档化返回信封后，该函数已删除。
   - 原因：路径模式匹配已经不再走旧的标准错误信封，也不再使用旧路径错误码映射。
 
+- `src/by_qa/knowledge_base/api/routes.py`
+  - `_map_download_file_validation_error`
+  - 现状：`downloadFile` 已切到文档化失败响应后，该函数已删除。
+  - 原因：下载文件接口已经不再走旧的标准错误信封，也不再使用旧路径错误码映射。
+
 - `src/by_qa/knowledge_base/repositories/retrieval_projection_repository.py`
   - `delete_for_knowledge_base`
   - 现状：删除知识库链路已改为直接操作 `knowledge_chunk_retrieval_mv`，不再调用该函数。
@@ -148,8 +153,8 @@
 - 原因：
   - 当前文档明确规定 `directoryPath`、`filePath` 不包含知识库名称。
   - 以上函数仍然围绕“知识库名称暴露为虚拟根目录”建模。
-  - `listDir` / `glob` 已切到基于 `knCode + 相对路径` 的新模型。
-  - 等 `readFile` / `downloadFile` 也完全迁移后，这整套虚拟根路径处理可整体移除或大幅收缩。
+  - `listDir` / `glob` / `downloadFile` 已切到基于 `knCode + 相对路径` 的新模型。
+  - 等 `readFile` 也完全迁移后，这整套虚拟根路径处理可整体移除或大幅收缩。
 
 ### 2. 旧文档编码 / 版本模型链路
 
@@ -368,3 +373,16 @@
   - `knowledge_base_repository.get_by_code`
   - `knowledge_fs_entry_repository.list_children_by_parent_entry_id`
 - `_map_glob_validation_error` 已删除。
+
+在“下载原始文件”接口完成后，新增确认：
+
+- `downloadFile` 已改为仅处理 `knCode`、`filePath`，不再保留 `kb_codes`、`path` 旧字段。
+- `downloadFile` 正常返回保持文件流，不使用 JSON 信封。
+- `downloadFile` 失败返回已改为文档化信封。
+- `knowledge_base_service.download_file` 已从 `get_current_file_version_by_entry_id` / 虚拟根路径链路切换到：
+  - `knowledge_base_repository.get_by_code`
+  - `knowledge_fs_entry_repository.get_file_by_path`
+  - `knowledge_fs_entry.file_bucket_name`
+  - `knowledge_fs_entry.file_object_key`
+  - `knowledge_fs_entry.mime_type`
+- `_map_download_file_validation_error` 已删除。

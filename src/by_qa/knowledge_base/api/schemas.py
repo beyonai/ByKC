@@ -474,8 +474,16 @@ class KnowledgeItemFetchRequest(BaseModel):
 class KnowledgeItemDownloadRequest(BaseModel):
     """Request body for downloading the original file content."""
 
-    kb_codes: list[str] = Field(min_length=1)
-    path: str = Field(min_length=1)
+    model_config = ConfigDict(populate_by_name=True)
+
+    kb_code: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("knCode", "kb_code"),
+    )
+    file_path: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("filePath", "file_path"),
+    )
 
 
 class KnowledgeItemFetchResponse(BaseModel):

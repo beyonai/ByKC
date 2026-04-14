@@ -765,47 +765,53 @@ class KnowledgeBaseService:
         )
 
     def download_file(self, request: KnowledgeItemDownloadRequest) -> dict[str, Any]:
-        """Download the current original file bytes for a virtual path."""
+        """Download original file bytes for a knowledge-base-relative file path."""
         logger.info(
-            "knowledge_base_service.download_file started: path=%s",
-            request.path,
+            "knowledge_base_service.download_file started: kb_code=%s, file_path=%s",
+            request.kb_code,
+            request.file_path,
         )
         if self.object_storage is None:
             raise KnowledgeBaseValidationError("download runtime is not configured")
 
-        normalized_virtual_path = self._normalize_virtual_path(request.path)
+        normalized_file_path = request.file_path.strip()
+        if not normalized_file_path.startswith("/"):
+            raise KnowledgeBaseValidationError("filePath must start with /")
         connection = self.connection_factory()
         try:
             cursor = connection.cursor()
-            file_node = self._resolve_virtual_path(
+            kb_row = self.knowledge_base_repository.get_by_code(
                 cursor,
-                normalized_virtual_path,
-                kb_codes=request.kb_codes,
+                request.kb_code,
             )
-            if file_node is None or file_node["type"] != "file":
-                raise KnowledgeBaseValidationError(f"file not found: {request.path}")
-            version_row = (
-                self.knowledge_fs_entry_repository.get_current_file_version_by_entry_id(
-                    cursor,
-                    fs_entry_id=int(file_node["kid"]),
-                )
-            )
-            if version_row is None:
+            if not kb_row:
                 raise KnowledgeBaseValidationError(
-                    f"current version not found: {request.path}"
+                    f"knowledge base not found: {request.kb_code}"
+                )
+            knowledge_base_id = self._row_id(kb_row)
+            file_row = self.knowledge_fs_entry_repository.get_file_by_path(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                full_path=normalized_file_path.strip("/"),
+            )
+            if file_row is None or not file_row.get("file_object_key"):
+                raise KnowledgeBaseValidationError(
+                    f"file not found: {request.file_path}"
                 )
         finally:
             connection.close()
 
         payload = self.object_storage.download_object(
-            str(version_row["object_key"]),
-            bucket_name=str(version_row["bucket_name"]),
+            str(file_row["file_object_key"]),
+            bucket_name=str(
+                file_row.get("file_bucket_name") or self.object_storage.bucket_name
+            ),
         )
-        filename = PurePosixPath(normalized_virtual_path).name or "download"
-        media_type = self._guess_media_type(filename)
+        filename = PurePosixPath(normalized_file_path).name or "download"
+        media_type = str(file_row.get("mime_type") or self._guess_media_type(filename))
         logger.info(
-            "knowledge_base_service.download_file finished: path=%s, filename=%s, returned_bytes=%s",
-            request.path,
+            "knowledge_base_service.download_file finished: file_path=%s, filename=%s, returned_bytes=%s",
+            request.file_path,
             filename,
             len(payload),
         )

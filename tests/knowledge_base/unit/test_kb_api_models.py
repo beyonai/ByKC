@@ -354,6 +354,19 @@ def test_glob_request_accepts_documented_fields():
     assert request.path_rule == "/制度/*/*.pdf"
 
 
+def test_download_request_accepts_documented_fields():
+    """Download requests should accept knCode and filePath."""
+    from by_qa.knowledge_base.api.schemas import KnowledgeItemDownloadRequest
+
+    request = KnowledgeItemDownloadRequest(
+        knCode="hr-policy",
+        filePath="/制度/人事/请假制度.pdf",
+    )
+
+    assert request.kb_code == "hr-policy"
+    assert request.file_path == "/制度/人事/请假制度.pdf"
+
+
 def test_search_request_requires_candidate_limits_not_smaller_than_top_k():
     """Candidate pool sizes should not be smaller than the final top_k."""
     from by_qa.knowledge_base.api.schemas import KnowledgeItemSearchRequest

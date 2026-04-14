@@ -177,8 +177,8 @@
 - 原因：
   - 当前文档明确规定 `directoryPath`、`filePath` 不包含知识库名称。
   - 以上函数仍然围绕“知识库名称暴露为虚拟根目录”建模。
-  - `listDir` / `glob` / `downloadFile` 已切到基于 `knCode + 相对路径` 的新模型。
-  - 等 `readFile` 也完全迁移后，这整套虚拟根路径处理可整体移除或大幅收缩。
+  - `listDir` / `glob` / `downloadFile` / `readFile` 已切到基于 `knCode + 相对路径` 的新模型。
+  - 这整套虚拟根路径处理已无生产路由调用，可整体移除。仅因旧 integration test 通过旧 import 链路间接依赖而暂时保留代码。
 
 ### 2. 旧文档编码 / 版本模型链路
 
@@ -434,3 +434,18 @@
 - `DocumentChunkingService` 现在由 `knowledge_base` 模块通过依赖注入使用，不再需要 `knowledge_build` 模块的对外接口。
 - `knowledge_build` 模块的三个对外接口（`file-to-markdown`、`build-markdown-index`、`file-to-markdown-index`）已完全弃用。
 - `knowledge_base` 模块的 `write-index` 路由和 `write_index` 服务方法已完全被 `fileToMarkdownIndex` 取代。
+
+在"读取文件"接口完成后，新增确认：
+
+- `readFile` 已改为仅处理 `knCode`、`filePath`、`startLine`、`endLine`，不再保留 `kb_codes`、`path`、`content_type` 旧字段。
+- `readFile` 仅读取已构建的 Markdown 文件，不再支持 `content_type: "original"` 回退到原始文件 URL。
+- 文件未构建时返回 `"file not built: {filePath}"` 错误，而非静默回退。
+- `readFile` 返回已改为文档化信封（`resultCode` / `resultMsg` / `resultObject`）。
+- `knowledge_base_service.read_file` 已从 `_resolve_virtual_path` / `get_current_file_version_by_entry_id` / 虚拟根路径链路切换到：
+  - `knowledge_base_repository.get_by_code`
+  - `knowledge_fs_entry_repository.get_file_by_path`
+  - `knowledge_fs_entry.markdown_bucket_name`
+  - `knowledge_fs_entry.markdown_object_key`
+- `_map_read_file_validation_error` 已删除。
+- 旧的 `fetch` 方法和 `KnowledgeItemFetchRequest` / `KnowledgeItemFetchResponse` 暂时保留，因其他 integration test 仍通过旧 import 链路间接使用。待旧 import 链路迁移完成后可一并删除。
+- 所有旧的"知识库名作为虚拟根目录"链路（`_resolve_virtual_path`、`_normalize_virtual_path`、`_with_virtual_full_path`、`list_root_nodes`、`list_root_entries`）已无生产路由调用，可进入移除范围。

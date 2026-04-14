@@ -486,6 +486,38 @@ class KnowledgeItemFetchRequest(BaseModel):
         return self
 
 
+class ReadFileRequest(BaseModel):
+    """Request body for reading built markdown content by line range."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kb_code: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("knCode", "kb_code"),
+    )
+    file_path: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("filePath", "file_path"),
+    )
+    start_line: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("startLine", "start_line"),
+    )
+    end_line: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("endLine", "end_line"),
+    )
+
+    @model_validator(mode="after")
+    def validate_line_window(self) -> "ReadFileRequest":
+        """start_line and end_line must be provided together."""
+        has_start = self.start_line is not None
+        has_end = self.end_line is not None
+        if has_start != has_end:
+            raise ValueError("startLine and endLine must be provided together")
+        return self
+
+
 class KnowledgeItemDownloadRequest(BaseModel):
     """Request body for downloading the original file content."""
 

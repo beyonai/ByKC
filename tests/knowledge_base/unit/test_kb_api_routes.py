@@ -213,6 +213,16 @@ class FakeKBService:
             reached_eof=True,
         )
 
+    def read_file(self, request):
+        return {
+            "knCode": request.kb_code,
+            "filePath": request.file_path,
+            "startLine": request.start_line,
+            "endLine": request.end_line,
+            "data": "line1\nline2\n",
+            "reachedEof": True,
+        }
+
     def download_file(self, request):
         return {
             "filename": "doc.pdf",
@@ -1194,62 +1204,60 @@ def test_glob_route_maps_configuration_error_to_503(monkeypatch):
 
 
 def test_read_file_route_returns_requested_text(monkeypatch):
-    """Read-file route should delegate to the KB service and return the standard envelope."""
+    """Read-file route should delegate to the KB service and return the documented envelope."""
     service = FakeKBService()
     client = make_test_client(monkeypatch, service)
 
     response = client.post(
-        "/api/v1/read-file",
+        "/api/v1/readFile",
         json={
-            "kb_codes": ["hr-policy"],
-            "path": "Integration KB/dir1/doc.md",
-            "content_type": "markdown",
-            "start_line": 1,
-            "end_line": 2,
+            "knCode": "hr-policy",
+            "filePath": "/dir1/doc.md",
+            "startLine": 1,
+            "endLine": 2,
         },
     )
 
     assert response.status_code == 200
-    assert response.json()["data"] == {
-        "kb_code": "hr-policy",
-        "path": "/Integration KB/dir1/doc.md",
-        "content_type": "markdown",
-        "start_line": 1,
-        "end_line": 2,
+    body = response.json()
+    assert body["resultCode"] == "0"
+    assert body["resultMsg"] == "success"
+    assert body["resultObject"] == {
+        "knCode": "hr-policy",
+        "filePath": "/dir1/doc.md",
+        "startLine": 1,
+        "endLine": 2,
         "data": "line1\nline2\n",
-        "reached_eof": True,
+        "reachedEof": True,
     }
 
 
-def test_read_file_route_returns_access_url_for_binary_files(monkeypatch):
-    """Read-file should return a URL for binary objects."""
+def test_read_file_route_returns_full_content_without_line_range(monkeypatch):
+    """Read-file should return all content when startLine/endLine are omitted."""
 
-    class BinaryKBService(FakeKBService):
-        def fetch(self, request):
-            return KnowledgeItemFetchResponse(
-                kb_code=request.kb_codes[0],
-                path=request.path,
-                content_type="original",
-                url="https://minio.example/knowledge-base/7/dir1/doc.pdf/v1/doc.pdf?ttl=3600",
-            )
+    class FullReadKBService(FakeKBService):
+        def read_file(self, request):
+            return {
+                "knCode": request.kb_code,
+                "filePath": request.file_path,
+                "data": "full content\n",
+                "reachedEof": True,
+            }
 
-    client = make_test_client(monkeypatch, BinaryKBService())
+    client = make_test_client(monkeypatch, FullReadKBService())
     response = client.post(
-        "/api/v1/read-file",
+        "/api/v1/readFile",
         json={
-            "kb_codes": ["hr-policy"],
-            "path": "Integration KB/dir1/doc.pdf",
-            "content_type": "original",
+            "knCode": "hr-policy",
+            "filePath": "/dir1/doc.md",
         },
     )
 
     assert response.status_code == 200
-    assert response.json()["data"] == {
-        "kb_code": "hr-policy",
-        "path": "/Integration KB/dir1/doc.pdf",
-        "content_type": "original",
-        "url": "https://minio.example/knowledge-base/7/dir1/doc.pdf/v1/doc.pdf?ttl=3600",
-    }
+    body = response.json()
+    assert body["resultCode"] == "0"
+    assert body["resultObject"]["data"] == "full content\n"
+    assert body["resultObject"]["reachedEof"] is True
 
 
 def test_download_file_route_returns_binary_stream(monkeypatch):
@@ -1322,103 +1330,123 @@ def test_download_file_route_maps_validation_error_to_documented_error(monkeypat
     }
 
 
-def test_read_file_route_requires_kb_codes(monkeypatch):
-    """Read-file route should reject requests that omit kb_codes."""
+def test_read_file_route_requires_kn_code(monkeypatch):
+    """Read-file route should reject requests that omit knCode."""
     client = make_test_client(monkeypatch, FakeKBService())
 
     response = client.post(
-        "/api/v1/read-file",
+        "/api/v1/readFile",
         json={
-            "path": "Integration KB/dir1/doc.md",
-            "content_type": "markdown",
-            "start_line": 1,
-            "end_line": 2,
+            "filePath": "/dir1/doc.md",
+            "startLine": 1,
+            "endLine": 2,
         },
     )
 
     assert response.status_code == 422
-    assert response.json()["error"]["error_code"] == "REQUEST_VALIDATION_FAILED"
+    body = response.json()
+    assert body["resultCode"] == "-1"
+    assert body["resultMsg"] == "request validation failed"
 
 
-def test_read_file_route_maps_validation_error_to_standard_error(monkeypatch):
-    """Read-file business validation should use the standardized error envelope."""
+def test_read_file_route_maps_validation_error_to_documented_error(monkeypatch):
+    """Read-file business validation should use the documented error envelope."""
 
     class BrokenKBService(FakeKBService):
-        def fetch(self, request):
-            raise KnowledgeBaseValidationError("start_line must be greater than 0")
+        def read_file(self, request):
+            raise KnowledgeBaseValidationError("startLine must be greater than 0")
 
     client = make_test_client(monkeypatch, BrokenKBService())
     response = client.post(
-        "/api/v1/read-file",
+        "/api/v1/readFile",
         json={
-            "kb_codes": ["hr-policy"],
-            "path": "Integration KB/dir1/doc.md",
-            "content_type": "markdown",
-            "start_line": 0,
-            "end_line": 2,
+            "knCode": "hr-policy",
+            "filePath": "/dir1/doc.md",
+            "startLine": 0,
+            "endLine": 2,
         },
     )
 
     assert response.status_code == 422
-    assert response.json()["code"] == 422
-    assert response.json()["message"] == "error"
-    assert response.json()["data"] is None
-    assert response.json()["error"]["type"] == "business_validation"
-    assert response.json()["error"]["error_code"] == "KB_READ_FILE_INVALID"
-    assert response.json()["error"]["details"] == {
-        "path": "Integration KB/dir1/doc.md",
-        "kb_codes": ["hr-policy"],
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "startLine must be greater than 0",
+        "resultObject": {},
     }
 
 
-def test_read_file_route_maps_not_found_to_404(monkeypatch):
-    """Read-file missing files should map to the standardized not-found response."""
+def test_read_file_route_maps_not_found_to_documented_error(monkeypatch):
+    """Read-file missing files should use the documented error envelope."""
 
     class BrokenKBService(FakeKBService):
-        def fetch(self, request):
-            raise KnowledgeBaseValidationError(f"file not found: {request.path}")
+        def read_file(self, request):
+            raise KnowledgeBaseValidationError(f"file not found: {request.file_path}")
 
     client = make_test_client(monkeypatch, BrokenKBService())
     response = client.post(
-        "/api/v1/read-file",
+        "/api/v1/readFile",
         json={
-            "kb_codes": ["hr-policy"],
-            "path": "Integration KB/dir1/missing.pdf",
-            "content_type": "original",
+            "knCode": "hr-policy",
+            "filePath": "/dir1/missing.pdf",
         },
     )
 
-    assert response.status_code == 404
-    assert response.json()["error"]["type"] == "not_found"
-    assert response.json()["error"]["error_code"] == "KB_FILE_NOT_FOUND"
-    assert response.json()["error"]["details"] == {
-        "path": "Integration KB/dir1/missing.pdf",
-        "kb_codes": ["hr-policy"],
+    assert response.status_code == 422
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "file not found: /dir1/missing.pdf",
+        "resultObject": {},
+    }
+
+
+def test_read_file_route_maps_file_not_built_to_documented_error(monkeypatch):
+    """Read-file should return an error when the file has not been built."""
+
+    class NotBuiltKBService(FakeKBService):
+        def read_file(self, request):
+            raise KnowledgeBaseValidationError(f"file not built: {request.file_path}")
+
+    client = make_test_client(monkeypatch, NotBuiltKBService())
+    response = client.post(
+        "/api/v1/readFile",
+        json={
+            "knCode": "hr-policy",
+            "filePath": "/dir1/doc.pdf",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "file not built: /dir1/doc.pdf",
+        "resultObject": {},
     }
 
 
 def test_read_file_route_maps_configuration_error_to_503(monkeypatch):
-    """Read-file configuration failures should use the standardized error envelope."""
+    """Read-file configuration failures should use the documented error envelope."""
 
     class BrokenKBService(FakeKBService):
-        def fetch(self, request):
-            raise KnowledgeBaseConfigurationError("fetch runtime is not configured")
+        def read_file(self, request):
+            raise KnowledgeBaseConfigurationError("read file runtime is not configured")
 
     client = make_test_client(monkeypatch, BrokenKBService())
     response = client.post(
-        "/api/v1/read-file",
+        "/api/v1/readFile",
         json={
-            "kb_codes": ["hr-policy"],
-            "path": "Integration KB/dir1/doc.md",
-            "content_type": "markdown",
-            "start_line": 1,
-            "end_line": 2,
+            "knCode": "hr-policy",
+            "filePath": "/dir1/doc.md",
+            "startLine": 1,
+            "endLine": 2,
         },
     )
 
     assert response.status_code == 503
-    assert response.json()["error"]["type"] == "configuration_error"
-    assert response.json()["error"]["error_code"] == "KB_RUNTIME_CONFIG_ERROR"
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "read file runtime is not configured",
+        "resultObject": {},
+    }
 
 
 def test_create_knowledge_base_route_maps_configuration_error_to_503(monkeypatch):

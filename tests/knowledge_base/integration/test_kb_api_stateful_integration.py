@@ -1787,30 +1787,33 @@ def test_read_file_rejects_invalid_markdown_line_windows(monkeypatch, tmp_path):
         )
 
         zero_start = client.post(
-            "/api/v1/read-file",
+            "/api/v1/readFile",
             json={
-                "kb_codes": [kb_code],
-                "path": f"{kb_name}/Policies/window.md",
-                "content_type": "markdown",
-                "start_line": 0,
-                "end_line": 1,
+                "knCode": kb_code,
+                "filePath": "/Policies/window.md",
+                "startLine": 0,
+                "endLine": 1,
             },
         )
         reversed_window = client.post(
-            "/api/v1/read-file",
+            "/api/v1/readFile",
             json={
-                "kb_codes": [kb_code],
-                "path": f"{kb_name}/Policies/window.md",
-                "content_type": "markdown",
-                "start_line": 3,
-                "end_line": 2,
+                "knCode": kb_code,
+                "filePath": "/Policies/window.md",
+                "startLine": 3,
+                "endLine": 2,
             },
         )
 
     assert zero_start.status_code == 422
-    assert zero_start.json()["error"]["error_code"] == "KB_READ_FILE_INVALID"
+    assert zero_start.json()["resultCode"] == "-1"
+    assert "startLine must be greater than 0" in zero_start.json()["resultMsg"]
     assert reversed_window.status_code == 422
-    assert reversed_window.json()["error"]["error_code"] == "KB_READ_FILE_INVALID"
+    assert reversed_window.json()["resultCode"] == "-1"
+    assert (
+        "endLine must be greater than or equal to startLine"
+        in reversed_window.json()["resultMsg"]
+    )
 
 
 @pytest.mark.integration
@@ -2930,7 +2933,7 @@ def test_list_dir_returns_configuration_error_when_runtime_service_fails(monkeyp
 
 @pytest.mark.integration
 def test_read_file_returns_configuration_error_when_runtime_service_fails(monkeypatch):
-    """read-file should surface KB runtime configuration failures via the standard envelope."""
+    """read-file should surface KB runtime configuration failures via the documented envelope."""
     settings = _kb_settings()
     _reset_runtime(monkeypatch, settings)
     _disable_kb_lifecycle(monkeypatch)
@@ -2944,18 +2947,18 @@ def test_read_file_returns_configuration_error_when_runtime_service_fails(monkey
 
     with TestClient(main_module.app) as client:
         response = client.post(
-            "/api/v1/read-file",
+            "/api/v1/readFile",
             json={
-                "kb_codes": ["demo"],
-                "path": "Demo/path.md",
-                "content_type": "markdown",
-                "start_line": 1,
-                "end_line": 1,
+                "knCode": "demo",
+                "filePath": "/path.md",
+                "startLine": 1,
+                "endLine": 1,
             },
         )
 
     assert response.status_code == 503
-    assert response.json()["error"]["error_code"] == "KB_RUNTIME_CONFIG_ERROR"
+    assert response.json()["resultCode"] == "-1"
+    assert response.json()["resultMsg"] == "KB runtime is not configured"
 
 
 @pytest.mark.integration

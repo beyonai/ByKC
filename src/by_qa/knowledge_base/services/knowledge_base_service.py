@@ -26,6 +26,7 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemListDirItem,
     KnowledgeItemListDirRequest,
     KnowledgeItemListDirResponse,
+    ReadFileRequest,
     UpdateDirectoryRequest,
     UpdateDirectoryResponse,
     UpdateFileRequest,
@@ -819,6 +820,90 @@ class KnowledgeBaseService:
             "filename": filename,
             "media_type": media_type,
             "content": payload,
+        }
+
+    def read_file(self, request: ReadFileRequest) -> dict[str, Any]:
+        """Read built markdown content for a knowledge-base-relative file path."""
+        logger.info(
+            "knowledge_base_service.read_file started: kb_code=%s, file_path=%s, start_line=%s, end_line=%s",
+            request.kb_code,
+            request.file_path,
+            request.start_line,
+            request.end_line,
+        )
+        if request.start_line is not None:
+            if request.start_line < 1:
+                raise KnowledgeBaseValidationError("startLine must be greater than 0")
+            if request.end_line is None or request.end_line < request.start_line:
+                raise KnowledgeBaseValidationError(
+                    "endLine must be greater than or equal to startLine"
+                )
+        if self.object_storage is None:
+            raise KnowledgeBaseValidationError("read file runtime is not configured")
+
+        normalized_file_path = request.file_path.strip()
+        if not normalized_file_path.startswith("/"):
+            raise KnowledgeBaseValidationError("filePath must start with /")
+        connection = self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            kb_row = self.knowledge_base_repository.get_by_code(
+                cursor,
+                request.kb_code,
+            )
+            if not kb_row:
+                raise KnowledgeBaseValidationError(
+                    f"knowledge base not found: {request.kb_code}"
+                )
+            knowledge_base_id = self._row_id(kb_row)
+            file_row = self.knowledge_fs_entry_repository.get_file_by_path(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                full_path=normalized_file_path.strip("/"),
+            )
+            if file_row is None:
+                raise KnowledgeBaseValidationError(
+                    f"file not found: {request.file_path}"
+                )
+        finally:
+            connection.close()
+
+        markdown_object_key = file_row.get("markdown_object_key")
+        markdown_bucket_name = file_row.get("markdown_bucket_name")
+        if not markdown_object_key:
+            raise KnowledgeBaseValidationError(f"file not built: {request.file_path}")
+
+        payload = self.object_storage.download_object(
+            str(markdown_object_key),
+            bucket_name=str(markdown_bucket_name or self.object_storage.bucket_name),
+        )
+        markdown_text = payload.decode("utf-8")
+
+        if request.start_line is None:
+            data = markdown_text
+            reached_eof = True
+            start_line = None
+            end_line = None
+        else:
+            lines = markdown_text.splitlines(keepends=True)
+            selected = lines[request.start_line - 1 : request.end_line]
+            data = "".join(selected)
+            reached_eof = request.end_line >= len(lines)
+            start_line = request.start_line
+            end_line = request.end_line
+
+        logger.info(
+            "knowledge_base_service.read_file finished: file_path=%s, returned_line_count=%s",
+            request.file_path,
+            data.count("\n") if data else 0,
+        )
+        return {
+            "knCode": request.kb_code,
+            "filePath": request.file_path,
+            "startLine": start_line,
+            "endLine": end_line,
+            "data": data,
+            "reachedEof": reached_eof,
         }
 
     def _guess_media_type(self, filename: str) -> str:

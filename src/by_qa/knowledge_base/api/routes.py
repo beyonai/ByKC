@@ -19,12 +19,12 @@ from by_qa.knowledge_base.api.schemas import (
     DeleteKnowledgeItemRequest,
     FileToMarkdownIndexRequest,
     KnowledgeItemDownloadRequest,
-    KnowledgeItemFetchRequest,
     KnowledgeItemGlobRequest,
     KnowledgeItemImportRequest,
     KnowledgeItemListDirRequest,
     KnowledgeItemSearchRequest,
     KnowledgeItemUploadRequest,
+    ReadFileRequest,
     UpdateDirectoryRequest,
     UpdateFileRequest,
     UpdateKnowledgeBaseRequest,
@@ -506,30 +506,6 @@ def _map_search_validation_error(*, exc: KnowledgeBaseValidationError) -> JSONRe
         error_code="KB_SEARCH_INVALID",
         error_message=str(exc),
         details={},
-    )
-
-
-def _map_read_file_validation_error(
-    *, exc: KnowledgeBaseValidationError, path: str, kb_codes: list[str]
-) -> JSONResponse:
-    """Map read-file validation errors to the standardized protocol."""
-    message = str(exc)
-    if message.startswith("file not found:") or message.startswith(
-        "current version not found:"
-    ):
-        return _error_response(
-            status_code=404,
-            error_type="not_found",
-            error_code="KB_FILE_NOT_FOUND",
-            error_message=message,
-            details={"path": path, "kb_codes": kb_codes},
-        )
-    return _error_response(
-        status_code=422,
-        error_type="business_validation",
-        error_code="KB_READ_FILE_INVALID",
-        error_message=message,
-        details={"path": path, "kb_codes": kb_codes},
     )
 
 
@@ -1386,73 +1362,60 @@ def register_routes(
             }
         )
 
-    @app.post("/api/v1/read-file")
-    async def read_file(request: KnowledgeItemFetchRequest):
+    @app.post("/api/v1/readFile")
+    async def read_file(body: dict[str, Any] = Body(...)):
+        try:
+            request = ReadFileRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
         logger.info(
-            "read_file request received: path=%s, kb_code_count=%s, content_type=%s, start_line=%s, end_line=%s",
-            request.path,
-            len(request.kb_codes),
-            request.content_type,
+            "read_file request received: kb_code=%s, file_path=%s, start_line=%s, end_line=%s",
+            request.kb_code,
+            request.file_path,
             request.start_line,
             request.end_line,
         )
         try:
             service = get_knowledge_base_service()
+            result = service.read_file(request)
             logger.info(
-                "read_file resolved service: service_class=%s",
-                service.__class__.__name__,
+                "read_file service call succeeded: file_path=%s, returned_bytes=%s",
+                request.file_path,
+                len((result.get("data") or "").encode("utf-8")),
             )
-            result = service.fetch(request)
-            if result.content_type == "original":
-                logger.info(
-                    "read_file service call succeeded: path=%s, mode=original_url",
-                    request.path,
-                )
-            else:
-                logger.info(
-                    "read_file service call succeeded: path=%s, returned_bytes=%s",
-                    request.path,
-                    len((result.data or "").encode("utf-8")),
-                )
         except KnowledgeBaseConfigurationError as exc:
             logger.warning(
-                "read_file configuration failed: path=%s, error=%s",
-                request.path,
+                "read_file configuration failed: file_path=%s, error=%s",
+                request.file_path,
                 exc,
             )
-            return _error_response(
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
                 status_code=503,
-                error_type="configuration_error",
-                error_code="KB_RUNTIME_CONFIG_ERROR",
-                error_message=str(exc),
-                details={"path": request.path, "kb_codes": request.kb_codes},
             )
         except KnowledgeBaseValidationError as exc:
             logger.warning(
-                "read_file validation failed: path=%s, error=%s",
-                request.path,
+                "read_file validation failed: file_path=%s, error=%s",
+                request.file_path,
                 exc,
             )
-            return _map_read_file_validation_error(
-                exc=exc,
-                path=request.path,
-                kb_codes=request.kb_codes,
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=422,
             )
 
-        if result.content_type == "original":
-            logger.info(
-                "read_file response ready: code=200, path=%s, mode=original_url",
-                request.path,
-            )
-        else:
-            logger.info(
-                "read_file response ready: code=200, path=%s, returned_bytes=%s",
-                request.path,
-                len((result.data or "").encode("utf-8")),
-            )
-        payload = result.model_dump(exclude_none=True)
-        payload["path"] = _ensure_leading_slash(str(payload.get("path", "")))
-        return _success_response(data=payload)
+        result_object = {k: v for k, v in result.items() if v is not None}
+        logger.info(
+            "read_file response ready: code=200, file_path=%s",
+            request.file_path,
+        )
+        return _documented_success_response(result_object=result_object)
 
     @app.post("/api/v1/downloadFile")
     async def download_file(body: dict[str, Any] = Body(...)):

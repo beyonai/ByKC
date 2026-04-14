@@ -1,6 +1,6 @@
 CREATE UNIQUE INDEX IF NOT EXISTS uq_knowledge_fs_entry_root_per_kb
 ON knowledge_fs_entry (knowledge_base_id)
-WHERE is_root = true;
+WHERE is_root = true AND is_deleted = false;
 
 CREATE INDEX IF NOT EXISTS idx_knowledge_fs_entry_parent_name
 ON knowledge_fs_entry (knowledge_base_id, parent_entry_id, name);

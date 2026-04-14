@@ -7,15 +7,20 @@ CREATE TABLE IF NOT EXISTS knowledge_fs_entry (
     name varchar(512) NOT NULL,
     path_ltree ltree NOT NULL,
     depth integer NOT NULL DEFAULT 0,
-    status varchar(32) NOT NULL DEFAULT 'ACTIVE',
+    description text,
+    file_bucket_name varchar(128),
+    file_object_key varchar(1024),
+    markdown_bucket_name varchar(128),
+    markdown_object_key varchar(1024),
+    file_size bigint,
+    mime_type varchar(128),
+    checksum varchar(128),
+    line_count integer,
     is_deleted boolean NOT NULL DEFAULT false,
-    metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
     created_at timestamptz NOT NULL DEFAULT NOW(),
     updated_at timestamptz NOT NULL DEFAULT NOW(),
     CONSTRAINT chk_knowledge_fs_entry_type
         CHECK (entry_type IN ('DIRECTORY', 'FILE')),
-    CONSTRAINT chk_knowledge_fs_entry_status
-        CHECK (status IN ('ACTIVE', 'INACTIVE')),
     CONSTRAINT chk_knowledge_fs_entry_root
         CHECK (
             (is_root = true AND parent_entry_id IS NULL AND depth = 0)

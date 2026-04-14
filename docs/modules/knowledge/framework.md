@@ -39,7 +39,7 @@ src/by_qa/
 配套资源：
 
 ```text
-sql/knowledge_base/
+src/by_qa/knowledge_base/sql/
 docker/
 scripts/
 tests/

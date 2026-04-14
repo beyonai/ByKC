@@ -147,6 +147,11 @@ class FakeKBService:
             chunks={"count": len(request.chunks)},
         )
 
+    def file_to_markdown_index(  # pylint: disable=unused-argument
+        self, request, *, document_chunking_service
+    ):
+        return None
+
     def search(self, request):
         return KnowledgeItemSearchResponse(
             items=[
@@ -223,6 +228,7 @@ def make_test_client(monkeypatch, service):
         "by_qa.main.get_knowledge_item_ingestion_service", lambda: service
     )
     monkeypatch.setattr("by_qa.main.get_knowledge_item_search_service", lambda: service)
+    monkeypatch.setattr("by_qa.main.get_document_chunking_service", lambda: object())
     monkeypatch.setattr("by_qa.main.get_adapter", lambda: object())
     monkeypatch.setattr("by_qa.main.get_instant_search_engine", lambda: object())
     return TestClient(app)
@@ -1575,3 +1581,56 @@ def test_search_route_maps_configuration_error_to_503(monkeypatch):
     assert response.status_code == 503
     assert response.json()["error"]["type"] == "configuration_error"
     assert response.json()["error"]["error_code"] == "KB_RUNTIME_CONFIG_ERROR"
+
+
+# ---------------------------------------------------------------------------
+# fileToMarkdownIndex route tests
+# ---------------------------------------------------------------------------
+
+
+def test_file_to_markdown_index_success(monkeypatch):
+    """POST /api/v1/fileToMarkdownIndex returns success envelope."""
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+    response = client.post(
+        "/api/v1/fileToMarkdownIndex",
+        json={"knCode": "1", "filePath": "/制度/人事/请假制度.pdf"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["resultCode"] == "0"
+    assert body["resultMsg"] == "success"
+
+
+def test_file_to_markdown_index_kb_not_found(monkeypatch):
+    """POST /api/v1/fileToMarkdownIndex returns error when KB not found."""
+
+    class FailingService(FakeKBService):
+        def file_to_markdown_index(self, request, *, document_chunking_service):
+            raise KnowledgeBaseValidationError(
+                f"knowledge base not found: {request.kb_code}"
+            )
+
+    client = make_test_client(monkeypatch, FailingService())
+    response = client.post(
+        "/api/v1/fileToMarkdownIndex",
+        json={"knCode": "999", "filePath": "/doc.pdf"},
+    )
+    assert response.status_code == 422
+    body = response.json()
+    assert body["resultCode"] == "-1"
+    assert "knowledge base not found" in body["resultMsg"]
+
+
+def test_file_to_markdown_index_validation_error(monkeypatch):
+    """POST /api/v1/fileToMarkdownIndex returns error on bad input."""
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+    response = client.post(
+        "/api/v1/fileToMarkdownIndex",
+        json={"knCode": "", "filePath": "/doc.pdf"},
+    )
+    assert response.status_code == 422
+    body = response.json()
+    assert body["resultCode"] == "-1"
+    assert body["resultMsg"] == "request validation failed"

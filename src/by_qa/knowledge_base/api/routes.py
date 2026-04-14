@@ -17,6 +17,7 @@ from by_qa.knowledge_base.api.schemas import (
     DeleteDirectoryRequest,
     DeleteKnowledgeBaseRequest,
     DeleteKnowledgeItemRequest,
+    FileToMarkdownIndexRequest,
     KnowledgeItemDownloadRequest,
     KnowledgeItemFetchRequest,
     KnowledgeItemGlobRequest,
@@ -538,6 +539,7 @@ def register_routes(
     get_knowledge_base_service,
     get_knowledge_item_ingestion_service,
     get_knowledge_item_search_service,
+    get_document_chunking_service,
 ):
     """Register knowledge base API routes on the FastAPI app."""
 
@@ -1154,6 +1156,48 @@ def register_routes(
             result.chunks.count,
         )
         return _success_response(data=result.model_dump())
+
+    @app.post("/api/v1/fileToMarkdownIndex")
+    async def file_to_markdown_index(body: dict[str, Any] = Body(...)):
+        logger.info(
+            "file_to_markdown_index request received: body_keys=%s",
+            list(body.keys()),
+        )
+        try:
+            request = FileToMarkdownIndexRequest.model_validate(body)
+        except ValidationError as exc:
+            logger.warning("file_to_markdown_index validation failed: error=%s", exc)
+            return _documented_error_response(
+                result_msg="request validation failed",
+            )
+
+        try:
+            service = get_knowledge_item_ingestion_service()
+            chunking_service = get_document_chunking_service()
+            service.file_to_markdown_index(
+                request, document_chunking_service=chunking_service
+            )
+        except KnowledgeBaseConfigurationError as exc:
+            logger.warning("file_to_markdown_index configuration failed: error=%s", exc)
+            return _documented_error_response(
+                result_msg=str(exc),
+                status_code=503,
+            )
+        except KnowledgeBaseValidationError as exc:
+            logger.warning(
+                "file_to_markdown_index validation failed: kb_code=%s, file_path=%s, error=%s",
+                request.kb_code,
+                request.file_path,
+                exc,
+            )
+            return _documented_error_response(result_msg=str(exc))
+
+        logger.info(
+            "file_to_markdown_index response ready: code=200, kb_code=%s, file_path=%s",
+            request.kb_code,
+            request.file_path,
+        )
+        return _documented_success_response()
 
     @app.post("/api/v1/knowledge-items/search")
     async def search_knowledge_items(request: KnowledgeItemSearchRequest):

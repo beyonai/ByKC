@@ -1075,6 +1075,33 @@ class KnowledgeFsEntryRepository:
             return list(fetchall())
         return []
 
+    def update_markdown_metadata(
+        self,
+        cursor: Any,
+        *,
+        fs_entry_id: int,
+        markdown_bucket_name: str,
+        markdown_object_key: str,
+        line_count: int,
+    ) -> None:
+        """Update the markdown sidecar metadata on a file entry."""
+        cursor.execute(
+            """
+            UPDATE knowledge_fs_entry
+            SET markdown_bucket_name = %(markdown_bucket_name)s,
+                markdown_object_key = %(markdown_object_key)s,
+                line_count = %(line_count)s,
+                updated_at = NOW()
+            WHERE kid = %(fs_entry_id)s
+            """,
+            {
+                "fs_entry_id": fs_entry_id,
+                "markdown_bucket_name": markdown_bucket_name,
+                "markdown_object_key": markdown_object_key,
+                "line_count": line_count,
+            },
+        )
+
     def _path_label(self, prefix: str, depth: int, segment: str) -> str:
         digest = hashlib.md5(segment.encode("utf-8")).hexdigest()[:8]
         return f"{prefix}{depth}_{digest}"

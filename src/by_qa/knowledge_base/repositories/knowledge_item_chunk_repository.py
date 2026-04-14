@@ -121,3 +121,70 @@ class KnowledgeItemChunkRepository:
                 """,
                 {"chunk_id": item["chunk_id"], "embedding": vector_literal},
             )
+
+    def replace_for_fs_entry(
+        self,
+        cursor: Any,
+        *,
+        fs_entry_id: int,
+        chunks: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Replace chunk rows for one fs_entry and return their ids."""
+        cursor.execute(
+            f"""
+            DELETE FROM {self.embedding_table_name}
+            WHERE chunk_id IN (
+                SELECT kid
+                FROM knowledge_chunk
+                WHERE fs_entry_id = %(fs_entry_id)s
+            )
+            """,
+            {"fs_entry_id": fs_entry_id},
+        )
+        cursor.execute(
+            """
+            DELETE FROM knowledge_chunk
+            WHERE fs_entry_id = %(fs_entry_id)s
+            """,
+            {"fs_entry_id": fs_entry_id},
+        )
+        created_rows: list[dict[str, Any]] = []
+        fetchone = getattr(cursor, "fetchone", None)
+        for chunk in chunks:
+            cursor.execute(
+                """
+                INSERT INTO knowledge_chunk (
+                    fs_entry_id,
+                    chunk_no,
+                    start_line,
+                    end_line,
+                    chunk_text,
+                    search_text,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    %(fs_entry_id)s,
+                    %(chunk_no)s,
+                    %(start_line)s,
+                    %(end_line)s,
+                    %(chunk_text)s,
+                    to_tsvector('simple', %(chunk_text)s),
+                    NOW(),
+                    NOW()
+                )
+                RETURNING kid, chunk_no
+                """,
+                {
+                    "fs_entry_id": fs_entry_id,
+                    "chunk_no": chunk["chunk_no"],
+                    "start_line": chunk["start_line"],
+                    "end_line": chunk["end_line"],
+                    "chunk_text": chunk["chunk_text"],
+                },
+            )
+            if callable(fetchone):
+                row = fetchone()
+                if row is not None:
+                    created_rows.append(row)
+        return created_rows

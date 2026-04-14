@@ -116,7 +116,7 @@
   - `write_index`
   - `_map_write_index_validation_error`
   - 对应路径：`/api/v1/write-index`
-  - 原因：当前接口文档不包含 `write-index`。
+  - 原因：当前接口文档不包含 `write-index`。`fileToMarkdownIndex` 已实现为 file-to-markdown + write-index 的完整替代。
 
 - `src/by_qa/knowledge_base/api/routes.py`
   - `import_knowledge_item`
@@ -129,7 +129,31 @@
 - `src/by_qa/knowledge_base/repositories/knowledge_fs_entry_repository.py`
   - `list_all_root_nodes`
   - 现状：仅仓库测试涉及，生产代码没有引用。
-  - 原因：当前路径模型按 `knCode + 相对路径` 工作，不需要“列出所有虚拟根节点”这一能力。
+  - 原因：当前路径模型按 `knCode + 相对路径` 工作，不需要”列出所有虚拟根节点”这一能力。
+
+### 4. 知识构建模块对外接口（已被 fileToMarkdownIndex 完全取代）
+
+- `src/by_qa/knowledge_build/api/routes.py`
+  - `/api/v1/file-to-markdown` 路由
+  - `/api/v1/build-markdown-index` 路由
+  - `/api/v1/file-to-markdown-index` 路由
+  - `_parse_file_to_markdown` 辅助函数
+  - `_build_chunks` 辅助函数
+  - `_success_response` 辅助函数
+  - `_error_response` 辅助函数
+  - `_normalize_file_type` 辅助函数
+  - 现状：`fileToMarkdownIndex` 已由 `knowledge_base` 模块实现，从 MinIO 下载已上传文件后内部调用 `DocumentChunkingService` 完成全流程。
+  - 原因：知识构建模块的三个对外接口已完全弃用，不再出现在当前接口文档中。
+
+- `src/by_qa/knowledge_build/api/schemas.py`
+  - `FileToMarkdownRequest`
+  - `FileToMarkdownResponse`
+  - `BuildMarkdownIndexRequest`
+  - `BuildMarkdownIndexResponse`
+  - `FileToMarkdownIndexRequest`（knowledge_build 版本）
+  - `FileToMarkdownIndexResponse`
+  - 现状：对应的旧路由不再属于对外接口。
+  - 原因：新接口的请求模型已在 `knowledge_base/api/schemas.py` 中定义，不再需要 knowledge_build 版本。
 
 ## 待接口迁移完成后删除
 
@@ -207,6 +231,17 @@
   - 该函数仍依赖旧的 root-entry 模型和旧列写入方式。
   - 当前公开上传接口已经切到 `create_file_entry + update_file_entry_storage` 新链路。
   - 等旧导入链路移除后，这个函数可以一起删除。
+
+- `src/by_qa/knowledge_base/repositories/knowledge_item_chunk_repository.py`
+  - `replace_for_version`
+  - 现状：`fileToMarkdownIndex` 新链路已使用 `replace_for_fs_entry`，不再调用此方法。
+  - 原因：该方法依赖 `knowledge_item_id` 和 `knowledge_item_version_id`，属于旧版本模型。
+
+- `src/by_qa/knowledge_base/repositories/retrieval_projection_repository.py`
+  - `refresh_for_item`
+  - `delete_for_item`
+  - 现状：`fileToMarkdownIndex` 新链路已使用 `refresh_for_fs_entry`，不再调用这两个方法。
+  - 原因：这两个方法依赖 `knowledge_item_id`，属于旧版本模型。
 
 ### 3. 旧字段驱动的目录接口实现
 
@@ -386,3 +421,16 @@
   - `knowledge_fs_entry.file_object_key`
   - `knowledge_fs_entry.mime_type`
 - `_map_download_file_validation_error` 已删除。
+
+在"知识构建"接口完成后，新增确认：
+
+- `fileToMarkdownIndex` 已按新规范实现，路由为 `/api/v1/fileToMarkdownIndex`。
+- 入参为 `knCode` + `filePath`，不再接受 base64 文件内容，改为从 MinIO 读取已上传文件。
+- 处理流程为：定位文件 → 下载原始文件 → 解析为 Markdown → 切片 + 向量化 → 持久化 chunk/embedding → 刷新检索投影。
+- 新链路完全基于 `fs_entry_id`，不依赖 `knowledge_item`、`knowledge_item_version`、`file_code`、`version` 旧模型。
+- `knowledge_chunk` 写入使用新增的 `replace_for_fs_entry`，不再使用 `replace_for_version`。
+- `knowledge_chunk_retrieval_mv` 刷新使用新增的 `refresh_for_fs_entry`，不再使用 `refresh_for_item`。
+- `knowledge_fs_entry` 新增 `update_markdown_metadata` 用于记录 Markdown 文件元信息。
+- `DocumentChunkingService` 现在由 `knowledge_base` 模块通过依赖注入使用，不再需要 `knowledge_build` 模块的对外接口。
+- `knowledge_build` 模块的三个对外接口（`file-to-markdown`、`build-markdown-index`、`file-to-markdown-index`）已完全弃用。
+- `knowledge_base` 模块的 `write-index` 路由和 `write_index` 服务方法已完全被 `fileToMarkdownIndex` 取代。

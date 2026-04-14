@@ -48,6 +48,7 @@ API_MODULES = (
                 resolve_knowledge_item_ingestion_service
             ),
             "get_knowledge_item_search_service": resolve_knowledge_item_search_service,
+            "get_document_chunking_service": resolve_document_chunking_service,
         },
     ),
     ApiModuleDefinition(

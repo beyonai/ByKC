@@ -12,6 +12,7 @@ from by_qa.core import logger
 from by_qa.knowledge_base.api.schemas import (
     DeleteKnowledgeItemRequest,
     DeleteKnowledgeItemResponse,
+    FileToMarkdownIndexRequest,
     KnowledgeItemImportFileResponse,
     KnowledgeItemImportManifest,
     KnowledgeItemImportRequest,
@@ -123,6 +124,156 @@ class KnowledgeItemIngestionService:
                 self.object_storage.delete_object_quietly(
                     temp_object_key,
                     bucket_name=self.object_storage.bucket_name,
+                )
+            raise
+        finally:
+            connection.close()
+
+    def file_to_markdown_index(
+        self, request: FileToMarkdownIndexRequest, *, document_chunking_service: Any
+    ) -> None:
+        """Download uploaded file, parse to markdown, chunk, embed, and persist."""
+        logger.info(
+            "knowledge_item_ingestion_service.file_to_markdown_index started: kb_code=%s, file_path=%s",
+            request.kb_code,
+            request.file_path,
+        )
+        normalized_file_path = request.file_path.strip("/")
+        if not normalized_file_path:
+            raise KnowledgeBaseValidationError("file_path must not be empty")
+
+        connection = self.connection_factory()
+        markdown_temp_object_key: str | None = None
+        try:
+            cursor = connection.cursor()
+
+            kb_row = self.knowledge_base_repository.get_by_code(cursor, request.kb_code)
+            if not kb_row:
+                raise KnowledgeBaseValidationError(
+                    f"knowledge base not found: {request.kb_code}"
+                )
+            knowledge_base_id = self._row_id(kb_row)
+
+            file_row = self.knowledge_fs_entry_repository.get_file_by_path(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                full_path=normalized_file_path,
+            )
+            if file_row is None:
+                raise KnowledgeBaseValidationError(
+                    f"file not found: {request.file_path}"
+                )
+            fs_entry_id = self._row_id(file_row)
+            file_object_key = file_row.get("file_object_key")
+            if not file_object_key:
+                raise KnowledgeBaseValidationError(
+                    f"file has not been uploaded yet: {request.file_path}"
+                )
+            file_bucket_name = (
+                file_row.get("file_bucket_name") or self.object_storage.bucket_name
+            )
+
+            file_bytes = self.object_storage.download_object(
+                file_object_key, bucket_name=file_bucket_name
+            )
+
+            file_type = self._derive_file_type(file_row, normalized_file_path)
+
+            logger.info(
+                "file_to_markdown_index stage started: stage=extract_text, file_type=%s, file_size=%s",
+                file_type,
+                len(file_bytes),
+            )
+            markdown_content = document_chunking_service.extract_text_from_file(
+                file_bytes, file_type
+            )
+            logger.info(
+                "file_to_markdown_index stage completed: stage=extract_text, md_length=%s",
+                len(markdown_content),
+            )
+
+            markdown_bytes = markdown_content.encode("utf-8")
+            original_name = (
+                file_row.get("name") or PurePosixPath(normalized_file_path).name
+            )
+            chunk_filename = PurePosixPath(original_name).stem + ".md"
+            logger.info(
+                "file_to_markdown_index stage started: stage=chunk_and_embed, filename=%s",
+                chunk_filename,
+            )
+            chunks = document_chunking_service.chunk_and_embed(
+                markdown_bytes, filename=chunk_filename
+            )
+            logger.info(
+                "file_to_markdown_index stage completed: stage=chunk_and_embed, chunk_count=%s",
+                len(chunks),
+            )
+
+            self._validate_chunk_embedding_dimensions(chunks)
+
+            markdown_object_key = (
+                f"kb/{knowledge_base_id}/fs-entry/{fs_entry_id}/markdown.md"
+            )
+            markdown_temp_object_key = self.object_storage.upload_temp_object(
+                f"ftmi-{knowledge_base_id}-{fs_entry_id}",
+                markdown_bytes,
+                content_type="text/markdown; charset=utf-8",
+                bucket_name=self.object_storage.markdown_bucket_name,
+            )
+
+            chunk_rows = self.knowledge_item_chunk_repository.replace_for_fs_entry(
+                cursor,
+                fs_entry_id=fs_entry_id,
+                chunks=[chunk.model_dump() for chunk in chunks],
+            )
+            chunk_id_by_no = {row["chunk_no"]: self._row_id(row) for row in chunk_rows}
+            self.knowledge_item_chunk_repository.replace_embeddings(
+                cursor,
+                embeddings=[
+                    {
+                        "chunk_id": chunk_id_by_no[chunk.chunk_no],
+                        "embedding": chunk.embedding,
+                    }
+                    for chunk in chunks
+                ],
+            )
+
+            line_count = markdown_content.count("\n") + 1
+            self.knowledge_fs_entry_repository.update_markdown_metadata(
+                cursor,
+                fs_entry_id=fs_entry_id,
+                markdown_bucket_name=self.object_storage.markdown_bucket_name,
+                markdown_object_key=markdown_object_key,
+                line_count=line_count,
+            )
+
+            self.retrieval_projection_repository.refresh_for_fs_entry(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                fs_entry_id=fs_entry_id,
+                full_path=normalized_file_path,
+            )
+
+            connection.commit()
+
+            self.object_storage.promote_temp_object(
+                markdown_temp_object_key,
+                markdown_object_key,
+                bucket_name=self.object_storage.markdown_bucket_name,
+            )
+
+            logger.info(
+                "knowledge_item_ingestion_service.file_to_markdown_index finished: kb_code=%s, file_path=%s, chunk_count=%s",
+                request.kb_code,
+                request.file_path,
+                len(chunks),
+            )
+        except Exception:
+            connection.rollback()
+            if markdown_temp_object_key is not None:
+                self.object_storage.delete_object_quietly(
+                    markdown_temp_object_key,
+                    bucket_name=self.object_storage.markdown_bucket_name,
                 )
             raise
         finally:
@@ -959,6 +1110,23 @@ class KnowledgeItemIngestionService:
 
     def _derive_type_code(self, file_path: str) -> str:
         """Derive type_code from the final extension segment."""
+        suffix = PurePosixPath(file_path).suffix.lower()
+        return suffix[1:] if suffix.startswith(".") else suffix
+
+    def _derive_file_type(self, file_row: dict[str, Any], file_path: str) -> str:
+        """Derive a file type label from mime_type or file extension."""
+        mime_to_type = {
+            "application/pdf": "pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+            "text/plain": "txt",
+            "text/markdown": "md",
+            "text/csv": "csv",
+        }
+        mime_type = file_row.get("mime_type")
+        if mime_type and mime_type in mime_to_type:
+            return mime_to_type[mime_type]
         suffix = PurePosixPath(file_path).suffix.lower()
         return suffix[1:] if suffix.startswith(".") else suffix
 

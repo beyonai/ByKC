@@ -492,3 +492,39 @@ def test_fetch_response_serializes_content_type_and_eof_flag():
 
     assert response.model_dump()["content_type"] == "markdown"
     assert response.model_dump()["reached_eof"] is True
+
+
+def test_file_to_markdown_index_request_accepts_camel_case():
+    from by_qa.knowledge_base.api.schemas import FileToMarkdownIndexRequest
+
+    req = FileToMarkdownIndexRequest.model_validate(
+        {"knCode": "1", "filePath": "/制度/人事/请假制度.pdf"}
+    )
+    assert req.kb_code == "1"
+    assert req.file_path == "/制度/人事/请假制度.pdf"
+
+
+def test_file_to_markdown_index_request_accepts_snake_case():
+    from by_qa.knowledge_base.api.schemas import FileToMarkdownIndexRequest
+
+    req = FileToMarkdownIndexRequest.model_validate(
+        {"kb_code": "1", "file_path": "/制度/人事/请假制度.pdf"}
+    )
+    assert req.kb_code == "1"
+    assert req.file_path == "/制度/人事/请假制度.pdf"
+
+
+def test_file_to_markdown_index_request_rejects_empty_kb_code():
+    from by_qa.knowledge_base.api.schemas import FileToMarkdownIndexRequest
+
+    with pytest.raises(Exception):
+        FileToMarkdownIndexRequest.model_validate(
+            {"knCode": "", "filePath": "/制度/人事/请假制度.pdf"}
+        )
+
+
+def test_file_to_markdown_index_request_rejects_missing_file_path():
+    from by_qa.knowledge_base.api.schemas import FileToMarkdownIndexRequest
+
+    with pytest.raises(Exception):
+        FileToMarkdownIndexRequest.model_validate({"knCode": "1"})

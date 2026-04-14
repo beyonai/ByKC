@@ -11,6 +11,7 @@ from by_qa.knowledge_base.api.schemas import (
     DeleteDirectoryRequest,
     DeleteKnowledgeBaseRequest,
     DeleteKnowledgeItemRequest,
+    FileToMarkdownIndexRequest,
     KnowledgeItemDownloadRequest,
     KnowledgeItemFetchRequest,
     KnowledgeItemGlobRequest,
@@ -29,6 +30,7 @@ from by_qa.knowledge_base.services.knowledge_base_service import KnowledgeBaseSe
 from by_qa.knowledge_base.services.knowledge_item_ingestion_service import (
     KnowledgeItemIngestionService,
 )
+from by_qa.knowledge_common.schemas import KnowledgeItemChunkPayload
 
 
 class FakeConnection:
@@ -603,6 +605,27 @@ class FakeKnowledgeFsEntryRepository:
             )
         )
 
+    def update_markdown_metadata(
+        self,
+        cursor,
+        *,
+        fs_entry_id,
+        markdown_bucket_name,
+        markdown_object_key,
+        line_count,
+    ):
+        self.calls.append(
+            (
+                "update_markdown_metadata",
+                {
+                    "fs_entry_id": fs_entry_id,
+                    "markdown_bucket_name": markdown_bucket_name,
+                    "markdown_object_key": markdown_object_key,
+                    "line_count": line_count,
+                },
+            )
+        )
+
 
 class FakeKnowledgeItemRepository:
     """Repository double for knowledge items."""
@@ -735,6 +758,18 @@ class FakeKnowledgeItemChunkRepository:
     def replace_embeddings(self, cursor, **kwargs):
         self.calls.append(("replace_embeddings", kwargs))
 
+    def replace_for_fs_entry(self, cursor, *, fs_entry_id, chunks):
+        self.calls.append(
+            (
+                "replace_for_fs_entry",
+                {"fs_entry_id": fs_entry_id, "chunk_count": len(chunks)},
+            )
+        )
+        return [
+            {"kid": 9000 + i, "chunk_no": chunk["chunk_no"]}
+            for i, chunk in enumerate(chunks)
+        ]
+
 
 class FakeRetrievalProjectionRepository:
     """Repository double for the retrieval projection."""
@@ -753,6 +788,20 @@ class FakeRetrievalProjectionRepository:
 
     def delete_for_fs_entry_ids(self, cursor, **kwargs):
         self.calls.append(("delete_for_fs_entry_ids", kwargs))
+
+    def refresh_for_fs_entry(
+        self, cursor, *, knowledge_base_id, fs_entry_id, full_path
+    ):
+        self.calls.append(
+            (
+                "refresh_for_fs_entry",
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "fs_entry_id": fs_entry_id,
+                    "full_path": full_path,
+                },
+            )
+        )
 
 
 class FakeObjectStorage:
@@ -3631,3 +3680,205 @@ def test_fetch_rejects_paths_outside_allowed_kb_codes(tmp_path):
         assert "file not found" in str(exc)
     else:
         raise AssertionError("expected KnowledgeBaseValidationError")
+
+
+# ---------------------------------------------------------------------------
+# FakeDocumentChunkingService & fileToMarkdownIndex tests
+# ---------------------------------------------------------------------------
+
+
+class FakeDocumentChunkingService:
+    """Fake document chunking service for testing."""
+
+    def __init__(self):
+        self.extract_calls = []
+        self.chunk_calls = []
+        self.markdown_result = "# Test Document\n\nThis is test content."
+        self.chunks_result = [
+            KnowledgeItemChunkPayload(
+                chunk_no=1,
+                start_line=1,
+                end_line=3,
+                chunk_text="# Test Document\n\nThis is test content.",
+                embedding=[0.1, 0.2, 0.3],
+            )
+        ]
+
+    def extract_text_from_file(self, file_bytes, file_type):
+        self.extract_calls.append({"file_type": file_type, "size": len(file_bytes)})
+        return self.markdown_result
+
+    def chunk_and_embed(self, file_bytes, *, filename):
+        self.chunk_calls.append({"filename": filename, "size": len(file_bytes)})
+        return self.chunks_result
+
+
+def test_file_to_markdown_index_kb_not_found():
+    """fileToMarkdownIndex returns error when knowledge base does not exist."""
+    import pytest
+
+    kb_repo = FakeKnowledgeBaseRepository(default_lookup_result=None)
+    fs_repo = FakeKnowledgeFsEntryRepository()
+    service = KnowledgeItemIngestionService(
+        connection_factory=FakeConnection,
+        knowledge_base_repository=kb_repo,
+        knowledge_fs_entry_repository=fs_repo,
+        knowledge_item_repository=FakeKnowledgeItemRepository(),
+        knowledge_item_version_repository=FakeKnowledgeItemVersionRepository(),
+        knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        object_storage=FakeObjectStorage(),
+        embedding_dimension=3,
+    )
+    request = FileToMarkdownIndexRequest.model_validate(
+        {"knCode": "999", "filePath": "/doc.pdf"}
+    )
+    with pytest.raises(KnowledgeBaseValidationError, match="knowledge base not found"):
+        service.file_to_markdown_index(
+            request, document_chunking_service=FakeDocumentChunkingService()
+        )
+
+
+def test_file_to_markdown_index_file_not_found():
+    """fileToMarkdownIndex returns error when file does not exist."""
+    import pytest
+
+    kb_repo = FakeKnowledgeBaseRepository(
+        default_lookup_result={
+            "kid": 7,
+            "kb_code": "1",
+            "kb_name": "TestKB",
+            "status": "ACTIVE",
+        }
+    )
+    fs_repo = FakeKnowledgeFsEntryRepository()
+    fs_repo.file_entry_by_path = {}
+    service = KnowledgeItemIngestionService(
+        connection_factory=FakeConnection,
+        knowledge_base_repository=kb_repo,
+        knowledge_fs_entry_repository=fs_repo,
+        knowledge_item_repository=FakeKnowledgeItemRepository(),
+        knowledge_item_version_repository=FakeKnowledgeItemVersionRepository(),
+        knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        object_storage=FakeObjectStorage(),
+        embedding_dimension=3,
+    )
+    request = FileToMarkdownIndexRequest.model_validate(
+        {"knCode": "1", "filePath": "/nonexistent.pdf"}
+    )
+    with pytest.raises(KnowledgeBaseValidationError, match="file not found"):
+        service.file_to_markdown_index(
+            request, document_chunking_service=FakeDocumentChunkingService()
+        )
+
+
+def test_file_to_markdown_index_file_not_uploaded():
+    """fileToMarkdownIndex returns error when file has no uploaded content."""
+    import pytest
+
+    kb_repo = FakeKnowledgeBaseRepository(
+        default_lookup_result={
+            "kid": 7,
+            "kb_code": "1",
+            "kb_name": "TestKB",
+            "status": "ACTIVE",
+        }
+    )
+    fs_repo = FakeKnowledgeFsEntryRepository()
+    fs_repo.file_entry_by_path = {
+        "制度/人事/请假制度.pdf": {
+            "kid": 71,
+            "entry_type": "FILE",
+            "name": "请假制度.pdf",
+            "file_bucket_name": None,
+            "file_object_key": None,
+            "mime_type": None,
+        }
+    }
+    service = KnowledgeItemIngestionService(
+        connection_factory=FakeConnection,
+        knowledge_base_repository=kb_repo,
+        knowledge_fs_entry_repository=fs_repo,
+        knowledge_item_repository=FakeKnowledgeItemRepository(),
+        knowledge_item_version_repository=FakeKnowledgeItemVersionRepository(),
+        knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        object_storage=FakeObjectStorage(),
+        embedding_dimension=3,
+    )
+    request = FileToMarkdownIndexRequest.model_validate(
+        {"knCode": "1", "filePath": "/制度/人事/请假制度.pdf"}
+    )
+    with pytest.raises(
+        KnowledgeBaseValidationError, match="file has not been uploaded"
+    ):
+        service.file_to_markdown_index(
+            request, document_chunking_service=FakeDocumentChunkingService()
+        )
+
+
+def test_file_to_markdown_index_success():
+    """fileToMarkdownIndex completes full pipeline successfully."""
+    kb_repo = FakeKnowledgeBaseRepository(
+        default_lookup_result={
+            "kid": 7,
+            "kb_code": "1",
+            "kb_name": "TestKB",
+            "status": "ACTIVE",
+        }
+    )
+    fs_repo = FakeKnowledgeFsEntryRepository()
+    fs_repo.file_entry_by_path = {
+        "制度/人事/请假制度.pdf": {
+            "kid": 71,
+            "entry_type": "FILE",
+            "name": "请假制度.pdf",
+            "file_bucket_name": "test-bucket",
+            "file_object_key": "kb/7/fs-entry/71/original.pdf",
+            "mime_type": "application/pdf",
+        }
+    }
+    chunk_repo = FakeKnowledgeItemChunkRepository()
+    retrieval_repo = FakeRetrievalProjectionRepository()
+    obj_storage = FakeObjectStorage()
+    obj_storage.object_payloads[("test-bucket", "kb/7/fs-entry/71/original.pdf")] = (
+        b"fake-pdf-bytes"
+    )
+    chunking_service = FakeDocumentChunkingService()
+    service = KnowledgeItemIngestionService(
+        connection_factory=FakeConnection,
+        knowledge_base_repository=kb_repo,
+        knowledge_fs_entry_repository=fs_repo,
+        knowledge_item_repository=FakeKnowledgeItemRepository(),
+        knowledge_item_version_repository=FakeKnowledgeItemVersionRepository(),
+        knowledge_item_chunk_repository=chunk_repo,
+        retrieval_projection_repository=retrieval_repo,
+        object_storage=obj_storage,
+        embedding_dimension=3,
+    )
+    request = FileToMarkdownIndexRequest.model_validate(
+        {"knCode": "1", "filePath": "/制度/人事/请假制度.pdf"}
+    )
+    service.file_to_markdown_index(request, document_chunking_service=chunking_service)
+
+    # Verify document chunking was called
+    assert len(chunking_service.extract_calls) == 1
+    assert chunking_service.extract_calls[0]["file_type"] == "pdf"
+    assert len(chunking_service.chunk_calls) == 1
+
+    # Verify chunks were persisted
+    chunk_calls = [c for c in chunk_repo.calls if c[0] == "replace_for_fs_entry"]
+    assert len(chunk_calls) == 1
+    assert chunk_calls[0][1]["fs_entry_id"] == 71
+
+    # Verify retrieval projection was refreshed
+    refresh_calls = [c for c in retrieval_repo.calls if c[0] == "refresh_for_fs_entry"]
+    assert len(refresh_calls) == 1
+    assert refresh_calls[0][1]["fs_entry_id"] == 71
+    assert refresh_calls[0][1]["full_path"] == "制度/人事/请假制度.pdf"
+
+    # Verify markdown metadata was updated on fs_entry
+    md_calls = [c for c in fs_repo.calls if c[0] == "update_markdown_metadata"]
+    assert len(md_calls) == 1
+    assert md_calls[0][1]["fs_entry_id"] == 71

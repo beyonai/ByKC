@@ -253,6 +253,21 @@ class DeleteKnowledgeItemResponse(BaseModel):
     is_deleted: bool
 
 
+class FileToMarkdownIndexRequest(BaseModel):
+    """Request body for triggering knowledge build on an uploaded file."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kb_code: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("knCode", "kb_code"),
+    )
+    file_path: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("filePath", "file_path"),
+    )
+
+
 class WriteIndexRequest(BaseModel):
     """Request body for writing chunk indexes for an existing file version."""
 

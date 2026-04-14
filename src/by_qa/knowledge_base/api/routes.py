@@ -508,28 +508,6 @@ def _map_search_validation_error(*, exc: KnowledgeBaseValidationError) -> JSONRe
     )
 
 
-def _map_list_dir_validation_error(
-    *, exc: KnowledgeBaseValidationError, path: str
-) -> JSONResponse:
-    """Map list-dir validation errors to the standardized protocol."""
-    message = str(exc)
-    if message.startswith("directory not found:"):
-        return _error_response(
-            status_code=404,
-            error_type="not_found",
-            error_code="KB_DIRECTORY_NOT_FOUND",
-            error_message=message,
-            details={"path": path},
-        )
-    return _error_response(
-        status_code=422,
-        error_type="business_validation",
-        error_code="KB_LIST_DIR_INVALID",
-        error_message=message,
-        details={"path": path},
-    )
-
-
 def _map_glob_validation_error(
     *, exc: KnowledgeBaseValidationError, path: str
 ) -> JSONResponse:
@@ -1257,9 +1235,21 @@ def register_routes(
         )
         return _success_response(data=result.model_dump())
 
-    @app.post("/api/v1/list_dir")
-    async def list_dir(request: KnowledgeItemListDirRequest):
-        logger.info("list_dir request received: path=%s", request.path)
+    @app.post("/api/v1/listDir")
+    async def list_dir(body: dict[str, Any] = Body(...)):
+        try:
+            request = KnowledgeItemListDirRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        logger.info(
+            "list_dir request received: kb_code=%s, directory_path=%s",
+            request.kb_code,
+            request.directory_path,
+        )
         try:
             service = get_knowledge_base_service()
             logger.info(
@@ -1268,32 +1258,54 @@ def register_routes(
             )
             result = service.list_dir(request)
             logger.info(
-                "list_dir service call succeeded: path=%s, item_count=%s",
-                request.path,
+                "list_dir service call succeeded: directory_path=%s, item_count=%s",
+                request.directory_path,
                 len(result.items),
             )
         except KnowledgeBaseConfigurationError as exc:
             logger.warning(
-                "list_dir configuration failed: path=%s, error=%s", request.path, exc
+                "list_dir configuration failed: directory_path=%s, error=%s",
+                request.directory_path,
+                exc,
             )
-            return _error_response(
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
                 status_code=503,
-                error_type="configuration_error",
-                error_code="KB_RUNTIME_CONFIG_ERROR",
-                error_message=str(exc),
-                details={"path": request.path},
             )
         except KnowledgeBaseValidationError as exc:
             logger.warning(
-                "list_dir validation failed: path=%s, error=%s", request.path, exc
+                "list_dir validation failed: directory_path=%s, error=%s",
+                request.directory_path,
+                exc,
             )
-            return _map_list_dir_validation_error(exc=exc, path=request.path)
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=422,
+            )
+        except Exception as exc:
+            logger.exception(
+                "list_dir unexpected error: kb_code=%s, directory_path=%s, error=%s",
+                request.kb_code,
+                request.directory_path,
+                exc,
+            )
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error",
+                result_object={},
+                status_code=500,
+            )
 
         logger.info(
             "list_dir response ready: code=200, item_count=%s",
             len(result.items),
         )
-        return {"code": 200, "message": "success", "data": result.model_dump()["items"]}
+        return _documented_success_response(
+            result_object={
+                "data": [item.model_dump(by_alias=True) for item in result.items]
+            }
+        )
 
     @app.post("/api/v1/glob")
     async def glob(request: KnowledgeItemGlobRequest):

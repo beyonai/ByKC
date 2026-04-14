@@ -266,6 +266,13 @@ class FakeKnowledgeFsEntryRepository:
                 "size": 0,
             },
         ]
+        self.directory_child_rows_by_parent = {
+            None: [{"name": "dir1", "type": "directory", "size": 0}],
+            80: [
+                {"name": "doc.md", "type": "file", "size": 128},
+                {"name": "subdir", "type": "directory", "size": 0},
+            ],
+        }
         self.pattern_matches = [
             {
                 "kb_code": "hr-policy",
@@ -474,9 +481,23 @@ class FakeKnowledgeFsEntryRepository:
                 },
             )
         )
-        if full_path == self.directory_entry["full_path"]:
+        if full_path in (self.directory_entry["full_path"], "dir1"):
             return self.directory_entry
         return None
+
+    def list_children_by_parent_entry_id(
+        self, cursor, *, knowledge_base_id, parent_entry_id
+    ):
+        self.calls.append(
+            (
+                "list_children_by_parent_entry_id",
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "parent_entry_id": parent_entry_id,
+                },
+            )
+        )
+        return self.directory_child_rows_by_parent.get(parent_entry_id, [])
 
     def get_file_by_path(self, cursor, *, knowledge_base_id, full_path):
         self.calls.append(
@@ -2882,28 +2903,30 @@ def test_import_document_rejects_missing_parent_directory():
     assert connection.rolled_back is True
 
 
-def test_list_dir_root_returns_virtual_knowledge_base_directories():
-    """Root listing should return root knowledge-base directories."""
+def test_list_dir_root_returns_top_level_entries():
+    """Root listing should return top-level entries inside the requested knowledge base."""
     connection = FakeConnection()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeBaseService(
         connection_factory=lambda: connection,
         knowledge_base_repository=FakeKnowledgeBaseRepository(
-            default_lookup_result=None
+            default_lookup_result={"kid": 7, "kb_name": "人力制度知识库"}
         ),
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
     )
 
     response = service.list_dir(
-        KnowledgeItemListDirRequest(kb_codes=["hr-policy"], path="/")
+        KnowledgeItemListDirRequest(kb_code="hr-policy", directory_path="/")
     )
 
-    assert (
-        response.model_dump()["items"]
-        == knowledge_fs_entry_repository.root_entries_by_kb_code["hr-policy"]
-    )
+    assert response.model_dump()["items"] == [
+        {"kb_code": "hr-policy", "name": "/dir1", "type": "directory", "size": 0}
+    ]
     assert knowledge_fs_entry_repository.calls == [
-        ("list_root_entries", {"kb_codes": ["hr-policy"]})
+        (
+            "list_children_by_parent_entry_id",
+            {"knowledge_base_id": 7, "parent_entry_id": None},
+        )
     ]
 
 
@@ -2914,23 +2937,33 @@ def test_list_dir_directory_path_returns_direct_children_only():
     service = KnowledgeBaseService(
         connection_factory=lambda: connection,
         knowledge_base_repository=FakeKnowledgeBaseRepository(
-            default_lookup_result=None
+            default_lookup_result={"kid": 7, "kb_name": "人力制度知识库"}
         ),
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
     )
 
     response = service.list_dir(
-        KnowledgeItemListDirRequest(kb_codes=["hr-policy"], path="人力制度知识库/dir1/")
+        KnowledgeItemListDirRequest(kb_code="hr-policy", directory_path="/dir1")
     )
 
-    assert (
-        response.model_dump()["items"]
-        == knowledge_fs_entry_repository.directory_children
-    )
+    assert response.model_dump()["items"] == [
+        {"kb_code": "hr-policy", "name": "/dir1/doc.md", "type": "file", "size": 128},
+        {
+            "kb_code": "hr-policy",
+            "name": "/dir1/subdir",
+            "type": "directory",
+            "size": 0,
+        },
+    ]
     assert knowledge_fs_entry_repository.calls == [
-        ("list_root_nodes", {"kb_codes": ["hr-policy"]}),
-        ("list_child_nodes", {"parent_path_ltree": "kb_7"}),
-        ("list_child_nodes", {"parent_path_ltree": "kb_7.d1_a"}),
+        (
+            "get_directory_by_path",
+            {"knowledge_base_id": 7, "full_path": "dir1"},
+        ),
+        (
+            "list_children_by_parent_entry_id",
+            {"knowledge_base_id": 7, "parent_entry_id": 80},
+        ),
     ]
 
 
@@ -2941,22 +2974,25 @@ def test_list_dir_literal_missing_path_raises_not_found():
     service = KnowledgeBaseService(
         connection_factory=lambda: connection,
         knowledge_base_repository=FakeKnowledgeBaseRepository(
-            default_lookup_result=None
+            default_lookup_result={"kid": 7, "kb_name": "人力制度知识库"}
         ),
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
     )
 
     try:
         service.list_dir(
-            KnowledgeItemListDirRequest(kb_codes=["hr-policy"], path="*.md")
+            KnowledgeItemListDirRequest(kb_code="hr-policy", directory_path="/missing")
         )
     except KnowledgeBaseValidationError as exc:
-        assert str(exc) == "directory not found: *.md"
+        assert str(exc) == "directory not found: /missing"
     else:
         raise AssertionError("expected KnowledgeBaseValidationError")
 
     assert knowledge_fs_entry_repository.calls == [
-        ("list_root_nodes", {"kb_codes": ["hr-policy"]})
+        (
+            "get_directory_by_path",
+            {"knowledge_base_id": 7, "full_path": "missing"},
+        )
     ]
 
 
@@ -3132,8 +3168,8 @@ def test_glob_directory_patterns_keep_root_prefix_and_treat_trailing_slash_as_li
     ]
 
 
-def test_list_dir_root_filters_visible_knowledge_bases_by_kb_codes():
-    """Root listing should only expose authorized knowledge bases."""
+def test_list_dir_raises_when_knowledge_base_is_missing():
+    """List-dir should fail when knCode does not resolve to a knowledge base."""
     connection = FakeConnection()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeBaseService(
@@ -3144,34 +3180,15 @@ def test_list_dir_root_filters_visible_knowledge_bases_by_kb_codes():
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
     )
 
-    response = service.list_dir(
-        KnowledgeItemListDirRequest(kb_codes=["hr-policy"], path="/")
-    )
+    try:
+        service.list_dir(
+            KnowledgeItemListDirRequest(kb_code="missing-kb", directory_path="/")
+        )
+    except KnowledgeBaseValidationError as exc:
+        assert str(exc) == "knowledge base not found: missing-kb"
+    else:
+        raise AssertionError("expected KnowledgeBaseValidationError")
 
-    assert (
-        response.model_dump()["items"]
-        == knowledge_fs_entry_repository.root_entries_by_kb_code["hr-policy"]
-    )
-    assert knowledge_fs_entry_repository.calls == [
-        ("list_root_entries", {"kb_codes": ["hr-policy"]})
-    ]
-
-
-def test_list_dir_returns_empty_when_kb_codes_is_empty():
-    """Empty kb_codes means the caller has no visible knowledge bases."""
-    connection = FakeConnection()
-    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
-    service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
-        knowledge_base_repository=FakeKnowledgeBaseRepository(
-            default_lookup_result=None
-        ),
-        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
-    )
-
-    response = service.list_dir(KnowledgeItemListDirRequest(kb_codes=[], path="/"))
-
-    assert response.model_dump()["items"] == []
     assert knowledge_fs_entry_repository.calls == []
 
 

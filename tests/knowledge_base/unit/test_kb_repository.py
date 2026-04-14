@@ -400,6 +400,37 @@ def test_get_file_by_path_resolves_file_under_current_path_model():
     assert len(cursor.executed) == 3
 
 
+def test_list_children_by_parent_entry_id_uses_current_fs_entry_columns():
+    """Directory listing should read direct children from knowledge_fs_entry only."""
+    repo = KnowledgeFsEntryRepository()
+    cursor = FakeCursor(
+        fetchall_results=[
+            [
+                {"name": "归档", "type": "directory", "size": 0},
+                {"name": "考勤制度.pdf", "type": "file", "size": 245760},
+            ]
+        ]
+    )
+
+    rows = repo.list_children_by_parent_entry_id(
+        cursor,
+        knowledge_base_id=7,
+        parent_entry_id=80,
+    )
+
+    assert rows == [
+        {"name": "归档", "type": "directory", "size": 0},
+        {"name": "考勤制度.pdf", "type": "file", "size": 245760},
+    ]
+    sql, params = cursor.executed[0]
+    lowered = sql.lower()
+    assert "from knowledge_fs_entry fs" in lowered
+    assert "knowledge_item" not in lowered
+    assert "knowledge_item_version" not in lowered
+    assert "fs.file_size" in lowered
+    assert params == {"knowledge_base_id": 7, "parent_entry_id": 80}
+
+
 def test_update_file_entry_storage_updates_new_storage_columns():
     """File upload should persist object-storage metadata on the fs entry row."""
     repo = KnowledgeFsEntryRepository()

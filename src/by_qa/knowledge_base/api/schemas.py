@@ -408,16 +408,22 @@ class KnowledgeItemImportResponse(BaseModel):
 class KnowledgeItemListDirRequest(BaseModel):
     """Request body for virtual filesystem listing."""
 
-    kb_codes: list[str] = Field(...)
-    path: str = "/"
-    source_codes: Optional[list[str]] = None
-    type_codes: Optional[list[str]] = None
+    model_config = ConfigDict(populate_by_name=True)
+
+    kb_code: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("knCode", "kb_code"),
+    )
+    directory_path: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("directoryPath", "directory_path"),
+    )
 
 
 class KnowledgeItemListDirItem(BaseModel):
     """Single filesystem entry returned by list_dir."""
 
-    kb_code: str
+    kb_code: str = Field(serialization_alias="knCode")
     name: str
     type: Literal["file", "directory"]
     size: int = 0

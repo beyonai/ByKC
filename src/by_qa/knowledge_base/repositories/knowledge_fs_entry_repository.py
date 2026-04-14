@@ -614,6 +614,71 @@ class KnowledgeFsEntryRepository:
         )
         return self._fetchall(cursor)
 
+    def list_children_by_parent_entry_id(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        parent_entry_id: int | None,
+    ) -> list[dict[str, Any]]:
+        """List direct children under one knowledge-base-relative directory."""
+        if parent_entry_id is None:
+            cursor.execute(
+                """
+                SELECT
+                    fs.kid,
+                    fs.knowledge_base_id,
+                    fs.parent_entry_id,
+                    fs.name,
+                    CASE
+                        WHEN fs.entry_type = 'DIRECTORY' THEN 'directory'
+                        ELSE 'file'
+                    END AS type,
+                    CASE
+                        WHEN fs.entry_type = 'DIRECTORY' THEN 0
+                        ELSE COALESCE(fs.file_size, 0)
+                    END AS size
+                FROM knowledge_fs_entry fs
+                WHERE fs.knowledge_base_id = %(knowledge_base_id)s
+                  AND fs.parent_entry_id IS NULL
+                  AND fs.is_deleted = FALSE
+                ORDER BY
+                    CASE WHEN fs.entry_type = 'DIRECTORY' THEN 0 ELSE 1 END,
+                    lower(fs.name)
+                """,
+                {"knowledge_base_id": knowledge_base_id},
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT
+                    fs.kid,
+                    fs.knowledge_base_id,
+                    fs.parent_entry_id,
+                    fs.name,
+                    CASE
+                        WHEN fs.entry_type = 'DIRECTORY' THEN 'directory'
+                        ELSE 'file'
+                    END AS type,
+                    CASE
+                        WHEN fs.entry_type = 'DIRECTORY' THEN 0
+                        ELSE COALESCE(fs.file_size, 0)
+                    END AS size
+                FROM knowledge_fs_entry fs
+                WHERE fs.knowledge_base_id = %(knowledge_base_id)s
+                  AND fs.parent_entry_id = %(parent_entry_id)s
+                  AND fs.is_deleted = FALSE
+                ORDER BY
+                    CASE WHEN fs.entry_type = 'DIRECTORY' THEN 0 ELSE 1 END,
+                    lower(fs.name)
+                """,
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "parent_entry_id": parent_entry_id,
+                },
+            )
+        return self._fetchall(cursor)
+
     def list_child_nodes(
         self, cursor: Any, *, parent_path_ltree: str
     ) -> list[dict[str, Any]]:

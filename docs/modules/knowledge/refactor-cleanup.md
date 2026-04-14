@@ -66,6 +66,11 @@
   - 现状：`directories/delete` 已切到文档化返回信封后，不再调用该函数。
   - 原因：删除目录已经不再走旧的标准错误信封，也不再使用 `directory_code` 相关的旧业务错误码映射。
 
+- `src/by_qa/knowledge_base/api/routes.py`
+  - `_map_list_dir_validation_error`
+  - 现状：`listDir` 已切到文档化返回信封后，该函数已删除。
+  - 原因：获取目录内容已经不再走旧的标准错误信封，也不再使用旧路径错误码映射。
+
 - `src/by_qa/knowledge_base/repositories/retrieval_projection_repository.py`
   - `delete_for_knowledge_base`
   - 现状：删除知识库链路已改为直接操作 `knowledge_chunk_retrieval_mv`，不再调用该函数。
@@ -118,7 +123,6 @@
 
 - `src/by_qa/knowledge_base/services/knowledge_base_service.py`
   - `_list_by_path_pattern`
-  - `_list_directory_entries`
   - `_match_pattern_segments`
   - `_project_node`
   - `_normalize_output_item`
@@ -215,6 +219,13 @@
   - 旧实现按“虚拟根目录路径”解析目录。
   - 现已切到按 `knowledge_base_id + 库内相对路径` 解析。
   - 后续可直接删除旧的虚拟根路径说明和相关兼容语义，只保留当前实现。
+
+- `src/by_qa/knowledge_base/services/knowledge_base_service.py`
+  - `_list_directory_entries`
+
+- 原因：
+  - `listDir` 已不再调用该函数，而是直接基于 `knowledge_base_id + directoryPath` 和 `list_children_by_parent_entry_id` 列出一层子节点。
+  - 当前该函数只剩 `glob` 旧虚拟路径链路仍可能间接依赖，等 `glob` 迁完后可删除。
 
 ### 4. 可删除的旧表字段
 
@@ -322,3 +333,15 @@
   - `knowledge_fetch_cache_index` 中对应 `fs_entry_id` 的缓存索引删除
   - MinIO 中原始文件与 markdown 文件对象的清理
 - `knowledge_fs_entry.get_file_by_path` 已进入当前主链路，后续可作为 `readFile`、`downloadFile` 等接口的统一路径定位基础。
+
+在“获取目录内容”接口完成后，新增确认：
+
+- `listDir` 已改为仅处理 `knCode`、`directoryPath`，不再保留 `kb_codes`、`path`、虚拟知识库根目录语义。
+- `listDir` 已移除 `source_codes`、`type_codes` 旧过滤字段。
+- `listDir` 返回已改为文档化信封，并通过 `resultObject.data` 返回目录项。
+- `knowledge_base_service.list_dir` 已从 `list_root_entries` / `list_root_nodes` 旧链路切换到：
+  - `knowledge_base_repository.get_by_code`
+  - `knowledge_fs_entry_repository.get_directory_by_path`
+  - `knowledge_fs_entry_repository.list_children_by_parent_entry_id`
+- `knowledge_fs_entry_repository.list_children_by_parent_entry_id` 已进入当前主链路，并且只依赖 `knowledge_fs_entry` 当前字段，不再 join `knowledge_item` / `knowledge_item_version`。
+- `_map_list_dir_validation_error` 已删除。

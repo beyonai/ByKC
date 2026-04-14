@@ -177,8 +177,8 @@ class FakeKBService:
         return KnowledgeItemListDirResponse(
             items=[
                 KnowledgeItemListDirItem(
-                    kb_code="integration-kb",
-                    name="/Integration KB/dir1/doc.md",
+                    kb_code=request.kb_code,
+                    name="/dir1/doc.md",
                     type="file",
                     size=100,
                 )
@@ -946,23 +946,28 @@ def test_list_dir_route_returns_filesystem_entries(monkeypatch):
     client = make_test_client(monkeypatch, service)
 
     response = client.post(
-        "/api/v1/list_dir",
+        "/api/v1/listDir",
         json={
-            "kb_codes": ["integration-kb"],
-            "path": "Integration KB/dir1/",
+            "knCode": "integration-kb",
+            "directoryPath": "/dir1",
         },
     )
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["data"] == [
-        {
-            "kb_code": "integration-kb",
-            "name": "/Integration KB/dir1/doc.md",
-            "type": "file",
-            "size": 100,
-        }
-    ]
+    assert response.json() == {
+        "resultCode": "0",
+        "resultMsg": "success",
+        "resultObject": {
+            "data": [
+                {
+                    "knCode": "integration-kb",
+                    "name": "/dir1/doc.md",
+                    "type": "file",
+                    "size": 100,
+                }
+            ]
+        },
+    }
 
 
 def test_list_dir_route_emits_summary_logs(monkeypatch):
@@ -980,35 +985,37 @@ def test_list_dir_route_emits_summary_logs(monkeypatch):
     client = make_test_client(monkeypatch, service)
 
     response = client.post(
-        "/api/v1/list_dir",
+        "/api/v1/listDir",
         json={
-            "kb_codes": ["integration-kb"],
-            "path": "*.md",
+            "knCode": "integration-kb",
+            "directoryPath": "/dir1",
         },
     )
 
     assert response.status_code == 200
     assert info_messages == [
-        "list_dir request received: path=*.md",
+        "list_dir request received: kb_code=integration-kb, directory_path=/dir1",
         "list_dir resolved service: service_class=FakeKBService",
-        "list_dir service call succeeded: path=*.md, item_count=1",
+        "list_dir service call succeeded: directory_path=/dir1, item_count=1",
         "list_dir response ready: code=200, item_count=1",
     ]
 
 
 def test_list_dir_route_requires_kb_codes(monkeypatch):
-    """List-dir route should reject requests that omit kb_codes."""
+    """List-dir route should reject requests that omit knCode."""
     client = make_test_client(monkeypatch, FakeKBService())
 
     response = client.post(
-        "/api/v1/list_dir",
+        "/api/v1/listDir",
         json={
-            "path": "/",
+            "directoryPath": "/",
         },
     )
 
     assert response.status_code == 422
-    assert response.json()["error"]["error_code"] == "REQUEST_VALIDATION_FAILED"
+    assert response.json()["resultCode"] == "-1"
+    assert response.json()["resultMsg"] == "request validation failed"
+    assert response.json()["resultObject"]["errors"]
 
 
 def test_list_dir_route_maps_validation_error_to_standard_error(monkeypatch):
@@ -1020,20 +1027,19 @@ def test_list_dir_route_maps_validation_error_to_standard_error(monkeypatch):
 
     client = make_test_client(monkeypatch, BrokenKBService())
     response = client.post(
-        "/api/v1/list_dir",
+        "/api/v1/listDir",
         json={
-            "kb_codes": ["integration-kb"],
-            "path": "../secret",
+            "knCode": "integration-kb",
+            "directoryPath": "../secret",
         },
     )
 
     assert response.status_code == 422
-    assert response.json()["code"] == 422
-    assert response.json()["message"] == "error"
-    assert response.json()["data"] is None
-    assert response.json()["error"]["type"] == "business_validation"
-    assert response.json()["error"]["error_code"] == "KB_LIST_DIR_INVALID"
-    assert response.json()["error"]["details"] == {"path": "../secret"}
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "path contains invalid segments",
+        "resultObject": {},
+    }
 
 
 def test_list_dir_route_maps_missing_directory_to_404(monkeypatch):
@@ -1041,21 +1047,25 @@ def test_list_dir_route_maps_missing_directory_to_404(monkeypatch):
 
     class BrokenKBService(FakeKBService):
         def list_dir(self, request):
-            raise KnowledgeBaseValidationError(f"directory not found: {request.path}")
+            raise KnowledgeBaseValidationError(
+                f"directory not found: {request.directory_path}"
+            )
 
     client = make_test_client(monkeypatch, BrokenKBService())
     response = client.post(
-        "/api/v1/list_dir",
+        "/api/v1/listDir",
         json={
-            "kb_codes": ["integration-kb"],
-            "path": "missing-dir",
+            "knCode": "integration-kb",
+            "directoryPath": "/missing-dir",
         },
     )
 
-    assert response.status_code == 404
-    assert response.json()["error"]["type"] == "not_found"
-    assert response.json()["error"]["error_code"] == "KB_DIRECTORY_NOT_FOUND"
-    assert response.json()["error"]["details"] == {"path": "missing-dir"}
+    assert response.status_code == 422
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "directory not found: /missing-dir",
+        "resultObject": {},
+    }
 
 
 def test_list_dir_route_maps_configuration_error_to_503(monkeypatch):
@@ -1067,16 +1077,19 @@ def test_list_dir_route_maps_configuration_error_to_503(monkeypatch):
 
     client = make_test_client(monkeypatch, BrokenKBService())
     response = client.post(
-        "/api/v1/list_dir",
+        "/api/v1/listDir",
         json={
-            "kb_codes": ["integration-kb"],
-            "path": "/",
+            "knCode": "integration-kb",
+            "directoryPath": "/",
         },
     )
 
     assert response.status_code == 503
-    assert response.json()["error"]["type"] == "configuration_error"
-    assert response.json()["error"]["error_code"] == "KB_RUNTIME_CONFIG_ERROR"
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "KB runtime is not configured",
+        "resultObject": {},
+    }
 
 
 def test_glob_route_returns_matching_entries(monkeypatch):

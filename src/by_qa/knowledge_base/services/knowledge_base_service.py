@@ -23,6 +23,7 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemFetchRequest,
     KnowledgeItemFetchResponse,
     KnowledgeItemGlobRequest,
+    KnowledgeItemListDirItem,
     KnowledgeItemListDirRequest,
     KnowledgeItemListDirResponse,
     UpdateDirectoryRequest,
@@ -473,34 +474,63 @@ class KnowledgeBaseService:
     def list_dir(
         self, request: KnowledgeItemListDirRequest
     ) -> KnowledgeItemListDirResponse:
-        """List entries from the virtual filesystem."""
+        """List direct children under one knowledge-base-relative directory."""
         logger.info(
-            "knowledge_base_service.list_dir started: path=%s",
-            request.path,
+            "knowledge_base_service.list_dir started: kb_code=%s, directory_path=%s",
+            request.kb_code,
+            request.directory_path,
         )
         connection = self.connection_factory()
         try:
             cursor = connection.cursor()
-            if not request.kb_codes:
-                return KnowledgeItemListDirResponse(items=[])
-            normalized_path = request.path.strip()
-            if normalized_path in ("", "/"):
-                items = [
-                    self._normalize_output_item(item)
-                    for item in self.knowledge_fs_entry_repository.list_root_entries(
-                        cursor,
-                        kb_codes=request.kb_codes,
-                    )
-                ]
-            else:
-                items = self._list_directory_entries(
-                    cursor,
-                    normalized_path,
-                    kb_codes=request.kb_codes,
+            kb_row = self.knowledge_base_repository.get_by_code(
+                cursor,
+                request.kb_code,
+            )
+            if not kb_row:
+                raise KnowledgeBaseValidationError(
+                    f"knowledge base not found: {request.kb_code}"
                 )
+            knowledge_base_id = self._row_id(kb_row)
+            normalized_path = request.directory_path.strip()
+            if not normalized_path.startswith("/"):
+                raise KnowledgeBaseValidationError("directoryPath must start with /")
+            if normalized_path == "/":
+                parent_entry_id = None
+                output_prefix = ""
+            else:
+                directory_row = (
+                    self.knowledge_fs_entry_repository.get_directory_by_path(
+                        cursor,
+                        knowledge_base_id=knowledge_base_id,
+                        full_path=normalized_path.strip("/"),
+                    )
+                )
+                if directory_row is None:
+                    raise KnowledgeBaseValidationError(
+                        f"directory not found: {request.directory_path}"
+                    )
+                parent_entry_id = int(directory_row["kid"])
+                output_prefix = normalized_path.rstrip("/")
+            child_rows = (
+                self.knowledge_fs_entry_repository.list_children_by_parent_entry_id(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    parent_entry_id=parent_entry_id,
+                )
+            )
+            items = [
+                KnowledgeItemListDirItem(
+                    kb_code=request.kb_code,
+                    name=f"{output_prefix}/{row['name']}",
+                    type=row["type"],
+                    size=int(row.get("size") or 0),
+                )
+                for row in child_rows
+            ]
             logger.info(
-                "knowledge_base_service.list_dir finished: path=%s, item_count=%s",
-                request.path,
+                "knowledge_base_service.list_dir finished: directory_path=%s, item_count=%s",
+                request.directory_path,
                 len(items),
             )
             return KnowledgeItemListDirResponse(items=items)

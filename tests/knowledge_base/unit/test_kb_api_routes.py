@@ -57,7 +57,7 @@ class FakeKBService:
     def delete_directory(self, request):
         return DeleteDirectoryResponse(
             kb_code=request.kb_code,
-            directory_code=request.directory_code,
+            directory_path=request.directory_path,
             is_deleted=True,
         )
 
@@ -435,21 +435,16 @@ def test_delete_directory_route_returns_business_response(monkeypatch):
     response = client.post(
         "/api/v1/directories/delete",
         json={
-            "kb_code": "hr-policy",
-            "directory_code": "attendance-archive",
+            "knCode": "hr-policy",
+            "directoryPath": "/考勤制度/归档",
         },
     )
 
     assert response.status_code == 200
     assert response.json() == {
-        "code": 200,
-        "message": "success",
-        "error": None,
-        "data": {
-            "kb_code": "hr-policy",
-            "directory_code": "attendance-archive",
-            "is_deleted": True,
-        },
+        "resultCode": "0",
+        "resultMsg": "success",
+        "resultObject": {},
     }
 
 
@@ -459,20 +454,24 @@ def test_delete_directory_route_maps_missing_directory_to_404(monkeypatch):
     class BrokenKBService(FakeKBService):
         def delete_directory(self, request):
             raise KnowledgeBaseValidationError(
-                f"directory not found: {request.directory_code}"
+                f"directory not found: {request.directory_path}"
             )
 
     client = make_test_client(monkeypatch, BrokenKBService())
     response = client.post(
         "/api/v1/directories/delete",
         json={
-            "kb_code": "hr-policy",
-            "directory_code": "attendance-archive",
+            "knCode": "hr-policy",
+            "directoryPath": "/考勤制度/归档",
         },
     )
 
-    assert response.status_code == 404
-    assert response.json()["error"]["error_code"] == "KB_DIRECTORY_NOT_FOUND"
+    assert response.status_code == 422
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "directory not found: /考勤制度/归档",
+        "resultObject": {},
+    }
 
 
 def test_update_directory_route_returns_business_response(monkeypatch):

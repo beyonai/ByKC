@@ -118,15 +118,23 @@ class CreateDirectoryResponse(BaseModel):
 class DeleteDirectoryRequest(BaseModel):
     """Request body for logically deleting one directory subtree."""
 
-    kb_code: str = Field(min_length=1)
-    directory_code: str = Field(min_length=1)
+    model_config = ConfigDict(populate_by_name=True)
+
+    kb_code: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("knCode", "kb_code"),
+    )
+    directory_path: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("directoryPath", "directory_path"),
+    )
 
 
 class DeleteDirectoryResponse(BaseModel):
     """Business response for logically deleting one directory subtree."""
 
     kb_code: str
-    directory_code: str
+    directory_path: str
     is_deleted: bool
 
 

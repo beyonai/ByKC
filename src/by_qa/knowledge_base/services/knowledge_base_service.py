@@ -246,17 +246,10 @@ class KnowledgeBaseService:
     ) -> DeleteDirectoryResponse:
         """Logically delete one directory subtree and its retrieval projection rows."""
         logger.info(
-            "knowledge_base_service.delete_directory started: kb_code=%s, directory_code=%s",
+            "knowledge_base_service.delete_directory started: kb_code=%s, directory_path=%s",
             request.kb_code,
-            request.directory_code,
+            request.directory_path,
         )
-        if (
-            self.knowledge_item_repository is None
-            or self.retrieval_projection_repository is None
-        ):
-            raise KnowledgeBaseValidationError(
-                "delete directory runtime is not configured"
-            )
 
         connection = self.connection_factory()
         try:
@@ -267,16 +260,17 @@ class KnowledgeBaseService:
                     f"knowledge base not found: {request.kb_code}"
                 )
             knowledge_base_id = self._row_id(kb_row)
-            item_row = self.knowledge_item_repository.get_by_item_code(
+            normalized_directory_path = request.directory_path.strip("/")
+            directory_row = self.knowledge_fs_entry_repository.get_directory_by_path(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
-                item_code=request.directory_code,
+                full_path=normalized_directory_path,
             )
-            if item_row is None or item_row.get("item_kind") not in (None, "DIRECTORY"):
+            if directory_row is None or directory_row.get("entry_type") != "DIRECTORY":
                 raise KnowledgeBaseValidationError(
-                    f"directory not found: {request.directory_code}"
+                    f"directory not found: {request.directory_path}"
                 )
-            root_fs_entry_id = int(item_row["fs_entry_id"])
+            root_fs_entry_id = int(directory_row["kid"])
             fs_entry_ids = self.knowledge_fs_entry_repository.list_subtree_entry_ids(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
@@ -287,20 +281,21 @@ class KnowledgeBaseService:
                 knowledge_base_id=knowledge_base_id,
                 root_fs_entry_id=root_fs_entry_id,
             )
-            self.knowledge_item_repository.soft_delete_by_fs_entry_ids(
-                cursor,
-                knowledge_base_id=knowledge_base_id,
-                fs_entry_ids=fs_entry_ids,
-            )
-            self.retrieval_projection_repository.delete_for_fs_entry_ids(
-                cursor,
-                knowledge_base_id=knowledge_base_id,
-                fs_entry_ids=fs_entry_ids,
+            cursor.execute(
+                """
+                DELETE FROM knowledge_chunk_retrieval_mv
+                WHERE knowledge_base_id = %(knowledge_base_id)s
+                  AND fs_entry_id = ANY(%(fs_entry_ids)s)
+                """,
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "fs_entry_ids": fs_entry_ids,
+                },
             )
             connection.commit()
             return DeleteDirectoryResponse(
                 kb_code=request.kb_code,
-                directory_code=request.directory_code,
+                directory_path=self._ensure_leading_slash(normalized_directory_path),
                 is_deleted=True,
             )
         except Exception:

@@ -1177,17 +1177,16 @@ def test_create_directory_supports_recursive_creation():
 def test_delete_directory_marks_subtree_deleted_and_clears_projection():
     """Deleting a directory should logically delete its subtree and retrieval rows."""
     connection = FakeConnection()
-    knowledge_item_repository = FakeKnowledgeItemRepository()
-    knowledge_item_repository.existing = {
-        "kid": 10,
-        "knowledge_base_id": 7,
-        "fs_entry_id": 81,
-        "item_code": "attendance-archive",
-        "item_kind": "DIRECTORY",
-        "status": "ACTIVE",
-        "is_deleted": False,
-    }
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    knowledge_fs_entry_repository.directory_entry = {
+        "kid": 81,
+        "knowledge_base_id": 7,
+        "parent_entry_id": None,
+        "name": "归档",
+        "entry_type": "DIRECTORY",
+        "full_path": "考勤制度/归档",
+        "path_ltree": "d1_a.d2_b",
+    }
     retrieval_projection_repository = FakeRetrievalProjectionRepository()
     service = KnowledgeBaseService(
         connection_factory=lambda: connection,
@@ -1203,21 +1202,24 @@ def test_delete_directory_marks_subtree_deleted_and_clears_projection():
             }
         ),
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
-        knowledge_item_repository=knowledge_item_repository,
         retrieval_projection_repository=retrieval_projection_repository,
     )
 
     response = service.delete_directory(
         DeleteDirectoryRequest(
-            kb_code="hr-policy",
-            directory_code="attendance-archive",
+            knCode="hr-policy",
+            directoryPath="/考勤制度/归档",
         )
     )
 
     assert response.kb_code == "hr-policy"
-    assert response.directory_code == "attendance-archive"
+    assert response.directory_path == "/考勤制度/归档"
     assert response.is_deleted is True
     assert connection.committed is True
+    assert (
+        "get_directory_by_path",
+        {"knowledge_base_id": 7, "full_path": "考勤制度/归档"},
+    ) in knowledge_fs_entry_repository.calls
     assert (
         "list_subtree_entry_ids",
         {"knowledge_base_id": 7, "root_fs_entry_id": 81},
@@ -1226,23 +1228,19 @@ def test_delete_directory_marks_subtree_deleted_and_clears_projection():
         "soft_delete_subtree",
         {"knowledge_base_id": 7, "root_fs_entry_id": 81},
     ) in knowledge_fs_entry_repository.calls
-    assert (
-        "soft_delete_by_fs_entry_ids",
+    assert connection.cursor_obj.executed[-1] == (
+        """
+                DELETE FROM knowledge_chunk_retrieval_mv
+                WHERE knowledge_base_id = %(knowledge_base_id)s
+                  AND fs_entry_id = ANY(%(fs_entry_ids)s)
+                """,
         {"knowledge_base_id": 7, "fs_entry_ids": [81, 82, 83]},
-    ) in knowledge_item_repository.calls
-    assert retrieval_projection_repository.calls == [
-        (
-            "delete_for_fs_entry_ids",
-            {"knowledge_base_id": 7, "fs_entry_ids": [81, 82, 83]},
-        )
-    ]
+    )
 
 
 def test_delete_directory_rejects_missing_directory():
-    """Deleting a directory should fail when the business code does not exist."""
+    """Deleting a directory should fail when the path does not exist."""
     connection = FakeConnection()
-    knowledge_item_repository = FakeKnowledgeItemRepository()
-    knowledge_item_repository.existing = None
     service = KnowledgeBaseService(
         connection_factory=lambda: connection,
         knowledge_base_repository=FakeKnowledgeBaseRepository(
@@ -1257,19 +1255,18 @@ def test_delete_directory_rejects_missing_directory():
             }
         ),
         knowledge_fs_entry_repository=FakeKnowledgeFsEntryRepository(),
-        knowledge_item_repository=knowledge_item_repository,
         retrieval_projection_repository=FakeRetrievalProjectionRepository(),
     )
 
     try:
         service.delete_directory(
             DeleteDirectoryRequest(
-                kb_code="hr-policy",
-                directory_code="attendance-archive",
+                knCode="hr-policy",
+                directoryPath="/考勤制度/归档",
             )
         )
     except KnowledgeBaseValidationError as exc:
-        assert str(exc) == "directory not found: attendance-archive"
+        assert str(exc) == "directory not found: /考勤制度/归档"
     else:
         raise AssertionError("expected KnowledgeBaseValidationError")
 

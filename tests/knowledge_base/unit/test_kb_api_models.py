@@ -54,17 +54,17 @@ def test_create_directory_request_accepts_documented_fields():
     assert request.directory_path == "/考勤制度/归档"
 
 
-def test_delete_directory_request_requires_kb_code_and_directory_code():
-    """Delete-directory requests should require kb_code and directory_code."""
+def test_delete_directory_request_requires_documented_fields():
+    """Delete-directory requests should require documented path fields."""
     from by_qa.knowledge_base.api.schemas import DeleteDirectoryRequest
 
     request = DeleteDirectoryRequest(
-        kb_code="hr-policy",
-        directory_code="attendance-archive",
+        knCode="hr-policy",
+        directoryPath="/考勤制度/归档",
     )
 
     assert request.kb_code == "hr-policy"
-    assert request.directory_code == "attendance-archive"
+    assert request.directory_path == "/考勤制度/归档"
 
 
 def test_update_directory_request_accepts_documented_fields():

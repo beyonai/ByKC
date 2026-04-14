@@ -28,11 +28,11 @@
 
 - `resultCode`：接口状态码，`0` 表示成功，`-1` 表示失败
 - `resultMsg`：接口返回说明
-- `resultObject`：业务返回体；无额外返回时可省略或返回空对象
+- `resultObject`：业务返回体；无额外返回时返回空对象
 
 ### 失败响应
 
-失败时返回 JSON，结构如下：
+失败时统一返回：
 
 ```json
 {
@@ -97,10 +97,20 @@
   "resultCode": "0",
   "resultMsg": "success",
   "resultObject": {
-    "knCode": "KN202604140001",
+    "knCode": "1",
     "knName": "人力制度知识库",
     "knDescription": "公司人事制度与流程文档"
   }
+}
+```
+
+失败响应示例：
+
+```json
+{
+  "resultCode": "-1",
+  "resultMsg": "knowledge base name already exists: 人力制度知识库",
+  "resultObject": {}
 }
 ```
 
@@ -120,7 +130,7 @@
 
 ```json
 {
-  "knCode": "KN202604140001",
+  "knCode": "1",
   "knName": "人力制度知识库（新版）",
   "knDescription": "更新后的公司人事制度与流程文档"
 }
@@ -131,7 +141,18 @@
 ```json
 {
   "resultCode": "0",
-  "resultMsg": "success"
+  "resultMsg": "success",
+  "resultObject": {}
+}
+```
+
+失败响应示例：
+
+```json
+{
+  "resultCode": "-1",
+  "resultMsg": "knowledge base not found: 1",
+  "resultObject": {}
 }
 ```
 
@@ -149,7 +170,7 @@
 
 ```json
 {
-  "knCode": "KN202604140001"
+  "knCode": "1"
 }
 ```
 
@@ -158,7 +179,8 @@
 ```json
 {
   "resultCode": "0",
-  "resultMsg": "success"
+  "resultMsg": "success",
+  "resultObject": {}
 }
 ```
 
@@ -176,6 +198,36 @@
 | `directoryPath` | string | 是 | 需创建的目录路径，以 `/` 开头，不包括知识库名称，支持递归创建 |
 | `directoryDescription` | string | 否 | 目录描述 |
 
+请求示例：
+
+```json
+{
+  "knCode": "1",
+  "directoryPath": "/制度/人事/考勤",
+  "directoryDescription": "考勤制度目录"
+}
+```
+
+成功响应示例：
+
+```json
+{
+  "resultCode": "0",
+  "resultMsg": "success",
+  "resultObject": {}
+}
+```
+
+失败响应示例：
+
+```json
+{
+  "resultCode": "-1",
+  "resultMsg": "directory path already exists: /制度/人事/考勤",
+  "resultObject": {}
+}
+```
+
 ### `POST /api/v1/directories/update`
 
 修改指定知识库的目录。
@@ -188,6 +240,36 @@
 | `directoryPath` | string | 是 | 需要修改的目录路径，以 `/` 开头，不包括知识库名称 |
 | `directoryName` | string | 是 | 新目录名称，仅修改 `directoryPath` 最后一个层级的名称 |
 
+请求示例：
+
+```json
+{
+  "knCode": "1",
+  "directoryPath": "/制度/人事/考勤",
+  "directoryName": "考勤管理"
+}
+```
+
+成功响应示例：
+
+```json
+{
+  "resultCode": "0",
+  "resultMsg": "success",
+  "resultObject": {}
+}
+```
+
+失败响应示例：
+
+```json
+{
+  "resultCode": "-1",
+  "resultMsg": "directory name already exists under parent: 考勤管理",
+  "resultObject": {}
+}
+```
+
 ### `POST /api/v1/directories/delete`
 
 删除指定知识库的目录。
@@ -198,6 +280,35 @@
 | --- | --- | --- | --- |
 | `knCode` | string | 是 | 知识库编码 |
 | `directoryPath` | string | 是 | 需删除的目录路径，以 `/` 开头，不包括知识库名称 |
+
+请求示例：
+
+```json
+{
+  "knCode": "1",
+  "directoryPath": "/制度/人事/考勤"
+}
+```
+
+成功响应示例：
+
+```json
+{
+  "resultCode": "0",
+  "resultMsg": "success",
+  "resultObject": {}
+}
+```
+
+失败响应示例：
+
+```json
+{
+  "resultCode": "-1",
+  "resultMsg": "directory not found: /制度/人事/考勤",
+  "resultObject": {}
+}
+```
 
 ## 文档管理
 
@@ -218,10 +329,30 @@
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
-  -F "knCode=KN202604140001" \
-  -F "filePath=/Policies/Holiday/leave-policy.pdf" \
-  -F "fileDescription=请假制度原文" \
-  -F "fileContent=@./leave-policy.pdf"
+  -F "knCode=1" \
+  -F "filePath=/制度/人事/考勤制度.pdf" \
+  -F "fileDescription=考勤制度原文" \
+  -F "fileContent=@./考勤制度.pdf"
+```
+
+成功响应示例：
+
+```json
+{
+  "resultCode": "0",
+  "resultMsg": "success",
+  "resultObject": {}
+}
+```
+
+失败响应示例：
+
+```json
+{
+  "resultCode": "-1",
+  "resultMsg": "file path already exists: /制度/人事/考勤制度.pdf",
+  "resultObject": {}
+}
 ```
 
 ### `POST /api/v1/knowledgeItems/delete`
@@ -235,28 +366,213 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
 | `knCode` | string | 是 | 知识库编码 |
 | `filePath` | string | 是 | 需删除的文档全路径，以 `/` 开头，不包括知识库名称 |
 
+请求示例：
+
+```json
+{
+  "knCode": "1",
+  "filePath": "/制度/人事/考勤制度.pdf"
+}
+```
+
+成功响应示例：
+
+```json
+{
+  "resultCode": "0",
+  "resultMsg": "success",
+  "resultObject": {}
+}
+```
+
 ## 目录与文件读取
 
 ### `POST /api/v1/listDir`
 
 获取指定知识库目录下的所有文件和文件夹。
 
+请求体：`application/json`
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `knCode` | string | 是 | 知识库编码 |
+| `directoryPath` | string | 是 | 目录路径，以 `/` 开头，不包括知识库名称 |
+
+请求示例：
+
+```json
+{
+  "knCode": "1",
+  "directoryPath": "/制度/人事"
+}
+```
+
+成功响应示例：
+
+```json
+{
+  "resultCode": "0",
+  "resultMsg": "success",
+  "resultObject": {
+    "data": [
+      {
+        "knCode": "1",
+        "name": "/制度/人事/考勤",
+        "type": "directory",
+        "size": 0
+      },
+      {
+        "knCode": "1",
+        "name": "/制度/人事/请假制度.pdf",
+        "type": "file",
+        "size": 245760
+      }
+    ]
+  }
+}
+```
+
+失败响应示例：
+
+```json
+{
+  "resultCode": "-1",
+  "resultMsg": "directory not found: /制度/人事",
+  "resultObject": {}
+}
+```
+
 ### `POST /api/v1/glob`
 
 基于路径模式匹配查找指定知识库下面的文件或目录。
+
+请求体：`application/json`
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `knCode` | string | 是 | 知识库编码 |
+| `pathRule` | string | 是 | 匹配模式规则，支持通配符匹配多层级文件全路径/目录路径，以 `/` 开头，不包括知识库名称 |
+
+请求示例：
+
+```json
+{
+  "knCode": "1",
+  "pathRule": "/制度/**/*.pdf"
+}
+```
+
+成功响应示例：
+
+```json
+{
+  "resultCode": "0",
+  "resultMsg": "success",
+  "resultObject": {
+    "data": [
+      {
+        "knCode": "1",
+        "name": "/制度/人事/请假制度.pdf",
+        "type": "file",
+        "size": 245760
+      },
+      {
+        "knCode": "1",
+        "name": "/制度/法务/合同规范.pdf",
+        "type": "file",
+        "size": 327680
+      }
+    ]
+  }
+}
+```
+
+失败响应示例：
+
+```json
+{
+  "resultCode": "-1",
+  "resultMsg": "pathRule must not be empty",
+  "resultObject": {}
+}
+```
 
 ### `POST /api/v1/readFile`
 
 根据文件路径读取指定知识库下的原始文件内容，并以 Markdown 文本形式返回。
 
+请求体：`application/json`
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `knCode` | string | 是 | 知识库编码 |
+| `filePath` | string | 是 | 需读取的文件全路径，以 `/` 开头，不包括知识库名称 |
+| `startLine` | integer | 否 | Markdown 起始行，默认不填表示全部读取 |
+| `endLine` | integer | 否 | Markdown 结束行，默认不填表示全部读取 |
+
+请求示例：
+
+```json
+{
+  "knCode": "1",
+  "filePath": "/制度/人事/请假制度.pdf",
+  "startLine": 1,
+  "endLine": 20
+}
+```
+
+成功响应示例：
+
+```json
+{
+  "resultCode": "0",
+  "resultMsg": "success",
+  "resultObject": {
+    "knCode": "1",
+    "filePath": "/制度/人事/请假制度.pdf",
+    "startLine": 1,
+    "endLine": 20,
+    "data": "# 请假制度\n\n第一条 适用范围\n...",
+    "reachedEof": false
+  }
+}
+```
+
+失败响应示例：
+
+```json
+{
+  "resultCode": "-1",
+  "resultMsg": "file not found: /制度/人事/请假制度.pdf",
+  "resultObject": {}
+}
+```
+
 ### `POST /api/v1/downloadFile`
 
 根据文件路径下载指定知识库下的原始文件。
+
+请求体：`application/json`
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `knCode` | string | 是 | 知识库编码 |
+| `filePath` | string | 是 | 需下载的文件全路径，以 `/` 开头，不包括知识库名称 |
+
+请求示例：
+
+```json
+{
+  "knCode": "1",
+  "filePath": "/制度/人事/请假制度.pdf"
+}
+```
 
 成功响应：
 
 - `200 OK`
 - `Content-Type: application/octet-stream`
+- `Content-Disposition: attachment; filename="..."` 或带 `filename*`
 - 响应体为原始文件二进制字节流
 
 失败响应示例：
@@ -264,7 +580,7 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
 ```json
 {
   "resultCode": "-1",
-  "resultMsg": "file not found",
+  "resultMsg": "file not found: /制度/人事/请假制度.pdf",
   "resultObject": {}
 }
 ```
@@ -273,7 +589,7 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
 
 ### `POST /api/v1/fileToMarkdownIndex`
 
-根据文件路径异步构建指定知识库下的文件，自动完成原始文件转 Markdown、切片和切片向量化处理。
+根据文件路径异步构建指定知识库下面的文件，自动完成原始文件转 Markdown、切片和切片向量化处理。
 
 请求体：`application/json`
 
@@ -282,8 +598,104 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
 | `knCode` | string | 是 | 知识库编码 |
 | `filePath` | string | 是 | 需构建的文档全路径，以 `/` 开头，不包括知识库名称 |
 
+请求示例：
+
+```json
+{
+  "knCode": "1",
+  "filePath": "/制度/人事/请假制度.pdf"
+}
+```
+
+成功响应示例：
+
+```json
+{
+  "resultCode": "0",
+  "resultMsg": "success",
+  "resultObject": {}
+}
+```
+
+失败响应示例：
+
+```json
+{
+  "resultCode": "-1",
+  "resultMsg": "file not found: /制度/人事/请假制度.pdf",
+  "resultObject": {}
+}
+```
+
 ## 知识检索
 
 ### `POST /api/v1/knowledge-items/search`
 
 根据用户提问召回对应的知识切片。
+
+请求体：`application/json`
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `query` | string | 是 | 需要检索的内容 |
+| `knCodeList` | array[string] | 是 | 知识库编码列表 |
+| `topK` | integer | 是 | 最终返回条数，必须大于 0 |
+| `fileTypeList` | array[string] | 否 | 按照文件类型过滤 |
+| `searchMode` | string | 是 | 检索模式：`fullTextRecall`、`embedding`、`mixedRecall` |
+
+请求示例：
+
+```json
+{
+  "query": "员工请假流程是什么",
+  "knCodeList": ["1"],
+  "topK": 5,
+  "fileTypeList": ["pdf"],
+  "searchMode": "mixedRecall"
+}
+```
+
+成功响应示例：
+
+```json
+{
+  "resultCode": "0",
+  "resultMsg": "success",
+  "resultObject": {
+    "data": [
+      {
+        "knCode": "1",
+        "filePath": "/制度/人事/请假制度.pdf",
+        "chunkNo": 3,
+        "chunkId": 10023,
+        "chunkText": "员工请假需在 OA 系统发起申请，经部门负责人审批后生效。",
+        "score": 92,
+        "imagePath": "/images/10023.png",
+        "startLine": 18,
+        "endLine": 26
+      },
+      {
+        "knCode": "1",
+        "filePath": "/制度/人事/考勤制度.pdf",
+        "chunkNo": 5,
+        "chunkId": 10087,
+        "chunkText": "病假需提供医院证明材料。",
+        "score": 81,
+        "imagePath": "",
+        "startLine": 42,
+        "endLine": 46
+      }
+    ]
+  }
+}
+```
+
+失败响应示例：
+
+```json
+{
+  "resultCode": "-1",
+  "resultMsg": "topK must be greater than 0",
+  "resultObject": {}
+}
+```

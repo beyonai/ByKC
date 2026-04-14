@@ -431,8 +431,16 @@ class FakeKnowledgeFsEntryRepository:
             nodes.extend(node_list)
         return nodes
 
-    def get_directory_by_path(self, cursor, *, full_path):
-        self.calls.append(("get_directory_by_path", {"full_path": full_path}))
+    def get_directory_by_path(self, cursor, *, knowledge_base_id, full_path):
+        self.calls.append(
+            (
+                "get_directory_by_path",
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "full_path": full_path,
+                },
+            )
+        )
         if full_path == self.directory_entry["full_path"]:
             return self.directory_entry
         return None
@@ -1268,22 +1276,27 @@ def test_delete_directory_rejects_missing_directory():
     assert connection.rolled_back is True
 
 
-def test_update_directory_renames_directory_and_updates_metadata():
-    """Updating a directory should rename the entry and update business metadata."""
+def test_update_directory_renames_directory_by_path():
+    """Updating a directory should rename the matched path entry."""
     connection = FakeConnection()
-    knowledge_item_repository = FakeKnowledgeItemRepository()
-    knowledge_item_repository.existing = {
-        "kid": 10,
-        "knowledge_base_id": 7,
-        "fs_entry_id": 80,
-        "item_code": "attendance-archive",
-        "item_kind": "DIRECTORY",
-        "description": "旧目录说明",
-        "metadata": {"owner": "old"},
-        "status": "ACTIVE",
-        "is_deleted": False,
-    }
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    knowledge_fs_entry_repository.directory_entry = {
+        "kid": 80,
+        "knowledge_base_id": 7,
+        "parent_entry_id": None,
+        "name": "归档",
+        "entry_type": "DIRECTORY",
+        "full_path": "考勤制度/归档",
+        "path_ltree": "d1_a.d2_b",
+    }
+    knowledge_fs_entry_repository.entry_by_id[80] = {
+        "kid": 80,
+        "knowledge_base_id": 7,
+        "parent_entry_id": None,
+        "name": "历史归档",
+        "entry_type": "DIRECTORY",
+        "path_ltree": "d1_a.d2_b",
+    }
     service = KnowledgeBaseService(
         connection_factory=lambda: connection,
         knowledge_base_repository=FakeKnowledgeBaseRepository(
@@ -1298,56 +1311,57 @@ def test_update_directory_renames_directory_and_updates_metadata():
             }
         ),
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
-        knowledge_item_repository=knowledge_item_repository,
     )
 
     response = service.update_directory(
         UpdateDirectoryRequest(
-            kb_code="hr-policy",
-            directory_code="attendance-archive",
-            directory_name="历史归档",
-            directory_description="更新后的目录说明",
-            metadata={"owner": "HR"},
+            knCode="hr-policy",
+            directoryPath="/考勤制度/归档",
+            directoryName="历史归档",
         )
     )
 
     assert response.kb_code == "hr-policy"
-    assert response.directory_code == "attendance-archive"
     assert response.directory_path == "/考勤制度/历史归档"
-    assert response.directory_description == "更新后的目录说明"
-    assert response.metadata == {"owner": "HR"}
+    assert response.directory_name == "历史归档"
     assert connection.committed is True
+    assert (
+        "get_directory_by_path",
+        {"knowledge_base_id": 7, "full_path": "考勤制度/归档"},
+    ) in knowledge_fs_entry_repository.calls
     assert (
         "rename_entry",
         {"entry_id": 80, "new_name": "历史归档"},
     ) in knowledge_fs_entry_repository.calls
-    assert (
-        "update_knowledge_item",
-        {
-            "knowledge_base_id": 7,
-            "item_code": "attendance-archive",
-            "updates": {
-                "description": "更新后的目录说明",
-                "metadata": {"owner": "HR"},
-            },
-        },
-    ) in knowledge_item_repository.calls
 
 
-def test_update_directory_keeps_omitted_fields_unchanged():
-    """Omitted directory fields should keep their previous values."""
+def test_update_directory_allows_same_name_without_conflict():
+    """Renaming to the current name should not trigger a sibling conflict."""
     connection = FakeConnection()
-    knowledge_item_repository = FakeKnowledgeItemRepository()
-    knowledge_item_repository.existing = {
-        "kid": 10,
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    knowledge_fs_entry_repository.directory_entry = {
+        "kid": 80,
         "knowledge_base_id": 7,
-        "fs_entry_id": 80,
-        "item_code": "attendance-archive",
-        "item_kind": "DIRECTORY",
-        "description": "旧目录说明",
-        "metadata": {"owner": "old"},
-        "status": "ACTIVE",
-        "is_deleted": False,
+        "parent_entry_id": None,
+        "name": "归档",
+        "entry_type": "DIRECTORY",
+        "full_path": "考勤制度/归档",
+        "path_ltree": "d1_a.d2_b",
+    }
+    knowledge_fs_entry_repository.entry_by_id[80] = {
+        "kid": 80,
+        "knowledge_base_id": 7,
+        "parent_entry_id": None,
+        "name": "归档",
+        "entry_type": "DIRECTORY",
+        "path_ltree": "d1_a.d2_b",
+    }
+    knowledge_fs_entry_repository.child_entry_by_parent_and_name[(7, None, "归档")] = {
+        "kid": 80,
+        "knowledge_base_id": 7,
+        "parent_entry_id": None,
+        "name": "归档",
+        "entry_type": "DIRECTORY",
     }
     service = KnowledgeBaseService(
         connection_factory=lambda: connection,
@@ -1362,52 +1376,40 @@ def test_update_directory_keeps_omitted_fields_unchanged():
                 "metadata": {},
             }
         ),
-        knowledge_fs_entry_repository=FakeKnowledgeFsEntryRepository(),
-        knowledge_item_repository=knowledge_item_repository,
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
     )
 
     response = service.update_directory(
         UpdateDirectoryRequest(
-            kb_code="hr-policy",
-            directory_code="attendance-archive",
-            directory_name="历史归档",
+            knCode="hr-policy",
+            directoryPath="/考勤制度/归档",
+            directoryName="归档",
         )
     )
 
-    assert response.directory_description == "旧目录说明"
-    assert response.metadata == {"owner": "old"}
-    assert (
-        "update_knowledge_item",
-        {
-            "knowledge_base_id": 7,
-            "item_code": "attendance-archive",
-            "updates": {},
-        },
-    ) in knowledge_item_repository.calls
+    assert response.directory_name == "归档"
+    assert connection.committed is True
 
 
 def test_update_directory_rejects_sibling_name_conflict():
     """Updating a directory should reject sibling name conflicts."""
     connection = FakeConnection()
-    knowledge_item_repository = FakeKnowledgeItemRepository()
-    knowledge_item_repository.existing = {
-        "kid": 10,
-        "knowledge_base_id": 7,
-        "fs_entry_id": 80,
-        "item_code": "attendance-archive",
-        "item_kind": "DIRECTORY",
-        "description": "旧目录说明",
-        "metadata": {"owner": "old"},
-        "status": "ACTIVE",
-        "is_deleted": False,
-    }
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    knowledge_fs_entry_repository.directory_entry = {
+        "kid": 80,
+        "knowledge_base_id": 7,
+        "parent_entry_id": None,
+        "name": "归档",
+        "entry_type": "DIRECTORY",
+        "full_path": "考勤制度/归档",
+        "path_ltree": "d1_a.d2_b",
+    }
     knowledge_fs_entry_repository.child_entry_by_parent_and_name[
-        (7, 70, "历史归档")
+        (7, None, "历史归档")
     ] = {
         "kid": 82,
         "knowledge_base_id": 7,
-        "parent_entry_id": 70,
+        "parent_entry_id": None,
         "name": "历史归档",
         "entry_type": "DIRECTORY",
     }
@@ -1425,15 +1427,14 @@ def test_update_directory_rejects_sibling_name_conflict():
             }
         ),
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
-        knowledge_item_repository=knowledge_item_repository,
     )
 
     try:
         service.update_directory(
             UpdateDirectoryRequest(
-                kb_code="hr-policy",
-                directory_code="attendance-archive",
-                directory_name="历史归档",
+                knCode="hr-policy",
+                directoryPath="/考勤制度/归档",
+                directoryName="历史归档",
             )
         )
     except KnowledgeBaseValidationError as exc:

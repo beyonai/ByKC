@@ -131,19 +131,26 @@ class DeleteDirectoryResponse(BaseModel):
 
 
 class UpdateDirectoryRequest(BaseModel):
-    """Request body for updating one directory without moving it."""
+    """Request body for renaming one directory by path."""
 
-    kb_code: str = Field(min_length=1)
-    directory_code: str = Field(min_length=1)
-    directory_name: str | None = None
-    directory_description: str | None = None
-    metadata: dict[str, Any] | None = None
+    model_config = ConfigDict(populate_by_name=True)
+
+    kb_code: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("knCode", "kb_code"),
+    )
+    directory_path: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("directoryPath", "directory_path"),
+    )
+    directory_name: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("directoryName", "directory_name"),
+    )
 
     @model_validator(mode="after")
     def validate_directory_name(self) -> "UpdateDirectoryRequest":
         """Directory names must be a single segment, not a path."""
-        if self.directory_name is None:
-            return self
         normalized = self.directory_name.strip()
         if not normalized or "/" in normalized or normalized in {".", ".."}:
             raise ValueError("directory_name must be a single valid path segment")
@@ -151,13 +158,11 @@ class UpdateDirectoryRequest(BaseModel):
 
 
 class UpdateDirectoryResponse(BaseModel):
-    """Business response for updating one directory."""
+    """Business response for renaming one directory."""
 
     kb_code: str
-    directory_code: str
     directory_path: str
-    directory_description: str | None = None
-    metadata: dict[str, Any] | None = None
+    directory_name: str
 
 
 class UpdateFileRequest(BaseModel):

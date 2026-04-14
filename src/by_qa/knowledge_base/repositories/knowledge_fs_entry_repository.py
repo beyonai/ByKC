@@ -377,26 +377,26 @@ class KnowledgeFsEntryRepository:
         return self._fetchall(cursor)
 
     def get_directory_by_path(
-        self, cursor: Any, *, full_path: str
+        self, cursor: Any, *, knowledge_base_id: int, full_path: str
     ) -> dict[str, Any] | None:
-        """Look up one directory entry by its virtual path."""
+        """Look up one directory entry by its knowledge-base-relative path."""
         path_segments = [
             segment for segment in full_path.strip("/").split("/") if segment
         ]
         if not path_segments:
             return None
-        current = self._get_root_by_name(cursor, name=path_segments[0])
-        if current is None:
-            return None
-        for segment in path_segments[1:]:
+        current_parent_id: int | None = None
+        current: dict[str, Any] | None = None
+        for segment in path_segments:
             current = self._get_child_entry(
                 cursor,
-                knowledge_base_id=int(current["knowledge_base_id"]),
-                parent_entry_id=self._row_id(current),
+                knowledge_base_id=knowledge_base_id,
+                parent_entry_id=current_parent_id,
                 name=segment,
             )
             if current is None:
                 return None
+            current_parent_id = self._row_id(current)
         return current if current.get("entry_type") == "DIRECTORY" else None
 
     def list_children(

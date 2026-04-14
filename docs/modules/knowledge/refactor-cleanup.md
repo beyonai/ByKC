@@ -56,6 +56,11 @@
   - 现状：`directories/create` 已切到文档化返回信封后，不再调用该函数。
   - 原因：创建目录已经不再走旧的标准错误信封，也不再使用 `directory_code` 相关的旧业务错误码映射。
 
+- `src/by_qa/knowledge_base/api/routes.py`
+  - `_map_update_directory_validation_error`
+  - 现状：`directories/update` 已切到文档化返回信封后，不再调用该函数。
+  - 原因：修改目录已经不再走旧的标准错误信封，也不再使用 `directory_code` 相关的旧业务错误码映射。
+
 - `src/by_qa/knowledge_base/repositories/retrieval_projection_repository.py`
   - `delete_for_knowledge_base`
   - 现状：删除知识库链路已改为直接操作 `knowledge_chunk_retrieval_mv`，不再调用该函数。
@@ -190,6 +195,14 @@
   - 这些接口仍有保留价值，但当前实现还带着 `directory_code`、`source_code`、虚拟根路径等旧约束。
   - 它们不是“直接删除”，而是“等对应接口重写后，删旧实现、留新实现”。
 
+- `src/by_qa/knowledge_base/repositories/knowledge_fs_entry_repository.py`
+  - `get_directory_by_path`
+
+- 原因：
+  - 旧实现按“虚拟根目录路径”解析目录。
+  - 现已切到按 `knowledge_base_id + 库内相对路径` 解析。
+  - 后续可直接删除旧的虚拟根路径说明和相关兼容语义，只保留当前实现。
+
 ### 4. 可删除的旧表字段
 
 - `src/by_qa/knowledge_base/sql/`
@@ -236,6 +249,9 @@
   - `path_ltree` 不再带 `kb_<id>` 前缀
 - `ensure_root_entry` 的使用范围已进一步缩小到旧的文件导入 / 写入链路。
 - `knowledge_fs_entry.is_root` 已确认不再属于目标模型字段，后续可随 root-node 旧链路一起移除。
+- “修改目录”接口已经按 `knCode + directoryPath + directoryName` 收口，不再依赖 `directory_code`。
+- `knowledge_base_service.update_directory` 已经脱离 `knowledge_item_repository`，只基于 `knowledge_fs_entry` 路径模型完成目录重命名。
+- 目录修改链路里的 `directory_description`、`metadata` 旧语义已确认废弃。
 
 - 新增名称重复校验后，`knowledgeBases/create` 已不再需要旧的 `kb_code` 创建语义。
 - `list_root_entries` / `list_root_nodes` / `list_all_root_nodes` 不符合当前文档路径模型，应进入后续删除范围。

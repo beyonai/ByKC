@@ -64,10 +64,8 @@ class FakeKBService:
     def update_directory(self, request):
         return UpdateDirectoryResponse(
             kb_code=request.kb_code,
-            directory_code=request.directory_code,
             directory_path="/考勤制度/历史归档",
-            directory_description=request.directory_description,
-            metadata=request.metadata,
+            directory_name=request.directory_name,
         )
 
     def update_file(self, request):
@@ -485,26 +483,17 @@ def test_update_directory_route_returns_business_response(monkeypatch):
     response = client.post(
         "/api/v1/directories/update",
         json={
-            "kb_code": "hr-policy",
-            "directory_code": "attendance-archive",
-            "directory_name": "历史归档",
-            "directory_description": "更新后的目录说明",
-            "metadata": {"owner": "HR"},
+            "knCode": "hr-policy",
+            "directoryPath": "/考勤制度/归档",
+            "directoryName": "历史归档",
         },
     )
 
     assert response.status_code == 200
     assert response.json() == {
-        "code": 200,
-        "message": "success",
-        "error": None,
-        "data": {
-            "kb_code": "hr-policy",
-            "directory_code": "attendance-archive",
-            "directory_path": "/考勤制度/历史归档",
-            "directory_description": "更新后的目录说明",
-            "metadata": {"owner": "HR"},
-        },
+        "resultCode": "0",
+        "resultMsg": "success",
+        "resultObject": {},
     }
 
 
@@ -521,37 +510,37 @@ def test_update_directory_route_maps_name_conflict_to_409(monkeypatch):
     response = client.post(
         "/api/v1/directories/update",
         json={
-            "kb_code": "hr-policy",
-            "directory_code": "attendance-archive",
-            "directory_name": "历史归档",
+            "knCode": "hr-policy",
+            "directoryPath": "/考勤制度/归档",
+            "directoryName": "历史归档",
         },
     )
 
     assert response.status_code == 409
-    assert response.json()["error"]["error_code"] == "KB_DIRECTORY_NAME_CONFLICT"
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "directory name already exists under parent: 历史归档",
+        "resultObject": {},
+    }
 
 
 def test_update_directory_route_maps_request_validation_to_standard_error(monkeypatch):
-    """Update-directory validation should use the standard error envelope."""
+    """Update-directory validation should use the documented error envelope."""
     client = make_test_client(monkeypatch, FakeKBService())
 
     response = client.post(
         "/api/v1/directories/update",
         json={
-            "kb_code": "hr-policy",
-            "directory_code": "attendance-archive",
-            "directory_name": "/考勤制度",
+            "knCode": "hr-policy",
+            "directoryPath": "/考勤制度/归档",
+            "directoryName": "/考勤制度",
         },
     )
 
     assert response.status_code == 422
-    assert response.json()["code"] == 422
-    assert response.json()["message"] == "error"
-    assert response.json()["data"] is None
-    assert response.json()["error"]["type"] == "request_invalid"
-    assert response.json()["error"]["error_code"] == "REQUEST_VALIDATION_FAILED"
-    assert response.json()["error"]["error_message"] == "request validation failed"
-    assert response.json()["error"]["details"]["errors"]
+    assert response.json()["resultCode"] == "-1"
+    assert response.json()["resultMsg"] == "request validation failed"
+    assert response.json()["resultObject"]["errors"]
 
 
 def test_update_file_route_returns_business_response(monkeypatch):

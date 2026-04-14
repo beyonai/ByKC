@@ -67,21 +67,19 @@ def test_delete_directory_request_requires_kb_code_and_directory_code():
     assert request.directory_code == "attendance-archive"
 
 
-def test_update_directory_request_accepts_partial_fields():
-    """Update-directory requests should allow partial updates."""
+def test_update_directory_request_accepts_documented_fields():
+    """Update-directory requests should accept documented path rename fields."""
     from by_qa.knowledge_base.api.schemas import UpdateDirectoryRequest
 
     request = UpdateDirectoryRequest(
-        kb_code="hr-policy",
-        directory_code="attendance-archive",
-        directory_name="历史归档",
-        metadata={"owner": "HR"},
+        knCode="hr-policy",
+        directoryPath="/考勤制度/归档",
+        directoryName="历史归档",
     )
 
     assert request.kb_code == "hr-policy"
-    assert request.directory_code == "attendance-archive"
+    assert request.directory_path == "/考勤制度/归档"
     assert request.directory_name == "历史归档"
-    assert request.directory_description is None
 
 
 def test_update_directory_request_rejects_path_like_directory_name():
@@ -90,9 +88,9 @@ def test_update_directory_request_rejects_path_like_directory_name():
 
     with pytest.raises(ValidationError):
         UpdateDirectoryRequest(
-            kb_code="hr-policy",
-            directory_code="attendance-archive",
-            directory_name="/demo",
+            knCode="hr-policy",
+            directoryPath="/考勤制度/归档",
+            directoryName="/demo",
         )
 
 

@@ -312,19 +312,13 @@ class KnowledgeBaseService:
     def update_directory(
         self, request: UpdateDirectoryRequest
     ) -> UpdateDirectoryResponse:
-        """Update one directory's display name and metadata without moving it."""
+        """Rename one directory by its knowledge-base-relative path."""
         logger.info(
-            "knowledge_base_service.update_directory started: kb_code=%s, directory_code=%s, has_name=%s, has_description=%s, has_metadata=%s",
+            "knowledge_base_service.update_directory started: kb_code=%s, directory_path=%s, directory_name=%s",
             request.kb_code,
-            request.directory_code,
-            "directory_name" in request.model_fields_set,
-            "directory_description" in request.model_fields_set,
-            "metadata" in request.model_fields_set,
+            request.directory_path,
+            request.directory_name,
         )
-        if self.knowledge_item_repository is None:
-            raise KnowledgeBaseValidationError(
-                "update directory runtime is not configured"
-            )
 
         connection = self.connection_factory()
         try:
@@ -335,75 +329,32 @@ class KnowledgeBaseService:
                     f"knowledge base not found: {request.kb_code}"
                 )
             knowledge_base_id = self._row_id(kb_row)
-            item_row = self.knowledge_item_repository.get_by_item_code(
+            normalized_directory_path = request.directory_path.strip("/")
+            fs_entry_row = self.knowledge_fs_entry_repository.get_directory_by_path(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
-                item_code=request.directory_code,
-            )
-            if item_row is None or item_row.get("item_kind") not in (None, "DIRECTORY"):
-                raise KnowledgeBaseValidationError(
-                    f"directory not found: {request.directory_code}"
-                )
-
-            fs_entry_id = int(item_row["fs_entry_id"])
-            fs_entry_row = self.knowledge_fs_entry_repository.get_entry_by_id(
-                cursor,
-                entry_id=fs_entry_id,
+                full_path=normalized_directory_path,
             )
             if fs_entry_row is None or fs_entry_row.get("entry_type") != "DIRECTORY":
                 raise KnowledgeBaseValidationError(
-                    f"directory not found: {request.directory_code}"
+                    f"directory not found: {request.directory_path}"
                 )
+            fs_entry_id = int(fs_entry_row["kid"])
 
-            if (
-                "directory_name" in request.model_fields_set
-                and request.directory_name is not None
-            ):
-                sibling = self.knowledge_fs_entry_repository.get_child_entry(
-                    cursor,
-                    knowledge_base_id=knowledge_base_id,
-                    parent_entry_id=int(fs_entry_row["parent_entry_id"]),
-                    name=request.directory_name,
-                )
-                if sibling is not None and int(sibling["kid"]) != fs_entry_id:
-                    raise KnowledgeBaseValidationError(
-                        f"directory name already exists under parent: {request.directory_name}"
-                    )
-                self.knowledge_fs_entry_repository.rename_entry(
-                    cursor,
-                    entry_id=fs_entry_id,
-                    new_name=request.directory_name,
-                )
-                if self.retrieval_projection_repository is not None:
-                    subtree_ids = (
-                        self.knowledge_fs_entry_repository.list_subtree_entry_ids(
-                            cursor,
-                            knowledge_base_id=knowledge_base_id,
-                            root_fs_entry_id=fs_entry_id,
-                        )
-                    )
-                    for sid in subtree_ids:
-                        item_row = self.knowledge_item_repository.get_by_fs_entry_id(
-                            cursor,
-                            knowledge_base_id=knowledge_base_id,
-                            fs_entry_id=sid,
-                        )
-                        if item_row is not None:
-                            self.retrieval_projection_repository.refresh_for_item(
-                                cursor,
-                                knowledge_item_id=int(item_row["kid"]),
-                            )
-
-            updates: dict[str, Any] = {}
-            if "directory_description" in request.model_fields_set:
-                updates["description"] = request.directory_description
-            if "metadata" in request.model_fields_set:
-                updates["metadata"] = request.metadata
-            self.knowledge_item_repository.update_knowledge_item(
+            sibling = self.knowledge_fs_entry_repository.get_child_entry(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
-                item_code=request.directory_code,
-                updates=updates,
+                parent_entry_id=fs_entry_row.get("parent_entry_id"),
+                name=request.directory_name,
+            )
+            if sibling is not None and int(sibling["kid"]) != fs_entry_id:
+                raise KnowledgeBaseValidationError(
+                    f"directory name already exists under parent: {request.directory_name}"
+                )
+            self.knowledge_fs_entry_repository.rename_entry(
+                cursor,
+                entry_id=fs_entry_id,
+                new_name=request.directory_name,
             )
 
             directory_path = (
@@ -415,18 +366,8 @@ class KnowledgeBaseService:
             connection.commit()
             return UpdateDirectoryResponse(
                 kb_code=request.kb_code,
-                directory_code=request.directory_code,
                 directory_path=self._ensure_leading_slash(str(directory_path or "")),
-                directory_description=(
-                    request.directory_description
-                    if "directory_description" in request.model_fields_set
-                    else item_row.get("description")
-                ),
-                metadata=(
-                    request.metadata
-                    if "metadata" in request.model_fields_set
-                    else item_row.get("metadata")
-                ),
+                directory_name=request.directory_name,
             )
         except Exception:
             connection.rollback()

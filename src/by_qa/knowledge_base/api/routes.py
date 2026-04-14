@@ -1,5 +1,6 @@
 """Route registration for knowledge base APIs."""
 
+import json
 import mimetypes
 from pathlib import PurePosixPath
 from typing import Any, Optional
@@ -312,7 +313,7 @@ def _map_update_directory_validation_error(
     *,
     exc: KnowledgeBaseValidationError,
     kb_code: str,
-    directory_code: str,
+    directory_path: str,
 ) -> JSONResponse:
     """Map update-directory validation errors to the standardized protocol."""
     message = str(exc)
@@ -330,7 +331,7 @@ def _map_update_directory_validation_error(
             error_type="not_found",
             error_code="KB_DIRECTORY_NOT_FOUND",
             error_message=message,
-            details={"kb_code": kb_code, "directory_code": directory_code},
+            details={"kb_code": kb_code, "directory_path": directory_path},
         )
     if message.startswith("directory name already exists under parent:"):
         return _error_response(
@@ -338,14 +339,14 @@ def _map_update_directory_validation_error(
             error_type="conflict",
             error_code="KB_DIRECTORY_NAME_CONFLICT",
             error_message=message,
-            details={"kb_code": kb_code, "directory_code": directory_code},
+            details={"kb_code": kb_code, "directory_path": directory_path},
         )
     return _error_response(
         status_code=422,
         error_type="business_validation",
         error_code="KB_DIRECTORY_UPDATE_INVALID",
         error_message=message,
-        details={"kb_code": kb_code, "directory_code": directory_code},
+        details={"kb_code": kb_code, "directory_path": directory_path},
     )
 
 
@@ -638,7 +639,7 @@ def register_routes(
         except ValidationError as exc:
             return _documented_error_response(
                 result_msg="request validation failed",
-                result_object={"errors": exc.errors()},
+                result_object={"errors": json.loads(exc.json())},
                 status_code=422,
             )
 
@@ -707,7 +708,7 @@ def register_routes(
         except ValidationError as exc:
             return _documented_error_response(
                 result_msg="request validation failed",
-                result_object={"errors": exc.errors()},
+                result_object={"errors": json.loads(exc.json())},
                 status_code=422,
             )
         logger.info(
@@ -750,7 +751,7 @@ def register_routes(
         except ValidationError as exc:
             return _documented_error_response(
                 result_msg="request validation failed",
-                result_object={"errors": exc.errors()},
+                result_object={"errors": json.loads(exc.json())},
                 status_code=422,
             )
         logger.info(
@@ -794,7 +795,7 @@ def register_routes(
         except ValidationError as exc:
             return _documented_error_response(
                 result_msg="request validation failed",
-                result_object={"errors": exc.errors()},
+                result_object={"errors": json.loads(exc.json())},
                 status_code=422,
             )
         logger.info(
@@ -865,36 +866,52 @@ def register_routes(
         return _success_response(data=result.model_dump())
 
     @app.post("/api/v1/directories/update")
-    async def update_directory(request: UpdateDirectoryRequest):
+    async def update_directory(body: dict[str, Any] = Body(...)):
+        try:
+            request = UpdateDirectoryRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
         logger.info(
-            "update_directory request received: kb_code=%s, directory_code=%s, has_name=%s, has_description=%s, has_metadata=%s",
+            "update_directory request received: kb_code=%s, directory_path=%s, directory_name=%s",
             request.kb_code,
-            request.directory_code,
-            "directory_name" in request.model_fields_set,
-            "directory_description" in request.model_fields_set,
-            "metadata" in request.model_fields_set,
+            request.directory_path,
+            request.directory_name,
         )
         try:
             service = get_knowledge_base_service()
-            result = service.update_directory(request)
+            service.update_directory(request)
         except KnowledgeBaseConfigurationError as exc:
-            return _error_response(
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
                 status_code=503,
-                error_type="configuration_error",
-                error_code="KB_RUNTIME_CONFIG_ERROR",
-                error_message=str(exc),
-                details={
-                    "kb_code": request.kb_code,
-                    "directory_code": request.directory_code,
-                },
             )
         except KnowledgeBaseValidationError as exc:
-            return _map_update_directory_validation_error(
-                exc=exc,
-                kb_code=request.kb_code,
-                directory_code=request.directory_code,
+            message = str(exc)
+            return _documented_error_response(
+                result_msg=message,
+                result_object={},
+                status_code=409
+                if message.startswith("directory name already exists under parent:")
+                else 422,
             )
-        return _success_response(data=result.model_dump())
+        except Exception as exc:
+            logger.exception(
+                "update_directory unexpected error: kb_code=%s, directory_path=%s, error=%s",
+                request.kb_code,
+                request.directory_path,
+                exc,
+            )
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error",
+                result_object={},
+                status_code=500,
+            )
+        return _documented_success_response(result_object={})
 
     @app.post("/api/v1/knowledge-items/update")
     async def update_file(request: UpdateFileRequest):

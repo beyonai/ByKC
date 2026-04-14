@@ -1,6 +1,5 @@
 """Persistence helpers for knowledge_base rows."""
 
-import json
 from typing import Any
 
 
@@ -25,9 +24,9 @@ class KnowledgeBaseRepository:
         """Fetch a knowledge base by business code including logically deleted rows."""
         cursor.execute(
             """
-            SELECT kid, kb_code, kb_name, kb_description, status, is_deleted, root_entry_id, metadata
+            SELECT kid, kb_name, kb_description, is_deleted
             FROM knowledge_base
-            WHERE kb_code = %(kb_code)s
+            WHERE kid = %(kb_code)s::bigint
             """,
             {"kb_code": kb_code},
         )
@@ -70,9 +69,9 @@ class KnowledgeBaseRepository:
         """Fetch a knowledge base by business code."""
         cursor.execute(
             """
-            SELECT kid, kb_code, kb_name, kb_description, status, is_deleted, root_entry_id, metadata
+            SELECT kid, kb_name, kb_description, is_deleted
             FROM knowledge_base
-            WHERE kb_code = %(kb_code)s
+            WHERE kid = %(kb_code)s::bigint
               AND is_deleted = FALSE
             """,
             {"kb_code": kb_code},
@@ -87,7 +86,7 @@ class KnowledgeBaseRepository:
             UPDATE knowledge_base
             SET is_deleted = TRUE,
                 updated_at = NOW()
-            WHERE kb_code = %(kb_code)s
+            WHERE kid = %(kb_code)s::bigint
             """,
             {"kb_code": kb_code},
         )
@@ -109,9 +108,6 @@ class KnowledgeBaseRepository:
         if "kb_description" in updates:
             assignments.append("kb_description = %(kb_description)s")
             params["kb_description"] = updates["kb_description"]
-        if "metadata" in updates:
-            assignments.append("metadata = %(metadata)s::jsonb")
-            params["metadata"] = json.dumps(updates["metadata"] or {})
 
         if not assignments:
             return
@@ -121,7 +117,7 @@ class KnowledgeBaseRepository:
             UPDATE knowledge_base
             SET {", ".join(assignments)},
                 updated_at = NOW()
-            WHERE kb_code = %(kb_code)s
+            WHERE kid = %(kb_code)s::bigint
               AND is_deleted = FALSE
             """,
             params,

@@ -901,8 +901,8 @@ def test_delete_knowledge_base_marks_kb_and_descendants_deleted():
     ]
 
 
-def test_update_knowledge_base_commits_and_updates_root_entry_name():
-    """Updating a KB should persist metadata changes and sync the root entry display name."""
+def test_update_knowledge_base_commits_and_returns_success():
+    """Updating a KB should persist documented fields and commit."""
     connection = FakeConnection()
     knowledge_base_repository = FakeKnowledgeBaseRepository(
         default_lookup_result={
@@ -912,8 +912,6 @@ def test_update_knowledge_base_commits_and_updates_root_entry_name():
             "kb_description": "旧描述",
             "status": "ACTIVE",
             "is_deleted": False,
-            "root_entry_id": 70,
-            "metadata": {"owner": "old"},
         }
     )
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
@@ -925,17 +923,13 @@ def test_update_knowledge_base_commits_and_updates_root_entry_name():
 
     response = service.update_knowledge_base(
         UpdateKnowledgeBaseRequest(
-            kb_code="hr-policy",
-            kb_name="新知识库名称",
-            kb_description="新描述",
-            metadata={"owner": "HR"},
+            knCode="hr-policy",
+            knName="新知识库名称",
+            knDescription="新描述",
         )
     )
 
     assert response.kb_code == "hr-policy"
-    assert response.kb_name == "新知识库名称"
-    assert response.kb_description == "新描述"
-    assert response.metadata == {"owner": "HR"}
     assert connection.committed is True
     assert ("get_by_code", {"kb_code": "hr-policy"}) in knowledge_base_repository.calls
     assert (
@@ -945,14 +939,12 @@ def test_update_knowledge_base_commits_and_updates_root_entry_name():
             "updates": {
                 "kb_name": "新知识库名称",
                 "kb_description": "新描述",
-                "metadata": {"owner": "HR"},
             },
         },
     ) in knowledge_base_repository.calls
-    assert (
-        "rename_entry",
-        {"entry_id": 70, "new_name": "新知识库名称"},
-    ) in knowledge_fs_entry_repository.calls
+    assert not any(
+        call[0] == "rename_entry" for call in knowledge_fs_entry_repository.calls
+    )
 
 
 def test_update_knowledge_base_rejects_missing_kb():
@@ -968,8 +960,8 @@ def test_update_knowledge_base_rejects_missing_kb():
     try:
         service.update_knowledge_base(
             UpdateKnowledgeBaseRequest(
-                kb_code="missing-kb",
-                kb_name="新知识库名称",
+                knCode="missing-kb",
+                knName="新知识库名称",
             )
         )
     except KnowledgeBaseValidationError as exc:
@@ -977,6 +969,44 @@ def test_update_knowledge_base_rejects_missing_kb():
     else:
         raise AssertionError("expected KnowledgeBaseValidationError")
 
+    assert connection.rolled_back is True
+
+
+def test_update_knowledge_base_rejects_duplicate_name():
+    """Updating a KB should reject duplicate kb names."""
+    connection = FakeConnection()
+    knowledge_base_repository = FakeKnowledgeBaseRepository(
+        default_lookup_result={
+            "kid": 7,
+            "kb_code": "hr-policy",
+            "kb_name": "人力制度知识库",
+            "kb_description": "旧描述",
+            "status": "ACTIVE",
+            "is_deleted": False,
+        }
+    )
+    knowledge_base_repository.existing_by_name["法务制度知识库"] = {
+        "kid": 8,
+        "kb_name": "法务制度知识库",
+    }
+    service = KnowledgeBaseService(
+        connection_factory=lambda: connection,
+        knowledge_base_repository=knowledge_base_repository,
+        knowledge_fs_entry_repository=FakeKnowledgeFsEntryRepository(),
+    )
+
+    try:
+        service.update_knowledge_base(
+            UpdateKnowledgeBaseRequest(
+                knCode="hr-policy",
+                knName="法务制度知识库",
+            )
+        )
+        raise AssertionError("expected KnowledgeBaseValidationError")
+    except KnowledgeBaseValidationError as exc:
+        assert str(exc) == "knowledge base name already exists: 法务制度知识库"
+
+    assert connection.committed is False
     assert connection.rolled_back is True
 
 
@@ -1010,7 +1040,6 @@ def test_update_knowledge_base_keeps_omitted_fields_unchanged():
     )
 
     assert response.kb_description == "旧描述"
-    assert response.metadata == {"owner": "old", "lang": "zh-CN"}
     assert (
         "update_knowledge_base",
         {
@@ -1045,17 +1074,15 @@ def test_update_knowledge_base_clears_fields_only_when_null_is_explicit():
         UpdateKnowledgeBaseRequest(
             kb_code="hr-policy",
             kb_description=None,
-            metadata=None,
         )
     )
 
     assert response.kb_description is None
-    assert response.metadata is None
     assert (
         "update_knowledge_base",
         {
             "kb_code": "hr-policy",
-            "updates": {"kb_description": None, "metadata": None},
+            "updates": {"kb_description": None},
         },
     ) in knowledge_base_repository.calls
 

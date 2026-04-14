@@ -90,7 +90,6 @@ class FakeKBService:
             kb_code=request.kb_code,
             kb_name=request.kb_name or "人力制度知识库",
             kb_description=request.kb_description,
-            metadata=request.metadata,
         )
 
     def delete_knowledge_item(self, request):
@@ -350,24 +349,65 @@ def test_update_knowledge_base_route_returns_business_response(monkeypatch):
     response = client.post(
         "/api/v1/knowledgeBases/update",
         json={
-            "kb_code": "hr-policy",
-            "kb_name": "新知识库名称",
-            "kb_description": "更新后的描述",
-            "metadata": {"owner": "HR"},
+            "knCode": "hr-policy",
+            "knName": "新知识库名称",
+            "knDescription": "更新后的描述",
         },
     )
 
     assert response.status_code == 200
     assert response.json() == {
-        "code": 200,
-        "message": "success",
-        "error": None,
-        "data": {
-            "kb_code": "hr-policy",
-            "kb_name": "新知识库名称",
-            "kb_description": "更新后的描述",
-            "metadata": {"owner": "HR"},
-        },
+        "resultCode": "0",
+        "resultMsg": "success",
+        "resultObject": {},
+    }
+
+
+def test_update_knowledge_base_route_maps_duplicate_name_to_documented_error(
+    monkeypatch,
+):
+    """Update-knowledge-base duplicate names should use the documented error envelope."""
+
+    class DuplicateNameKBService(FakeKBService):
+        def update_knowledge_base(self, request):
+            raise KnowledgeBaseValidationError(
+                f"knowledge base name already exists: {request.kb_name}"
+            )
+
+    client = make_test_client(monkeypatch, DuplicateNameKBService())
+    response = client.post(
+        "/api/v1/knowledgeBases/update",
+        json={"knCode": "hr-policy", "knName": "人力制度知识库"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "knowledge base name already exists: 人力制度知识库",
+        "resultObject": {},
+    }
+
+
+def test_update_knowledge_base_route_maps_unexpected_exception_to_documented_500(
+    monkeypatch,
+):
+    """Update-knowledge-base unexpected failures should use the documented error envelope."""
+
+    class BrokenKBService(FakeKBService):
+        def update_knowledge_base(self, request):
+            raise RuntimeError('column "kb_code" does not exist')
+
+    client = make_test_client(monkeypatch, BrokenKBService())
+    response = client.post(
+        "/api/v1/knowledgeBases/update",
+        json={"knCode": "7", "knName": "人力制度知识库"},
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": 'column "kb_code" does not exist',
+        "resultObject": {},
     }
 
 

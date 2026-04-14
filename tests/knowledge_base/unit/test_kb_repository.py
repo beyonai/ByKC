@@ -105,7 +105,6 @@ def test_update_knowledge_base_executes_update_sql():
         updates={
             "kb_name": "新知识库名称",
             "kb_description": "更新后的描述",
-            "metadata": {"owner": "HR"},
         },
     )
 
@@ -114,7 +113,7 @@ def test_update_knowledge_base_executes_update_sql():
     assert "update knowledge_base" in lowered
     assert "kb_name = %(kb_name)s" in sql
     assert "kb_description = %(kb_description)s" in sql
-    assert "metadata = %(metadata)s::jsonb" in sql
+    assert "metadata = %(metadata)s::jsonb" not in sql
     assert params["kb_code"] == "hr-policy"
     assert params["kb_name"] == "新知识库名称"
 
@@ -252,6 +251,7 @@ def test_get_knowledge_base_by_code_filters_deleted_rows():
     repo.get_by_code(cursor, "hr-policy")
 
     sql, params = cursor.executed[0]
+    assert "kid = %(kb_code)s::bigint" in sql
     assert "is_deleted = FALSE" in sql
     assert params == {"kb_code": "hr-policy"}
 
@@ -264,6 +264,7 @@ def test_get_any_knowledge_base_by_code_includes_deleted_rows():
     repo.get_any_by_code(cursor, "hr-policy")
 
     sql, params = cursor.executed[0]
+    assert "kid = %(kb_code)s::bigint" in sql
     assert "is_deleted = FALSE" not in sql
     assert params == {"kb_code": "hr-policy"}
 

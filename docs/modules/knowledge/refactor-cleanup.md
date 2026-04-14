@@ -41,6 +41,11 @@
   - 现状：`knowledgeBases/create` 已切到文档化返回信封后，不再调用该函数。
   - 原因：创建知识库已不再使用旧的 `kb_code` 冲突语义映射。
 
+- `src/by_qa/knowledge_base/api/routes.py`
+  - `_map_update_knowledge_base_validation_error`
+  - 现状：`knowledgeBases/update` 已切到文档化返回信封后，不再调用该函数。
+  - 原因：修改知识库已经不再走旧的标准错误信封，也不再使用旧的业务错误码映射。
+
 ### 2. 仅服务旧接口的路由与映射函数
 
 - `src/by_qa/knowledge_base/api/routes.py`
@@ -202,3 +207,9 @@
 - 新增名称重复校验后，`knowledgeBases/create` 已不再需要旧的 `kb_code` 创建语义。
 - `list_root_entries` / `list_root_nodes` / `list_all_root_nodes` 不符合当前文档路径模型，应进入后续删除范围。
 - `ensure_root_entry` 仍是内部实现依赖，先保留。
+
+在“修改知识库”接口完成后，新增确认：
+
+- `knowledgeBases/update` 已改为仅处理 `knCode`、`knName`、`knDescription`，不再保留 `metadata` 更新语义。
+- 修改知识库成功响应已收敛为仅返回 `resultCode` / `resultMsg`，不再需要旧的业务响应体。
+- `_map_update_knowledge_base_validation_error` 已进入可直接删除范围。

@@ -59,10 +59,20 @@ class DeleteKnowledgeBaseResponse(BaseModel):
 class UpdateKnowledgeBaseRequest(BaseModel):
     """Request body for updating knowledge base business fields."""
 
-    kb_code: str = Field(min_length=1)
-    kb_name: str | None = None
-    kb_description: str | None = None
-    metadata: dict[str, Any] | None = None
+    model_config = ConfigDict(populate_by_name=True)
+
+    kb_code: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("knCode", "kb_code"),
+    )
+    kb_name: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("knName", "kb_name"),
+    )
+    kb_description: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("knDescription", "kb_description"),
+    )
 
 
 class UpdateKnowledgeBaseResponse(BaseModel):
@@ -71,7 +81,6 @@ class UpdateKnowledgeBaseResponse(BaseModel):
     kb_code: str
     kb_name: str
     kb_description: str | None = None
-    metadata: dict[str, Any] | None = None
 
 
 class CreateDirectoryRequest(BaseModel):

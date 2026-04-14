@@ -310,3 +310,15 @@
 - `_map_create_directory_validation_error` 已进入可直接删除范围。
 - 创建目录链路已不再依赖 `knowledge_item_repository`，目录元数据直接落到 `knowledge_fs_entry`。
 - `create_directory_entry` 已开始适配新表结构，去除了对 `status`、`metadata` 列的依赖。
+
+在“删除文档”接口完成后，新增确认：
+
+- `knowledgeItems/delete` 已改为仅处理 `knCode`、`filePath`，不再保留 `file_code` 语义。
+- 删除文档主链路已改为基于 `knowledge_fs_entry.get_file_by_path` 按库内相对路径定位文件节点。
+- 删除文档已不再依赖 `knowledge_item_repository`、`retrieval_projection_repository`。
+- 删除文档当前直接处理：
+  - `knowledge_fs_entry` 的逻辑删除
+  - `knowledge_chunk_retrieval_mv` 中对应 `fs_entry_id` 的检索投影删除
+  - `knowledge_fetch_cache_index` 中对应 `fs_entry_id` 的缓存索引删除
+  - MinIO 中原始文件与 markdown 文件对象的清理
+- `knowledge_fs_entry.get_file_by_path` 已进入当前主链路，后续可作为 `readFile`、`downloadFile` 等接口的统一路径定位基础。

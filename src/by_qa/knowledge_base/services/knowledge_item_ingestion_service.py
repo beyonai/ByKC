@@ -131,11 +131,11 @@ class KnowledgeItemIngestionService:
     def delete_knowledge_item(
         self, request: DeleteKnowledgeItemRequest
     ) -> DeleteKnowledgeItemResponse:
-        """Logically delete one knowledge item and its file-tree entry."""
+        """Logically delete one file entry and clear derived artifacts."""
         logger.info(
-            "knowledge_item_ingestion_service.delete_knowledge_item started: kb_code=%s, file_code=%s",
+            "knowledge_item_ingestion_service.delete_knowledge_item started: kb_code=%s, file_path=%s",
             request.kb_code,
-            request.file_code,
+            request.file_path,
         )
         connection = self.connection_factory()
         try:
@@ -146,33 +146,62 @@ class KnowledgeItemIngestionService:
                     f"knowledge base not found: {request.kb_code}"
                 )
             knowledge_base_id = self._row_id(kb_row)
-            item_row = self.knowledge_item_repository.get_by_item_code(
+            file_row = self.knowledge_fs_entry_repository.get_file_by_path(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
-                item_code=request.file_code,
+                full_path=request.file_path.strip("/"),
             )
-            if item_row is None:
+            if file_row is None:
                 raise KnowledgeBaseValidationError(
-                    f"knowledge item not found: {request.file_code}"
+                    f"knowledge item not found: {request.file_path}"
                 )
-            self.knowledge_item_repository.soft_delete_by_item_code(
-                cursor,
-                knowledge_base_id=knowledge_base_id,
-                item_code=request.file_code,
-            )
+            fs_entry_id = int(file_row["kid"])
             self.knowledge_fs_entry_repository.soft_delete_file_entry(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
-                fs_entry_id=int(item_row["fs_entry_id"]),
+                fs_entry_id=fs_entry_id,
             )
-            self.retrieval_projection_repository.delete_for_item(
-                cursor,
-                knowledge_item_id=self._row_id(item_row),
+            cursor.execute(
+                """
+                DELETE FROM knowledge_chunk_retrieval_mv
+                WHERE knowledge_base_id = %(knowledge_base_id)s
+                  AND fs_entry_id = %(fs_entry_id)s
+                """,
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "fs_entry_id": fs_entry_id,
+                },
+            )
+            cursor.execute(
+                """
+                DELETE FROM knowledge_fetch_cache_index
+                WHERE knowledge_base_id = %(knowledge_base_id)s
+                  AND fs_entry_id = %(fs_entry_id)s
+                """,
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "fs_entry_id": fs_entry_id,
+                },
             )
             connection.commit()
+            file_bucket_name = file_row.get("file_bucket_name")
+            file_object_key = file_row.get("file_object_key")
+            markdown_bucket_name = file_row.get("markdown_bucket_name")
+            markdown_object_key = file_row.get("markdown_object_key")
+            if file_object_key:
+                self.object_storage.delete_object_quietly(
+                    file_object_key,
+                    bucket_name=file_bucket_name or self.object_storage.bucket_name,
+                )
+            if markdown_object_key:
+                self.object_storage.delete_object_quietly(
+                    markdown_object_key,
+                    bucket_name=markdown_bucket_name
+                    or self.object_storage.markdown_bucket_name,
+                )
             return DeleteKnowledgeItemResponse(
                 kb_code=request.kb_code,
-                file_code=request.file_code,
+                file_path=request.file_path,
                 is_deleted=True,
             )
         except Exception:

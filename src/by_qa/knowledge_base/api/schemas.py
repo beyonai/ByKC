@@ -233,15 +233,23 @@ class WriteFileResponse(BaseModel):
 class DeleteKnowledgeItemRequest(BaseModel):
     """Request body for logically deleting a knowledge item."""
 
-    kb_code: str = Field(min_length=1)
-    file_code: str = Field(min_length=1)
+    model_config = ConfigDict(populate_by_name=True)
+
+    kb_code: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("knCode", "kb_code"),
+    )
+    file_path: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("filePath", "file_path"),
+    )
 
 
 class DeleteKnowledgeItemResponse(BaseModel):
     """Business response for logically deleting a knowledge item."""
 
     kb_code: str
-    file_code: str
+    file_path: str
     is_deleted: bool
 
 

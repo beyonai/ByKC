@@ -1717,8 +1717,8 @@ def test_deleting_a_single_file_removes_it_from_follow_up_browse_and_read(
         )
 
         delete_response = client.post(
-            "/api/v1/knowledge-items/delete",
-            json={"kb_code": kb_code, "file_code": deleted_file_code},
+            "/api/v1/knowledgeItems/delete",
+            json={"knCode": kb_code, "filePath": "/Policies/delete.md"},
         )
         list_after = client.post(
             "/api/v1/list_dir",
@@ -2149,8 +2149,8 @@ def test_search_results_disappear_after_single_file_delete(monkeypatch, tmp_path
             json={"query": "disappear", "kb_codes": [kb_code]},
         )
         delete_response = client.post(
-            "/api/v1/knowledge-items/delete",
-            json={"kb_code": kb_code, "file_code": file_code},
+            "/api/v1/knowledgeItems/delete",
+            json={"knCode": kb_code, "filePath": "/Policies/delete-search.md"},
         )
         after = client.post(
             "/api/v1/knowledge-items/search",
@@ -2612,8 +2612,8 @@ def test_soft_deleted_file_code_cannot_be_reused_for_write_file(monkeypatch, tmp
             markdown_content="first version\n",
         )
         delete_response = client.post(
-            "/api/v1/knowledge-items/delete",
-            json={"kb_code": kb_code, "file_code": file_code},
+            "/api/v1/knowledgeItems/delete",
+            json={"knCode": kb_code, "filePath": "/Policies/reuse.md"},
         )
         reuse = client.post(
             "/api/v1/write-file",
@@ -2660,8 +2660,8 @@ def test_soft_deleted_file_code_cannot_be_reused_for_import(monkeypatch, tmp_pat
             markdown_content="first import\n",
         )
         delete_response = client.post(
-            "/api/v1/knowledge-items/delete",
-            json={"kb_code": kb_code, "file_code": file_code},
+            "/api/v1/knowledgeItems/delete",
+            json={"knCode": kb_code, "filePath": "/Policies/reimport.md"},
         )
         reuse = client.post(
             "/api/v1/knowledge-items/import",

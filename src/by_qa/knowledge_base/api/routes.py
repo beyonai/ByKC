@@ -426,39 +426,6 @@ def _map_update_file_validation_error(
     )
 
 
-def _map_delete_knowledge_item_validation_error(
-    *,
-    exc: KnowledgeBaseValidationError,
-    kb_code: str,
-    file_code: str,
-) -> JSONResponse:
-    """Map delete-knowledge-item validation errors to the standardized protocol."""
-    message = str(exc)
-    if message.startswith("knowledge base not found:"):
-        return _error_response(
-            status_code=404,
-            error_type="not_found",
-            error_code="KB_NOT_FOUND",
-            error_message=message,
-            details={"kb_code": kb_code},
-        )
-    if message.startswith("knowledge item not found:"):
-        return _error_response(
-            status_code=404,
-            error_type="not_found",
-            error_code="KB_FILE_NOT_FOUND",
-            error_message=message,
-            details={"kb_code": kb_code, "file_code": file_code},
-        )
-    return _error_response(
-        status_code=422,
-        error_type="business_validation",
-        error_code="KB_DELETE_FILE_INVALID",
-        error_message=message,
-        details={"kb_code": kb_code, "file_code": file_code},
-    )
-
-
 def _map_write_index_validation_error(
     *,
     exc: KnowledgeBaseValidationError,
@@ -1085,31 +1052,49 @@ def register_routes(
         )
         return _success_response(data=result.model_dump())
 
-    @app.post("/api/v1/knowledge-items/delete")
-    async def delete_knowledge_item(request: DeleteKnowledgeItemRequest):
+    @app.post("/api/v1/knowledgeItems/delete")
+    async def delete_knowledge_item(body: dict[str, Any] = Body(...)):
+        try:
+            request = DeleteKnowledgeItemRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
         logger.info(
-            "delete_knowledge_item request received: kb_code=%s, file_code=%s",
+            "delete_knowledge_item request received: kb_code=%s, file_path=%s",
             request.kb_code,
-            request.file_code,
+            request.file_path,
         )
         try:
             service = get_knowledge_item_ingestion_service()
-            result = service.delete_knowledge_item(request)
+            service.delete_knowledge_item(request)
         except KnowledgeBaseConfigurationError as exc:
-            return _error_response(
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
                 status_code=503,
-                error_type="configuration_error",
-                error_code="KB_RUNTIME_CONFIG_ERROR",
-                error_message=str(exc),
-                details={"kb_code": request.kb_code, "file_code": request.file_code},
             )
         except KnowledgeBaseValidationError as exc:
-            return _map_delete_knowledge_item_validation_error(
-                exc=exc,
-                kb_code=request.kb_code,
-                file_code=request.file_code,
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=422,
             )
-        return _success_response(data=result.model_dump())
+        except Exception as exc:
+            logger.exception(
+                "delete_knowledge_item unexpected error: kb_code=%s, file_path=%s, error=%s",
+                request.kb_code,
+                request.file_path,
+                exc,
+            )
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error",
+                result_object={},
+                status_code=500,
+            )
+        return _documented_success_response(result_object={})
 
     @app.post("/api/v1/write-file")
     async def write_file(request: WriteFileRequest):

@@ -133,6 +133,7 @@ class FakeKnowledgeFsEntryRepository:
         self.raise_missing_parent_directory = False
         self.root_entry = {"kid": 70, "is_root": True, "full_path": "人力制度知识库"}
         self.file_entry = {"kid": 71, "entry_type": "FILE", "full_path": "item-1"}
+        self.file_entry_by_path = {}
         self.root_entries_by_kb_code = {
             "hr-policy": [
                 {
@@ -476,6 +477,18 @@ class FakeKnowledgeFsEntryRepository:
         if full_path == self.directory_entry["full_path"]:
             return self.directory_entry
         return None
+
+    def get_file_by_path(self, cursor, *, knowledge_base_id, full_path):
+        self.calls.append(
+            (
+                "get_file_by_path",
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "full_path": full_path,
+                },
+            )
+        )
+        return self.file_entry_by_path.get(full_path)
 
     def get_entry_by_id(self, cursor, *, entry_id):
         self.calls.append(("get_entry_by_id", {"entry_id": entry_id}))
@@ -1681,20 +1694,24 @@ def test_update_file_rejects_sibling_name_conflict():
     assert connection.rolled_back is True
 
 
-def test_delete_knowledge_item_marks_item_and_fs_entry_deleted():
-    """Deleting one file should logically delete the item, the fs entry, and clear retrieval rows."""
+def test_delete_knowledge_item_marks_file_entry_deleted_and_clears_artifacts():
+    """Deleting one file should logically delete the file entry and clear derived artifacts."""
     connection = FakeConnection()
-    knowledge_item_repository = FakeKnowledgeItemRepository()
-    knowledge_item_repository.existing = {
-        "kid": 10,
-        "knowledge_base_id": 7,
-        "fs_entry_id": 71,
-        "item_code": "file-001",
-        "status": "ACTIVE",
-        "is_deleted": False,
-    }
+    object_storage = FakeObjectStorage()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
-    retrieval_projection_repository = FakeRetrievalProjectionRepository()
+    knowledge_fs_entry_repository.file_entry_by_path["Policies/delete.md"] = {
+        "kid": 71,
+        "knowledge_base_id": 7,
+        "parent_entry_id": None,
+        "entry_type": "FILE",
+        "name": "delete.md",
+        "path_ltree": "d1_a.f2_b",
+        "depth": 2,
+        "file_bucket_name": "knowledge-base",
+        "file_object_key": "kb/7/fs-entry/71/original.md",
+        "markdown_bucket_name": "knowledge-base-markdown",
+        "markdown_object_key": "kb/7/fs-entry/71/markdown.md",
+    }
     service = KnowledgeItemIngestionService(
         connection_factory=lambda: connection,
         knowledge_base_repository=FakeKnowledgeBaseRepository(
@@ -1707,33 +1724,45 @@ def test_delete_knowledge_item_marks_item_and_fs_entry_deleted():
             }
         ),
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
-        knowledge_item_repository=knowledge_item_repository,
+        knowledge_item_repository=FakeKnowledgeItemRepository(),
         knowledge_item_version_repository=FakeKnowledgeItemVersionRepository(),
         knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
-        retrieval_projection_repository=retrieval_projection_repository,
-        object_storage=FakeObjectStorage(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        object_storage=object_storage,
         embedding_dimension=2,
     )
 
     response = service.delete_knowledge_item(
-        DeleteKnowledgeItemRequest(kb_code="hr-policy", file_code="file-001")
+        DeleteKnowledgeItemRequest(kb_code="hr-policy", file_path="/Policies/delete.md")
     )
 
     assert response.kb_code == "hr-policy"
-    assert response.file_code == "file-001"
+    assert response.file_path == "/Policies/delete.md"
     assert response.is_deleted is True
     assert connection.committed is True
     assert (
-        "soft_delete_by_item_code",
-        {"knowledge_base_id": 7, "item_code": "file-001"},
-    ) in knowledge_item_repository.calls
+        "get_file_by_path",
+        {"knowledge_base_id": 7, "full_path": "Policies/delete.md"},
+    ) in knowledge_fs_entry_repository.calls
     assert (
         "soft_delete_file_entry",
         {"knowledge_base_id": 7, "fs_entry_id": 71},
     ) in knowledge_fs_entry_repository.calls
-    assert retrieval_projection_repository.calls == [
-        ("delete_for_item", {"knowledge_item_id": 10})
-    ]
+    assert any(
+        "delete from knowledge_chunk_retrieval_mv" in sql.lower()
+        and params == {"knowledge_base_id": 7, "fs_entry_id": 71}
+        for sql, params in connection.cursor_obj.executed
+    )
+    assert any(
+        "delete from knowledge_fetch_cache_index" in sql.lower()
+        and params == {"knowledge_base_id": 7, "fs_entry_id": 71}
+        for sql, params in connection.cursor_obj.executed
+    )
+    assert ("kb/7/fs-entry/71/original.md", "knowledge-base") in object_storage.deleted
+    assert (
+        "kb/7/fs-entry/71/markdown.md",
+        "knowledge-base-markdown",
+    ) in object_storage.deleted
 
 
 def test_create_knowledge_base_emits_internal_key_node_logs(monkeypatch):

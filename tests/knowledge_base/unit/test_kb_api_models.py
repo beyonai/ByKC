@@ -123,14 +123,17 @@ def test_update_file_request_rejects_path_like_file_name():
         )
 
 
-def test_delete_knowledge_item_request_requires_kb_code_and_file_code():
-    """Delete-knowledge-item requests should require kb_code and file_code."""
+def test_delete_knowledge_item_request_accepts_documented_fields():
+    """Delete-knowledge-item requests should accept knCode and filePath."""
     from by_qa.knowledge_base.api.schemas import DeleteKnowledgeItemRequest
 
-    request = DeleteKnowledgeItemRequest(kb_code="hr-policy", file_code="file-001")
+    request = DeleteKnowledgeItemRequest(
+        knCode="hr-policy",
+        filePath="/考勤制度/异常考勤处理办法.pdf",
+    )
 
     assert request.kb_code == "hr-policy"
-    assert request.file_code == "file-001"
+    assert request.file_path == "/考勤制度/异常考勤处理办法.pdf"
 
 
 def test_import_manifest_rejects_duplicate_chunk_numbers():

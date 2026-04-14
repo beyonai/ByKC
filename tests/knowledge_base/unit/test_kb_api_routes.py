@@ -91,7 +91,7 @@ class FakeKBService:
     def delete_knowledge_item(self, request):
         return DeleteKnowledgeItemResponse(
             kb_code=request.kb_code,
-            file_code=request.file_code,
+            file_path=request.file_path,
             is_deleted=True,
         )
 
@@ -634,21 +634,37 @@ def test_delete_knowledge_item_route_returns_business_response(monkeypatch):
     client = make_test_client(monkeypatch, service)
 
     response = client.post(
-        "/api/v1/knowledge-items/delete",
-        json={"kb_code": "hr-policy", "file_code": "file-001"},
+        "/api/v1/knowledgeItems/delete",
+        json={
+            "knCode": "hr-policy",
+            "filePath": "/考勤制度/异常考勤处理办法.pdf",
+        },
     )
 
     assert response.status_code == 200
     assert response.json() == {
-        "code": 200,
-        "message": "success",
-        "error": None,
-        "data": {
-            "kb_code": "hr-policy",
-            "file_code": "file-001",
-            "is_deleted": True,
-        },
+        "resultCode": "0",
+        "resultMsg": "success",
+        "resultObject": {},
     }
+
+
+def test_delete_knowledge_item_route_maps_request_validation_to_documented_error(
+    monkeypatch,
+):
+    """Delete-knowledge-item route should return the documented validation envelope."""
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/knowledgeItems/delete",
+        json={"knCode": "hr-policy"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["resultCode"] == "-1"
+    assert response.json()["resultMsg"] == "request validation failed"
+    assert response.json()["resultObject"]["errors"]
 
 
 def test_write_file_route_returns_business_response(monkeypatch):

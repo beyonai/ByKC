@@ -343,6 +343,63 @@ def test_create_file_entry_recursively_creates_missing_parents():
     assert insert_statements[2][1]["parent_entry_id"] == 81
 
 
+def test_get_file_by_path_resolves_file_under_current_path_model():
+    """File lookup should traverse knowledge-base-relative paths and return storage metadata."""
+    repo = KnowledgeFsEntryRepository()
+    cursor = FakeCursor(
+        fetchone_results=[
+            {
+                "kid": 80,
+                "knowledge_base_id": 7,
+                "parent_entry_id": None,
+                "path_ltree": "d1_5f95f5aa",
+                "name": "考勤制度",
+                "entry_type": "DIRECTORY",
+                "is_root": False,
+                "depth": 1,
+            },
+            {
+                "kid": 81,
+                "knowledge_base_id": 7,
+                "parent_entry_id": 80,
+                "path_ltree": "d1_5f95f5aa.f2_4100c4d4",
+                "name": "考勤制度.pdf",
+                "entry_type": "FILE",
+                "is_root": False,
+                "depth": 2,
+            },
+            {
+                "kid": 81,
+                "knowledge_base_id": 7,
+                "parent_entry_id": 80,
+                "path_ltree": "d1_5f95f5aa.f2_4100c4d4",
+                "name": "考勤制度.pdf",
+                "entry_type": "FILE",
+                "is_root": False,
+                "depth": 2,
+                "file_bucket_name": "knowledge-base",
+                "file_object_key": "kb/7/fs-entry/81/original.pdf",
+                "markdown_bucket_name": "knowledge-base-markdown",
+                "markdown_object_key": "kb/7/fs-entry/81/markdown.md",
+                "file_size": 245760,
+                "mime_type": "application/pdf",
+                "checksum": "abc123",
+            },
+        ]
+    )
+
+    row = repo.get_file_by_path(
+        cursor,
+        knowledge_base_id=7,
+        full_path="考勤制度/考勤制度.pdf",
+    )
+
+    assert row is not None
+    assert row["kid"] == 81
+    assert row["file_object_key"] == "kb/7/fs-entry/81/original.pdf"
+    assert len(cursor.executed) == 3
+
+
 def test_update_file_entry_storage_updates_new_storage_columns():
     """File upload should persist object-storage metadata on the fs entry row."""
     repo = KnowledgeFsEntryRepository()

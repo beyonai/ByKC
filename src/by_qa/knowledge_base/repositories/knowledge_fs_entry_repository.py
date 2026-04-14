@@ -552,6 +552,31 @@ class KnowledgeFsEntryRepository:
             current_parent_id = self._row_id(current)
         return current if current.get("entry_type") == "DIRECTORY" else None
 
+    def get_file_by_path(
+        self, cursor: Any, *, knowledge_base_id: int, full_path: str
+    ) -> dict[str, Any] | None:
+        """Look up one file entry by its knowledge-base-relative path."""
+        path_segments = [
+            segment for segment in full_path.strip("/").split("/") if segment
+        ]
+        if not path_segments:
+            return None
+        current_parent_id: int | None = None
+        current: dict[str, Any] | None = None
+        for segment in path_segments:
+            current = self._get_child_entry(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                parent_entry_id=current_parent_id,
+                name=segment,
+            )
+            if current is None:
+                return None
+            current_parent_id = self._row_id(current)
+        if current is None or current.get("entry_type") != "FILE":
+            return None
+        return self._get_entry_by_id(cursor, entry_id=self._row_id(current))
+
     def list_children(
         self, cursor: Any, *, parent_path_ltree: str
     ) -> list[dict[str, Any]]:
@@ -690,7 +715,23 @@ class KnowledgeFsEntryRepository:
     def _get_entry_by_id(self, cursor: Any, *, entry_id: int) -> dict[str, Any] | None:
         cursor.execute(
             """
-            SELECT kid, knowledge_base_id, parent_entry_id, path_ltree, name, entry_type, is_root, depth
+            SELECT
+                kid,
+                knowledge_base_id,
+                parent_entry_id,
+                path_ltree,
+                name,
+                entry_type,
+                is_root,
+                depth,
+                description,
+                file_bucket_name,
+                file_object_key,
+                markdown_bucket_name,
+                markdown_object_key,
+                file_size,
+                mime_type,
+                checksum
             FROM knowledge_fs_entry
             WHERE kid = %(entry_id)s
               AND is_deleted = FALSE
@@ -711,7 +752,23 @@ class KnowledgeFsEntryRepository:
         if parent_entry_id is None:
             cursor.execute(
                 """
-                SELECT kid, knowledge_base_id, parent_entry_id, path_ltree, name, entry_type, is_root, depth
+                SELECT
+                    kid,
+                    knowledge_base_id,
+                    parent_entry_id,
+                    path_ltree,
+                    name,
+                    entry_type,
+                    is_root,
+                    depth,
+                    description,
+                    file_bucket_name,
+                    file_object_key,
+                    markdown_bucket_name,
+                    markdown_object_key,
+                    file_size,
+                    mime_type,
+                    checksum
                 FROM knowledge_fs_entry
                 WHERE knowledge_base_id = %(knowledge_base_id)s
                   AND parent_entry_id IS NULL
@@ -726,7 +783,23 @@ class KnowledgeFsEntryRepository:
         else:
             cursor.execute(
                 """
-                SELECT kid, knowledge_base_id, parent_entry_id, path_ltree, name, entry_type, is_root, depth
+                SELECT
+                    kid,
+                    knowledge_base_id,
+                    parent_entry_id,
+                    path_ltree,
+                    name,
+                    entry_type,
+                    is_root,
+                    depth,
+                    description,
+                    file_bucket_name,
+                    file_object_key,
+                    markdown_bucket_name,
+                    markdown_object_key,
+                    file_size,
+                    mime_type,
+                    checksum
                 FROM knowledge_fs_entry
                 WHERE knowledge_base_id = %(knowledge_base_id)s
                   AND parent_entry_id = %(parent_entry_id)s

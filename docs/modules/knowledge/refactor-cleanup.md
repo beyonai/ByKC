@@ -46,6 +46,16 @@
   - 现状：`knowledgeBases/update` 已切到文档化返回信封后，不再调用该函数。
   - 原因：修改知识库已经不再走旧的标准错误信封，也不再使用旧的业务错误码映射。
 
+- `src/by_qa/knowledge_base/api/routes.py`
+  - `_map_delete_knowledge_base_validation_error`
+  - 现状：`knowledgeBases/delete` 已切到文档化返回信封后，不再调用该函数。
+  - 原因：删除知识库已经不再走旧的标准错误信封，也不再使用旧的业务错误码映射。
+
+- `src/by_qa/knowledge_base/repositories/retrieval_projection_repository.py`
+  - `delete_for_knowledge_base`
+  - 现状：删除知识库链路已改为直接操作 `knowledge_chunk_retrieval_mv`，不再调用该函数。
+  - 原因：该 repository 仍基于旧投影模型命名保留，但 `delete_for_knowledge_base` 已经没有生产调用。
+
 ### 2. 仅服务旧接口的路由与映射函数
 
 - `src/by_qa/knowledge_base/api/routes.py`
@@ -213,3 +223,10 @@
 - `knowledgeBases/update` 已改为仅处理 `knCode`、`knName`、`knDescription`，不再保留 `metadata` 更新语义。
 - 修改知识库成功响应已收敛为仅返回 `resultCode` / `resultMsg`，不再需要旧的业务响应体。
 - `_map_update_knowledge_base_validation_error` 已进入可直接删除范围。
+
+在“删除知识库”接口完成后，新增确认：
+
+- `knowledgeBases/delete` 已改为仅处理 `knCode`，成功响应仅返回 `resultCode` / `resultMsg`。
+- `_map_delete_knowledge_base_validation_error` 已进入可直接删除范围。
+- 删除知识库链路已不再依赖 `knowledge_item_repository`，也不再调用 `retrieval_projection_repository.delete_for_knowledge_base`。
+- 删除知识库当前直接清理 `knowledge_chunk_retrieval_mv`，说明旧 `knowledge_item` 主链路已不再是这条接口的运行前提。

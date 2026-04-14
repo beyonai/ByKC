@@ -701,26 +701,47 @@ def register_routes(
         )
 
     @app.post("/api/v1/knowledgeBases/delete")
-    async def delete_knowledge_base(request: DeleteKnowledgeBaseRequest):
+    async def delete_knowledge_base(body: dict[str, Any] = Body(...)):
+        try:
+            request = DeleteKnowledgeBaseRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": exc.errors()},
+                status_code=422,
+            )
         logger.info(
             "delete_knowledge_base request received: kb_code=%s", request.kb_code
         )
         try:
             service = get_knowledge_base_service()
-            result = service.delete_knowledge_base(request)
+            service.delete_knowledge_base(request)
         except KnowledgeBaseConfigurationError as exc:
-            return _error_response(
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
                 status_code=503,
-                error_type="configuration_error",
-                error_code="KB_RUNTIME_CONFIG_ERROR",
-                error_message=str(exc),
-                details={"kb_code": request.kb_code},
             )
         except KnowledgeBaseValidationError as exc:
-            return _map_delete_knowledge_base_validation_error(
-                exc=exc, kb_code=request.kb_code
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=404
+                if str(exc).startswith("knowledge base not found:")
+                else 422,
             )
-        return _success_response(data=result.model_dump())
+        except Exception as exc:
+            logger.exception(
+                "delete_knowledge_base unexpected error: kb_code=%s, error=%s",
+                request.kb_code,
+                exc,
+            )
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error",
+                result_object={},
+                status_code=500,
+            )
+        return _documented_success_response(result_object={})
 
     @app.post("/api/v1/knowledgeBases/update")
     async def update_knowledge_base(body: dict[str, Any] = Body(...)):

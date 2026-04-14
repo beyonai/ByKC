@@ -113,14 +113,6 @@ class KnowledgeBaseService:
             "knowledge_base_service.delete_knowledge_base started: kb_code=%s",
             request.kb_code,
         )
-        if (
-            self.knowledge_item_repository is None
-            or self.retrieval_projection_repository is None
-        ):
-            raise KnowledgeBaseValidationError(
-                "delete knowledge base runtime is not configured"
-            )
-
         connection = self.connection_factory()
         try:
             cursor = connection.cursor()
@@ -137,13 +129,12 @@ class KnowledgeBaseService:
                 cursor,
                 knowledge_base_id=knowledge_base_id,
             )
-            self.knowledge_item_repository.soft_delete_by_knowledge_base_id(
-                cursor,
-                knowledge_base_id=knowledge_base_id,
-            )
-            self.retrieval_projection_repository.delete_for_knowledge_base(
-                cursor,
-                knowledge_base_id=knowledge_base_id,
+            cursor.execute(
+                """
+                DELETE FROM knowledge_chunk_retrieval_mv
+                WHERE knowledge_base_id = %(knowledge_base_id)s
+                """,
+                {"knowledge_base_id": knowledge_base_id},
             )
             connection.commit()
             return DeleteKnowledgeBaseResponse(kb_code=request.kb_code, is_deleted=True)

@@ -21,7 +21,7 @@ def test_delete_knowledge_base_request_requires_kb_code():
     """Delete-knowledge-base requests should require the business kb_code."""
     from by_qa.knowledge_base.api.schemas import DeleteKnowledgeBaseRequest
 
-    request = DeleteKnowledgeBaseRequest(kb_code="hr-policy")
+    request = DeleteKnowledgeBaseRequest(knCode="hr-policy")
 
     assert request.kb_code == "hr-policy"
 

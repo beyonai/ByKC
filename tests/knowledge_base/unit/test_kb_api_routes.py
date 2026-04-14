@@ -329,15 +329,14 @@ def test_delete_knowledge_base_route_returns_business_response(monkeypatch):
 
     response = client.post(
         "/api/v1/knowledgeBases/delete",
-        json={"kb_code": "hr-policy"},
+        json={"knCode": "hr-policy"},
     )
 
     assert response.status_code == 200
     assert response.json() == {
-        "code": 200,
-        "message": "success",
-        "error": None,
-        "data": {"kb_code": "hr-policy", "is_deleted": True},
+        "resultCode": "0",
+        "resultMsg": "success",
+        "resultObject": {},
     }
 
 

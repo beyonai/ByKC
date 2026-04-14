@@ -36,7 +36,7 @@ class FakeConnection:
     def __init__(self):
         self.committed = False
         self.rolled_back = False
-        self.cursor_obj = object()
+        self.cursor_obj = FakeServiceCursor()
 
     def cursor(self):
         return self.cursor_obj
@@ -49,6 +49,16 @@ class FakeConnection:
 
     def close(self):
         return None
+
+
+class FakeServiceCursor:
+    """Minimal cursor double for service-level raw SQL assertions."""
+
+    def __init__(self):
+        self.executed = []
+
+    def execute(self, sql, params=None):
+        self.executed.append((sql, params))
 
 
 class FakeKnowledgeBaseRepository:
@@ -855,7 +865,7 @@ def test_create_knowledge_base_rejects_duplicate_name():
 
 
 def test_delete_knowledge_base_marks_kb_and_descendants_deleted():
-    """Deleting one knowledge base should logically delete the KB, fs entries, items, and projection rows."""
+    """Deleting one knowledge base should logically delete the KB, fs entries, and retrieval rows."""
     connection = FakeConnection()
     knowledge_base_repository = FakeKnowledgeBaseRepository(
         default_lookup_result={
@@ -867,14 +877,10 @@ def test_delete_knowledge_base_marks_kb_and_descendants_deleted():
         }
     )
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
-    knowledge_item_repository = FakeKnowledgeItemRepository()
-    retrieval_projection_repository = FakeRetrievalProjectionRepository()
     service = KnowledgeBaseService(
         connection_factory=lambda: connection,
         knowledge_base_repository=knowledge_base_repository,
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
-        knowledge_item_repository=knowledge_item_repository,
-        retrieval_projection_repository=retrieval_projection_repository,
     )
 
     response = service.delete_knowledge_base(
@@ -893,12 +899,12 @@ def test_delete_knowledge_base_marks_kb_and_descendants_deleted():
         {"knowledge_base_id": 7},
     ) in knowledge_fs_entry_repository.calls
     assert (
-        "soft_delete_by_knowledge_base_id",
+        """
+                DELETE FROM knowledge_chunk_retrieval_mv
+                WHERE knowledge_base_id = %(knowledge_base_id)s
+                """,
         {"knowledge_base_id": 7},
-    ) in knowledge_item_repository.calls
-    assert retrieval_projection_repository.calls == [
-        ("delete_for_knowledge_base", {"knowledge_base_id": 7})
-    ]
+    ) in connection.cursor_obj.executed
 
 
 def test_update_knowledge_base_commits_and_returns_success():

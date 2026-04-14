@@ -438,10 +438,16 @@ class KnowledgeItemListDirResponse(BaseModel):
 class KnowledgeItemGlobRequest(BaseModel):
     """Request body for path-pattern based filesystem matching."""
 
-    kb_codes: list[str] = Field(min_length=1)
-    path: str = Field(min_length=1)
-    source_codes: Optional[list[str]] = None
-    type_codes: Optional[list[str]] = None
+    model_config = ConfigDict(populate_by_name=True)
+
+    kb_code: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("knCode", "kb_code"),
+    )
+    path_rule: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("pathRule", "path_rule"),
+    )
 
 
 class KnowledgeItemFetchRequest(BaseModel):

@@ -34,7 +34,7 @@
 - `src/by_qa/knowledge_base/services/knowledge_base_service.py`
   - `_path_to_regex`
   - 现状：未被任何生产代码调用。
-  - 原因：当前 `glob` 已使用 `_match_pattern_segments` 处理路径匹配，不再使用正则路径转换辅助函数。
+  - 原因：当前 `glob` 已改为基于库内相对路径逐层匹配，不再使用正则路径转换辅助函数。
 
 - `src/by_qa/knowledge_base/api/routes.py`
   - `_map_create_knowledge_base_validation_error`
@@ -71,10 +71,27 @@
   - 现状：`listDir` 已切到文档化返回信封后，该函数已删除。
   - 原因：获取目录内容已经不再走旧的标准错误信封，也不再使用旧路径错误码映射。
 
+- `src/by_qa/knowledge_base/api/routes.py`
+  - `_map_glob_validation_error`
+  - 现状：`glob` 已切到文档化返回信封后，该函数已删除。
+  - 原因：路径模式匹配已经不再走旧的标准错误信封，也不再使用旧路径错误码映射。
+
 - `src/by_qa/knowledge_base/repositories/retrieval_projection_repository.py`
   - `delete_for_knowledge_base`
   - 现状：删除知识库链路已改为直接操作 `knowledge_chunk_retrieval_mv`，不再调用该函数。
   - 原因：该 repository 仍基于旧投影模型命名保留，但 `delete_for_knowledge_base` 已经没有生产调用。
+
+- `src/by_qa/knowledge_base/services/knowledge_base_service.py`
+  - `_list_by_path_pattern`
+  - `_list_directory_entries`
+  - `_match_pattern_segments`
+  - `_project_node`
+  - `_segment_matches_pattern`
+  - `_segment_has_pattern`
+  - `_expand_directory_contents`
+  - `_all_directories`
+  - 现状：`listDir` / `glob` 已切到新路径模型后，这组虚拟根路径匹配辅助函数已经没有生产调用。
+  - 原因：这组函数只服务旧的虚拟根目录匹配和目录展开逻辑。
 
 ### 2. 仅服务旧接口的路由与映射函数
 
@@ -122,23 +139,17 @@
   - `get_virtual_path_by_entry_id`
 
 - `src/by_qa/knowledge_base/services/knowledge_base_service.py`
-  - `_list_by_path_pattern`
-  - `_match_pattern_segments`
-  - `_project_node`
   - `_normalize_output_item`
   - `_ensure_leading_slash`
-  - `_segment_matches_pattern`
-  - `_segment_has_pattern`
-  - `_expand_directory_contents`
   - `_resolve_virtual_path`
   - `_with_virtual_full_path`
-  - `_all_directories`
   - `_normalize_virtual_path`
 
 - 原因：
   - 当前文档明确规定 `directoryPath`、`filePath` 不包含知识库名称。
   - 以上函数仍然围绕“知识库名称暴露为虚拟根目录”建模。
-  - 等 `listDir` / `glob` / `readFile` / `downloadFile` 完全改成基于 `knCode + 相对路径` 后，这整套虚拟根路径处理可整体移除或大幅收缩。
+  - `listDir` / `glob` 已切到基于 `knCode + 相对路径` 的新模型。
+  - 等 `readFile` / `downloadFile` 也完全迁移后，这整套虚拟根路径处理可整体移除或大幅收缩。
 
 ### 2. 旧文档编码 / 版本模型链路
 
@@ -345,3 +356,15 @@
   - `knowledge_fs_entry_repository.list_children_by_parent_entry_id`
 - `knowledge_fs_entry_repository.list_children_by_parent_entry_id` 已进入当前主链路，并且只依赖 `knowledge_fs_entry` 当前字段，不再 join `knowledge_item` / `knowledge_item_version`。
 - `_map_list_dir_validation_error` 已删除。
+
+在“按路径模式匹配”接口完成后，新增确认：
+
+- `glob` 已改为仅处理 `knCode`、`pathRule`，不再保留 `kb_codes`、`path`、`source_codes`、`type_codes` 旧字段。
+- `glob` 返回已改为文档化信封，并通过 `resultObject.data` 返回匹配项。
+- `glob` 匹配规则已收敛为：
+  - `*` 只匹配单层路径段
+  - 不支持 `**` 多层目录匹配
+- `knowledge_base_service.glob` 已从 `list_root_nodes` / 虚拟根路径链路切换到：
+  - `knowledge_base_repository.get_by_code`
+  - `knowledge_fs_entry_repository.list_children_by_parent_entry_id`
+- `_map_glob_validation_error` 已删除。

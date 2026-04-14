@@ -189,8 +189,8 @@ class FakeKBService:
         return KnowledgeItemListDirResponse(
             items=[
                 KnowledgeItemListDirItem(
-                    kb_code="integration-kb",
-                    name="/Integration KB/dir1/doc.md",
+                    kb_code=request.kb_code,
+                    name="/dir1/doc.md",
                     type="file",
                     size=100,
                 )
@@ -1100,35 +1100,43 @@ def test_glob_route_returns_matching_entries(monkeypatch):
     response = client.post(
         "/api/v1/glob",
         json={
-            "kb_codes": ["integration-kb"],
-            "path": "Integration KB/*.md",
+            "knCode": "integration-kb",
+            "pathRule": "/dir1/*.md",
         },
     )
 
     assert response.status_code == 200
-    assert response.json()["data"] == [
-        {
-            "kb_code": "integration-kb",
-            "name": "/Integration KB/dir1/doc.md",
-            "type": "file",
-            "size": 100,
-        }
-    ]
+    assert response.json() == {
+        "resultCode": "0",
+        "resultMsg": "success",
+        "resultObject": {
+            "data": [
+                {
+                    "knCode": "integration-kb",
+                    "name": "/dir1/doc.md",
+                    "type": "file",
+                    "size": 100,
+                }
+            ]
+        },
+    }
 
 
 def test_glob_route_requires_kb_codes(monkeypatch):
-    """Glob route should reject requests that omit kb_codes."""
+    """Glob route should reject requests that omit knCode."""
     client = make_test_client(monkeypatch, FakeKBService())
 
     response = client.post(
         "/api/v1/glob",
         json={
-            "path": "*.md",
+            "pathRule": "/*.md",
         },
     )
 
     assert response.status_code == 422
-    assert response.json()["error"]["error_code"] == "REQUEST_VALIDATION_FAILED"
+    assert response.json()["resultCode"] == "-1"
+    assert response.json()["resultMsg"] == "request validation failed"
+    assert response.json()["resultObject"]["errors"]
 
 
 def test_glob_route_maps_validation_error_to_standard_error(monkeypatch):
@@ -1142,18 +1150,17 @@ def test_glob_route_maps_validation_error_to_standard_error(monkeypatch):
     response = client.post(
         "/api/v1/glob",
         json={
-            "kb_codes": ["integration-kb"],
-            "path": "../secret",
+            "knCode": "integration-kb",
+            "pathRule": "../secret",
         },
     )
 
     assert response.status_code == 422
-    assert response.json()["code"] == 422
-    assert response.json()["message"] == "error"
-    assert response.json()["data"] is None
-    assert response.json()["error"]["type"] == "business_validation"
-    assert response.json()["error"]["error_code"] == "KB_GLOB_INVALID"
-    assert response.json()["error"]["details"] == {"path": "../secret"}
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "path contains invalid segments",
+        "resultObject": {},
+    }
 
 
 def test_glob_route_maps_configuration_error_to_503(monkeypatch):
@@ -1167,14 +1174,17 @@ def test_glob_route_maps_configuration_error_to_503(monkeypatch):
     response = client.post(
         "/api/v1/glob",
         json={
-            "kb_codes": ["integration-kb"],
-            "path": "*.md",
+            "knCode": "integration-kb",
+            "pathRule": "/*.md",
         },
     )
 
     assert response.status_code == 503
-    assert response.json()["error"]["type"] == "configuration_error"
-    assert response.json()["error"]["error_code"] == "KB_RUNTIME_CONFIG_ERROR"
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "KB runtime is not configured",
+        "resultObject": {},
+    }
 
 
 def test_read_file_route_returns_requested_text(monkeypatch):

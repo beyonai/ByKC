@@ -267,10 +267,10 @@ class FakeKnowledgeFsEntryRepository:
             },
         ]
         self.directory_child_rows_by_parent = {
-            None: [{"name": "dir1", "type": "directory", "size": 0}],
+            None: [{"kid": 80, "name": "dir1", "type": "directory", "size": 0}],
             80: [
-                {"name": "doc.md", "type": "file", "size": 128},
-                {"name": "subdir", "type": "directory", "size": 0},
+                {"kid": 81, "name": "doc.md", "type": "file", "size": 128},
+                {"kid": 82, "name": "subdir", "type": "directory", "size": 0},
             ],
         }
         self.pattern_matches = [
@@ -2996,176 +2996,64 @@ def test_list_dir_literal_missing_path_raises_not_found():
     ]
 
 
-def test_glob_pattern_with_literal_prefix_uses_ancestor_path_ltree():
-    """Literal-prefix pattern should resolve the prefix directory and constrain traversal."""
+def test_glob_pattern_matches_one_segment_at_a_time():
+    """Glob should match pathRule with * limited to one path segment."""
     connection = FakeConnection()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeBaseService(
         connection_factory=lambda: connection,
         knowledge_base_repository=FakeKnowledgeBaseRepository(
-            default_lookup_result=None
+            default_lookup_result={"kid": 7, "kb_name": "人力制度知识库"}
         ),
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
     )
 
     response = service.glob(
-        KnowledgeItemGlobRequest(
-            kb_codes=["hr-policy"], path="人力制度知识库/dir1/*.md"
+        KnowledgeItemGlobRequest(kb_code="hr-policy", path_rule="/dir1/*.md")
+    )
+
+    assert response.model_dump()["items"] == [
+        {
+            "kb_code": "hr-policy",
+            "name": "/dir1/doc.md",
+            "type": "file",
+            "size": 128,
+        }
+    ]
+    assert knowledge_fs_entry_repository.calls == [
+        (
+            "list_children_by_parent_entry_id",
+            {"knowledge_base_id": 7, "parent_entry_id": None},
+        ),
+        (
+            "list_children_by_parent_entry_id",
+            {"knowledge_base_id": 7, "parent_entry_id": 80},
+        ),
+    ]
+
+
+def test_glob_rejects_double_star_multi_level_matching():
+    """Glob should reject ** because only single-level * matching is supported."""
+    connection = FakeConnection()
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    service = KnowledgeBaseService(
+        connection_factory=lambda: connection,
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={"kid": 7, "kb_name": "人力制度知识库"}
+        ),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+    )
+
+    try:
+        service.glob(
+            KnowledgeItemGlobRequest(kb_code="hr-policy", path_rule="/dir1/**/*.md")
         )
-    )
+    except KnowledgeBaseValidationError as exc:
+        assert str(exc) == "pathRule does not support ** multi-level matching"
+    else:
+        raise AssertionError("expected KnowledgeBaseValidationError")
 
-    assert response.model_dump()["items"] == [
-        {
-            "kb_code": "hr-policy",
-            "name": "/人力制度知识库/dir1/doc.md",
-            "type": "file",
-            "size": 128,
-        }
-    ]
-    assert knowledge_fs_entry_repository.calls == [
-        ("list_root_nodes", {"kb_codes": ["hr-policy"]}),
-        ("list_child_nodes", {"parent_path_ltree": "kb_7"}),
-        ("list_child_nodes", {"parent_path_ltree": "kb_7.d1_a"}),
-    ]
-
-
-def test_glob_pattern_with_root_glob_limits_search_to_matching_roots():
-    """Multi-segment glob should match roots first, then only search matched root subtrees."""
-    connection = FakeConnection()
-    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
-    service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
-        knowledge_base_repository=FakeKnowledgeBaseRepository(
-            default_lookup_result=None
-        ),
-        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
-    )
-
-    response = service.glob(
-        KnowledgeItemGlobRequest(kb_codes=["hr-policy"], path="人力*/*.md")
-    )
-
-    assert response.model_dump()["items"] == [
-        {
-            "kb_code": "hr-policy",
-            "name": "/人力制度知识库/doc.md",
-            "type": "file",
-            "size": 128,
-        }
-    ]
-    assert knowledge_fs_entry_repository.calls == [
-        ("list_root_nodes", {"kb_codes": ["hr-policy"]}),
-        ("list_child_nodes", {"parent_path_ltree": "kb_7"}),
-    ]
-
-
-def test_glob_directory_patterns_keep_root_prefix_and_treat_trailing_slash_as_list_contents():
-    """Directory-like patterns should list matched directory contents and keep the root prefix."""
-    connection = FakeConnection()
-    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
-    knowledge_fs_entry_repository.root_entries = [
-        {"kb_code": "demo-kb", "name": "/DEMO知识库", "type": "directory", "size": 0}
-    ]
-    knowledge_fs_entry_repository.root_entries_by_kb_code["demo-kb"] = [
-        {"kb_code": "demo-kb", "name": "/DEMO知识库", "type": "directory", "size": 0}
-    ]
-    knowledge_fs_entry_repository.root_nodes = [
-        {
-            "kid": 9,
-            "kb_code": "demo-kb",
-            "name": "DEMO知识库",
-            "full_path": "DEMO知识库",
-            "type": "directory",
-            "size": 0,
-            "path_ltree": "kb_9",
-        }
-    ]
-    knowledge_fs_entry_repository.root_nodes_by_kb_code["demo-kb"] = list(
-        knowledge_fs_entry_repository.root_nodes
-    )
-    knowledge_fs_entry_repository.child_nodes_by_parent = {
-        "kb_9": [
-            {
-                "kid": 91,
-                "kb_code": "demo-kb",
-                "name": "教程",
-                "full_path": "教程",
-                "type": "directory",
-                "size": 0,
-                "path_ltree": "kb_9.d1_tutorial",
-            }
-        ],
-        "kb_9.d1_tutorial": [
-            {
-                "kid": 92,
-                "kb_code": "demo-kb",
-                "name": "单跳.pdf",
-                "full_path": "单跳.pdf",
-                "type": "file",
-                "size": 100,
-                "path_ltree": "kb_9.d1_tutorial.f2_pdf",
-            }
-        ],
-    }
-    service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
-        knowledge_base_repository=FakeKnowledgeBaseRepository(
-            default_lookup_result=None
-        ),
-        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
-    )
-
-    level_one_with_slash = service.glob(
-        KnowledgeItemGlobRequest(kb_codes=["demo-kb"], path="DEMO知识*/")
-    )
-    level_one_without_slash = service.glob(
-        KnowledgeItemGlobRequest(kb_codes=["demo-kb"], path="DEMO知识*")
-    )
-    level_two_with_slash = service.glob(
-        KnowledgeItemGlobRequest(kb_codes=["demo-kb"], path="DEMO知识*/*/")
-    )
-    level_two_without_slash = service.glob(
-        KnowledgeItemGlobRequest(kb_codes=["demo-kb"], path="DEMO知识*/*")
-    )
-    level_three = service.glob(
-        KnowledgeItemGlobRequest(kb_codes=["demo-kb"], path="DEMO知识*/*/*")
-    )
-
-    assert level_one_with_slash.model_dump()["items"] == [
-        {
-            "kb_code": "demo-kb",
-            "name": "/DEMO知识库/教程",
-            "type": "directory",
-            "size": 0,
-        }
-    ]
-    assert level_one_without_slash.model_dump()["items"] == [
-        {"kb_code": "demo-kb", "name": "/DEMO知识库", "type": "directory", "size": 0}
-    ]
-    assert level_two_with_slash.model_dump()["items"] == [
-        {
-            "kb_code": "demo-kb",
-            "name": "/DEMO知识库/教程/单跳.pdf",
-            "type": "file",
-            "size": 100,
-        }
-    ]
-    assert level_two_without_slash.model_dump()["items"] == [
-        {
-            "kb_code": "demo-kb",
-            "name": "/DEMO知识库/教程",
-            "type": "directory",
-            "size": 0,
-        }
-    ]
-    assert level_three.model_dump()["items"] == [
-        {
-            "kb_code": "demo-kb",
-            "name": "/DEMO知识库/教程/单跳.pdf",
-            "type": "file",
-            "size": 100,
-        }
-    ]
+    assert knowledge_fs_entry_repository.calls == []
 
 
 def test_list_dir_raises_when_knowledge_base_is_missing():

@@ -508,19 +508,6 @@ def _map_search_validation_error(*, exc: KnowledgeBaseValidationError) -> JSONRe
     )
 
 
-def _map_glob_validation_error(
-    *, exc: KnowledgeBaseValidationError, path: str
-) -> JSONResponse:
-    """Map glob validation errors to the standardized protocol."""
-    return _error_response(
-        status_code=422,
-        error_type="business_validation",
-        error_code="KB_GLOB_INVALID",
-        error_message=str(exc),
-        details={"path": path},
-    )
-
-
 def _map_read_file_validation_error(
     *, exc: KnowledgeBaseValidationError, path: str, kb_codes: list[str]
 ) -> JSONResponse:
@@ -1308,8 +1295,20 @@ def register_routes(
         )
 
     @app.post("/api/v1/glob")
-    async def glob(request: KnowledgeItemGlobRequest):
-        logger.info("glob request received: path=%s", request.path)
+    async def glob(body: dict[str, Any] = Body(...)):
+        try:
+            request = KnowledgeItemGlobRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        logger.info(
+            "glob request received: kb_code=%s, path_rule=%s",
+            request.kb_code,
+            request.path_rule,
+        )
         try:
             service = get_knowledge_base_service()
             logger.info(
@@ -1318,32 +1317,54 @@ def register_routes(
             )
             result = service.glob(request)
             logger.info(
-                "glob service call succeeded: path=%s, item_count=%s",
-                request.path,
+                "glob service call succeeded: path_rule=%s, item_count=%s",
+                request.path_rule,
                 len(result.items),
             )
         except KnowledgeBaseConfigurationError as exc:
             logger.warning(
-                "glob configuration failed: path=%s, error=%s", request.path, exc
+                "glob configuration failed: path_rule=%s, error=%s",
+                request.path_rule,
+                exc,
             )
-            return _error_response(
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
                 status_code=503,
-                error_type="configuration_error",
-                error_code="KB_RUNTIME_CONFIG_ERROR",
-                error_message=str(exc),
-                details={"path": request.path},
             )
         except KnowledgeBaseValidationError as exc:
             logger.warning(
-                "glob validation failed: path=%s, error=%s", request.path, exc
+                "glob validation failed: path_rule=%s, error=%s",
+                request.path_rule,
+                exc,
             )
-            return _map_glob_validation_error(exc=exc, path=request.path)
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=422,
+            )
+        except Exception as exc:
+            logger.exception(
+                "glob unexpected error: kb_code=%s, path_rule=%s, error=%s",
+                request.kb_code,
+                request.path_rule,
+                exc,
+            )
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error",
+                result_object={},
+                status_code=500,
+            )
 
         logger.info(
             "glob response ready: code=200, item_count=%s",
             len(result.items),
         )
-        return {"code": 200, "message": "success", "data": result.model_dump()["items"]}
+        return _documented_success_response(
+            result_object={
+                "data": [item.model_dump(by_alias=True) for item in result.items]
+            }
+        )
 
     @app.post("/api/v1/read-file")
     async def read_file(request: KnowledgeItemFetchRequest):

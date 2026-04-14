@@ -538,20 +538,47 @@ class KnowledgeBaseService:
             connection.close()
 
     def glob(self, request: KnowledgeItemGlobRequest) -> KnowledgeItemListDirResponse:
-        """Match filesystem entries via layered glob/regex-style segments."""
-        logger.info("knowledge_base_service.glob started: path=%s", request.path)
+        """Match filesystem entries via single-level path segments."""
+        logger.info(
+            "knowledge_base_service.glob started: kb_code=%s, path_rule=%s",
+            request.kb_code,
+            request.path_rule,
+        )
         connection = self.connection_factory()
         try:
             cursor = connection.cursor()
-            items = self._list_by_path_pattern(
+            kb_row = self.knowledge_base_repository.get_by_code(
                 cursor,
-                request.path.strip("/"),
-                list_directory_contents=request.path.strip().endswith("/"),
-                kb_codes=request.kb_codes,
+                request.kb_code,
+            )
+            if not kb_row:
+                raise KnowledgeBaseValidationError(
+                    f"knowledge base not found: {request.kb_code}"
+                )
+            knowledge_base_id = self._row_id(kb_row)
+            normalized_rule = request.path_rule.strip()
+            if not normalized_rule:
+                raise KnowledgeBaseValidationError("pathRule must not be empty")
+            if not normalized_rule.startswith("/"):
+                raise KnowledgeBaseValidationError("pathRule must start with /")
+            pattern_segments = [
+                segment for segment in normalized_rule.strip("/").split("/") if segment
+            ]
+            if not pattern_segments:
+                raise KnowledgeBaseValidationError("pathRule must not be root")
+            if any("**" in segment for segment in pattern_segments):
+                raise KnowledgeBaseValidationError(
+                    "pathRule does not support ** multi-level matching"
+                )
+            items = self._glob_relative_path_segments(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                kb_code=request.kb_code,
+                pattern_segments=pattern_segments,
             )
             logger.info(
-                "knowledge_base_service.glob finished: path=%s, item_count=%s",
-                request.path,
+                "knowledge_base_service.glob finished: path_rule=%s, item_count=%s",
+                request.path_rule,
                 len(items),
             )
             return KnowledgeItemListDirResponse(items=items)
@@ -830,6 +857,59 @@ class KnowledgeBaseService:
             cursor=cursor,
             list_directory_contents=list_directory_contents,
         )
+
+    def _glob_relative_path_segments(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        kb_code: str,
+        pattern_segments: list[str],
+    ) -> list[KnowledgeItemListDirItem]:
+        current_matches: list[tuple[int | None, str, str, int]] = [
+            (None, "", "directory", 0)
+        ]
+        for segment in pattern_segments:
+            next_matches: list[tuple[int, str, str, int]] = []
+            for match in current_matches:
+                parent_entry_id = match[0]
+                parent_path = match[1]
+                child_rows = (
+                    self.knowledge_fs_entry_repository.list_children_by_parent_entry_id(
+                        cursor,
+                        knowledge_base_id=knowledge_base_id,
+                        parent_entry_id=parent_entry_id,
+                    )
+                )
+                for row in child_rows:
+                    name = str(row["name"])
+                    if not self._segment_matches_path_rule(name, segment):
+                        continue
+                    child_path = f"{parent_path}/{name}"
+                    next_matches.append(
+                        (
+                            int(row["kid"]),
+                            child_path,
+                            str(row["type"]),
+                            int(row.get("size") or 0),
+                        )
+                    )
+            current_matches = next_matches
+            if not current_matches:
+                return []
+        return [
+            KnowledgeItemListDirItem(
+                kb_code=kb_code,
+                name=matched_path,
+                type=item_type,
+                size=item_size,
+            )
+            for row_id, matched_path, item_type, item_size in current_matches
+            if row_id is not None
+        ]
+
+    def _segment_matches_path_rule(self, name: str, pattern: str) -> bool:
+        return fnmatch.fnmatchcase(name, pattern)
 
     def _list_directory_entries(
         self, cursor: Any, path: str, *, kb_codes: list[str]

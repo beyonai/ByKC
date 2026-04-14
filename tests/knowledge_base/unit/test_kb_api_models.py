@@ -341,6 +341,19 @@ def test_search_request_rejects_empty_kb_codes():
         )
 
 
+def test_glob_request_accepts_documented_fields():
+    """Glob requests should accept knCode and pathRule."""
+    from by_qa.knowledge_base.api.schemas import KnowledgeItemGlobRequest
+
+    request = KnowledgeItemGlobRequest(
+        knCode="hr-policy",
+        pathRule="/制度/*/*.pdf",
+    )
+
+    assert request.kb_code == "hr-policy"
+    assert request.path_rule == "/制度/*/*.pdf"
+
+
 def test_search_request_requires_candidate_limits_not_smaller_than_top_k():
     """Candidate pool sizes should not be smaller than the final top_k."""
     from by_qa.knowledge_base.api.schemas import KnowledgeItemSearchRequest

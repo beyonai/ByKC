@@ -16,10 +16,10 @@
 
 相关文档：
 
-- [模块框架](docs/modules/knowledge-base/framework.md)
-- [模块设计](docs/modules/knowledge-base/design.md)
-- [接口说明](docs/modules/knowledge-base/api.md)
-- [MinIO 说明](docs/modules/knowledge-base/minio.md)
+- [模块框架](docs/modules/knowledge/framework.md)
+- [模块设计](docs/modules/knowledge/design.md)
+- [接口说明](docs/modules/knowledge/api.md)
+- [MinIO 说明](docs/modules/knowledge/minio.md)
 
 ### Knowledge Build
 
@@ -33,9 +33,9 @@
 
 相关文档：
 
-- [模块框架](docs/modules/knowledge-build/framework.md)
-- [模块设计](docs/modules/knowledge-build/design.md)
-- [处理流程](docs/modules/knowledge-build/process.md)
+- [模块框架](docs/modules/knowledge/framework.md)
+- [模块设计](docs/modules/knowledge/design.md)
+- [处理流程](docs/modules/knowledge/process.md)
 
 ### Instant QA
 

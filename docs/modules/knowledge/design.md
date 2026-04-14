@@ -1,32 +1,36 @@
-# 知识库模块存储设计文档
+# 知识模块设计文档
 
 ## 文档目标
 
-本文档描述知识库模块的整体存储结构，回答三个核心问题：
+本文档描述知识模块的整体结构，回答 4 个核心问题：
 
 - openGauss 中有哪些核心表，各自负责什么
 - 这些表之间如何关联，主数据如何从知识库一路落到 chunk
 - MinIO 中对象如何存、如何命名、如何参与导入和读取
+- 文件解析、切片和 embedding 构建如何接入整条知识链路
 
 相关文档：
 
 - [framework.md](./framework.md)
 - [design.md](./design.md)
 - [api.md](./api.md)
+- [process.md](./process.md)
 - [minio.md](./minio.md)
 
-## 整体存储结构
+## 整体结构
 
-知识库模块采用“双存储层”设计：
+知识模块采用“双存储层 + 一条构建链路”设计：
 
 - openGauss：保存结构化元数据、版本关系、chunk、检索投影和缓存索引
 - MinIO：保存原始文件对象和 Markdown sidecar 对象
+- 构建链路：负责原始文件转 Markdown、切片和向量化
 
 职责边界如下：
 
 - 数据库是业务状态的权威来源
 - MinIO 是文件内容的权威来源
 - 本地缓存目录 `agent_data/kb_cache` 是读取优化层，不是业务主存储
+- 构建链路服务于导入后的读取和检索能力
 
 整体数据流如下：
 
@@ -35,11 +39,12 @@ flowchart LR
     A["知识库 knowledge_base"] --> B["文件树 knowledge_fs_entry"]
     B --> C["文档主表 knowledge_item"]
     C --> D["版本表 knowledge_item_version"]
-    D --> E["Chunk 表 knowledge_item_chunk"]
-    E --> F["检索投影 knowledge_item_chunk_retrieval_mv"]
-    D --> G["读取缓存索引 knowledge_fetch_cache_index"]
-    D --> H["MinIO 原始文件对象"]
-    D --> I["MinIO Markdown 对象"]
+    D --> E["原始文件对象 MinIO"]
+    D --> F["Markdown 对象 MinIO"]
+    F --> G["知识构建链路"]
+    G --> H["Chunk 表 knowledge_item_chunk"]
+    H --> I["检索投影 knowledge_item_chunk_retrieval_mv"]
+    D --> J["读取缓存索引 knowledge_fetch_cache_index"]
 ```
 
 ## 存储分层设计
@@ -208,7 +213,7 @@ flowchart LR
 
 - 版本表不直接保存大文本，只保存对象位置和摘要
 - 原始文件与 Markdown sidecar 都挂在版本级，而不是文档级
-- 当前实现支持“一个业务文档多个历史版本，一个当前版本”
+- 支持“一个业务文档多个历史版本，一个当前版本”
 - 对象键不再依赖逻辑路径，而是依赖稳定的知识库 ID、文档 ID 与版本号
 
 ### `knowledge_item_chunk`
@@ -258,240 +263,141 @@ chunk 表，记录某个版本切分后的文本块。
 
 当前版本检索投影表，用于把检索需要的字段拍平成一张宽表。
 
-核心字段：
-
-- `chunk_id`
-- `knowledge_base_id`、`kb_code`、`knowledge_base_status`
-- `fs_entry_id`、`parent_entry_id`、`full_path`
-- `knowledge_item_id`、`item_code`、`item_kind`、`knowledge_item_status`
-- `current_version_id`、`knowledge_item_version_id`、`version`
-- `source_code`、`type_code`
-- `metadata`
-- `chunk_no`、`start_line`、`end_line`
-- `chunk_text`、`search_text`
-
 设计要点：
 
-- 只保留“当前版本”的检索视图，减少历史版本噪声
-- 查询时不必多表 join，提升检索链路稳定性
-- 命名虽然带 `mv`，当前实现是物化投影表，不是数据库原生 materialized view
-- `full_path` 在该表中是检索展示字段，由文件树结构推导后写入
+- 只暴露当前生效版本的 chunk
+- 同时携带知识库、文件、版本与 chunk 信息
+- 尽量避免检索时做多表复杂 join
 
 ### `knowledge_fetch_cache_index`
 
-Markdown 读取缓存索引表，记录远端对象到本地缓存文件的映射。
+本地读取缓存索引表，用于管理 Markdown sidecar 的本地缓存。
 
 核心字段：
 
-- `knowledge_base_id`、`fs_entry_id`、`knowledge_item_id`、`knowledge_item_version_id`
-- `kb_code`、`full_path`、`virtual_path`
-- `bucket_name`、`object_key`、`checksum`
+- `knowledge_item_version_id`
+- `bucket_name`、`object_key`
 - `cache_file_path`
-- `file_size`
-- `cache_ttl_seconds`
-- `first_cached_at`、`last_cached_at`、`last_accessed_at`、`expires_at`
+- `checksum`
+- `expires_at`
 - `cache_status`
-- `evict_retry_count`
-- `last_error`
-
-关键约束：
-
-- 一个版本最多一条缓存索引：`knowledge_item_version_id UNIQUE`
-- 一个本地缓存路径只能被一个版本占用：`cache_file_path UNIQUE`
-- `cache_status` 限定为 `READY`、`EVICTING`、`ERROR`
 
 设计要点：
 
-- 这张表不管理远端对象，只管理本地缓存文件状态
-- 它服务 `read-file` 等读取接口的缓存命中与清理
-- 是存储优化层，不是主业务表
+- 服务 `readFile` 的按行读取能力
+- 减少相同版本 Markdown 的重复下载
+- 与后台缓存清理任务协同
 
-## 表关系设计
+## 表关系
 
-### 主关系链
-
-主关系链如下：
+核心主从关系如下：
 
 ```mermaid
 erDiagram
+    knowledge_base ||--|| knowledge_fs_entry : root_entry_id
     knowledge_base ||--o{ knowledge_fs_entry : contains
-    knowledge_base ||--o{ knowledge_item : owns
-    knowledge_fs_entry ||--o| knowledge_item : binds_file
+    knowledge_fs_entry ||--o| knowledge_item : binds
     knowledge_item ||--o{ knowledge_item_version : has
-    knowledge_fs_entry ||--o{ knowledge_item_version : points_path
-    knowledge_item ||--o{ knowledge_item_chunk : has
-    knowledge_item_version ||--o{ knowledge_item_chunk : splits_into
+    knowledge_item_version ||--o{ knowledge_item_chunk : has
+    knowledge_item_chunk ||--o| embedding_table : maps
     knowledge_item_version ||--o| knowledge_fetch_cache_index : caches
 ```
 
-关系说明：
+也可以按业务链路理解为：
 
-- 一个 `knowledge_base` 下有多个 `knowledge_fs_entry`
-- 一个 `knowledge_base` 下有多个 `knowledge_item`
-- 一个文件节点 `knowledge_fs_entry` 最多绑定一个 `knowledge_item`
-- 一个 `knowledge_item` 下有多个 `knowledge_item_version`
-- 一个 `knowledge_item_version` 下有多个 `knowledge_item_chunk`
-- 一个 `knowledge_item_version` 最多对应一个 `knowledge_fetch_cache_index`
+1. 一个 `knowledge_base` 对应一棵文件树
+2. 文件树中的文件节点绑定一个 `knowledge_item`
+3. 一个 `knowledge_item` 可以有多个 `knowledge_item_version`
+4. 一个版本可以切分出多个 `knowledge_item_chunk`
+5. 一个 chunk 对应一个 embedding 记录
 
-### 当前版本关系
+### 基于 SQL 的关系说明
 
-`knowledge_item.current_version_id -> knowledge_item_version.kid`
+结合 `sql/knowledge_base/` 下的建表语句，核心关系可以表示为：
 
-这条关系负责：
+```mermaid
+erDiagram
+    knowledge_base ||--o{ knowledge_fs_entry : "knowledge_base_id"
+    knowledge_fs_entry ||--o{ knowledge_fs_entry : "parent_entry_id"
+    knowledge_base ||--|| knowledge_fs_entry : "root_entry_id"
 
-- 指定当前对外生效的文档版本
-- 驱动检索投影刷新
-- 驱动默认读取行为
+    knowledge_base ||--o{ knowledge_item : "knowledge_base_id"
+    knowledge_fs_entry ||--|| knowledge_item : "fs_entry_id"
 
-### 根目录关系
+    knowledge_item ||--o{ knowledge_item_version : "knowledge_item_id"
+    knowledge_fs_entry ||--o{ knowledge_item_version : "fs_entry_id"
+    knowledge_item ||--o| knowledge_item_version : "current_version_id"
 
-`knowledge_base.root_entry_id -> knowledge_fs_entry.kid`
+    knowledge_item ||--o{ knowledge_item_chunk : "knowledge_item_id"
+    knowledge_item_version ||--o{ knowledge_item_chunk : "knowledge_item_version_id"
 
-这条关系负责：
+    knowledge_item_chunk ||--|| embedding_table : "chunk_id"
 
-- 标识知识库树的起点
-- 保证目录遍历和文件创建有统一根节点
-
-## MinIO 存储方法
-
-### 存储对象类型
-
-MinIO 中保存两类正式对象：
-
-- 原始文件对象
-- Markdown sidecar 对象
-
-以及一类中间态对象：
-
-- 临时对象 `tmp/`
-
-### Bucket 设计
-
-当前实现使用两个业务 bucket：
-
-- 原始文件 bucket：`knowledge-base`
-- Markdown bucket：`knowledge-base-markdown`
-
-分桶原因：
-
-- 原始文件和 Markdown sidecar 的读取模式不同
-- Markdown 会被频繁读取和缓存
-- 分桶后更利于做权限、配额和生命周期管理
-
-### Object Key 设计
-
-#### 临时对象 key
-
-```text
-tmp/{import_request_id}/content.md
+    knowledge_base ||--o{ knowledge_fetch_cache_index : "knowledge_base_id"
+    knowledge_fs_entry ||--o{ knowledge_fetch_cache_index : "fs_entry_id"
+    knowledge_item ||--o{ knowledge_fetch_cache_index : "knowledge_item_id"
+    knowledge_item_version ||--|| knowledge_fetch_cache_index : "knowledge_item_version_id"
 ```
 
-用途：
+说明：
 
-- 导入事务开始时先写入临时区
-- 避免事务失败时留下业务可见的正式对象
+- 主链路是 `knowledge_base -> knowledge_fs_entry -> knowledge_item -> knowledge_item_version -> knowledge_item_chunk`。
+- `knowledge_fs_entry` 既承担知识库根节点绑定，也承担目录树父子关系。
+- `knowledge_item.current_version_id` 指向当前生效版本。
+- `embedding_table` 是按模板动态生成的向量表，通过 `chunk_id` 与 `knowledge_item_chunk` 一对一关联。
+- `knowledge_fetch_cache_index` 是版本级 Markdown 本地缓存索引表。
+- `knowledge_item_chunk_retrieval_mv` 是检索宽表，保存拍平后的检索字段，不通过外键维护关系。
 
-#### 原始文件 key
+## 构建设计
 
-```text
-kb/{knowledge_base_id}/item/{knowledge_item_id}/version/{version}/original
-```
+知识构建链路包含 3 个阶段：
 
-示例：
+1. 原始文件解析为 Markdown
+2. Markdown 切片
+3. 切片向量化
 
-```text
-kb/12/item/345/version/v1/original
-```
+支持的输入文件类型包括：
 
-#### Markdown 对象 key
+- `txt`
+- `md`
+- `csv`
+- `pdf`
+- `docx`
+- `pptx`
+- `xlsx`
 
-```text
-kb/{knowledge_base_id}/item/{knowledge_item_id}/version/{version}/markdown
-```
+设计说明：
 
-示例：
+- Markdown 文本优先按标题切片
+- 纯文本走通用字符切片
+- 最终输出统一的 chunk payload，落到版本与 chunk 体系中
 
-```text
-kb/12/item/345/version/v1/markdown
-```
+## 读取设计
 
-设计意图：
+知识模块同时提供两类读取能力：
 
-- 用 `knowledge_base_id` 做租户边界
-- 用 `knowledge_item_id` 保持对象键稳定
-- 用 `version` 显式隔离不同版本
-- 避免逻辑路径变化要求对象迁移
+- `readFile`：返回 Markdown 文本内容，可按行范围读取
+- `downloadFile`：直接返回原始文件流
 
-### 导入存储方法
+设计说明：
 
-导入时采用“临时上传 + 数据库提交 + 正式晋升”的方法。
+- `readFile` 依赖 Markdown 对象与本地缓存索引
+- `downloadFile` 直接面向原始对象，不需要服务端做文本切片
 
-步骤如下：
+## 检索设计
 
-1. 原始文件上传到原始 bucket 的 `tmp/` 路径
-2. Markdown sidecar 上传到 Markdown bucket 的 `tmp/` 路径
-3. 数据库中写入 `knowledge_item`、`knowledge_item_version`、`knowledge_item_chunk`
-4. 刷新 `knowledge_item.current_version_id`
-5. 刷新 `knowledge_item_chunk_retrieval_mv`
-6. 数据库事务提交成功后，将临时对象 copy 到正式 object key
-7. 删除临时对象
+知识检索以 chunk 为最小召回单元，返回：
 
-这种方法的意义：
+- 所属知识库
+- 文档路径
+- chunk 编号
+- chunk 文本
+- 行号范围
+- 融合得分
 
-- 事务失败时，正式对象不会提前暴露
-- 版本表中保存的对象位置是稳定引用
-- 原始文件与 Markdown sidecar 的正式路径完全可追溯
+检索链路通常包括：
 
-### 读取存储方法
-
-#### 原始文件读取
-
-原始文件读取通过版本表中的：
-
-- `bucket_name`
-- `object_key`
-
-定位对象，然后生成 MinIO 预签名 URL 返回。
-
-适用场景：
-
-- 文件下载
-- 回放原始内容
-- 不需要服务端做按行切片的读取
-
-#### Markdown 读取
-
-Markdown 读取通过版本表中的：
-
-- `markdown_bucket_name`
-- `markdown_object_key`
-
-定位对象，但不会直接返回 URL，而是：
-
-1. 先检查 `knowledge_fetch_cache_index`
-2. 若缓存有效，则直接读取本地缓存文件
-3. 若缓存无效，则从 MinIO 下载 Markdown 对象
-4. 将内容写入 `agent_data/kb_cache`
-5. upsert `knowledge_fetch_cache_index`
-6. 按全文或按行区间返回内容
-
-这样设计的原因：
-
-- Markdown 常被按行读取
-- 直接返回远端 URL 不方便服务端做 line window 裁切
-- 同一版本 Markdown 可能被频繁复用，适合本地缓存
-
-## 存储关系总结
-
-可以把整个存储结构理解为三层：
-
-1. 数据库主链：`knowledge_base -> knowledge_fs_entry -> knowledge_item -> knowledge_item_version -> knowledge_item_chunk`
-2. 检索侧投影：`knowledge_item_chunk_retrieval_mv` 和动态 embedding 表
-3. 文件内容侧：`knowledge_item_version -> MinIO 对象 -> knowledge_fetch_cache_index -> 本地缓存文件`
-
-其中：
-
-- 业务状态以数据库为准
-- 文件内容以 MinIO 为准
-- 检索性能依赖投影表和 embedding 表
-- 读取性能依赖本地缓存索引表
+1. 文本召回
+2. 向量召回
+3. 服务层融合排序
+4. 返回最终 chunk 命中列表

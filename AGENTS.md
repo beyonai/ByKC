@@ -155,8 +155,7 @@ Relevant files:
 
 When updating behavior, keep the corresponding module docs in sync:
 
-- `docs/modules/knowledge-base/`
-- `docs/modules/knowledge-build/`
+- `docs/modules/knowledge/`
 - `docs/modules/instant-qa/`
 
 Prefer concise, user-facing documentation. For process docs, use diagrams plus short explanations instead of long prose.

@@ -4,7 +4,7 @@
 
 参考依据：
 
-- `docs/modules/knowledge-base/api.md`
+- `docs/modules/knowledge/api.md`
 - `src/by_qa/knowledge_base/api/routes.py`
 - `src/by_qa/knowledge_build/api/routes.py`
 - `src/by_qa/knowledge_base/api/schemas.py`

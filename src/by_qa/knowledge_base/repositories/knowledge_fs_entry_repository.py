@@ -732,16 +732,50 @@ class KnowledgeFsEntryRepository:
         return str(row[0]) if row else None
 
     def rename_entry(self, cursor: Any, *, entry_id: int, new_name: str) -> None:
-        """Rename one filesystem entry without moving it."""
+        """Rename one filesystem entry and rebuild its subtree path prefix."""
         cursor.execute(
             """
-            UPDATE knowledge_fs_entry
-            SET name = %(new_name)s,
-                updated_at = NOW()
+            SELECT kid, parent_entry_id, path_ltree, depth
+            FROM knowledge_fs_entry
             WHERE kid = %(entry_id)s
               AND is_deleted = FALSE
             """,
-            {"entry_id": entry_id, "new_name": new_name},
+            {"entry_id": entry_id},
+        )
+        fetchone = getattr(cursor, "fetchone", None)
+        target = fetchone() if callable(fetchone) else None
+        if target is None:
+            return
+
+        current_path_ltree = str(self._row_value(target, "path_ltree"))
+        depth = int(self._row_value(target, "depth"))
+        current_parent_path = ".".join(current_path_ltree.split(".")[:-1])
+        new_label = self._path_label("d", depth, new_name)
+        new_path_ltree = (
+            f"{current_parent_path}.{new_label}" if current_parent_path else new_label
+        )
+        cursor.execute(
+            """
+            UPDATE knowledge_fs_entry fs
+            SET name = CASE
+                    WHEN fs.kid = %(entry_id)s THEN %(new_name)s
+                    ELSE fs.name
+                END,
+                path_ltree = CASE
+                    WHEN fs.kid = %(entry_id)s THEN %(new_path_ltree)s::ltree
+                    ELSE %(new_path_ltree)s::ltree
+                         || subpath(fs.path_ltree, nlevel(%(current_path_ltree)s::ltree))
+                END,
+                updated_at = NOW()
+            WHERE fs.path_ltree <@ %(current_path_ltree)s::ltree
+              AND fs.is_deleted = FALSE
+            """,
+            {
+                "entry_id": entry_id,
+                "new_name": new_name,
+                "new_path_ltree": new_path_ltree,
+                "current_path_ltree": current_path_ltree,
+            },
         )
 
     def _fetchall(self, cursor: Any) -> list[dict[str, Any]]:

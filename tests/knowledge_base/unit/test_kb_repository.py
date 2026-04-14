@@ -615,6 +615,42 @@ def test_soft_delete_fs_file_entry_updates_is_deleted_flag():
     assert params == {"knowledge_base_id": 7, "fs_entry_id": 71}
 
 
+def test_rename_entry_updates_name_and_path_ltree_prefix():
+    """Directory rename should rebuild the entry path prefix so future siblings get distinct tree paths."""
+    repo = KnowledgeFsEntryRepository()
+    cursor = FakeCursor(
+        fetchone_results=[
+            {
+                "kid": 81,
+                "parent_entry_id": 80,
+                "path_ltree": "d1_parent.d2_old",
+                "depth": 2,
+            }
+        ]
+    )
+
+    repo.rename_entry(cursor, entry_id=81, new_name="新目录")
+
+    assert (
+        "select kid, parent_entry_id, path_ltree, depth"
+        in cursor.executed[0][0].lower()
+    )
+    update_sql, params = cursor.executed[1]
+    lowered = update_sql.lower()
+    assert "update knowledge_fs_entry" in lowered
+    assert "set name = case" in lowered
+    assert "when fs.kid = %(entry_id)s then %(new_name)s" in lowered
+    assert "else fs.name" in lowered
+    assert "path_ltree = case" in lowered
+    assert "subpath(fs.path_ltree, nlevel(%(current_path_ltree)s::ltree))" in lowered
+    assert "where fs.path_ltree <@ %(current_path_ltree)s::ltree" in lowered
+    assert params["entry_id"] == 81
+    assert params["new_name"] == "新目录"
+    assert params["current_path_ltree"] == "d1_parent.d2_old"
+    assert params["new_path_ltree"].startswith("d1_parent.d2_")
+    assert params["new_path_ltree"] != "d1_parent.d2_old"
+
+
 def test_upsert_fetch_cache_entry_persists_cache_identity_and_expiry():
     """Fetch cache upsert should store the current version identity and expiry timestamps."""
     repo = KnowledgeFetchCacheRepository()

@@ -61,6 +61,11 @@
   - 现状：`directories/update` 已切到文档化返回信封后，不再调用该函数。
   - 原因：修改目录已经不再走旧的标准错误信封，也不再使用 `directory_code` 相关的旧业务错误码映射。
 
+- `src/by_qa/knowledge_base/api/routes.py`
+  - `_map_delete_directory_validation_error`
+  - 现状：`directories/delete` 已切到文档化返回信封后，不再调用该函数。
+  - 原因：删除目录已经不再走旧的标准错误信封，也不再使用 `directory_code` 相关的旧业务错误码映射。
+
 - `src/by_qa/knowledge_base/repositories/retrieval_projection_repository.py`
   - `delete_for_knowledge_base`
   - 现状：删除知识库链路已改为直接操作 `knowledge_chunk_retrieval_mv`，不再调用该函数。
@@ -252,6 +257,13 @@
 - “修改目录”接口已经按 `knCode + directoryPath + directoryName` 收口，不再依赖 `directory_code`。
 - `knowledge_base_service.update_directory` 已经脱离 `knowledge_item_repository`，只基于 `knowledge_fs_entry` 路径模型完成目录重命名。
 - 目录修改链路里的 `directory_description`、`metadata` 旧语义已确认废弃。
+- “删除目录”接口已经按 `knCode + directoryPath` 收口，不再依赖 `directory_code`。
+- `knowledge_base_service.delete_directory` 已经脱离 `knowledge_item_repository` 和 `retrieval_projection_repository`，改为：
+  - 基于 `knowledge_fs_entry` 路径模型定位目录
+  - 基于 `list_subtree_entry_ids` + `soft_delete_subtree` 删除目录树
+  - 直接删除 `knowledge_chunk_retrieval_mv` 中对应 `fs_entry_id` 的检索投影
+- `knowledge_fs_entry.rename_entry` 现已确认必须同步更新整棵子树的 `path_ltree` 前缀。
+  - 否则会出现“目录改名后再创建旧名称目录，两个目录共享同一 `path_ltree` 前缀”的冲突问题。
 
 - 新增名称重复校验后，`knowledgeBases/create` 已不再需要旧的 `kb_code` 创建语义。
 - `list_root_entries` / `list_root_nodes` / `list_all_root_nodes` 不符合当前文档路径模型，应进入后续删除范围。

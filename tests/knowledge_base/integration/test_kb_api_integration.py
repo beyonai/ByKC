@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 import by_qa.main as main_module
 from by_qa.config import Settings
 from by_qa.knowledge_base.infrastructure.database import build_connection_factory
+from by_qa.knowledge_common.schemas import KnowledgeItemChunkPayload
 
 DEFAULT_DSN = (
     "postgresql://gaussdb:OpenGauss%232026@127.0.0.1:15432/postgres?sslmode=disable"
@@ -33,22 +34,24 @@ class FakeDocumentChunkingService:
         assert isinstance(file_bytes, bytes)
         return self.markdown_text
 
-    def chunk_and_embed(self, file_bytes: bytes, *, filename: str) -> list[dict]:
+    def chunk_and_embed(
+        self, file_bytes: bytes, *, filename: str
+    ) -> list[KnowledgeItemChunkPayload]:
         assert isinstance(filename, str)
         content = (
             file_bytes.decode("utf-8") if isinstance(file_bytes, bytes) else file_bytes
         )
         line_count = max(1, content.count("\n"))
         return [
-            {
-                "chunk_no": 1,
-                "start_line": 1,
-                "end_line": line_count,
-                "chunk_text": content.strip(),
-                "embedding": self.embedding,
-                "char_start": 0,
-                "char_end": len(file_bytes),
-            }
+            KnowledgeItemChunkPayload(
+                chunk_no=1,
+                start_line=1,
+                end_line=line_count,
+                chunk_text=content.strip(),
+                embedding=self.embedding,
+                char_start=0,
+                char_end=len(file_bytes),
+            )
         ]
 
 
@@ -132,18 +135,13 @@ def test_kb_api_end_to_end_persists_to_opengauss_and_minio(monkeypatch):
         main_module, "get_document_chunking_service", lambda: fake_chunking
     )
 
-    kb_code = f"kb-{uuid4().hex[:8]}"
-
     with TestClient(main_module.app) as client:
         kb_response = client.post(
             "/api/v1/knowledgeBases/create",
-            json={
-                "kb_code": kb_code,
-                "kb_name": "Integration KB",
-                "status": "ACTIVE",
-            },
+            json={"knName": f"Integration KB {uuid4().hex[:4]}"},
         )
         assert kb_response.status_code == 200
+        kb_code = kb_response.json()["resultObject"]["knCode"]
         _create_directory(
             client,
             kb_code=kb_code,
@@ -167,7 +165,7 @@ def test_kb_api_end_to_end_persists_to_opengauss_and_minio(monkeypatch):
                 FROM knowledge_chunk kc
                 JOIN knowledge_fs_entry fe ON fe.kid = kc.fs_entry_id
                 JOIN knowledge_base kb ON kb.kid = fe.knowledge_base_id
-                WHERE kb.kb_code = %(kb_code)s
+                WHERE kb.kid = %(kb_code)s::bigint
                 """,
                 {"kb_code": kb_code},
             )
@@ -189,20 +187,13 @@ def test_read_file_requires_build_step(monkeypatch):
     monkeypatch.setattr(main_module, "_knowledge_fetch_cache_cleanup_service", None)
     monkeypatch.setattr(main_module, "_document_chunking_service", None)
 
-    kb_code = f"kb-{uuid4().hex[:8]}"
-
     with TestClient(main_module.app) as client:
-        assert (
-            client.post(
-                "/api/v1/knowledgeBases/create",
-                json={
-                    "kb_code": kb_code,
-                    "kb_name": "Integration KB",
-                    "status": "ACTIVE",
-                },
-            ).status_code
-            == 200
+        create_resp = client.post(
+            "/api/v1/knowledgeBases/create",
+            json={"knName": f"Integration KB {uuid4().hex[:4]}"},
         )
+        assert create_resp.status_code == 200
+        kb_code = create_resp.json()["resultObject"]["knCode"]
         _create_directory(
             client,
             kb_code=kb_code,
@@ -250,20 +241,13 @@ def test_read_file_succeeds_after_upload_and_build(monkeypatch):
         main_module, "get_document_chunking_service", lambda: fake_chunking
     )
 
-    kb_code = f"kb-{uuid4().hex[:8]}"
-
     with TestClient(main_module.app) as client:
-        assert (
-            client.post(
-                "/api/v1/knowledgeBases/create",
-                json={
-                    "kb_code": kb_code,
-                    "kb_name": "Integration KB",
-                    "status": "ACTIVE",
-                },
-            ).status_code
-            == 200
+        create_resp = client.post(
+            "/api/v1/knowledgeBases/create",
+            json={"knName": f"Integration KB {uuid4().hex[:4]}"},
         )
+        assert create_resp.status_code == 200
+        kb_code = create_resp.json()["resultObject"]["knCode"]
         _create_directory(
             client,
             kb_code=kb_code,

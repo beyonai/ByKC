@@ -2,8 +2,7 @@
 
 `by-qa` 是一个按模块组织的开源知识与问答服务仓库，当前包含：
 
-- `knowledge_base`：知识库管理、导入结果落库和检索
-- `knowledge_build`：文件解析、切片和 embedding 构建
+- `knowledge_base`：知识库管理、文件解析/切片/embedding 构建、导入结果落库和检索
 - `qa.instant`：即时问答核心编排能力
 
 项目采用可选依赖安装，不同模块可以按需安装和启用。
@@ -12,7 +11,7 @@
 
 ### Knowledge Base
 
-`knowledge_base` 提供知识库管理、文档导入、文件读取和检索能力，适合用作知识数据的存储与检索承载层。
+`knowledge_base` 提供知识库管理、文档导入、`fileToMarkdownIndex` 知识构建、文件读取和检索能力，适合用作知识数据的存储与检索承载层。
 
 相关文档：
 
@@ -21,21 +20,7 @@
 - [接口说明](docs/modules/knowledge/api.md)
 - [MinIO 说明](docs/modules/knowledge/minio.md)
 
-### Knowledge Build
-
-`knowledge_build` 提供 3 个知识构建相关接口：
-
-- `file-to-markdown`
-- `build-markdown-index`
-- `file-to-markdown-index`
-
-需要特别说明的是，当前 `knowledge_build` 更偏向示例实现，适合本地联调、协议参考和轻量验证。如果要保证生产检索效果，更推荐接入第三方知识构建能力，再把 markdown、chunk 和 embedding 结果导入 `knowledge_base`。
-
-相关文档：
-
-- [模块框架](docs/modules/knowledge/framework.md)
-- [模块设计](docs/modules/knowledge/design.md)
-- [处理流程](docs/modules/knowledge/process.md)
+知识构建能力已经并入 `knowledge_base`，旧的 `file-to-markdown`、`build-markdown-index`、`file-to-markdown-index` 独立接口均已弃用并移除；当前统一通过 `POST /api/v1/fileToMarkdownIndex` 触发文件解析、切片、向量化和落库链路。
 
 ### Instant QA
 
@@ -55,12 +40,6 @@
 pip install by-qa[knowledge]
 ```
 
-只安装知识构建：
-
-```bash
-pip install by-qa[knowledge-build]
-```
-
 只安装问答：
 
 ```bash
@@ -77,7 +56,6 @@ pip install by-qa[all]
 
 ```bash
 uv sync --extra knowledge
-uv sync --extra knowledge-build
 uv sync --extra qa
 uv sync --all-extras
 ```
@@ -85,7 +63,7 @@ uv sync --all-extras
 开发环境推荐：
 
 ```bash
-uv sync --extra dev --extra knowledge --extra knowledge-build --extra qa
+uv sync --extra dev --extra knowledge --extra qa
 ```
 
 ## 启动
@@ -139,14 +117,13 @@ cp .env.example .env
 - embedding 配置
 - 即时问答模型与运行时配置
 
-如果只使用 `knowledge_build`，通常只需要 embedding 相关配置；如果运行完整的 `by-qa` 服务，还需要 openGauss、MinIO 和 Redis 等运行配置。其中 Redis 是必需项，因为项目依赖 `by-framework` 提供运行时基础能力。
+如果使用 `knowledge_base`，需要同时准备 openGauss、MinIO、Redis 和 embedding 相关配置；如果运行完整的 `by-qa` 服务，`qa.instant` 也会复用同一套运行时基础设施。其中 Redis 是必需项，因为项目依赖 `by-framework` 提供运行时基础能力。
 
 ## 中间件依赖
 
 不同模块依赖的中间件不同：
 
-- `knowledge_build`：只依赖 embedding 服务，不依赖 openGauss、MinIO 或 Redis
-- `knowledge_base`：依赖 openGauss、MinIO、Redis 和 embedding 服务
+- `knowledge_base`：依赖 openGauss、MinIO、Redis 和 embedding 服务，并承载知识构建接口
 - `qa.instant`：当前是代码级能力入口，本身不直接操作 openGauss 或 MinIO，但服务运行仍依赖 `by-framework`，因此 Redis 仍是必需中间件；如果结合知识检索使用，通常也会依赖 `knowledge_base`
 
 ### openGauss
@@ -239,20 +216,12 @@ docker compose -f docker-compose.kb-stack.yml --profile init up --abort-on-conta
 /bin/bash scripts/verify_kb_stack.sh
 ```
 
-如果你只是想体验 `knowledge_build` 的示例接口，可以不启动这套中间件。
-
 ## 测试
 
 知识库单元测试：
 
 ```bash
 bash scripts/knowledge_base/run_unit_tests.sh
-```
-
-知识构建单元测试：
-
-```bash
-bash scripts/knowledge_build/run_unit_tests.sh
 ```
 
 问答单元测试：
@@ -283,7 +252,6 @@ uv run pre-commit run --all-files
 src/by_qa/
 ├── core/
 ├── knowledge_base/
-├── knowledge_build/
 ├── knowledge_common/
 └── qa/
 ```
@@ -293,7 +261,6 @@ src/by_qa/
 当前仓库已经开源并维护的是：
 
 - `knowledge_base`
-- `knowledge_build`
 - `qa.instant`
 
 当前还不在开源范围内或未恢复为对外能力的包括：

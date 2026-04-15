@@ -133,7 +133,7 @@ async def test_lifespan_logs_configuration_and_registers_service(monkeypatch):
     assert recorded["initialized"] == []
     assert recorded["shutdown"] == []
     assert (
-        "application startup configuration: service_name=%s, host=%s, port=%s, host_machine=%s, checkpointer_backend=%s, agent_data_path=%s, knowledge_base_configured=%s, knowledge_build_configured=%s, qa_llm_configured=%s",
+        "application startup configuration: service_name=%s, host=%s, port=%s, host_machine=%s, checkpointer_backend=%s, agent_data_path=%s, knowledge_base_configured=%s, document_chunking_configured=%s, qa_llm_configured=%s",
         "by-qa-manager",
         "0.0.0.0",
         8000,

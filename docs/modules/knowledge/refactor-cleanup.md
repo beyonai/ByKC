@@ -131,9 +131,9 @@
   - 现状：仅仓库测试涉及，生产代码没有引用。
   - 原因：当前路径模型按 `knCode + 相对路径` 工作，不需要”列出所有虚拟根节点”这一能力。
 
-### 4. 知识构建模块对外接口（已被 fileToMarkdownIndex 完全取代）
+### 4. 知识构建模块对外接口（已删除，曾被 fileToMarkdownIndex 完全取代）
 
-- `src/by_qa/knowledge_build/api/routes.py`
+- `src/by_qa/knowledge_build/api/routes.py`（已删除）
   - `/api/v1/file-to-markdown` 路由
   - `/api/v1/build-markdown-index` 路由
   - `/api/v1/file-to-markdown-index` 路由
@@ -145,7 +145,7 @@
   - 现状：`fileToMarkdownIndex` 已由 `knowledge_base` 模块实现，从 MinIO 下载已上传文件后内部调用 `DocumentChunkingService` 完成全流程。
   - 原因：知识构建模块的三个对外接口已完全弃用，不再出现在当前接口文档中。
 
-- `src/by_qa/knowledge_build/api/schemas.py`
+- `src/by_qa/knowledge_build/api/schemas.py`（已删除）
   - `FileToMarkdownRequest`
   - `FileToMarkdownResponse`
   - `BuildMarkdownIndexRequest`

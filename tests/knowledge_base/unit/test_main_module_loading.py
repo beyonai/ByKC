@@ -25,8 +25,8 @@ def test_register_api_modules_skips_modules_with_missing_packages(monkeypatch):
     warnings = []
 
     module_definition = SimpleNamespace(
-        name="knowledge_build",
-        route_module="by_qa.knowledge_build.api.routes",
+        name="knowledge_base",
+        route_module="by_qa.knowledge_base.api.routes",
         register_function="register_routes",
         required_packages=("missing_package",),
         register_kwargs_factory=lambda: {"sentinel": "value"},
@@ -48,10 +48,10 @@ def test_register_api_modules_skips_modules_with_missing_packages(monkeypatch):
     loaded, skipped = _register_api_modules(app)
 
     assert loaded == []
-    assert skipped == {"knowledge_build": ["missing_package"]}
+    assert skipped == {"knowledge_base": ["missing_package"]}
     assert registered == []
     assert warnings == [
-        "api module skipped: module=knowledge_build, missing_packages=missing_package"
+        "api module skipped: module=knowledge_base, missing_packages=missing_package"
     ]
 
 
@@ -62,8 +62,8 @@ def test_register_api_modules_registers_available_modules(monkeypatch):
     registered = []
 
     module_definition = SimpleNamespace(
-        name="knowledge_build",
-        route_module="by_qa.knowledge_build.api.routes",
+        name="knowledge_base",
+        route_module="by_qa.knowledge_base.api.routes",
         register_function="register_routes",
         required_packages=("fastapi",),
         register_kwargs_factory=lambda: {"sentinel": "value"},
@@ -84,9 +84,9 @@ def test_register_api_modules_registers_available_modules(monkeypatch):
 
     loaded, skipped = _register_api_modules(app)
 
-    assert loaded == ["knowledge_build"]
+    assert loaded == ["knowledge_base"]
     assert skipped == {}
     assert registered == [((app,), {"sentinel": "value"})]
     assert infos == [
-        "api module registered: module=knowledge_build, route_module=by_qa.knowledge_build.api.routes"
+        "api module registered: module=knowledge_base, route_module=by_qa.knowledge_base.api.routes"
     ]

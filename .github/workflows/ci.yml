@@ -23,7 +23,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Install dependencies
-        run: uv sync --extra dev --extra knowledge --extra knowledge-build --extra qa
+        run: uv sync --extra dev --extra knowledge --extra qa
 
       - name: Run pre-commit
         run: uv run pre-commit run --all-files
@@ -37,9 +37,6 @@ jobs:
           - name: knowledge
             install: uv sync --extra dev --extra knowledge
             test_command: bash scripts/knowledge_base/run_unit_tests.sh
-          - name: knowledge-build
-            install: uv sync --extra dev --extra knowledge-build
-            test_command: bash scripts/knowledge_build/run_unit_tests.sh
           - name: qa
             install: uv sync --extra dev --extra qa
             test_command: bash scripts/qa/run_unit_tests.sh

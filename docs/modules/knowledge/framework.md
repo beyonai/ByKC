@@ -61,7 +61,6 @@ docs/modules/knowledge/
 目录：
 
 - `src/by_qa/knowledge_base/api/`
-- `src/by_qa/knowledge_build/api/`
 
 职责：
 
@@ -80,7 +79,7 @@ docs/modules/knowledge/
 职责：
 
 - 编排知识库创建、目录管理、文档导入、删除、检索、缓存清理
-- 承载文件解析、文本切片和 embedding 构建能力
+- 通过 `knowledge_build/services/` 承载文件解析、文本切片和 embedding 构建能力
 - 定义业务校验与事务边界
 - 对接对象存储、仓储和 embedding 查询服务
 

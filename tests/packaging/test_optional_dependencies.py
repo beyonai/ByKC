@@ -13,7 +13,6 @@ def test_optional_dependency_groups_are_defined():
     optional = project["optional-dependencies"]
 
     assert "knowledge" in optional
-    assert "knowledge-build" in optional
     assert "qa" in optional
     assert "all" in optional
     assert "dev" in optional
@@ -35,15 +34,12 @@ def test_all_group_contains_capability_packages():
     optional = project["optional-dependencies"]
 
     knowledge = set(optional["knowledge"])
-    knowledge_build = set(optional["knowledge-build"])
     qa = set(optional["qa"])
     all_group = set(optional["all"])
 
     assert knowledge
-    assert knowledge_build
     assert qa
     assert knowledge.issubset(all_group)
-    assert knowledge_build.issubset(all_group)
     assert qa.issubset(all_group)
 
 
@@ -56,10 +52,10 @@ def test_qa_group_includes_checkpoint_backends():
     assert any(dep.startswith("psycopg") for dep in qa)
 
 
-def test_knowledge_build_group_includes_document_parsing_dependencies():
+def test_knowledge_group_includes_document_parsing_dependencies():
     project = _load_pyproject()["project"]
-    knowledge_build = set(project["optional-dependencies"]["knowledge-build"])
+    knowledge = set(project["optional-dependencies"]["knowledge"])
 
-    assert any(dep.startswith("fastapi") for dep in knowledge_build)
-    assert any(dep.startswith("langchain-text-splitters") for dep in knowledge_build)
-    assert any(dep.startswith("python-pptx") for dep in knowledge_build)
+    assert any(dep.startswith("fastapi") for dep in knowledge)
+    assert any(dep.startswith("langchain-text-splitters") for dep in knowledge)
+    assert any(dep.startswith("python-pptx") for dep in knowledge)

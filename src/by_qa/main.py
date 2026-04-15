@@ -51,22 +51,6 @@ API_MODULES = (
             "get_document_chunking_service": resolve_document_chunking_service,
         },
     ),
-    ApiModuleDefinition(
-        name="knowledge_build",
-        route_module="by_qa.knowledge_build.api.routes",
-        register_function="register_routes",
-        required_packages=(
-            "fastapi",
-            "langchain_text_splitters",
-            "openpyxl",
-            "fitz",
-            "docx",
-            "pptx",
-        ),
-        register_kwargs_factory=lambda: {
-            "get_document_chunking_service": resolve_document_chunking_service,
-        },
-    ),
 )
 
 
@@ -82,7 +66,7 @@ def _get_startup_configuration_summary() -> dict[str, Any]:
         "knowledge_base_configured": bool(
             settings.kb_opengauss_dsn and settings.embedding_model_name
         ),
-        "knowledge_build_configured": bool(
+        "document_chunking_configured": bool(
             settings.embedding_model_name and settings.embedding_base_url
         ),
         "qa_llm_configured": bool(settings.llm_base_url and settings.llm_api_key),
@@ -109,7 +93,7 @@ def _log_startup_configuration() -> None:
     logger.info(
         "application startup configuration: service_name=%s, host=%s, port=%s, "
         "host_machine=%s, checkpointer_backend=%s, agent_data_path=%s, "
-        "knowledge_base_configured=%s, knowledge_build_configured=%s, "
+        "knowledge_base_configured=%s, document_chunking_configured=%s, "
         "qa_llm_configured=%s",
         summary["service_name"],
         summary["host"],
@@ -118,7 +102,7 @@ def _log_startup_configuration() -> None:
         summary["checkpointer_backend"],
         summary["agent_data_path"],
         summary["knowledge_base_configured"],
-        summary["knowledge_build_configured"],
+        summary["document_chunking_configured"],
         summary["qa_llm_configured"],
     )
 
@@ -476,7 +460,7 @@ async def async_main() -> None:
     except ImportError as exc:
         raise RuntimeError(
             "uvicorn is required to run the API server. "
-            "Install by-qa[knowledge], by-qa[knowledge-build], or by-qa[all]."
+            "Install by-qa[knowledge] or by-qa[all]."
         ) from exc
 
     uvicorn.run(

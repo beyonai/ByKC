@@ -189,16 +189,6 @@ knowledge = [
     { name = "python-pptx" },
     { name = "uvicorn", extra = ["standard"] },
 ]
-knowledge-build = [
-    { name = "by-framework" },
-    { name = "fastapi" },
-    { name = "langchain-text-splitters" },
-    { name = "openpyxl" },
-    { name = "pymupdf" },
-    { name = "python-docx" },
-    { name = "python-pptx" },
-    { name = "uvicorn", extra = ["standard"] },
-]
 qa = [
     { name = "aiosqlite" },
     { name = "by-framework" },
@@ -217,11 +207,9 @@ requires-dist = [
     { name = "aiosqlite", marker = "extra == 'qa'", specifier = ">=0.20.0" },
     { name = "by-framework", marker = "extra == 'all'", specifier = "==0.1.8" },
     { name = "by-framework", marker = "extra == 'knowledge'", specifier = "==0.1.8" },
-    { name = "by-framework", marker = "extra == 'knowledge-build'", specifier = "==0.1.8" },
     { name = "by-framework", marker = "extra == 'qa'", specifier = "==0.1.8" },
     { name = "fastapi", marker = "extra == 'all'", specifier = ">=0.115.0" },
     { name = "fastapi", marker = "extra == 'knowledge'", specifier = ">=0.115.0" },
-    { name = "fastapi", marker = "extra == 'knowledge-build'", specifier = ">=0.115.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "langchain", marker = "extra == 'all'", specifier = ">=0.3.0" },
     { name = "langchain", marker = "extra == 'qa'", specifier = ">=0.3.0" },
@@ -232,7 +220,6 @@ requires-dist = [
     { name = "langchain-openai", marker = "extra == 'qa'", specifier = ">=0.2.0" },
     { name = "langchain-text-splitters", marker = "extra == 'all'", specifier = ">=0.3.0" },
     { name = "langchain-text-splitters", marker = "extra == 'knowledge'", specifier = ">=0.3.0" },
-    { name = "langchain-text-splitters", marker = "extra == 'knowledge-build'", specifier = ">=0.3.0" },
     { name = "langgraph", marker = "extra == 'all'", specifier = ">=0.2.0" },
     { name = "langgraph", marker = "extra == 'qa'", specifier = ">=0.2.0" },
     { name = "langgraph-checkpoint-postgres", marker = "extra == 'all'", specifier = ">=2.0.0" },
@@ -243,7 +230,6 @@ requires-dist = [
     { name = "minio", marker = "extra == 'knowledge'", specifier = ">=7.2.15" },
     { name = "openpyxl", marker = "extra == 'all'", specifier = ">=3.1.0" },
     { name = "openpyxl", marker = "extra == 'knowledge'", specifier = ">=3.1.0" },
-    { name = "openpyxl", marker = "extra == 'knowledge-build'", specifier = ">=3.1.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.0.0" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'all'", specifier = ">=3.2.0" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'knowledge'", specifier = ">=3.2.0" },
@@ -253,25 +239,21 @@ requires-dist = [
     { name = "pyink", marker = "extra == 'dev'", specifier = ">=24.10.0" },
     { name = "pymupdf", marker = "extra == 'all'", specifier = ">=1.24.0" },
     { name = "pymupdf", marker = "extra == 'knowledge'", specifier = ">=1.24.0" },
-    { name = "pymupdf", marker = "extra == 'knowledge-build'", specifier = ">=1.24.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6.0.0" },
     { name = "python-docx", marker = "extra == 'all'", specifier = ">=1.1.0" },
     { name = "python-docx", marker = "extra == 'knowledge'", specifier = ">=1.1.0" },
-    { name = "python-docx", marker = "extra == 'knowledge-build'", specifier = ">=1.1.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "python-multipart", marker = "extra == 'all'", specifier = ">=0.0.12" },
     { name = "python-multipart", marker = "extra == 'knowledge'", specifier = ">=0.0.12" },
     { name = "python-pptx", marker = "extra == 'all'", specifier = ">=1.0.2" },
     { name = "python-pptx", marker = "extra == 'knowledge'", specifier = ">=1.0.2" },
-    { name = "python-pptx", marker = "extra == 'knowledge-build'", specifier = ">=1.0.2" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8.0" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'all'", specifier = ">=0.32.0" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'knowledge'", specifier = ">=0.32.0" },
-    { name = "uvicorn", extras = ["standard"], marker = "extra == 'knowledge-build'", specifier = ">=0.32.0" },
 ]
-provides-extras = ["knowledge", "knowledge-build", "qa", "all", "dev"]
+provides-extras = ["knowledge", "qa", "all", "dev"]
 
 [[package]]
 name = "certifi"

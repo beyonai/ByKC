@@ -1,5 +1,7 @@
 """Tests for knowledge-build runtime wiring."""
 
+from importlib.util import find_spec
+
 from by_qa.config import Settings
 from by_qa.knowledge_build.runtime import (
     build_document_chunking_service,
@@ -30,3 +32,8 @@ def test_build_document_chunking_service_uses_embedding_batch_max_texts_setting(
     service = build_document_chunking_service(settings)
 
     assert service.embedding_batch_max_texts == 7
+
+
+def test_knowledge_build_no_longer_exposes_standalone_api_package():
+    """Deprecated standalone knowledge-build API code should be removed."""
+    assert find_spec("by_qa.knowledge_build.api") is None

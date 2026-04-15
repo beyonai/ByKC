@@ -101,7 +101,7 @@ def _upload_and_build_file(
 ) -> None:
     """Upload a file and build its markdown index."""
     upload_response = client.post(
-        "/api/v1/knowledgeItems/import",
+        "/api/v1/knowledge-items/import",
         data={"knCode": kb_code, "filePath": file_path},
         files={"fileContent": (file_path.split("/")[-1], file_content, content_type)},
     )
@@ -202,7 +202,7 @@ def test_read_file_requires_build_step(monkeypatch):
 
         # Upload only (no build)
         upload_response = client.post(
-            "/api/v1/knowledgeItems/import",
+            "/api/v1/knowledge-items/import",
             data={"knCode": kb_code, "filePath": "/dir1/doc.md"},
             files={
                 "fileContent": ("doc.md", b"line1\nline2\nline3\n", "text/markdown")

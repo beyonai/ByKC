@@ -59,8 +59,8 @@
 | `POST` | `/api/v1/directories/create` | 创建目录 |
 | `POST` | `/api/v1/directories/update` | 修改目录 |
 | `POST` | `/api/v1/directories/delete` | 删除目录 |
-| `POST` | `/api/v1/knowledgeItems/import` | 上传文档 |
-| `POST` | `/api/v1/knowledgeItems/delete` | 删除文档 |
+| `POST` | `/api/v1/knowledge-items/import` | 上传文档 |
+| `POST` | `/api/v1/knowledge-items/delete` | 删除文档 |
 | `POST` | `/api/v1/listDir` | 获取目录内容 |
 | `POST` | `/api/v1/glob` | 按路径模式匹配 |
 | `POST` | `/api/v1/readFile` | 读取文件内容 |
@@ -312,7 +312,7 @@
 
 ## 文档管理
 
-### `POST /api/v1/knowledgeItems/import`
+### `POST /api/v1/knowledge-items/import`
 
 将文档上传到指定知识库下面。
 
@@ -328,7 +328,7 @@
 表单示例：
 
 ```bash
-curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
+curl -X POST http://localhost:8000/api/v1/knowledge-items/import \
   -F "knCode=1" \
   -F "filePath=/制度/人事/考勤制度.pdf" \
   -F "fileDescription=考勤制度原文" \
@@ -355,7 +355,7 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
 }
 ```
 
-### `POST /api/v1/knowledgeItems/delete`
+### `POST /api/v1/knowledge-items/delete`
 
 删除指定知识库下面的文档。
 
@@ -635,7 +635,7 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
 
 ## 知识检索
 
-### `POST /api/v1/knowledgeItems/search`
+### `POST /api/v1/knowledge-items/search`
 
 根据用户提问召回对应的知识切片。
 

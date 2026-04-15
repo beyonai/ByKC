@@ -100,7 +100,7 @@ python ./run_kb_flow.py \
 这个脚本会依次调用：
 
 - `/api/v1/fileToMarkdownIndex`
-- `/api/v1/knowledgeItems/import`
+- `/api/v1/knowledge-items/import`
 - `/api/v1/listDir`
 - `/api/v1/glob`
 

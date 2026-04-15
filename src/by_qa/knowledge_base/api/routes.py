@@ -405,7 +405,7 @@ def register_routes(
             )
         return _documented_success_response(result_object={})
 
-    @app.post("/api/v1/knowledgeItems/import")
+    @app.post("/api/v1/knowledge-items/import")
     async def upload_file(
         kn_code: str | None = Form(None, alias="knCode"),
         file_path: str | None = Form(None, alias="filePath"),
@@ -470,7 +470,7 @@ def register_routes(
             )
         return _documented_success_response(result_object={})
 
-    @app.post("/api/v1/knowledgeItems/delete")
+    @app.post("/api/v1/knowledge-items/delete")
     async def delete_knowledge_item(body: dict[str, Any] = Body(...)):
         try:
             request = DeleteKnowledgeItemRequest.model_validate(body)
@@ -556,7 +556,7 @@ def register_routes(
         )
         return _documented_success_response()
 
-    @app.post("/api/v1/knowledgeItems/search")
+    @app.post("/api/v1/knowledge-items/search")
     async def search_knowledge_items(body: dict[str, Any] = Body(...)):
         try:
             request = SearchRequest.model_validate(body)

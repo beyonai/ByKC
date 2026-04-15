@@ -20,19 +20,6 @@ class KnowledgeBaseRepository:
         fetchone = getattr(cursor, "fetchone", None)
         return fetchone() if callable(fetchone) else None
 
-    def get_any_by_code(self, cursor: Any, kb_code: str) -> dict[str, Any] | None:
-        """Fetch a knowledge base by business code including logically deleted rows."""
-        cursor.execute(
-            """
-            SELECT kid, kb_name, kb_description, is_deleted
-            FROM knowledge_base
-            WHERE kid = %(kb_code)s::bigint
-            """,
-            {"kb_code": kb_code},
-        )
-        fetchone = getattr(cursor, "fetchone", None)
-        return fetchone() if callable(fetchone) else None
-
     def create_knowledge_base(
         self,
         cursor: Any,

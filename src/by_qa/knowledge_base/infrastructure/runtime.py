@@ -17,14 +17,8 @@ from by_qa.knowledge_base.repositories.knowledge_fs_entry_repository import (
 from by_qa.knowledge_base.repositories.knowledge_item_chunk_repository import (
     KnowledgeItemChunkRepository,
 )
-from by_qa.knowledge_base.repositories.knowledge_item_repository import (
-    KnowledgeItemRepository,
-)
 from by_qa.knowledge_base.repositories.knowledge_item_search_repository import (
     KnowledgeItemSearchRepository,
-)
-from by_qa.knowledge_base.repositories.knowledge_item_version_repository import (
-    KnowledgeItemVersionRepository,
 )
 from by_qa.knowledge_base.repositories.retrieval_projection_repository import (
     RetrievalProjectionRepository,
@@ -111,7 +105,6 @@ def build_knowledge_base_service(settings: Settings) -> KnowledgeBaseService:
         connection_factory=build_connection_factory(settings),
         knowledge_base_repository=KnowledgeBaseRepository(),
         knowledge_fs_entry_repository=KnowledgeFsEntryRepository(),
-        knowledge_item_repository=KnowledgeItemRepository(),
         retrieval_projection_repository=RetrievalProjectionRepository(),
         knowledge_fetch_cache_repository=KnowledgeFetchCacheRepository(),
         object_storage=build_object_storage(settings),
@@ -142,8 +135,6 @@ def build_knowledge_item_ingestion_service(
         connection_factory=build_connection_factory(settings),
         knowledge_base_repository=KnowledgeBaseRepository(),
         knowledge_fs_entry_repository=KnowledgeFsEntryRepository(),
-        knowledge_item_repository=KnowledgeItemRepository(),
-        knowledge_item_version_repository=KnowledgeItemVersionRepository(),
         knowledge_item_chunk_repository=KnowledgeItemChunkRepository(
             bootstrap.embedding_table_name
         ),

@@ -9,21 +9,12 @@ from by_qa.knowledge_base.api.schemas import (
     DeleteDirectoryResponse,
     DeleteKnowledgeBaseResponse,
     DeleteKnowledgeItemResponse,
-    KnowledgeItemFetchResponse,
-    KnowledgeItemImportFileResponse,
-    KnowledgeItemImportResponse,
     KnowledgeItemListDirItem,
     KnowledgeItemListDirResponse,
-    KnowledgeItemSearchHit,
-    KnowledgeItemSearchMeta,
-    KnowledgeItemSearchResponse,
     KnowledgeItemUploadResponse,
     SearchHit,
     UpdateDirectoryResponse,
-    UpdateFileResponse,
     UpdateKnowledgeBaseResponse,
-    WriteFileResponse,
-    WriteIndexResponse,
 )
 from by_qa.knowledge_base.services.errors import (
     KnowledgeBaseConfigurationError,
@@ -70,15 +61,6 @@ class FakeKBService:
             directory_name=request.directory_name,
         )
 
-    def update_file(self, request):
-        return UpdateFileResponse(
-            kb_code=request.kb_code,
-            file_code=request.file_code,
-            file_path="/考勤制度/异常考勤处理办法（正式版）.pdf",
-            file_description=request.file_description,
-            metadata=request.metadata,
-        )
-
     def delete_knowledge_base(self, request):
         return DeleteKnowledgeBaseResponse(kb_code=request.kb_code, is_deleted=True)
 
@@ -96,30 +78,6 @@ class FakeKBService:
             is_deleted=True,
         )
 
-    def import_document(self, *, markdown_bytes, manifest):
-        self.import_calls.append((markdown_bytes, manifest))
-        return KnowledgeItemImportResponse(
-            kb_code=manifest.kb_code,
-            full_path=manifest.document.full_path,
-            version=manifest.document.version,
-            status=manifest.document.status,
-            chunk_count=len(manifest.chunks),
-        )
-
-    def import_knowledge_item(self, request):
-        self.import_calls.append(request)
-        return KnowledgeItemImportFileResponse(
-            kb_code=request.kb_code,
-            file_code=request.file_code,
-            type_code="pdf",
-            file_path=request.file_path,
-            file_description=request.file_description,
-            version=request.version,
-            status=request.status,
-            metadata=request.metadata,
-            chunks={"count": len(request.chunks)},
-        )
-
     def upload_file(self, request):
         self.import_calls.append(request)
         return KnowledgeItemUploadResponse(
@@ -128,56 +86,10 @@ class FakeKBService:
             file_description=request.file_description,
         )
 
-    def write_file(self, request):
-        return WriteFileResponse(
-            kb_code=request.kb_code,
-            file_code=request.file_code,
-            type_code="pdf",
-            file_path=request.file_path,
-            file_description=request.file_description,
-            version=request.version,
-            status=request.status,
-            metadata=request.metadata,
-        )
-
-    def write_index(self, request):
-        return WriteIndexResponse(
-            kb_code=request.kb_code,
-            file_code=request.file_code,
-            version=request.version,
-            chunks={"count": len(request.chunks)},
-        )
-
     def file_to_markdown_index(  # pylint: disable=unused-argument
         self, request, *, document_chunking_service
     ):
         return None
-
-    def search(self, request):
-        return KnowledgeItemSearchResponse(
-            items=[
-                KnowledgeItemSearchHit(
-                    kb_code="hr-policy",
-                    file_code="item-1",
-                    version="v2",
-                    chunk_no=1,
-                    chunk_text="员工请假应至少提前一天提交申请。",
-                    score=0.91,
-                    text_score=0.62,
-                    vector_score=0.88,
-                    source_code="oa",
-                    type_code="policy_markdown",
-                    file_path="/employee-handbook.md",
-                )
-            ],
-            meta=KnowledgeItemSearchMeta(
-                query=request.query,
-                top_k=request.top_k,
-                vector_top_k=request.vector_top_k,
-                text_top_k=request.text_top_k,
-                returned_count=1,
-            ),
-        )
 
     def search_v2(self, request):
         return [
@@ -216,17 +128,6 @@ class FakeKBService:
                     size=100,
                 )
             ]
-        )
-
-    def fetch(self, request):
-        return KnowledgeItemFetchResponse(
-            kb_code=request.kb_codes[0],
-            path=request.path,
-            content_type=request.content_type,
-            start_line=request.start_line,
-            end_line=request.end_line,
-            data="line1\nline2\n",
-            reached_eof=True,
         )
 
     def read_file(self, request):
@@ -583,83 +484,6 @@ def test_update_directory_route_maps_request_validation_to_standard_error(monkey
     assert response.json()["resultObject"]["errors"]
 
 
-def test_update_file_route_returns_business_response(monkeypatch):
-    """Update-file route should delegate to the KB service."""
-    service = FakeKBService()
-    client = make_test_client(monkeypatch, service)
-
-    response = client.post(
-        "/api/v1/knowledge-items/update",
-        json={
-            "kb_code": "hr-policy",
-            "file_code": "attendance-policy-pdf",
-            "file_name": "异常考勤处理办法（正式版）.pdf",
-            "file_description": "更新后的文件说明",
-            "metadata": {"owner": "HR"},
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "code": 200,
-        "message": "success",
-        "error": None,
-        "data": {
-            "kb_code": "hr-policy",
-            "file_code": "attendance-policy-pdf",
-            "file_path": "/考勤制度/异常考勤处理办法（正式版）.pdf",
-            "file_description": "更新后的文件说明",
-            "metadata": {"owner": "HR"},
-        },
-    }
-
-
-def test_update_file_route_maps_name_conflict_to_409(monkeypatch):
-    """Update-file should return 409 for sibling name conflicts."""
-
-    class BrokenKBService(FakeKBService):
-        def update_file(self, request):
-            raise KnowledgeBaseValidationError(
-                f"file name already exists under parent: {request.file_name}"
-            )
-
-    client = make_test_client(monkeypatch, BrokenKBService())
-    response = client.post(
-        "/api/v1/knowledge-items/update",
-        json={
-            "kb_code": "hr-policy",
-            "file_code": "attendance-policy-pdf",
-            "file_name": "异常考勤处理办法（正式版）.pdf",
-        },
-    )
-
-    assert response.status_code == 409
-    assert response.json()["error"]["error_code"] == "KB_FILE_NAME_CONFLICT"
-
-
-def test_update_file_route_maps_request_validation_to_standard_error(monkeypatch):
-    """Update-file validation should use the standard error envelope."""
-    client = make_test_client(monkeypatch, FakeKBService())
-
-    response = client.post(
-        "/api/v1/knowledge-items/update",
-        json={
-            "kb_code": "hr-policy",
-            "file_code": "attendance-policy-pdf",
-            "file_name": "/demo.pdf",
-        },
-    )
-
-    assert response.status_code == 422
-    assert response.json()["code"] == 422
-    assert response.json()["message"] == "error"
-    assert response.json()["data"] is None
-    assert response.json()["error"]["type"] == "request_invalid"
-    assert response.json()["error"]["error_code"] == "REQUEST_VALIDATION_FAILED"
-    assert response.json()["error"]["error_message"] == "request validation failed"
-    assert response.json()["error"]["details"]["errors"]
-
-
 def test_delete_knowledge_item_route_returns_business_response(monkeypatch):
     """Delete-knowledge-item route should delegate to the ingestion service."""
     service = FakeKBService()
@@ -691,279 +515,6 @@ def test_delete_knowledge_item_route_maps_request_validation_to_documented_error
     response = client.post(
         "/api/v1/knowledgeItems/delete",
         json={"knCode": "hr-policy"},
-    )
-
-    assert response.status_code == 422
-    assert response.json()["resultCode"] == "-1"
-    assert response.json()["resultMsg"] == "request validation failed"
-    assert response.json()["resultObject"]["errors"]
-
-
-def test_write_file_route_returns_business_response(monkeypatch):
-    """Write-file route should delegate to the ingestion service."""
-    service = FakeKBService()
-    client = make_test_client(monkeypatch, service)
-
-    response = client.post(
-        "/api/v1/write-file",
-        json={
-            "kb_code": "hr-policy",
-            "file_code": "file-001",
-            "file_path": "/考勤制度/异常考勤处理办法.pdf",
-            "file_description": None,
-            "file_content": "ZmFrZS1iYXNlNjQ=",
-            "version": "V1",
-            "source_code": "oa",
-            "status": "ACTIVE",
-            "metadata": {"owner_dept": "HR"},
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "code": 200,
-        "message": "success",
-        "error": None,
-        "data": {
-            "kb_code": "hr-policy",
-            "file_code": "file-001",
-            "type_code": "pdf",
-            "file_path": "/考勤制度/异常考勤处理办法.pdf",
-            "file_description": None,
-            "version": "V1",
-            "status": "ACTIVE",
-            "metadata": {"owner_dept": "HR"},
-        },
-    }
-
-
-def test_write_file_route_maps_duplicate_version_to_409(monkeypatch):
-    """Duplicate file_code/version should surface as a conflict response."""
-
-    class BrokenKBService(FakeKBService):
-        def write_file(self, request):
-            raise KnowledgeBaseValidationError(
-                f"item_code/version already exists: {request.file_code}/{request.version}"
-            )
-
-    client = make_test_client(monkeypatch, BrokenKBService())
-    response = client.post(
-        "/api/v1/write-file",
-        json={
-            "kb_code": "hr-policy",
-            "file_code": "file-001",
-            "file_path": "/考勤制度/异常考勤处理办法.pdf",
-            "file_description": None,
-            "file_content": "ZmFrZS1iYXNlNjQ=",
-            "version": "V1",
-            "source_code": "oa",
-            "status": "ACTIVE",
-            "metadata": {"owner_dept": "HR"},
-        },
-    )
-
-    assert response.status_code == 409
-    assert response.json()["code"] == 409
-    assert response.json()["message"] == "error"
-    assert response.json()["data"] is None
-    assert response.json()["error"]["type"] == "conflict"
-    assert response.json()["error"]["error_code"] == "KB_FILE_VERSION_CONFLICT"
-
-
-def test_write_file_route_maps_soft_deleted_file_code_to_409(monkeypatch):
-    """Soft-deleted file_code conflicts should return a standard business conflict response."""
-
-    class BrokenKBService(FakeKBService):
-        def write_file(self, request):
-            raise KnowledgeBaseValidationError(
-                f"file_code is occupied by a soft-deleted knowledge item: {request.file_code}"
-            )
-
-    client = make_test_client(monkeypatch, BrokenKBService())
-    response = client.post(
-        "/api/v1/write-file",
-        json={
-            "kb_code": "hr-policy",
-            "file_code": "file-001",
-            "file_path": "/考勤制度/异常考勤处理办法.pdf",
-            "file_description": None,
-            "file_content": "ZmFrZS1iYXNlNjQ=",
-            "version": "V1",
-            "source_code": "oa",
-            "status": "ACTIVE",
-            "metadata": {"owner_dept": "HR"},
-        },
-    )
-
-    assert response.status_code == 409
-    assert (
-        response.json()["error"]["error_code"] == "KB_FILE_CODE_SOFT_DELETED_CONFLICT"
-    )
-
-
-def test_write_file_route_maps_request_validation_to_standard_error(monkeypatch):
-    """Write-file request validation should use the standard error envelope."""
-    client = make_test_client(monkeypatch, FakeKBService())
-
-    response = client.post(
-        "/api/v1/write-file",
-        json={
-            "kb_code": "hr-policy",
-            "file_path": "/考勤制度/异常考勤处理办法.pdf",
-            "file_content": "ZmFrZS1iYXNlNjQ=",
-            "version": "V1",
-            "source_code": "oa",
-        },
-    )
-
-    assert response.status_code == 422
-    assert response.json()["code"] == 422
-    assert response.json()["message"] == "error"
-    assert response.json()["data"] is None
-    assert response.json()["error"]["type"] == "request_invalid"
-    assert response.json()["error"]["error_code"] == "REQUEST_VALIDATION_FAILED"
-    assert response.json()["error"]["error_message"] == "request validation failed"
-    assert response.json()["error"]["details"]["errors"]
-
-
-def test_write_index_route_returns_business_response(monkeypatch):
-    """Write-index route should delegate to the ingestion service."""
-    service = FakeKBService()
-    client = make_test_client(monkeypatch, service)
-
-    response = client.post(
-        "/api/v1/write-index",
-        json={
-            "kb_code": "hr-policy",
-            "file_code": "file-001",
-            "version": "V1",
-            "markdown_content": "# 异常考勤处理办法",
-            "chunks": [
-                {
-                    "chunk_no": 1,
-                    "start_line": 1,
-                    "end_line": 100,
-                    "chunk_text": "xxxxx",
-                    "embedding": [0.1, 0.2],
-                    "char_start": 1,
-                    "char_end": 732,
-                }
-            ],
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "code": 200,
-        "message": "success",
-        "error": None,
-        "data": {
-            "kb_code": "hr-policy",
-            "file_code": "file-001",
-            "version": "V1",
-            "chunks": {"count": 1},
-        },
-    }
-
-
-def test_write_index_route_maps_missing_file_to_404(monkeypatch):
-    """Write-index should return 404 when the file does not exist."""
-
-    class BrokenKBService(FakeKBService):
-        def write_index(self, request):
-            raise KnowledgeBaseValidationError(
-                f"knowledge item not found: {request.file_code}"
-            )
-
-    client = make_test_client(monkeypatch, BrokenKBService())
-    response = client.post(
-        "/api/v1/write-index",
-        json={
-            "kb_code": "hr-policy",
-            "file_code": "file-001",
-            "version": "V1",
-            "markdown_content": "# missing",
-            "chunks": [
-                {
-                    "chunk_no": 1,
-                    "start_line": 1,
-                    "end_line": 100,
-                    "chunk_text": "xxxxx",
-                    "embedding": [0.1, 0.2],
-                }
-            ],
-        },
-    )
-
-    assert response.status_code == 404
-    assert response.json()["error"]["type"] == "not_found"
-    assert response.json()["error"]["error_code"] == "KB_FILE_NOT_FOUND"
-    assert response.json()["error"]["details"] == {"file_code": "file-001"}
-
-
-def test_upload_file_route_returns_documented_business_response(monkeypatch):
-    """Multipart upload route should delegate to the ingestion service."""
-    service = FakeKBService()
-    client = make_test_client(monkeypatch, service)
-
-    response = client.post(
-        "/api/v1/knowledgeItems/import",
-        data={
-            "knCode": "hr-policy",
-            "filePath": "/考勤制度/异常考勤处理办法.pdf",
-            "fileDescription": "异常考勤制度原文",
-        },
-        files={
-            "fileContent": ("异常考勤处理办法.pdf", b"pdf-bytes", "application/pdf")
-        },
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "resultCode": "0",
-        "resultMsg": "success",
-        "resultObject": {},
-    }
-
-
-def test_upload_file_route_maps_duplicate_path_to_documented_error(monkeypatch):
-    """Multipart upload route should surface duplicate file paths with documented envelope."""
-
-    class BrokenKBService(FakeKBService):
-        def upload_file(self, request):
-            raise KnowledgeBaseValidationError(
-                f"file path already exists: {request.file_path}"
-            )
-
-    client = make_test_client(monkeypatch, BrokenKBService())
-    response = client.post(
-        "/api/v1/knowledgeItems/import",
-        data={
-            "knCode": "hr-policy",
-            "filePath": "/考勤制度/异常考勤处理办法.pdf",
-        },
-        files={
-            "fileContent": ("异常考勤处理办法.pdf", b"pdf-bytes", "application/pdf")
-        },
-    )
-
-    assert response.status_code == 422
-    assert response.json() == {
-        "resultCode": "-1",
-        "resultMsg": "file path already exists: /考勤制度/异常考勤处理办法.pdf",
-        "resultObject": {},
-    }
-
-
-def test_upload_file_route_maps_request_validation_to_documented_error(
-    monkeypatch,
-):
-    """Multipart upload request validation should use the documented error envelope."""
-    client = make_test_client(monkeypatch, FakeKBService())
-
-    response = client.post(
-        "/api/v1/knowledgeItems/import",
-        data={"knCode": "hr-policy", "filePath": "/考勤制度/异常考勤处理办法.pdf"},
     )
 
     assert response.status_code == 422

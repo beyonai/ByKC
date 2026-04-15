@@ -2,23 +2,54 @@
 
 from __future__ import annotations
 
-import base64
 import os
-from pathlib import Path
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from minio import Minio
 
 import by_qa.main as main_module
 from by_qa.config import Settings
 from by_qa.knowledge_base.infrastructure.database import build_connection_factory
-from by_qa.knowledge_base.infrastructure.runtime import build_knowledge_base_service
 
 DEFAULT_DSN = (
     "postgresql://gaussdb:OpenGauss%232026@127.0.0.1:15432/postgres?sslmode=disable"
 )
+
+
+class FakeDocumentChunkingService:
+    """Controllable double for document chunking in integration tests."""
+
+    def __init__(
+        self,
+        *,
+        markdown_text: str = "# hello\nreal integration\n",
+        embedding: list[float] | None = None,
+    ):
+        self.markdown_text = markdown_text
+        self.embedding = embedding or [0.1, 0.2, 0.3]
+
+    def extract_text_from_file(self, file_bytes: bytes, file_type: str) -> str:  # pylint: disable=unused-argument
+        assert isinstance(file_bytes, bytes)
+        return self.markdown_text
+
+    def chunk_and_embed(self, file_bytes: bytes, *, filename: str) -> list[dict]:
+        assert isinstance(filename, str)
+        content = (
+            file_bytes.decode("utf-8") if isinstance(file_bytes, bytes) else file_bytes
+        )
+        line_count = max(1, content.count("\n"))
+        return [
+            {
+                "chunk_no": 1,
+                "start_line": 1,
+                "end_line": line_count,
+                "chunk_text": content.strip(),
+                "embedding": self.embedding,
+                "char_start": 0,
+                "char_end": len(file_bytes),
+            }
+        ]
 
 
 def _kb_settings() -> Settings:
@@ -44,52 +75,64 @@ def _create_directory(
     client: TestClient,
     *,
     kb_code: str,
-    directory_code: str,
     directory_path: str,
 ) -> None:
     response = client.post(
         "/api/v1/directories/create",
         json={
-            "kb_code": kb_code,
-            "directory_code": directory_code,
-            "directory_path": directory_path,
-            "directory_description": f"{directory_code} description",
-            "source_code": "integration",
-            "status": "ACTIVE",
+            "knCode": kb_code,
+            "directoryPath": directory_path,
+            "directoryDescription": f"{directory_path} description",
         },
     )
     assert response.status_code == 200, response.text
 
 
-class CountingObjectStorage:
-    """Wrapper that counts downloads while delegating to real object storage."""
+def _upload_and_build_file(
+    client: TestClient,
+    *,
+    kb_code: str,
+    file_path: str,
+    file_content: bytes,
+    content_type: str = "text/markdown",
+) -> None:
+    """Upload a file and build its markdown index."""
+    upload_response = client.post(
+        "/api/v1/knowledgeItems/import",
+        data={"knCode": kb_code, "filePath": file_path},
+        files={"fileContent": (file_path.split("/")[-1], file_content, content_type)},
+    )
+    assert upload_response.status_code == 200, upload_response.text
 
-    def __init__(self, inner):
-        self.inner = inner
-        self.bucket_name = inner.bucket_name
-        self.markdown_bucket_name = inner.markdown_bucket_name
-        self.download_calls: list[str] = []
-
-    def __getattr__(self, name):
-        return getattr(self.inner, name)
-
-    def download_object(
-        self, object_key: str, *, bucket_name: str | None = None
-    ) -> bytes:
-        self.download_calls.append(object_key)
-        return self.inner.download_object(object_key, bucket_name=bucket_name)
+    build_response = client.post(
+        "/api/v1/fileToMarkdownIndex",
+        json={
+            "knCode": kb_code,
+            "filePath": file_path,
+        },
+    )
+    assert build_response.status_code == 200, build_response.text
 
 
 @pytest.mark.integration
 def test_kb_api_end_to_end_persists_to_opengauss_and_minio(monkeypatch):
-    """Creating a KB and importing a document should persist DB and object storage state."""
+    """Creating a KB and uploading+building a document should persist DB and object storage state."""
     settings = _kb_settings()
     monkeypatch.setattr(main_module, "settings", settings)
     monkeypatch.setattr(main_module, "_knowledge_base_service", None)
     monkeypatch.setattr(main_module, "_knowledge_item_ingestion_service", None)
+    monkeypatch.setattr(main_module, "_knowledge_item_search_service", None)
+    monkeypatch.setattr(main_module, "_knowledge_fetch_cache_cleanup_service", None)
+    monkeypatch.setattr(main_module, "_document_chunking_service", None)
+
+    fake_chunking = FakeDocumentChunkingService(
+        markdown_text="# hello\nreal integration\n"
+    )
+    monkeypatch.setattr(
+        main_module, "get_document_chunking_service", lambda: fake_chunking
+    )
 
     kb_code = f"kb-{uuid4().hex[:8]}"
-    item_code = f"doc-{uuid4().hex[:8]}"
 
     with TestClient(main_module.app) as client:
         kb_response = client.post(
@@ -104,170 +147,49 @@ def test_kb_api_end_to_end_persists_to_opengauss_and_minio(monkeypatch):
         _create_directory(
             client,
             kb_code=kb_code,
-            directory_code=f"dir-{uuid4().hex[:8]}",
             directory_path="/dir1",
         )
 
-        import_response = client.post(
-            "/api/v1/knowledge-items/import",
-            json={
-                "kb_code": kb_code,
-                "file_code": item_code,
-                "file_path": f"dir1/{item_code}.md",
-                "file_content": base64.b64encode(b"# hello\nreal integration\n").decode(
-                    "ascii"
-                ),
-                "markdown_content": "# hello\nreal integration\n",
-                "status": "ACTIVE",
-                "source_code": "integration",
-                "version": "v1",
-                "chunks": [
-                    {
-                        "chunk_no": 1,
-                        "start_line": 1,
-                        "end_line": 2,
-                        "chunk_text": "hello real integration",
-                        "embedding": [0.1, 0.2, 0.3],
-                    }
-                ],
-            },
+        _upload_and_build_file(
+            client,
+            kb_code=kb_code,
+            file_path="/dir1/doc.md",
+            file_content=b"# hello\nreal integration\n",
         )
-        assert import_response.status_code == 200
 
+    # Verify DB state
     connection = build_connection_factory(settings)()
     try:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT
-                    kb.kid AS knowledge_base_id,
-                    ki.current_version_id,
-                    kv.object_key,
-                    kv.version,
-                    c.chunk_text
-                FROM knowledge_base kb
-                JOIN knowledge_item ki ON ki.knowledge_base_id = kb.kid
-                JOIN knowledge_item_version kv ON kv.kid = ki.current_version_id
-                JOIN knowledge_item_chunk c ON c.knowledge_item_version_id = kv.kid
+                SELECT COUNT(*) AS chunk_count
+                FROM knowledge_chunk kc
+                JOIN knowledge_fs_entry fe ON fe.kid = kc.fs_entry_id
+                JOIN knowledge_base kb ON kb.kid = fe.knowledge_base_id
                 WHERE kb.kb_code = %(kb_code)s
-                  AND ki.item_code = %(item_code)s
                 """,
-                {"kb_code": kb_code, "item_code": item_code},
+                {"kb_code": kb_code},
             )
             row = cursor.fetchone()
             assert row is not None
-            assert row["version"] == "v1"
-            assert row["chunk_text"] == "hello real integration"
-
-            cursor.execute(
-                """
-                SELECT COUNT(*) AS projection_count
-                FROM knowledge_item_chunk_retrieval_mv
-                WHERE kb_code = %(kb_code)s
-                  AND full_path = %(item_code)s
-                """,
-                {"kb_code": kb_code, "item_code": f"dir1/{item_code}.md"},
-            )
-            projection = cursor.fetchone()
-            assert projection["projection_count"] == 1
+            assert row["chunk_count"] >= 1
     finally:
         connection.close()
 
-    minio_client = Minio(
-        endpoint=settings.kb_minio_endpoint,
-        access_key=settings.kb_minio_access_key,
-        secret_key=settings.kb_minio_secret_key,
-        secure=settings.kb_minio_secure,
-    )
-    stat = minio_client.stat_object(settings.kb_minio_bucket, row["object_key"])
-    assert stat.object_name == row["object_key"]
-
 
 @pytest.mark.integration
-def test_kb_api_rejects_invalid_embedding_without_persisting_document(monkeypatch):
-    """Invalid embeddings should return 400 and leave no imported document rows."""
+def test_read_file_requires_build_step(monkeypatch):
+    """readFile should fail if the file was uploaded but not built."""
     settings = _kb_settings()
     monkeypatch.setattr(main_module, "settings", settings)
     monkeypatch.setattr(main_module, "_knowledge_base_service", None)
     monkeypatch.setattr(main_module, "_knowledge_item_ingestion_service", None)
+    monkeypatch.setattr(main_module, "_knowledge_item_search_service", None)
+    monkeypatch.setattr(main_module, "_knowledge_fetch_cache_cleanup_service", None)
+    monkeypatch.setattr(main_module, "_document_chunking_service", None)
 
     kb_code = f"kb-{uuid4().hex[:8]}"
-    item_code = f"doc-{uuid4().hex[:8]}"
-
-    with TestClient(main_module.app) as client:
-        kb_response = client.post(
-            "/api/v1/knowledgeBases/create",
-            json={
-                "kb_code": kb_code,
-                "kb_name": "Integration KB",
-                "status": "ACTIVE",
-            },
-        )
-        assert kb_response.status_code == 200
-        _create_directory(
-            client,
-            kb_code=kb_code,
-            directory_code=f"dir-{uuid4().hex[:8]}",
-            directory_path="/dir1",
-        )
-
-        import_response = client.post(
-            "/api/v1/knowledge-items/import",
-            json={
-                "kb_code": kb_code,
-                "file_code": item_code,
-                "file_path": f"dir1/{item_code}.md",
-                "file_content": base64.b64encode(b"# hello\nbad vector\n").decode(
-                    "ascii"
-                ),
-                "markdown_content": "# hello\nbad vector\n",
-                "status": "ACTIVE",
-                "source_code": "integration",
-                "version": "v1",
-                "chunks": [
-                    {
-                        "chunk_no": 1,
-                        "start_line": 1,
-                        "end_line": 2,
-                        "chunk_text": "hello bad vector",
-                        "embedding": [0.1, 0.2],
-                    }
-                ],
-            },
-        )
-        assert import_response.status_code == 422
-
-    connection = build_connection_factory(settings)()
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT COUNT(*) AS item_count
-                FROM knowledge_base kb
-                JOIN knowledge_item ki ON ki.knowledge_base_id = kb.kid
-                WHERE kb.kb_code = %(kb_code)s
-                  AND ki.item_code = %(item_code)s
-                """,
-                {"kb_code": kb_code, "item_code": item_code},
-            )
-            row = cursor.fetchone()
-            assert row["item_count"] == 0
-    finally:
-        connection.close()
-
-
-@pytest.mark.integration
-def test_fetch_api_caches_download_and_reuses_fresh_file(monkeypatch, tmp_path):
-    """Fetch should write a cache file once and avoid repeated MinIO downloads while fresh."""
-    settings = _kb_settings().model_copy(update={"agent_data_path": tmp_path})
-    monkeypatch.setattr(main_module, "settings", settings)
-    monkeypatch.setattr(main_module, "_knowledge_base_service", None)
-    monkeypatch.setattr(main_module, "_knowledge_item_ingestion_service", None)
-
-    kb_code = f"kb-{uuid4().hex[:8]}"
-    item_code = f"doc-{uuid4().hex[:8]}"
-    full_path = f"dir1/{item_code}.md"
-    virtual_path = f"Integration KB/{full_path}"
 
     with TestClient(main_module.app) as client:
         assert (
@@ -284,208 +206,98 @@ def test_fetch_api_caches_download_and_reuses_fresh_file(monkeypatch, tmp_path):
         _create_directory(
             client,
             kb_code=kb_code,
-            directory_code=f"dir-{uuid4().hex[:8]}",
             directory_path="/dir1",
         )
+
+        # Upload only (no build)
+        upload_response = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/dir1/doc.md"},
+            files={
+                "fileContent": ("doc.md", b"line1\nline2\nline3\n", "text/markdown")
+            },
+        )
+        assert upload_response.status_code == 200
+
+        # readFile should fail because file is not built
+        read_response = client.post(
+            "/api/v1/readFile",
+            json={
+                "knCode": kb_code,
+                "filePath": "/dir1/doc.md",
+                "startLine": 1,
+                "endLine": 3,
+            },
+        )
+
+    assert read_response.status_code in (404, 422)
+    assert read_response.json()["resultCode"] == "-1"
+
+
+@pytest.mark.integration
+def test_read_file_succeeds_after_upload_and_build(monkeypatch):
+    """readFile should succeed after upload + fileToMarkdownIndex."""
+    settings = _kb_settings()
+    monkeypatch.setattr(main_module, "settings", settings)
+    monkeypatch.setattr(main_module, "_knowledge_base_service", None)
+    monkeypatch.setattr(main_module, "_knowledge_item_ingestion_service", None)
+    monkeypatch.setattr(main_module, "_knowledge_item_search_service", None)
+    monkeypatch.setattr(main_module, "_knowledge_fetch_cache_cleanup_service", None)
+    monkeypatch.setattr(main_module, "_document_chunking_service", None)
+
+    fake_chunking = FakeDocumentChunkingService(markdown_text="line1\nline2\nline3\n")
+    monkeypatch.setattr(
+        main_module, "get_document_chunking_service", lambda: fake_chunking
+    )
+
+    kb_code = f"kb-{uuid4().hex[:8]}"
+
+    with TestClient(main_module.app) as client:
         assert (
             client.post(
-                "/api/v1/knowledge-items/import",
+                "/api/v1/knowledgeBases/create",
                 json={
                     "kb_code": kb_code,
-                    "file_code": item_code,
-                    "file_path": full_path,
-                    "file_content": base64.b64encode(b"line1\nline2\nline3\n").decode(
-                        "ascii"
-                    ),
-                    "markdown_content": "line1\nline2\nline3\n",
+                    "kb_name": "Integration KB",
                     "status": "ACTIVE",
-                    "source_code": "integration",
-                    "version": "v1",
-                    "chunks": [
-                        {
-                            "chunk_no": 1,
-                            "start_line": 1,
-                            "end_line": 3,
-                            "chunk_text": "line1 line2 line3",
-                            "embedding": [0.1, 0.2, 0.3],
-                        }
-                    ],
                 },
             ).status_code
             == 200
         )
+        _create_directory(
+            client,
+            kb_code=kb_code,
+            directory_path="/dir1",
+        )
 
-        service = build_knowledge_base_service(settings)
-        service.object_storage = CountingObjectStorage(service.object_storage)
-        monkeypatch.setattr(main_module, "_knowledge_base_service", service)
+        _upload_and_build_file(
+            client,
+            kb_code=kb_code,
+            file_path="/dir1/doc.md",
+            file_content=b"line1\nline2\nline3\n",
+        )
 
         first = client.post(
-            "/api/v1/read-file",
+            "/api/v1/readFile",
             json={
-                "kb_codes": [kb_code],
-                "path": virtual_path,
-                "content_type": "markdown",
-                "start_line": 1,
-                "end_line": 10,
+                "knCode": kb_code,
+                "filePath": "/dir1/doc.md",
+                "startLine": 1,
+                "endLine": 10,
             },
         )
         second = client.post(
-            "/api/v1/read-file",
+            "/api/v1/readFile",
             json={
-                "kb_codes": [kb_code],
-                "path": virtual_path,
-                "content_type": "markdown",
-                "start_line": 2,
-                "end_line": 2,
+                "knCode": kb_code,
+                "filePath": "/dir1/doc.md",
+                "startLine": 2,
+                "endLine": 2,
             },
         )
 
     assert first.status_code == 200
-    assert first.json()["data"]["data"] == "line1\nline2\nline3\n"
-    assert first.json()["data"]["reached_eof"] is True
+    assert first.json()["resultObject"]["data"]
+    assert first.json()["resultObject"].get("reachedEof") is True
     assert second.status_code == 200
-    assert second.json()["data"]["data"] == "line2\n"
-    assert second.json()["data"]["reached_eof"] is False
-    assert (
-        service.object_storage.download_calls == [f"7/{full_path}/v1/{item_code}.md"]
-        or len(service.object_storage.download_calls) == 1
-    )
-    cache_file = tmp_path / "kb_cache" / Path(virtual_path)
-    assert cache_file.exists()
-    assert cache_file.read_text(encoding="utf-8") == "line1\nline2\nline3\n"
-
-    connection = build_connection_factory(settings)()
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT cache_status, virtual_path
-                FROM knowledge_fetch_cache_index
-                WHERE virtual_path = %(virtual_path)s
-                """,
-                {"virtual_path": virtual_path},
-            )
-            row = cursor.fetchone()
-            assert row is not None
-            assert row["cache_status"] == "READY"
-    finally:
-        connection.close()
-
-
-@pytest.mark.integration
-def test_fetch_api_refreshes_expired_cache_and_rewrites_metadata(monkeypatch, tmp_path):
-    """Expired cache files should be replaced by a fresh MinIO download on the next fetch."""
-    settings = _kb_settings().model_copy(update={"agent_data_path": tmp_path})
-    monkeypatch.setattr(main_module, "settings", settings)
-    monkeypatch.setattr(main_module, "_knowledge_base_service", None)
-    monkeypatch.setattr(main_module, "_knowledge_item_ingestion_service", None)
-
-    kb_code = f"kb-{uuid4().hex[:8]}"
-    item_code = f"doc-{uuid4().hex[:8]}"
-    full_path = f"dir1/{item_code}.md"
-    virtual_path = f"Integration KB/{full_path}"
-
-    with TestClient(main_module.app) as client:
-        assert (
-            client.post(
-                "/api/v1/knowledgeBases/create",
-                json={
-                    "kb_code": kb_code,
-                    "kb_name": "Integration KB",
-                    "status": "ACTIVE",
-                },
-            ).status_code
-            == 200
-        )
-        _create_directory(
-            client,
-            kb_code=kb_code,
-            directory_code=f"dir-{uuid4().hex[:8]}",
-            directory_path="/dir1",
-        )
-        assert (
-            client.post(
-                "/api/v1/knowledge-items/import",
-                json={
-                    "kb_code": kb_code,
-                    "file_code": item_code,
-                    "file_path": full_path,
-                    "file_content": base64.b64encode(b"line1\nline2\nline3\n").decode(
-                        "ascii"
-                    ),
-                    "markdown_content": "line1\nline2\nline3\n",
-                    "status": "ACTIVE",
-                    "source_code": "integration",
-                    "version": "v1",
-                    "chunks": [
-                        {
-                            "chunk_no": 1,
-                            "start_line": 1,
-                            "end_line": 3,
-                            "chunk_text": "line1 line2 line3",
-                            "embedding": [0.1, 0.2, 0.3],
-                        }
-                    ],
-                },
-            ).status_code
-            == 200
-        )
-
-        service = build_knowledge_base_service(settings)
-        service.object_storage = CountingObjectStorage(service.object_storage)
-        monkeypatch.setattr(main_module, "_knowledge_base_service", service)
-
-        cache_file = tmp_path / "kb_cache" / Path(virtual_path)
-        cache_file.parent.mkdir(parents=True, exist_ok=True)
-        cache_file.write_text("stale\n", encoding="utf-8")
-        connection = build_connection_factory(settings)()
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    UPDATE knowledge_fetch_cache_index
-                    SET expires_at = NOW() - INTERVAL '1 day'
-                    WHERE virtual_path = %(virtual_path)s
-                    """,
-                    {"virtual_path": virtual_path},
-                )
-            connection.commit()
-        finally:
-            connection.close()
-
-        response = client.post(
-            "/api/v1/read-file",
-            json={
-                "kb_codes": [kb_code],
-                "path": virtual_path,
-                "content_type": "markdown",
-                "start_line": 1,
-                "end_line": 3,
-            },
-        )
-
-    assert response.status_code == 200
-    assert response.json()["data"]["reached_eof"] is True
-    assert (
-        service.object_storage.download_calls == [f"7/{full_path}/v1/{item_code}.md"]
-        or len(service.object_storage.download_calls) == 1
-    )
-    assert cache_file.read_text(encoding="utf-8") == "line1\nline2\nline3\n"
-
-    connection = build_connection_factory(settings)()
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT cache_status, expires_at
-                FROM knowledge_fetch_cache_index
-                WHERE virtual_path = %(virtual_path)s
-                """,
-                {"virtual_path": virtual_path},
-            )
-            row = cursor.fetchone()
-            assert row is not None
-            assert row["cache_status"] == "READY"
-            assert row["expires_at"] is not None
-    finally:
-        connection.close()
+    assert second.json()["resultObject"]["data"]

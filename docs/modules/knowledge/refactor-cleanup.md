@@ -460,4 +460,47 @@
 - `_map_search_validation_error` 已删除。
 - `KnowledgeItemSearchRepository` 新增 `search_text_v2`、`search_vector_v2` 方法；旧的 `search_text`、`search_vector` 方法已无生产调用，可进入移除范围。
 - `KnowledgeItemSearchService` 新增 `search_v2` 方法；旧的 `search` 方法已无生产路由调用，仅 integration test 通过旧链路间接使用。
-- `KnowledgeItemSearchRequest`、`KnowledgeItemSearchResponse`、`KnowledgeItemSearchHit`、`KnowledgeItemSearchMeta` 旧 schema 已无生产路由使用，待旧 integration test 迁移后可删除。
+- `KnowledgeItemSearchRequest`、`KnowledgeItemSearchResponse`、`KnowledgeItemSearchHit`、`KnowledgeItemSearchMeta` 旧 schema 已删除。
+
+## 全面清理完成（2026-04-14）
+
+所有接口迁移完成后，执行了全面代码清理：
+
+### 已删除的路由
+- `/api/v1/knowledge-items/update` — 不在当前接口文档
+- `/api/v1/knowledge-items/import`（旧 JSON 导入）— 已被 `/api/v1/knowledgeItems/import`（multipart）取代
+- `/api/v1/write-file` — 不在当前接口文档
+- `/api/v1/write-index` — 不在当前接口文档
+- `/api/v1/file-to-markdown`、`/api/v1/build-markdown-index`、`/api/v1/file-to-markdown-index` — knowledge_build 三个路由全部弃用，功能已由 `/api/v1/fileToMarkdownIndex` 完全取代
+
+### 已删除的旧响应信封
+- `_success_response`、`_error_response` — 所有路由已切到 `_documented_success_response` / `_documented_error_response`
+- 所有 `_map_*_validation_error` 函数（10 个）— 已无调用方
+
+### 已删除的 Schema
+- `WriteFileRequest`/`WriteFileResponse`、`WriteIndexRequest`/`WriteIndexResponse`
+- `UpdateFileRequest`/`UpdateFileResponse`
+- `KnowledgeItemImportRequest`
+- `KnowledgeItemFetchRequest`/`KnowledgeItemFetchResponse`
+- `KnowledgeItemSearchRequest`/`KnowledgeItemSearchResponse`/`KnowledgeItemSearchHit`/`KnowledgeItemSearchMeta`
+- `build_knowledge_item_import_manifest` 函数
+- knowledge_build 模块所有 schema（`FileToMarkdownRequest` 等）
+
+### 已删除的 Service 方法
+- `KnowledgeBaseService`: `fetch()`、`update_file()`、`_resolve_virtual_path()`、`_normalize_virtual_path()`、`_with_virtual_full_path()`、`_path_to_regex()`、`_list_by_path_pattern()`、`_match_pattern_segments()`、`_all_directories()` 等全部虚拟根路径辅助函数
+- `KnowledgeItemIngestionService`: `write_file()`、`write_index()`、`import_knowledge_item()`、`_decode_file_content()`、`_derive_type_code()`
+- `KnowledgeItemSearchService`: 旧 `search()` 方法
+
+### 已删除的 Repository
+- `knowledge_item_repository.py` — 整个文件删除（`knowledge_item` 表已不存在）
+- `knowledge_item_version_repository.py` — 整个文件删除（`knowledge_item_version` 表已不存在）
+- `KnowledgeItemSearchRepository`: 旧 `search_text()`、`search_vector()` 方法
+- `RetrievalProjectionRepository`: `refresh_for_item()`、`delete_for_item()`、`delete_for_knowledge_base()`
+- `KnowledgeFsEntryRepository`: `list_root_entries()`、`list_all_root_nodes()`、`list_root_nodes()`
+- `runtime.py` 中对已删除 repository 的引用已清理
+
+### Integration Test 重构
+- 数据准备链路从旧 JSON 导入改为 `knowledgeItems/import`（multipart）+ `fileToMarkdownIndex`
+- 所有路由 URL、请求字段名、响应断言已更新为文档化规范
+- 已删除仅测试已弃用功能的测试（write-file、write-index、旧 import、旧 build 等）
+- knowledge_build 集成测试已清空（路由已全部弃用）

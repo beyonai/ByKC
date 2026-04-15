@@ -1,17 +1,8 @@
 """Pydantic schemas for knowledge base APIs."""
 
-import json
-from pathlib import PurePosixPath
 from typing import Any, Literal, Optional
 
-from pydantic import (
-    AliasChoices,
-    BaseModel,
-    ConfigDict,
-    Field,
-    ValidationError,
-    model_validator,
-)
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from by_qa.knowledge_common.schemas import KnowledgeItemChunkPayload
 
@@ -173,63 +164,6 @@ class UpdateDirectoryResponse(BaseModel):
     directory_name: str
 
 
-class UpdateFileRequest(BaseModel):
-    """Request body for updating one file without moving or rewriting it."""
-
-    kb_code: str = Field(min_length=1)
-    file_code: str = Field(min_length=1)
-    file_name: str | None = None
-    file_description: str | None = None
-    metadata: dict[str, Any] | None = None
-
-    @model_validator(mode="after")
-    def validate_file_name(self) -> "UpdateFileRequest":
-        """File names must be a single segment, not a path."""
-        if self.file_name is None:
-            return self
-        normalized = self.file_name.strip()
-        if not normalized or "/" in normalized or normalized in {".", ".."}:
-            raise ValueError("file_name must be a single valid path segment")
-        return self
-
-
-class UpdateFileResponse(BaseModel):
-    """Business response for updating one file."""
-
-    kb_code: str
-    file_code: str
-    file_path: str
-    file_description: str | None = None
-    metadata: dict[str, Any] | None = None
-
-
-class WriteFileRequest(BaseModel):
-    """Request body for writing a file into a knowledge base."""
-
-    kb_code: str = Field(min_length=1)
-    file_code: str = Field(min_length=1)
-    file_path: str = Field(min_length=1)
-    file_description: str | None = None
-    file_content: str = Field(min_length=1)
-    version: str = Field(min_length=1)
-    source_code: str = Field(min_length=1)
-    status: Status = "ACTIVE"
-    metadata: dict[str, Any] | None = None
-
-
-class WriteFileResponse(BaseModel):
-    """Business response for successfully writing a file."""
-
-    kb_code: str
-    file_code: str
-    type_code: str
-    file_path: str
-    file_description: str | None = None
-    version: str
-    status: Status
-    metadata: dict[str, Any] | None = None
-
-
 class DeleteKnowledgeItemRequest(BaseModel):
     """Request body for logically deleting a knowledge item."""
 
@@ -266,62 +200,6 @@ class FileToMarkdownIndexRequest(BaseModel):
         min_length=1,
         validation_alias=AliasChoices("filePath", "file_path"),
     )
-
-
-class WriteIndexRequest(BaseModel):
-    """Request body for writing chunk indexes for an existing file version."""
-
-    kb_code: str = Field(min_length=1)
-    file_code: str = Field(min_length=1)
-    version: str = Field(min_length=1)
-    markdown_content: str = Field(min_length=1)
-    chunks: list["KnowledgeItemChunkPayload"] = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def validate_unique_chunk_numbers(self) -> "WriteIndexRequest":
-        """Reject duplicate chunk numbers within one request."""
-        chunk_numbers = [chunk.chunk_no for chunk in self.chunks]
-        if len(chunk_numbers) != len(set(chunk_numbers)):
-            raise ValueError("chunk_no must be unique within one write-index request")
-        return self
-
-
-class WriteIndexResponse(BaseModel):
-    """Business response for successfully writing indexes."""
-
-    class ChunkSummary(BaseModel):
-        """Chunk summary for write-index responses."""
-
-        count: int
-
-    kb_code: str
-    file_code: str
-    version: str
-    chunks: ChunkSummary
-
-
-class KnowledgeItemImportRequest(BaseModel):
-    """Request body for atomically importing a file, markdown sidecar, and chunks."""
-
-    kb_code: str = Field(min_length=1)
-    file_code: str = Field(min_length=1)
-    file_path: str = Field(min_length=1)
-    file_description: str | None = None
-    file_content: str = Field(min_length=1)
-    version: str = Field(min_length=1)
-    source_code: str = Field(min_length=1)
-    status: Status = "ACTIVE"
-    metadata: dict[str, Any] | None = None
-    markdown_content: str = Field(min_length=1)
-    chunks: list["KnowledgeItemChunkPayload"] = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def validate_unique_chunk_numbers(self) -> "KnowledgeItemImportRequest":
-        """Reject duplicate chunk numbers within one combined import request."""
-        chunk_numbers = [chunk.chunk_no for chunk in self.chunks]
-        if len(chunk_numbers) != len(set(chunk_numbers)):
-            raise ValueError("chunk_no must be unique within one import request")
-        return self
 
 
 class KnowledgeItemImportFileResponse(BaseModel):
@@ -465,27 +343,6 @@ class KnowledgeItemGlobRequest(BaseModel):
     )
 
 
-class KnowledgeItemFetchRequest(BaseModel):
-    """Request body for fetching file content by line range."""
-
-    kb_codes: list[str] = Field(min_length=1)
-    path: str = Field(min_length=1)
-    content_type: Literal["original", "markdown"] = "markdown"
-    start_line: int | None = None
-    end_line: int | None = None
-
-    @model_validator(mode="after")
-    def validate_line_window(self) -> "KnowledgeItemFetchRequest":
-        """Line windows are optional for markdown full reads and unused for originals."""
-        has_start = self.start_line is not None
-        has_end = self.end_line is not None
-        if self.content_type == "original":
-            return self
-        if has_start != has_end:
-            raise ValueError("start_line and end_line must be provided together")
-        return self
-
-
 class ReadFileRequest(BaseModel):
     """Request body for reading built markdown content by line range."""
 
@@ -531,75 +388,6 @@ class KnowledgeItemDownloadRequest(BaseModel):
         min_length=1,
         validation_alias=AliasChoices("filePath", "file_path"),
     )
-
-
-class KnowledgeItemFetchResponse(BaseModel):
-    """Business response for fetch."""
-
-    kb_code: str
-    path: str
-    content_type: Literal["original", "markdown"]
-    start_line: Optional[int] = None
-    end_line: Optional[int] = None
-    data: Optional[str] = None
-    reached_eof: Optional[bool] = None
-    url: Optional[str] = None
-
-
-class KnowledgeItemSearchRequest(BaseModel):
-    """Request body for chunk-level hybrid retrieval."""
-
-    query: str = Field(min_length=1)
-    kb_codes: list[str] = Field(min_length=1)
-    top_k: int = 10
-    vector_top_k: int = 40
-    text_top_k: int = 30
-    source_codes: Optional[list[str]] = None
-    type_codes: Optional[list[str]] = None
-
-    @model_validator(mode="after")
-    def validate_candidate_limits(self) -> "KnowledgeItemSearchRequest":
-        """Candidate recall limits should not be smaller than top_k."""
-        if self.top_k <= 0:
-            raise ValueError("top_k must be greater than 0")
-        if self.vector_top_k < self.top_k:
-            raise ValueError("vector_top_k must be greater than or equal to top_k")
-        if self.text_top_k < self.top_k:
-            raise ValueError("text_top_k must be greater than or equal to top_k")
-        return self
-
-
-class KnowledgeItemSearchHit(BaseModel):
-    """Single chunk hit returned by the hybrid retrieval API."""
-
-    kb_code: str
-    file_code: str
-    version: str
-    chunk_no: int
-    chunk_text: str
-    score: float
-    text_score: Optional[float] = None
-    vector_score: Optional[float] = None
-    source_code: str
-    type_code: str
-    file_path: str
-
-
-class KnowledgeItemSearchMeta(BaseModel):
-    """Metadata accompanying a search response."""
-
-    query: str
-    top_k: int
-    vector_top_k: int
-    text_top_k: int
-    returned_count: int
-
-
-class KnowledgeItemSearchResponse(BaseModel):
-    """Business response for chunk-level hybrid retrieval."""
-
-    items: list[KnowledgeItemSearchHit]
-    meta: KnowledgeItemSearchMeta
 
 
 class SearchRequest(BaseModel):
@@ -650,56 +438,3 @@ class SearchHit(BaseModel):
     image_path: str = Field(default="", serialization_alias="imagePath")
     start_line: int = Field(serialization_alias="startLine")
     end_line: int = Field(serialization_alias="endLine")
-
-
-def build_knowledge_item_import_manifest(
-    *,
-    kb_code: str,
-    item_code: str,
-    full_path: str,
-    status: Status,
-    source_code: str,
-    type_code: str,
-    version: str,
-    chunks_json: str,
-    document_metadata_json: Optional[str] = None,
-) -> KnowledgeItemImportManifest:
-    """Build a validated import manifest from multipart form fields."""
-    try:
-        chunks = json.loads(chunks_json)
-    except json.JSONDecodeError as exc:
-        raise ValueError("chunks_json must be a valid JSON array") from exc
-    if not isinstance(chunks, list):
-        raise ValueError("chunks_json must be a JSON array")
-
-    metadata: dict[str, Any] | None = None
-    if document_metadata_json:
-        try:
-            metadata = json.loads(document_metadata_json)
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                "document_metadata_json must be a valid JSON object"
-            ) from exc
-        if not isinstance(metadata, dict):
-            raise ValueError("document_metadata_json must be a JSON object")
-
-    try:
-        derived_title = PurePosixPath(full_path).name or full_path
-        return KnowledgeItemImportManifest.model_validate(
-            {
-                "kb_code": kb_code,
-                "document": {
-                    "item_code": item_code,
-                    "full_path": full_path,
-                    "title": derived_title,
-                    "status": status,
-                    "source_code": source_code,
-                    "type_code": type_code,
-                    "version": version,
-                    "metadata": metadata,
-                },
-                "chunks": chunks,
-            }
-        )
-    except ValidationError as exc:
-        raise ValueError(str(exc)) from exc

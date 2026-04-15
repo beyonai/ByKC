@@ -425,9 +425,6 @@ def test_success_responses_follow_documented_path_contract(monkeypatch, tmp_path
 
 
 @pytest.mark.integration
-@pytest.mark.skip(
-    reason="rename_entry path_ltree update has a known bug with OpenGauss ltree concatenation"
-)
 def test_directory_rename_updates_parent_and_child_queries(monkeypatch, tmp_path):
     """Renaming a directory should update browse, match, and read behavior together."""
     settings = _kb_settings(agent_data_path=tmp_path)
@@ -740,9 +737,6 @@ def test_multilevel_directory_tree_lists_direct_children_and_supports_glob_match
 
 
 @pytest.mark.integration
-@pytest.mark.skip(
-    reason="rename_entry path_ltree update has a known bug with OpenGauss ltree concatenation"
-)
 def test_renaming_a_middle_directory_updates_all_descendant_paths(
     monkeypatch, tmp_path
 ):
@@ -1323,9 +1317,6 @@ def test_search_respects_file_type_filter(monkeypatch, tmp_path):
 
 
 @pytest.mark.integration
-@pytest.mark.skip(
-    reason="rename_entry path_ltree update has a known bug with OpenGauss ltree concatenation"
-)
 def test_search_path_updates_after_middle_directory_rename(monkeypatch, tmp_path):
     """Search results should follow the new file path after a middle directory rename."""
     settings = _kb_settings(agent_data_path=tmp_path)

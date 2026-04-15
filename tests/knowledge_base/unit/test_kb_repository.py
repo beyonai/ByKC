@@ -508,7 +508,7 @@ def test_soft_delete_fs_file_entry_updates_is_deleted_flag():
 
 
 def test_rename_entry_updates_name_and_path_ltree_prefix():
-    """Directory rename should rebuild the entry path prefix so future siblings get distinct tree paths."""
+    """Directory rename should rebuild the entry path prefix without the openGauss subpath edge-case."""
     repo = KnowledgeFsEntryRepository()
     cursor = FakeCursor(
         fetchone_results=[
@@ -533,8 +533,14 @@ def test_rename_entry_updates_name_and_path_ltree_prefix():
     assert "set name = case" in lowered
     assert "when fs.kid = %(entry_id)s then %(new_name)s" in lowered
     assert "else fs.name" in lowered
-    assert "path_ltree = case" in lowered
-    assert "subpath(fs.path_ltree, nlevel(%(current_path_ltree)s::ltree))" in lowered
+    assert "path_ltree = text2ltree(" in lowered
+    assert "fs.path_ltree::text" in lowered
+    assert "substring(" in lowered
+    assert "from char_length(%(current_path_ltree)s) + 1" in lowered
+    assert "coalesce(" in lowered
+    assert (
+        "subpath(fs.path_ltree, nlevel(%(current_path_ltree)s::ltree))" not in lowered
+    )
     assert "where fs.path_ltree <@ %(current_path_ltree)s::ltree" in lowered
     assert params["entry_id"] == 81
     assert params["new_name"] == "新目录"

@@ -655,11 +655,16 @@ class KnowledgeFsEntryRepository:
                     WHEN fs.kid = %(entry_id)s THEN %(new_name)s
                     ELSE fs.name
                 END,
-                path_ltree = CASE
-                    WHEN fs.kid = %(entry_id)s THEN %(new_path_ltree)s::ltree
-                    ELSE %(new_path_ltree)s::ltree
-                         || subpath(fs.path_ltree, nlevel(%(current_path_ltree)s::ltree))
-                END,
+                path_ltree = text2ltree(
+                    %(new_path_ltree)s
+                    || COALESCE(
+                        substring(
+                            fs.path_ltree::text
+                            FROM char_length(%(current_path_ltree)s) + 1
+                        ),
+                        ''
+                    )
+                ),
                 updated_at = NOW()
             WHERE fs.path_ltree <@ %(current_path_ltree)s::ltree
               AND fs.is_deleted = FALSE

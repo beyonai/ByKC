@@ -99,9 +99,9 @@ python ./run_kb_flow.py \
 
 这个脚本会依次调用：
 
-- `/api/v1/file-to-markdown-index`
-- `/api/v1/knowledge-items/import`
-- `/api/v1/list_dir`
+- `/api/v1/fileToMarkdownIndex`
+- `/api/v1/knowledgeItems/import`
+- `/api/v1/listDir`
 - `/api/v1/glob`
 
 它会按文件名顺序遍历目录中的所有受支持文件，并逐个完成知识构建与导入。

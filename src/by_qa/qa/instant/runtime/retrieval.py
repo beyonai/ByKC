@@ -11,16 +11,16 @@ from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
 
 def _format_search_hit(item: dict[str, Any]) -> Dict[str, Any]:
     """Normalize remote API hits into the agent-facing retrieval shape."""
-    file_path = item.get("file_path", "")
+    file_path = item.get("filePath") or item.get("file_path", "")
     return {
-        "content": item.get("chunk_text", ""),
+        "content": item.get("chunkText") or item.get("chunk_text", ""),
         "source": file_path,
         "source_type": "knowledge_base",
         "score": item.get("score", 0.0),
-        "kb_code": item.get("kb_code"),
+        "kb_code": item.get("knCode") or item.get("kb_code"),
         "file_code": item.get("file_code"),
         "version": item.get("version"),
-        "chunk_no": item.get("chunk_no"),
+        "chunk_no": item.get("chunkNo") or item.get("chunk_no"),
         "source_code": item.get("source_code"),
         "type_code": item.get("type_code"),
         "file_path": file_path,
@@ -44,10 +44,12 @@ async def _search_remote_knowledge_base(
         path=path,
         json=request_payload,
     )
-    response_data = payload.get("data", {})
-    items = response_data.get("items", [])
+    response_data = payload.get("resultObject", {})
+    items = response_data.get("data", [])
     if not isinstance(items, list):
-        raise ValueError("knowledge base search response data.items must be a list")
+        raise ValueError(
+            "knowledge base search response resultObject.data must be a list"
+        )
     return items
 
 
@@ -76,12 +78,9 @@ def _build_remote_search_requests(
                 service_target,
                 {
                     "query": query,
-                    "kb_codes": kb_codes,
-                    "source_codes": retrieval.source_codes,
-                    "type_codes": retrieval.type_codes,
-                    "top_k": retrieval.top_k,
-                    "vector_top_k": retrieval.vector_top_k,
-                    "text_top_k": retrieval.text_top_k,
+                    "knCodeList": kb_codes,
+                    "topK": retrieval.top_k,
+                    "searchMode": "mixedRecall",
                 },
             )
         )
@@ -121,7 +120,7 @@ async def search_knowledge_items(
                 "[instant_search.retrieval] remote KB search failed: service_name=%s, path=%s, kb_codes=%s, error=%s",
                 service_name,
                 path,
-                request_payload["kb_codes"],
+                request_payload["knCodeList"],
                 items,
             )
             continue

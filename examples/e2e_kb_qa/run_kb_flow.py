@@ -7,17 +7,15 @@ import time
 
 import httpx
 from common import (
-    DEFAULT_FILE_VERSION,
-    DEFAULT_SOURCE_CODE,
-    example_kb_identity,
-    infer_build_file_type,
+    build_example_kb_name,
     list_supported_input_files,
     normalized_base_url,
     post_api,
+    post_multipart_api,
     pretty_print,
-    read_file_base64,
     resolve_input_directory,
     runtime_dir,
+    save_example_kb_state,
     wait_for_health,
 )
 
@@ -25,7 +23,7 @@ from common import (
 def build_parser() -> argparse.ArgumentParser:
     """Create the CLI parser for the packaged KB flow example."""
     parser = argparse.ArgumentParser(
-        description="Run knowledge build, KB import, list_dir, and glob in one flow."
+        description="Run fileToMarkdownIndex, KB import, listDir, and glob in one flow."
     )
     parser.add_argument(
         "--runtime-dir",
@@ -48,9 +46,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     """Execute the full build -> import -> browse -> search example chain."""
     args = build_parser().parse_args()
-    runtime_dir(args.runtime_dir)
+    root = runtime_dir(args.runtime_dir)
     base_url = normalized_base_url(args.base_url)
-    kb_code, kb_name = example_kb_identity()
+    kb_name = build_example_kb_name()
     input_dir = resolve_input_directory(args.dir)
     input_files = list_supported_input_files(input_dir)
 
@@ -61,101 +59,84 @@ def main() -> None:
         create_result = post_api(
             client,
             base_url=base_url,
-            path="/api/v1/knowledge-bases/create",
+            path="/api/v1/knowledgeBases/create",
             payload={
-                "kb_code": kb_code,
-                "kb_name": kb_name,
-                "kb_description": "用于演示 knowledge_build、knowledge_base 与即时问答的端到端样例。",
-                "status": "ACTIVE",
-                "metadata": {"scenario": "packaged-e2e-example"},
+                "knName": kb_name,
+                "knDescription": "用于演示知识构建、knowledge_base 与即时问答的端到端样例。",
             },
-            allowed_error_codes={"KB_CODE_CONFLICT", "KB_CODE_SOFT_DELETED_CONFLICT"},
         )
+        kb_code = create_result["knCode"]
+        save_example_kb_state(root, kb_code=kb_code, kb_name=kb_name)
         pretty_print("Create Knowledge Base", create_result)
 
         imported_files: list[dict[str, str | int]] = []
         timestamp = int(time.time())
         for index, input_path in enumerate(input_files, start=1):
-            file_code = f"{timestamp}-{index}"
             file_name = input_path.name
-            file_path = f"{timestamp}-{index}-{file_name}"
-            file_content = read_file_base64(input_path)
-            file_type = infer_build_file_type(input_path)
+            file_path = f"/imports/{timestamp}-{index}-{file_name}"
+
+            import_result = post_multipart_api(
+                client,
+                base_url=base_url,
+                path="/api/v1/knowledgeItems/import",
+                data={
+                    "knCode": kb_code,
+                    "filePath": file_path,
+                    "fileDescription": f"端到端示例导入文件: {file_name}",
+                },
+                file_field_name="fileContent",
+                file_path=input_path,
+            )
+            pretty_print(f"Knowledge Import Result: {file_name}", import_result)
 
             build_result = post_api(
                 client,
                 base_url=base_url,
-                path="/api/v1/file-to-markdown-index",
-                payload={"content": file_content, "type": file_type},
+                path="/api/v1/fileToMarkdownIndex",
+                payload={"knCode": kb_code, "filePath": file_path},
             )
             pretty_print(
-                f"Knowledge Build Output: {file_name}",
-                {
-                    "md_preview": build_result["md_content"][:400],
-                    "chunk_count": len(build_result["chunks"]),
-                },
+                f"Knowledge Build Triggered: {file_name}",
+                {"knCode": kb_code, "filePath": file_path, **build_result},
             )
 
-            import_result = post_api(
-                client,
-                base_url=base_url,
-                path="/api/v1/knowledge-items/import",
-                payload={
-                    "kb_code": kb_code,
-                    "file_code": file_code,
-                    "file_path": file_path,
-                    "file_description": f"端到端示例导入文件: {file_name}",
-                    "file_content": file_content,
-                    "version": DEFAULT_FILE_VERSION,
-                    "source_code": DEFAULT_SOURCE_CODE,
-                    "status": "ACTIVE",
-                    "metadata": {
-                        "scenario": "packaged-e2e-example",
-                        "file_name": file_name,
-                    },
-                    "markdown_content": build_result["md_content"],
-                    "chunks": build_result["chunks"],
-                },
-            )
-            pretty_print(f"Knowledge Import Result: {file_name}", import_result)
             imported_files.append(
                 {
-                    "file_code": file_code,
                     "file_path": file_path,
                     "input_file": str(input_path),
-                    "input_file_type": file_type,
-                    "chunk_count": len(build_result["chunks"]),
                 }
             )
 
         root_listing = post_api(
             client,
             base_url=base_url,
-            path="/api/v1/list_dir",
-            payload={"kb_codes": [kb_code], "path": "/"},
+            path="/api/v1/listDir",
+            payload={"knCode": kb_code, "directoryPath": "/"},
         )
-        pretty_print("list_dir /", root_listing)
+        pretty_print("listDir /", root_listing)
 
         kb_listing = post_api(
             client,
             base_url=base_url,
-            path="/api/v1/list_dir",
-            payload={"kb_codes": [kb_code], "path": f"{kb_name}/"},
+            path="/api/v1/listDir",
+            payload={"knCode": kb_code, "directoryPath": "/imports"},
         )
-        pretty_print(f"list_dir {kb_name}/", kb_listing)
+        pretty_print("listDir /imports", kb_listing)
 
         first_level_glob = post_api(
             client,
             base_url=base_url,
             path="/api/v1/glob",
-            payload={"kb_codes": [kb_code], "path": f"{kb_name}/*"},
+            payload={"knCode": kb_code, "pathRule": "/imports/*"},
         )
-        pretty_print(f"glob {kb_name}/*", first_level_glob)
+        pretty_print("glob /imports/*", first_level_glob)
 
     pretty_print(
         "Import Summary",
         {
             "input_dir": str(input_dir),
+            "kb_code": kb_code,
+            "kb_name": kb_name,
             "imported_file_count": len(imported_files),
             "next_step": "run_instant_qa",
         },

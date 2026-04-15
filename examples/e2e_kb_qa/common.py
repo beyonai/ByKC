@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import mimetypes
 import os
 import time
 from pathlib import Path
@@ -17,6 +18,7 @@ DEFAULT_SOURCE_CODE = "demo"
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE_ROOT = Path(__file__).resolve().parent
 ENV_FILE = EXAMPLE_ROOT / ".env"
+EXAMPLE_STATE_FILE = "example_kb_state.json"
 
 
 class ExampleError(RuntimeError):
@@ -93,24 +95,57 @@ def post_api(
     base_url: str,
     path: str,
     payload: dict[str, Any],
-    allowed_error_codes: set[str] | None = None,
 ) -> dict[str, Any]:
-    """Post one request to the JSON envelope API."""
+    """Post one JSON request to the documented resultCode/resultObject API."""
     response = client.post(f"{base_url}{path}", json=payload)
     payload_json = response.json()
 
-    if response.status_code == 200:
-        return payload_json["data"]
-
-    error = payload_json.get("error") or {}
-    error_code = error.get("error_code")
-    if allowed_error_codes and error_code in allowed_error_codes:
-        return {"_allowed_error": error}
+    if response.status_code == 200 and payload_json.get("resultCode") == "0":
+        result_object = payload_json.get("resultObject")
+        return result_object if isinstance(result_object, dict) else {}
 
     raise ExampleError(
         "API call failed: "
         f"path={path}, status={response.status_code}, "
-        f"error_code={error_code}, error_message={error.get('error_message')}"
+        f"result_code={payload_json.get('resultCode')}, "
+        f"result_msg={payload_json.get('resultMsg')}"
+    )
+
+
+def post_multipart_api(
+    client: httpx.Client,
+    *,
+    base_url: str,
+    path: str,
+    data: dict[str, str],
+    file_field_name: str,
+    file_path: Path,
+) -> dict[str, Any]:
+    """Post one multipart request to the documented resultCode/resultObject API."""
+    content_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+    with file_path.open("rb") as file_handle:
+        response = client.post(
+            f"{base_url}{path}",
+            data=data,
+            files={
+                file_field_name: (
+                    file_path.name,
+                    file_handle,
+                    content_type,
+                )
+            },
+        )
+    payload_json = response.json()
+
+    if response.status_code == 200 and payload_json.get("resultCode") == "0":
+        result_object = payload_json.get("resultObject")
+        return result_object if isinstance(result_object, dict) else {}
+
+    raise ExampleError(
+        "API call failed: "
+        f"path={path}, status={response.status_code}, "
+        f"result_code={payload_json.get('resultCode')}, "
+        f"result_msg={payload_json.get('resultMsg')}"
     )
 
 
@@ -128,13 +163,43 @@ def read_file_base64(path: Path) -> str:
     return base64.b64encode(path.read_bytes()).decode("ascii")
 
 
-def example_kb_identity() -> tuple[str, str]:
-    """Return the default knowledge-base code and name."""
-    return "demo", "demo知识库"
+def build_example_kb_name() -> str:
+    """Return a unique example knowledge-base name for one run."""
+    return f"demo知识库-{int(time.time())}"
+
+
+def save_example_kb_state(
+    root: Path,
+    *,
+    kb_code: str,
+    kb_name: str,
+) -> Path:
+    """Persist the created example knowledge-base identity for later scripts."""
+    state_path = root / EXAMPLE_STATE_FILE
+    state_path.write_text(
+        json.dumps({"kb_code": kb_code, "kb_name": kb_name}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return state_path
+
+
+def load_example_kb_state(root: Path) -> tuple[str, str]:
+    """Load the created example knowledge-base identity from the runtime dir."""
+    state_path = root / EXAMPLE_STATE_FILE
+    if not state_path.exists():
+        raise ExampleError(
+            "example knowledge-base state not found. Run run_kb_flow.py first."
+        )
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    kb_code = str(payload.get("kb_code", "")).strip()
+    kb_name = str(payload.get("kb_name", "")).strip()
+    if not kb_code or not kb_name:
+        raise ExampleError(f"example knowledge-base state is invalid: {state_path}")
+    return kb_code, kb_name
 
 
 def infer_build_file_type(path: Path) -> str:
-    """Infer the knowledge-build file type from the file extension."""
+    """Infer the fileToMarkdownIndex file type from the file extension."""
     suffix = path.suffix.lower()
     supported = {
         ".pdf": "pdf",

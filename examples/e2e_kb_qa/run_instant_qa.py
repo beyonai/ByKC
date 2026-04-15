@@ -8,7 +8,7 @@ import os
 
 from common import (
     ExampleError,
-    example_kb_identity,
+    load_example_kb_state,
     pretty_print,
     require_environment,
     runtime_dir,
@@ -110,7 +110,7 @@ def build_parser() -> argparse.ArgumentParser:
 async def _run_async(args: argparse.Namespace) -> None:
     """Create the engine and stream one answer."""
     root = runtime_dir(args.runtime_dir)
-    kb_code, kb_name = example_kb_identity()
+    kb_code, kb_name = load_example_kb_state(root)
 
     require_environment(["LLM_API_KEY"])
     os.environ.setdefault("AGENT_DATA_PATH", str(root / "agent_data"))
@@ -135,7 +135,7 @@ async def _run_async(args: argparse.Namespace) -> None:
                         "kb_name": kb_name,
                         "kb_description": "Packaged end-to-end example knowledge base.",
                         "service_name": os.getenv("SERVICE_NAME", "by-qa-manager"),
-                        "path": "/api/v1/knowledge-items/search",
+                        "path": "/api/v1/knowledgeItems/search",
                     }
                 ],
                 "top_k": args.top_k,

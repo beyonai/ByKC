@@ -21,19 +21,19 @@ def test_build_remote_search_requests_groups_kb_codes_by_service_and_path():
                     kb_code="hr-policy",
                     kb_name="HR",
                     service_name="kb-search-service-a",
-                    path="/api/v1/knowledge-items/search",
+                    path="/api/v1/knowledgeItems/search",
                 ),
                 KnowledgeBaseConfig(
                     kb_code="finance-policy",
                     kb_name="Finance",
                     service_name="kb-search-service-a",
-                    path="/api/v1/knowledge-items/search",
+                    path="/api/v1/knowledgeItems/search",
                 ),
                 KnowledgeBaseConfig(
                     kb_code="legal-policy",
                     kb_name="Legal",
                     service_name="kb-search-service-b",
-                    path="/api/v1/knowledge-items/search",
+                    path="/api/v1/knowledgeItems/search",
                 ),
             ],
             source_codes=["oa"],
@@ -48,27 +48,21 @@ def test_build_remote_search_requests_groups_kb_codes_by_service_and_path():
 
     assert requests == [
         (
-            ("kb-search-service-a", "/api/v1/knowledge-items/search"),
+            ("kb-search-service-a", "/api/v1/knowledgeItems/search"),
             {
                 "query": "员工请假制度",
-                "kb_codes": ["hr-policy", "finance-policy"],
-                "source_codes": ["oa"],
-                "type_codes": ["pdf"],
-                "top_k": 5,
-                "vector_top_k": 10,
-                "text_top_k": 10,
+                "knCodeList": ["hr-policy", "finance-policy"],
+                "topK": 5,
+                "searchMode": "mixedRecall",
             },
         ),
         (
-            ("kb-search-service-b", "/api/v1/knowledge-items/search"),
+            ("kb-search-service-b", "/api/v1/knowledgeItems/search"),
             {
                 "query": "员工请假制度",
-                "kb_codes": ["legal-policy"],
-                "source_codes": ["oa"],
-                "type_codes": ["pdf"],
-                "top_k": 5,
-                "vector_top_k": 10,
-                "text_top_k": 10,
+                "knCodeList": ["legal-policy"],
+                "topK": 5,
+                "searchMode": "mixedRecall",
             },
         ),
     ]
@@ -104,7 +98,7 @@ async def test_search_knowledge_items_uses_framework_client():
                     kb_code="hr-policy",
                     kb_name="HR",
                     service_name="kb-search-service-a",
-                    path="/api/v1/knowledge-items/search",
+                    path="/api/v1/knowledgeItems/search",
                 )
             ],
             source_codes=["oa"],
@@ -118,18 +112,18 @@ async def test_search_knowledge_items_uses_framework_client():
         recorded["path"] = path
         recorded["json"] = json
         return {
-            "data": {
-                "items": [
+            "resultObject": {
+                "data": [
                     {
-                        "kb_code": "hr-policy",
-                        "file_code": "attendance-policy",
-                        "version": "v1",
-                        "chunk_no": 2,
-                        "chunk_text": "第二条 异常考勤需提交说明。",
+                        "knCode": "hr-policy",
+                        "filePath": "/考勤制度/异常考勤处理办法.pdf",
+                        "chunkNo": 2,
+                        "chunkId": 101,
+                        "chunkText": "第二条 异常考勤需提交说明。",
                         "score": 0.91,
-                        "source_code": "oa",
-                        "type_code": "pdf",
-                        "file_path": "/考勤制度/异常考勤处理办法.pdf",
+                        "imagePath": "",
+                        "startLine": 8,
+                        "endLine": 10,
                     }
                 ]
             }
@@ -143,15 +137,12 @@ async def test_search_knowledge_items_uses_framework_client():
 
     assert recorded == {
         "service_name": "kb-search-service-a",
-        "path": "/api/v1/knowledge-items/search",
+        "path": "/api/v1/knowledgeItems/search",
         "json": {
             "query": "员工请假制度",
-            "kb_codes": ["hr-policy"],
-            "source_codes": ["oa"],
-            "type_codes": ["pdf"],
-            "top_k": 20,
-            "vector_top_k": 40,
-            "text_top_k": 30,
+            "knCodeList": ["hr-policy"],
+            "topK": 20,
+            "searchMode": "mixedRecall",
         },
     }
     assert results[0]["content"] == "第二条 异常考勤需提交说明。"

@@ -39,8 +39,13 @@ def _documented_success_response(
     status_code: int = 200,
 ) -> JSONResponse:
     """Return the documented success envelope."""
+    if status_code != 200:
+        logger.info(
+            "knowledge_base success response normalized to HTTP 200: business_status_code=%s",
+            status_code,
+        )
     return JSONResponse(
-        status_code=status_code,
+        status_code=200,
         content={
             "resultCode": "0",
             "resultMsg": "success",
@@ -55,9 +60,14 @@ def _documented_error_response(
     result_object: dict[str, Any] | None = None,
     status_code: int = 422,
 ) -> JSONResponse:
-    """Return the documented error envelope."""
+    """Return the documented error envelope with HTTP status normalized to 200."""
+    logger.info(
+        "knowledge_base error response normalized to HTTP 200: business_status_code=%s, result_msg=%s",
+        status_code,
+        result_msg,
+    )
     return JSONResponse(
-        status_code=status_code,
+        status_code=200,
         content={
             "resultCode": "-1",
             "resultMsg": result_msg,

@@ -393,16 +393,12 @@ def create_app():
         if not request.url.path.startswith("/api/v1/"):
             return JSONResponse(status_code=422, content={"detail": errors})
         return JSONResponse(
-            status_code=422,
+            status_code=200,
             content={
-                "code": 422,
-                "message": "error",
-                "data": None,
-                "error": {
-                    "type": "request_invalid",
-                    "error_code": "REQUEST_VALIDATION_FAILED",
-                    "error_message": "request validation failed",
-                    "details": {"errors": errors},
+                "resultCode": "-1",
+                "resultMsg": "request validation failed",
+                "resultObject": {
+                    "errors": errors,
                 },
             },
         )
@@ -417,17 +413,11 @@ def create_app():
                 status_code=500, content={"detail": str(exc) or "internal error"}
             )
         return JSONResponse(
-            status_code=500,
+            status_code=200,
             content={
-                "code": 500,
-                "message": "error",
-                "data": None,
-                "error": {
-                    "type": "internal_error",
-                    "error_code": "KB_INTERNAL_ERROR",
-                    "error_message": str(exc) or "internal error",
-                    "details": {},
-                },
+                "resultCode": "-1",
+                "resultMsg": str(exc) or "internal error",
+                "resultObject": {},
             },
         )
 

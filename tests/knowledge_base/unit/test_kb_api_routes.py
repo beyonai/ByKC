@@ -228,7 +228,7 @@ def test_create_knowledge_base_route_maps_request_validation_to_documented_error
         json={"knDescription": "公司人事制度与流程文档"},
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
     assert response.json()["resultCode"] == "-1"
     assert response.json()["resultMsg"] == "request validation failed"
     assert response.json()["resultObject"]["errors"]
@@ -251,7 +251,7 @@ def test_create_knowledge_base_route_maps_duplicate_name_to_documented_error(
         json={"knName": "人力制度知识库"},
     )
 
-    assert response.status_code == 409
+    assert response.status_code == 200
     assert response.json() == {
         "resultCode": "-1",
         "resultMsg": "knowledge base name already exists: 人力制度知识库",
@@ -316,7 +316,7 @@ def test_update_knowledge_base_route_maps_duplicate_name_to_documented_error(
         json={"knCode": "hr-policy", "knName": "人力制度知识库"},
     )
 
-    assert response.status_code == 409
+    assert response.status_code == 200
     assert response.json() == {
         "resultCode": "-1",
         "resultMsg": "knowledge base name already exists: 人力制度知识库",
@@ -324,7 +324,7 @@ def test_update_knowledge_base_route_maps_duplicate_name_to_documented_error(
     }
 
 
-def test_update_knowledge_base_route_maps_unexpected_exception_to_documented_500(
+def test_update_knowledge_base_route_maps_unexpected_exception_to_documented_error(
     monkeypatch,
 ):
     """Update-knowledge-base unexpected failures should use the documented error envelope."""
@@ -339,7 +339,7 @@ def test_update_knowledge_base_route_maps_unexpected_exception_to_documented_500
         json={"knCode": "7", "knName": "人力制度知识库"},
     )
 
-    assert response.status_code == 500
+    assert response.status_code == 200
     assert response.json() == {
         "resultCode": "-1",
         "resultMsg": 'column "kb_code" does not exist',
@@ -390,8 +390,8 @@ def test_delete_directory_route_returns_business_response(monkeypatch):
     }
 
 
-def test_delete_directory_route_maps_missing_directory_to_404(monkeypatch):
-    """Delete-directory should return 404 when the directory does not exist."""
+def test_delete_directory_route_maps_missing_directory_to_documented_error(monkeypatch):
+    """Delete-directory should use the documented error envelope when the directory does not exist."""
 
     class BrokenKBService(FakeKBService):
         def delete_directory(self, request):
@@ -408,7 +408,7 @@ def test_delete_directory_route_maps_missing_directory_to_404(monkeypatch):
         },
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
     assert response.json() == {
         "resultCode": "-1",
         "resultMsg": "directory not found: /考勤制度/归档",
@@ -438,8 +438,8 @@ def test_update_directory_route_returns_business_response(monkeypatch):
     }
 
 
-def test_update_directory_route_maps_name_conflict_to_409(monkeypatch):
-    """Update-directory should return 409 for sibling name conflicts."""
+def test_update_directory_route_maps_name_conflict_to_documented_error(monkeypatch):
+    """Update-directory should use the documented error envelope for sibling name conflicts."""
 
     class BrokenKBService(FakeKBService):
         def update_directory(self, request):
@@ -457,7 +457,7 @@ def test_update_directory_route_maps_name_conflict_to_409(monkeypatch):
         },
     )
 
-    assert response.status_code == 409
+    assert response.status_code == 200
     assert response.json() == {
         "resultCode": "-1",
         "resultMsg": "directory name already exists under parent: 历史归档",
@@ -478,7 +478,7 @@ def test_update_directory_route_maps_request_validation_to_standard_error(monkey
         },
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
     assert response.json()["resultCode"] == "-1"
     assert response.json()["resultMsg"] == "request validation failed"
     assert response.json()["resultObject"]["errors"]
@@ -517,7 +517,7 @@ def test_delete_knowledge_item_route_maps_request_validation_to_documented_error
         json={"knCode": "hr-policy"},
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
     assert response.json()["resultCode"] == "-1"
     assert response.json()["resultMsg"] == "request validation failed"
     assert response.json()["resultObject"]["errors"]
@@ -595,7 +595,7 @@ def test_list_dir_route_requires_kb_codes(monkeypatch):
         },
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
     assert response.json()["resultCode"] == "-1"
     assert response.json()["resultMsg"] == "request validation failed"
     assert response.json()["resultObject"]["errors"]
@@ -617,7 +617,7 @@ def test_list_dir_route_maps_validation_error_to_standard_error(monkeypatch):
         },
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
     assert response.json() == {
         "resultCode": "-1",
         "resultMsg": "path contains invalid segments",
@@ -625,7 +625,7 @@ def test_list_dir_route_maps_validation_error_to_standard_error(monkeypatch):
     }
 
 
-def test_list_dir_route_maps_missing_directory_to_404(monkeypatch):
+def test_list_dir_route_maps_missing_directory_to_documented_error(monkeypatch):
     """List-dir missing paths should map to the standardized not-found response."""
 
     class BrokenKBService(FakeKBService):
@@ -643,7 +643,7 @@ def test_list_dir_route_maps_missing_directory_to_404(monkeypatch):
         },
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
     assert response.json() == {
         "resultCode": "-1",
         "resultMsg": "directory not found: /missing-dir",
@@ -651,7 +651,7 @@ def test_list_dir_route_maps_missing_directory_to_404(monkeypatch):
     }
 
 
-def test_list_dir_route_maps_configuration_error_to_503(monkeypatch):
+def test_list_dir_route_maps_configuration_error_to_documented_error(monkeypatch):
     """List-dir configuration failures should use the standardized error envelope."""
 
     class BrokenKBService(FakeKBService):
@@ -667,7 +667,7 @@ def test_list_dir_route_maps_configuration_error_to_503(monkeypatch):
         },
     )
 
-    assert response.status_code == 503
+    assert response.status_code == 200
     assert response.json() == {
         "resultCode": "-1",
         "resultMsg": "KB runtime is not configured",
@@ -716,7 +716,7 @@ def test_glob_route_requires_kb_codes(monkeypatch):
         },
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
     assert response.json()["resultCode"] == "-1"
     assert response.json()["resultMsg"] == "request validation failed"
     assert response.json()["resultObject"]["errors"]
@@ -738,7 +738,7 @@ def test_glob_route_maps_validation_error_to_standard_error(monkeypatch):
         },
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
     assert response.json() == {
         "resultCode": "-1",
         "resultMsg": "path contains invalid segments",
@@ -746,7 +746,7 @@ def test_glob_route_maps_validation_error_to_standard_error(monkeypatch):
     }
 
 
-def test_glob_route_maps_configuration_error_to_503(monkeypatch):
+def test_glob_route_maps_configuration_error_to_documented_error(monkeypatch):
     """Glob configuration failures should use the standardized error envelope."""
 
     class BrokenKBService(FakeKBService):
@@ -762,7 +762,7 @@ def test_glob_route_maps_configuration_error_to_503(monkeypatch):
         },
     )
 
-    assert response.status_code == 503
+    assert response.status_code == 200
     assert response.json() == {
         "resultCode": "-1",
         "resultMsg": "KB runtime is not configured",
@@ -889,7 +889,7 @@ def test_download_file_route_maps_validation_error_to_documented_error(monkeypat
         json={"knCode": "hr-policy", "filePath": "/missing.pdf"},
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
     assert response.json() == {
         "resultCode": "-1",
         "resultMsg": "file not found: /missing.pdf",
@@ -910,7 +910,7 @@ def test_read_file_route_requires_kn_code(monkeypatch):
         },
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
     body = response.json()
     assert body["resultCode"] == "-1"
     assert body["resultMsg"] == "request validation failed"
@@ -934,7 +934,7 @@ def test_read_file_route_maps_validation_error_to_documented_error(monkeypatch):
         },
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
     assert response.json() == {
         "resultCode": "-1",
         "resultMsg": "startLine must be greater than 0",
@@ -958,7 +958,7 @@ def test_read_file_route_maps_not_found_to_documented_error(monkeypatch):
         },
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
     assert response.json() == {
         "resultCode": "-1",
         "resultMsg": "file not found: /dir1/missing.pdf",
@@ -982,7 +982,7 @@ def test_read_file_route_maps_file_not_built_to_documented_error(monkeypatch):
         },
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
     assert response.json() == {
         "resultCode": "-1",
         "resultMsg": "file not built: /dir1/doc.pdf",
@@ -990,7 +990,7 @@ def test_read_file_route_maps_file_not_built_to_documented_error(monkeypatch):
     }
 
 
-def test_read_file_route_maps_configuration_error_to_503(monkeypatch):
+def test_read_file_route_maps_configuration_error_to_documented_error(monkeypatch):
     """Read-file configuration failures should use the documented error envelope."""
 
     class BrokenKBService(FakeKBService):
@@ -1008,7 +1008,7 @@ def test_read_file_route_maps_configuration_error_to_503(monkeypatch):
         },
     )
 
-    assert response.status_code == 503
+    assert response.status_code == 200
     assert response.json() == {
         "resultCode": "-1",
         "resultMsg": "read file runtime is not configured",
@@ -1016,8 +1016,10 @@ def test_read_file_route_maps_configuration_error_to_503(monkeypatch):
     }
 
 
-def test_create_knowledge_base_route_maps_configuration_error_to_503(monkeypatch):
-    """Missing KB runtime configuration should surface as a service-unavailable response."""
+def test_create_knowledge_base_route_maps_configuration_error_to_documented_error(
+    monkeypatch,
+):
+    """Missing KB runtime configuration should surface as a documented error response."""
 
     class MisconfiguredKBService(FakeKBService):
         def create_knowledge_base(self, request):
@@ -1031,7 +1033,7 @@ def test_create_knowledge_base_route_maps_configuration_error_to_503(monkeypatch
         },
     )
 
-    assert response.status_code == 503
+    assert response.status_code == 200
     assert response.json() == {
         "resultCode": "-1",
         "resultMsg": "KB_OPENGAUSS_DSN is required",
@@ -1039,7 +1041,7 @@ def test_create_knowledge_base_route_maps_configuration_error_to_503(monkeypatch
     }
 
 
-def test_create_knowledge_base_route_maps_unexpected_exception_to_standard_500(
+def test_create_knowledge_base_route_maps_unexpected_exception_to_standard_error(
     monkeypatch,
 ):
     """Unexpected route failures should still use the standard KB error envelope."""
@@ -1065,7 +1067,7 @@ def test_create_knowledge_base_route_maps_unexpected_exception_to_standard_500(
         json={"knName": "Demo KB"},
     )
 
-    assert response.status_code == 500
+    assert response.status_code == 200
     assert response.json() == {
         "resultCode": "-1",
         "resultMsg": "duplicate key value violates unique constraint",
@@ -1153,7 +1155,7 @@ def test_search_route_maps_validation_error_to_documented_error(monkeypatch):
         },
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
     assert response.json() == {
         "resultCode": "-1",
         "resultMsg": "knCodeList must not be empty",
@@ -1161,7 +1163,7 @@ def test_search_route_maps_validation_error_to_documented_error(monkeypatch):
     }
 
 
-def test_search_route_maps_configuration_error_to_503(monkeypatch):
+def test_search_route_maps_configuration_error_to_documented_error(monkeypatch):
     """Search configuration failures should use the documented error envelope."""
 
     class BrokenSearchService(FakeKBService):
@@ -1181,7 +1183,7 @@ def test_search_route_maps_configuration_error_to_503(monkeypatch):
         },
     )
 
-    assert response.status_code == 503
+    assert response.status_code == 200
     assert response.json() == {
         "resultCode": "-1",
         "resultMsg": "EMBEDDING_BASE_URL is required for retrieval",
@@ -1202,7 +1204,7 @@ def test_search_route_rejects_invalid_search_mode(monkeypatch):
         },
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
     assert response.json()["resultCode"] == "-1"
     assert response.json()["resultMsg"] == "request validation failed"
 
@@ -1220,7 +1222,7 @@ def test_search_route_rejects_non_positive_top_k(monkeypatch):
         },
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
     assert response.json()["resultCode"] == "-1"
     assert response.json()["resultMsg"] == "request validation failed"
 
@@ -1258,7 +1260,7 @@ def test_file_to_markdown_index_kb_not_found(monkeypatch):
         "/api/v1/fileToMarkdownIndex",
         json={"knCode": "999", "filePath": "/doc.pdf"},
     )
-    assert response.status_code == 422
+    assert response.status_code == 200
     body = response.json()
     assert body["resultCode"] == "-1"
     assert "knowledge base not found" in body["resultMsg"]
@@ -1272,7 +1274,7 @@ def test_file_to_markdown_index_validation_error(monkeypatch):
         "/api/v1/fileToMarkdownIndex",
         json={"knCode": "", "filePath": "/doc.pdf"},
     )
-    assert response.status_code == 422
+    assert response.status_code == 200
     body = response.json()
     assert body["resultCode"] == "-1"
     assert body["resultMsg"] == "request validation failed"

@@ -221,7 +221,7 @@ def test_read_file_requires_build_step(monkeypatch):
             },
         )
 
-    assert read_response.status_code in (404, 422)
+    assert read_response.status_code == 200
     assert read_response.json()["resultCode"] == "-1"
 
 

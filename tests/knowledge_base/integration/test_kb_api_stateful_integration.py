@@ -223,7 +223,8 @@ def test_create_directory_returns_success_then_duplicate_path_conflict(monkeypat
         )
 
     assert first.status_code == 200
-    assert duplicate_path.status_code == 422
+    assert duplicate_path.status_code == 200
+    assert duplicate_path.json()["resultCode"] == "-1"
     assert "already exists" in duplicate_path.json()["resultMsg"]
 
 
@@ -256,7 +257,8 @@ def test_create_empty_knowledge_base_exposes_root_and_rejects_duplicate_name(
     assert root.status_code == 200
     root_data = root.json()["resultObject"]["data"]
     assert len(root_data) == 0
-    assert duplicate.status_code == 409
+    assert duplicate.status_code == 200
+    assert duplicate.json()["resultCode"] == "-1"
 
 
 @pytest.mark.integration
@@ -509,12 +511,14 @@ def test_directory_rename_updates_parent_and_child_queries(monkeypatch, tmp_path
     after_data = after_parent.json()["resultObject"]["data"]
     assert any("Archive" in item["name"] for item in after_data)
 
-    assert old_child.status_code in (404, 422)
+    assert old_child.status_code == 200
+    assert old_child.json()["resultCode"] == "-1"
     assert new_child.status_code == 200
     new_child_data = new_child.json()["resultObject"]["data"]
     assert len(new_child_data) >= 1
 
-    assert old_read.status_code in (404, 422)
+    assert old_read.status_code == 200
+    assert old_read.json()["resultCode"] == "-1"
     assert new_read.status_code == 200
     assert new_read.json()["resultObject"]["data"]
 
@@ -575,8 +579,10 @@ def test_directory_delete_removes_subtree_from_follow_up_queries(monkeypatch, tm
     assert delete_response.status_code == 200
     assert parent_list.status_code == 200
     assert parent_list.json()["resultObject"]["data"] == []
-    assert deleted_list.status_code in (404, 422)
-    assert deleted_read.status_code in (404, 422)
+    assert deleted_list.status_code == 200
+    assert deleted_list.json()["resultCode"] == "-1"
+    assert deleted_read.status_code == 200
+    assert deleted_read.json()["resultCode"] == "-1"
 
 
 @pytest.mark.integration
@@ -838,8 +844,10 @@ def test_renaming_a_middle_directory_updates_all_descendant_paths(
     leaf_data = leaf_after.json()["resultObject"]["data"]
     assert any("handbook.md" in item["name"] for item in leaf_data)
 
-    assert old_leaf.status_code in (404, 422)
-    assert old_read.status_code in (404, 422)
+    assert old_leaf.status_code == 200
+    assert old_leaf.json()["resultCode"] == "-1"
+    assert old_read.status_code == 200
+    assert old_read.json()["resultCode"] == "-1"
     assert new_read.status_code == 200
     assert new_read.json()["resultObject"]["data"]
 
@@ -935,11 +943,14 @@ def test_deleting_a_middle_directory_removes_the_entire_descendant_subtree(
 
     assert delete_response.status_code == 200
     assert top_after.json()["resultObject"]["data"] == []
-    assert deleted_middle.status_code in (404, 422)
+    assert deleted_middle.status_code == 200
+    assert deleted_middle.json()["resultCode"] == "-1"
     assert deleted_glob.status_code == 200
     assert deleted_glob.json()["resultObject"]["data"] == []
-    assert deleted_read_one.status_code in (404, 422)
-    assert deleted_read_two.status_code in (404, 422)
+    assert deleted_read_one.status_code == 200
+    assert deleted_read_one.json()["resultCode"] == "-1"
+    assert deleted_read_two.status_code == 200
+    assert deleted_read_two.json()["resultCode"] == "-1"
 
 
 @pytest.mark.integration
@@ -1061,7 +1072,8 @@ def test_deleting_a_single_file_removes_it_from_follow_up_browse_and_read(
     assert len(list_data) == 1
     assert "keep.md" in list_data[0]["name"]
 
-    assert deleted_read.status_code in (404, 422)
+    assert deleted_read.status_code == 200
+    assert deleted_read.json()["resultCode"] == "-1"
     assert kept_read.status_code == 200
     assert kept_read.json()["resultObject"]["data"]
 
@@ -1111,10 +1123,10 @@ def test_read_file_rejects_invalid_markdown_line_windows(monkeypatch, tmp_path):
             },
         )
 
-    assert zero_start.status_code == 422
+    assert zero_start.status_code == 200
     assert zero_start.json()["resultCode"] == "-1"
     assert "startLine must be greater than 0" in zero_start.json()["resultMsg"]
-    assert reversed_window.status_code == 422
+    assert reversed_window.status_code == 200
     assert reversed_window.json()["resultCode"] == "-1"
     assert (
         "endLine must be greater than or equal to startLine"
@@ -1587,9 +1599,10 @@ def test_deleting_a_knowledge_base_removes_root_visibility_readability_and_searc
     assert search_before.status_code == 200
     assert len(search_before.json()["resultObject"]["data"]) >= 1
     assert delete_response.status_code == 200
-    assert root_after.status_code in (404, 422)
+    assert root_after.status_code == 200
     assert root_after.json()["resultCode"] == "-1"
-    assert read_after.status_code in (404, 422)
+    assert read_after.status_code == 200
+    assert read_after.json()["resultCode"] == "-1"
     assert search_after.status_code == 200
     assert search_after.json()["resultObject"]["data"] == []
 
@@ -1635,7 +1648,8 @@ def test_renaming_a_multilevel_directory_to_a_sibling_name_conflicts_without_sta
             json={"knCode": kb_code, "directoryPath": "/Policies"},
         )
 
-    assert conflict.status_code in (409, 422)
+    assert conflict.status_code == 200
+    assert conflict.json()["resultCode"] == "-1"
     assert parent_after.status_code == 200
     parent_data = parent_after.json()["resultObject"]["data"]
     assert len(parent_data) == 2
@@ -1674,7 +1688,7 @@ def test_read_file_returns_not_built_error_when_file_not_built(monkeypatch, tmp_
             },
         )
 
-    assert read_response.status_code in (404, 422)
+    assert read_response.status_code == 200
     assert read_response.json()["resultCode"] == "-1"
 
 
@@ -1852,7 +1866,7 @@ def test_list_dir_returns_configuration_error_when_runtime_service_fails(monkeyp
             json={"knCode": "demo", "directoryPath": "/"},
         )
 
-    assert response.status_code == 503
+    assert response.status_code == 200
     assert response.json()["resultCode"] == "-1"
     assert "KB runtime is not configured" in response.json()["resultMsg"]
 
@@ -1882,7 +1896,7 @@ def test_read_file_returns_configuration_error_when_runtime_service_fails(monkey
             },
         )
 
-    assert response.status_code == 503
+    assert response.status_code == 200
     assert response.json()["resultCode"] == "-1"
     assert response.json()["resultMsg"] == "KB runtime is not configured"
 
@@ -1912,7 +1926,7 @@ def test_search_returns_configuration_error_when_runtime_service_fails(monkeypat
             },
         )
 
-    assert response.status_code == 503
+    assert response.status_code == 200
     assert response.json()["resultCode"] == "-1"
     assert "KB runtime is not configured" in response.json()["resultMsg"]
 
@@ -1936,5 +1950,5 @@ def test_create_kb_returns_configuration_error_when_runtime_settings_are_incompl
             },
         )
 
-    assert response.status_code == 503
+    assert response.status_code == 200
     assert response.json()["resultCode"] == "-1"

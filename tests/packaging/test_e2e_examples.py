@@ -54,9 +54,6 @@ def test_e2e_example_scripts_use_current_knowledge_api_paths():
     assert "/api/v1/knowledge-items/import" in flow_script
     assert "/api/v1/fileToMarkdownIndex" in flow_script
     assert "/api/v1/listDir" in flow_script
-    assert "/api/v1/knowledge-bases/create" not in flow_script
-    assert "/api/v1/knowledge-items/import" not in flow_script
     assert "/api/v1/list_dir" not in flow_script
 
     assert "/api/v1/knowledge-items/search" in instant_script
-    assert "/api/v1/knowledge-items/search" not in instant_script

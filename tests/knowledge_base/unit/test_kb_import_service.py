@@ -737,13 +737,13 @@ class FakeKnowledgeFetchCacheRepository:
 
     def __init__(self):
         self.calls = []
-        self.entries_by_version_id = {}
+        self.entries_by_fs_entry_id = {}
 
     def upsert_cache_entry(self, cursor, **kwargs):
         self.calls.append(("upsert_cache_entry", kwargs))
-        self.entries_by_version_id[kwargs["knowledge_item_version_id"]] = {
+        self.entries_by_fs_entry_id[kwargs["fs_entry_id"]] = {
             "kid": 301,
-            "knowledge_item_version_id": kwargs["knowledge_item_version_id"],
+            "fs_entry_id": kwargs["fs_entry_id"],
             "checksum": kwargs["checksum"],
             "cache_file_path": kwargs["cache_file_path"],
             "expires_at": datetime(2099, 1, 1, tzinfo=timezone.utc),
@@ -751,14 +751,14 @@ class FakeKnowledgeFetchCacheRepository:
         }
         return {"kid": 301}
 
-    def get_by_version_id(self, cursor, *, knowledge_item_version_id):
+    def get_by_fs_entry_id(self, cursor, *, fs_entry_id):
         self.calls.append(
             (
-                "get_by_version_id",
-                {"knowledge_item_version_id": knowledge_item_version_id},
+                "get_by_fs_entry_id",
+                {"fs_entry_id": fs_entry_id},
             )
         )
-        return self.entries_by_version_id.get(knowledge_item_version_id)
+        return self.entries_by_fs_entry_id.get(fs_entry_id)
 
     def touch_cache_entry(self, cursor, *, cache_entry_id, cache_ttl_seconds):
         self.calls.append(

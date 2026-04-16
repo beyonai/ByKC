@@ -12,11 +12,7 @@ class KnowledgeFetchCacheRepository:
         *,
         knowledge_base_id: int,
         fs_entry_id: int,
-        knowledge_item_id: int,
-        knowledge_item_version_id: int,
-        kb_code: str,
         full_path: str,
-        virtual_path: str,
         bucket_name: str,
         object_key: str,
         checksum: str | None,
@@ -28,17 +24,13 @@ class KnowledgeFetchCacheRepository:
         cursor.execute(
             """
             DELETE FROM knowledge_fetch_cache_index
-            WHERE knowledge_item_version_id = %(knowledge_item_version_id)s
+            WHERE fs_entry_id = %(fs_entry_id)s
                OR cache_file_path = %(cache_file_path)s
             """,
             {
                 "knowledge_base_id": knowledge_base_id,
                 "fs_entry_id": fs_entry_id,
-                "knowledge_item_id": knowledge_item_id,
-                "knowledge_item_version_id": knowledge_item_version_id,
-                "kb_code": kb_code,
                 "full_path": full_path,
-                "virtual_path": virtual_path,
                 "bucket_name": bucket_name,
                 "object_key": object_key,
                 "checksum": checksum,
@@ -52,11 +44,7 @@ class KnowledgeFetchCacheRepository:
             INSERT INTO knowledge_fetch_cache_index (
                 knowledge_base_id,
                 fs_entry_id,
-                knowledge_item_id,
-                knowledge_item_version_id,
-                kb_code,
                 full_path,
-                virtual_path,
                 bucket_name,
                 object_key,
                 checksum,
@@ -76,11 +64,7 @@ class KnowledgeFetchCacheRepository:
             VALUES (
                 %(knowledge_base_id)s,
                 %(fs_entry_id)s,
-                %(knowledge_item_id)s,
-                %(knowledge_item_version_id)s,
-                %(kb_code)s,
                 %(full_path)s,
-                %(virtual_path)s,
                 %(bucket_name)s,
                 %(object_key)s,
                 %(checksum)s,
@@ -101,11 +85,7 @@ class KnowledgeFetchCacheRepository:
             {
                 "knowledge_base_id": knowledge_base_id,
                 "fs_entry_id": fs_entry_id,
-                "knowledge_item_id": knowledge_item_id,
-                "knowledge_item_version_id": knowledge_item_version_id,
-                "kb_code": kb_code,
                 "full_path": full_path,
-                "virtual_path": virtual_path,
                 "bucket_name": bucket_name,
                 "object_key": object_key,
                 "checksum": checksum,
@@ -118,24 +98,24 @@ class KnowledgeFetchCacheRepository:
             """
             SELECT kid
             FROM knowledge_fetch_cache_index
-            WHERE knowledge_item_version_id = %(knowledge_item_version_id)s
+            WHERE fs_entry_id = %(fs_entry_id)s
             """,
-            {"knowledge_item_version_id": knowledge_item_version_id},
+            {"fs_entry_id": fs_entry_id},
         )
         fetchone = getattr(cursor, "fetchone", None)
         return fetchone() if callable(fetchone) else None
 
-    def get_by_version_id(
-        self, cursor: Any, *, knowledge_item_version_id: int
+    def get_by_fs_entry_id(
+        self, cursor: Any, *, fs_entry_id: int
     ) -> dict[str, Any] | None:
-        """Fetch the cache row for one item version."""
+        """Fetch the cache row for one file node."""
         cursor.execute(
             """
             SELECT *
             FROM knowledge_fetch_cache_index
-            WHERE knowledge_item_version_id = %(knowledge_item_version_id)s
+            WHERE fs_entry_id = %(fs_entry_id)s
             """,
-            {"knowledge_item_version_id": knowledge_item_version_id},
+            {"fs_entry_id": fs_entry_id},
         )
         fetchone = getattr(cursor, "fetchone", None)
         return fetchone() if callable(fetchone) else None

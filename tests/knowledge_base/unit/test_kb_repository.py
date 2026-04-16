@@ -550,7 +550,7 @@ def test_rename_entry_updates_name_and_path_ltree_prefix():
 
 
 def test_upsert_fetch_cache_entry_persists_cache_identity_and_expiry():
-    """Fetch cache upsert should store the current version identity and expiry timestamps."""
+    """Fetch cache upsert should store the current file-node cache identity."""
     repo = KnowledgeFetchCacheRepository()
     cursor = FakeCursor(fetchone_results=[{"kid": 300}])
 
@@ -558,11 +558,7 @@ def test_upsert_fetch_cache_entry_persists_cache_identity_and_expiry():
         cursor,
         knowledge_base_id=7,
         fs_entry_id=71,
-        knowledge_item_id=10,
-        knowledge_item_version_id=22,
-        kb_code="hr-policy",
         full_path="dir1/doc.md",
-        virtual_path="人力制度知识库/dir1/doc.md",
         bucket_name="knowledge-base",
         object_key="7/dir1/doc.md/v1/content.md",
         checksum="abc123",
@@ -576,30 +572,34 @@ def test_upsert_fetch_cache_entry_persists_cache_identity_and_expiry():
     delete_lowered = delete_sql.lower()
     insert_lowered = insert_sql.lower()
     assert "delete from knowledge_fetch_cache_index" in delete_lowered
-    assert "knowledge_item_version_id = %(knowledge_item_version_id)s" in delete_sql
+    assert "fs_entry_id = %(fs_entry_id)s" in delete_sql
     assert "cache_file_path = %(cache_file_path)s" in delete_sql
     assert "insert into knowledge_fetch_cache_index" in insert_lowered
+    assert "knowledge_item_id" not in insert_lowered
+    assert "knowledge_item_version_id" not in insert_lowered
+    assert "kb_code" not in insert_lowered
+    assert "virtual_path" not in insert_lowered
     assert "expires_at" in insert_lowered
     assert "cache_status" in insert_lowered
-    assert insert_params["virtual_path"] == "人力制度知识库/dir1/doc.md"
+    assert insert_params["fs_entry_id"] == 71
     assert insert_params["cache_ttl_seconds"] == 86400
     assert (
         delete_params["cache_file_path"] == "/tmp/kb_cache/人力制度知识库/dir1/doc.md"
     )
 
 
-def test_get_cache_entry_by_version_queries_live_cache_row():
-    """Fetch should look up a cache record by current version id."""
+def test_get_cache_entry_by_fs_entry_id_queries_live_cache_row():
+    """Fetch should look up a cache record by file-node id."""
     repo = KnowledgeFetchCacheRepository()
     cursor = FakeCursor()
 
-    repo.get_by_version_id(cursor, knowledge_item_version_id=22)
+    repo.get_by_fs_entry_id(cursor, fs_entry_id=71)
 
     sql, params = cursor.executed[0]
     lowered = sql.lower()
     assert "from knowledge_fetch_cache_index" in lowered
-    assert "knowledge_item_version_id = %(knowledge_item_version_id)s" in sql
-    assert params == {"knowledge_item_version_id": 22}
+    assert "fs_entry_id = %(fs_entry_id)s" in sql
+    assert params == {"fs_entry_id": 71}
 
 
 def test_mark_expired_ready_entries_as_evicting_uses_skip_locked_batching():

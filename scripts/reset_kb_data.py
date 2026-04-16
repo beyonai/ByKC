@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 
-from minio import Minio
+import boto3
 
 from by_qa.config import Settings
 from by_qa.knowledge_base.infrastructure.database import build_connection_factory
@@ -21,10 +22,10 @@ TARGET_TABLES = (
 )
 
 
-def _detect_embedding_configuration(connection) -> tuple[str | None, int | None]:
+async def _detect_embedding_configuration(connection) -> tuple[str | None, int | None]:
     """Infer embedding table name suffix and vector dimension from the current schema."""
-    with connection.cursor() as cursor:
-        cursor.execute("""
+    async with connection.cursor() as cursor:
+        await cursor.execute("""
             SELECT
                 t.tablename,
                 format_type(a.atttypid, a.atttypmod) AS embedding_type
@@ -42,7 +43,7 @@ def _detect_embedding_configuration(connection) -> tuple[str | None, int | None]
             ORDER BY t.tablename
             LIMIT 1
             """)
-        row = cursor.fetchone()
+        row = await cursor.fetchone()
     if not row:
         return None, None
     match = re.search(r"vector\((\d+)\)", row["embedding_type"])
@@ -51,22 +52,23 @@ def _detect_embedding_configuration(connection) -> tuple[str | None, int | None]
     return model_name or None, dimension
 
 
-def reset_database(settings: Settings) -> str:
+async def reset_database(settings: Settings) -> str:
     """Drop and recreate this project's knowledge-base tables in the active schema."""
-    connection = build_connection_factory(settings)()
+    connection = await build_connection_factory(settings)()
     try:
         model_name = settings.embedding_model_name or None
         dimension = settings.embedding_dimension or None
         if not model_name or not dimension:
-            detected_model_name, detected_dimension = _detect_embedding_configuration(
-                connection
-            )
+            (
+                detected_model_name,
+                detected_dimension,
+            ) = await _detect_embedding_configuration(connection)
             model_name = model_name or detected_model_name
             dimension = dimension or detected_dimension
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT current_schema() AS schema_name")
-            schema_name = cursor.fetchone()["schema_name"]
-            cursor.execute(
+        async with connection.cursor() as cursor:
+            await cursor.execute("SELECT current_schema() AS schema_name")
+            schema_name = (await cursor.fetchone())["schema_name"]
+            await cursor.execute(
                 """
                 SELECT schemaname, tablename
                 FROM pg_tables
@@ -81,12 +83,12 @@ def reset_database(settings: Settings) -> str:
                     "table_names": list(TARGET_TABLES),
                 },
             )
-            table_rows = cursor.fetchall()
+            table_rows = await cursor.fetchall()
             for row in table_rows:
-                cursor.execute(
+                await cursor.execute(
                     f'DROP TABLE IF EXISTS "{row["schemaname"]}"."{row["tablename"]}" CASCADE'
                 )
-        connection.commit()
+        await connection.commit()
         if model_name and dimension:
             bootstrap_settings = settings.model_copy(
                 update={
@@ -94,36 +96,45 @@ def reset_database(settings: Settings) -> str:
                     "embedding_dimension": dimension,
                 }
             )
-            build_bootstrap_service(bootstrap_settings).apply(connection)
+            await build_bootstrap_service(bootstrap_settings).apply(connection)
         return schema_name
     finally:
-        connection.close()
+        await connection.close()
 
 
 def reset_minio(settings: Settings) -> None:
     """Remove all objects from this project's MinIO buckets but keep the buckets themselves."""
-    client = Minio(
-        endpoint=settings.kb_minio_endpoint,
-        access_key=settings.kb_minio_access_key,
-        secret_key=settings.kb_minio_secret_key,
-        secure=settings.kb_minio_secure,
+    scheme = "https" if settings.kb_minio_secure else "http"
+    endpoint = settings.kb_minio_endpoint.removeprefix("http://").removeprefix(
+        "https://"
+    )
+    endpoint_url = f"{scheme}://{endpoint}"
+    client = boto3.client(
+        "s3",
+        endpoint_url=endpoint_url,
+        aws_access_key_id=settings.kb_minio_access_key,
+        aws_secret_access_key=settings.kb_minio_secret_key,
     )
     bucket_names = {
         settings.kb_minio_bucket,
         settings.kb_minio_markdown_bucket,
     }
     for bucket_name in bucket_names:
-        if not client.bucket_exists(bucket_name):
-            client.make_bucket(bucket_name)
+        try:
+            client.head_bucket(Bucket=bucket_name)
+        except Exception:
+            client.create_bucket(Bucket=bucket_name)
             continue
-        for item in client.list_objects(bucket_name, recursive=True):
-            client.remove_object(bucket_name, item.object_name)
+        paginator = client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=bucket_name):
+            for obj in page.get("Contents", []):
+                client.delete_object(Bucket=bucket_name, Key=obj["Key"])
 
 
 def main() -> None:
     """Reset knowledge-base data stores for local development and testing."""
     settings = Settings()
-    schema_name = reset_database(settings)
+    schema_name = asyncio.run(reset_database(settings))
     reset_minio(settings)
     print(
         f"Knowledge-base data reset completed for schema '{schema_name}' and buckets "

@@ -9,7 +9,7 @@ class KnowledgeItemSearchRepository:
     def __init__(self, embedding_table_name: str):
         self.embedding_table_name = embedding_table_name
 
-    def search_text_v2(
+    async def search_text_v2(
         self,
         cursor: Any,
         *,
@@ -19,7 +19,7 @@ class KnowledgeItemSearchRepository:
         limit: int,
     ) -> list[dict[str, Any]]:
         """Full-text recall against the new retrieval projection table."""
-        cursor.execute(
+        await cursor.execute(
             """
             SELECT
                 r.chunk_id,
@@ -60,9 +60,9 @@ class KnowledgeItemSearchRepository:
             },
         )
         fetchall = getattr(cursor, "fetchall", None)
-        return fetchall() if callable(fetchall) else []
+        return await fetchall() if callable(fetchall) else []
 
-    def search_vector_v2(
+    async def search_vector_v2(
         self,
         cursor: Any,
         *,
@@ -73,7 +73,7 @@ class KnowledgeItemSearchRepository:
     ) -> list[dict[str, Any]]:
         """Vector similarity recall against the new retrieval projection table."""
         vector_literal = "[" + ",".join(str(value) for value in query_embedding) + "]"
-        cursor.execute(
+        await cursor.execute(
             f"""
             SELECT
                 r.chunk_id,
@@ -112,4 +112,4 @@ class KnowledgeItemSearchRepository:
             },
         )
         fetchall = getattr(cursor, "fetchall", None)
-        return fetchall() if callable(fetchall) else []
+        return await fetchall() if callable(fetchall) else []

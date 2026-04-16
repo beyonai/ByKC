@@ -156,24 +156,29 @@ def test_kb_api_end_to_end_persists_to_opengauss_and_minio(monkeypatch):
         )
 
     # Verify DB state
-    connection = build_connection_factory(settings)()
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT COUNT(*) AS chunk_count
-                FROM knowledge_chunk kc
-                JOIN knowledge_fs_entry fe ON fe.kid = kc.fs_entry_id
-                JOIN knowledge_base kb ON kb.kid = fe.knowledge_base_id
-                WHERE kb.kid = %(kb_code)s::bigint
-                """,
-                {"kb_code": kb_code},
-            )
-            row = cursor.fetchone()
-            assert row is not None
-            assert row["chunk_count"] >= 1
-    finally:
-        connection.close()
+    import asyncio
+
+    async def _verify_db():
+        connection = await build_connection_factory(settings)()
+        try:
+            async with connection.cursor() as cursor:
+                await cursor.execute(
+                    """
+                    SELECT COUNT(*) AS chunk_count
+                    FROM knowledge_chunk kc
+                    JOIN knowledge_fs_entry fe ON fe.kid = kc.fs_entry_id
+                    JOIN knowledge_base kb ON kb.kid = fe.knowledge_base_id
+                    WHERE kb.kid = %(kb_code)s::bigint
+                    """,
+                    {"kb_code": kb_code},
+                )
+                row = await cursor.fetchone()
+                assert row is not None
+                assert row["chunk_count"] >= 1
+        finally:
+            await connection.close()
+
+    asyncio.run(_verify_db())
 
 
 @pytest.mark.integration

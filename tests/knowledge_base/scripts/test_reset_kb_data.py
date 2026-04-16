@@ -15,25 +15,27 @@ def test_reset_minio_clears_primary_and_markdown_buckets(monkeypatch):
 
     calls: list[tuple[str, str, str | bool]] = []
 
-    class FakeMinio:
-        def __init__(self, endpoint, access_key, secret_key, secure):
-            calls.append(("init", endpoint, secure))
+    class FakeS3Client:
+        def head_bucket(self, Bucket):  # pylint: disable=invalid-name
+            calls.append(("head_bucket", Bucket, True))
 
-        def bucket_exists(self, bucket_name):
-            calls.append(("bucket_exists", bucket_name, False))
-            return True
+        def create_bucket(self, Bucket):  # pylint: disable=invalid-name
+            calls.append(("create_bucket", Bucket, False))
 
-        def make_bucket(self, bucket_name):
-            calls.append(("make_bucket", bucket_name, False))
+        def get_paginator(self, operation):  # pylint: disable=unused-argument
+            return FakePaginator()
 
-        def list_objects(self, bucket_name, recursive=True):
-            calls.append(("list_objects", bucket_name, recursive))
-            return [SimpleNamespace(object_name=f"{bucket_name}/object")]
+        def delete_object(self, Bucket, Key):  # pylint: disable=invalid-name
+            calls.append(("delete_object", Bucket, Key))
 
-        def remove_object(self, bucket_name, object_name):
-            calls.append(("remove_object", bucket_name, object_name))
+    class FakePaginator:
+        def paginate(self, Bucket):  # pylint: disable=invalid-name
+            return [{"Contents": [{"Key": f"{Bucket}/object"}]}]
 
-    monkeypatch.setattr("scripts.reset_kb_data.Minio", FakeMinio)
+    def fake_boto3_client(service_name, **kwargs):  # pylint: disable=unused-argument
+        return FakeS3Client()
+
+    monkeypatch.setattr("scripts.reset_kb_data.boto3.client", fake_boto3_client)
 
     settings = SimpleNamespace(
         kb_minio_endpoint="127.0.0.1:19000",
@@ -47,10 +49,10 @@ def test_reset_minio_clears_primary_and_markdown_buckets(monkeypatch):
     reset_minio(settings)
 
     listed_buckets = {
-        bucket_name for action, bucket_name, extra in calls if action == "list_objects"
+        bucket_name for action, bucket_name, extra in calls if action == "head_bucket"
     }
     removed_buckets = {
-        bucket_name for action, bucket_name, extra in calls if action == "remove_object"
+        bucket_name for action, bucket_name, extra in calls if action == "delete_object"
     }
 
     assert listed_buckets == {"knowledge-base", "knowledge-base-markdown"}

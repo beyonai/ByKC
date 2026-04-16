@@ -57,7 +57,7 @@ class FakeEmbeddingQueryService:
     def __init__(self, embedding: list[float] | None = None):
         self.embedding = embedding or [0.1, 0.2, 0.3]
 
-    def embed_query(self, query: str) -> list[float]:
+    async def embed_query(self, query: str) -> list[float]:
         assert isinstance(query, str)
         return self.embedding
 
@@ -114,12 +114,12 @@ def _set_search_service(
 
 def _disable_kb_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
     """Disable startup/shutdown runtime initialization for route-level failure tests."""
-    monkeypatch.setattr(
-        main_module, "_initialize_knowledge_base_runtime", lambda enabled_modules: None
-    )
-    monkeypatch.setattr(
-        main_module, "_shutdown_knowledge_base_runtime", lambda enabled_modules: None
-    )
+
+    async def _noop(enabled_modules):  # pylint: disable=unused-argument
+        pass
+
+    monkeypatch.setattr(main_module, "_initialize_knowledge_base_runtime", _noop)
+    monkeypatch.setattr(main_module, "_shutdown_knowledge_base_runtime", _noop)
 
 
 def _create_kb(client: TestClient, kb_name: str) -> str:
@@ -1852,13 +1852,11 @@ def test_list_dir_returns_configuration_error_when_runtime_service_fails(monkeyp
     settings = _kb_settings()
     _reset_runtime(monkeypatch, settings)
     _disable_kb_lifecycle(monkeypatch)
-    monkeypatch.setattr(
-        main_module,
-        "get_knowledge_base_service",
-        lambda: (_ for _ in ()).throw(
-            KnowledgeBaseConfigurationError("KB runtime is not configured")
-        ),
-    )
+
+    async def _raise():
+        raise KnowledgeBaseConfigurationError("KB runtime is not configured")
+
+    monkeypatch.setattr(main_module, "_get_or_build_knowledge_base_service", _raise)
 
     with TestClient(main_module.app) as client:
         response = client.post(
@@ -1877,13 +1875,11 @@ def test_read_file_returns_configuration_error_when_runtime_service_fails(monkey
     settings = _kb_settings()
     _reset_runtime(monkeypatch, settings)
     _disable_kb_lifecycle(monkeypatch)
-    monkeypatch.setattr(
-        main_module,
-        "get_knowledge_base_service",
-        lambda: (_ for _ in ()).throw(
-            KnowledgeBaseConfigurationError("KB runtime is not configured")
-        ),
-    )
+
+    async def _raise():
+        raise KnowledgeBaseConfigurationError("KB runtime is not configured")
+
+    monkeypatch.setattr(main_module, "_get_or_build_knowledge_base_service", _raise)
 
     with TestClient(main_module.app) as client:
         response = client.post(
@@ -1907,12 +1903,12 @@ def test_search_returns_configuration_error_when_runtime_service_fails(monkeypat
     settings = _kb_settings()
     _reset_runtime(monkeypatch, settings)
     _disable_kb_lifecycle(monkeypatch)
+
+    async def _raise():
+        raise KnowledgeBaseConfigurationError("KB runtime is not configured")
+
     monkeypatch.setattr(
-        main_module,
-        "get_knowledge_item_search_service",
-        lambda: (_ for _ in ()).throw(
-            KnowledgeBaseConfigurationError("KB runtime is not configured")
-        ),
+        main_module, "_get_or_build_knowledge_item_search_service", _raise
     )
 
     with TestClient(main_module.app) as client:

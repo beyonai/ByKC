@@ -29,7 +29,7 @@ class KnowledgeItemIngestionService:
     object_storage: Any
     embedding_dimension: int
 
-    def upload_file(
+    async def upload_file(
         self, request: KnowledgeItemUploadRequest
     ) -> KnowledgeItemUploadResponse:
         """Upload one original file and register its storage metadata on the file entry."""
@@ -53,11 +53,13 @@ class KnowledgeItemIngestionService:
         )
         checksum = hashlib.sha256(request.file_content).hexdigest()
 
-        connection = self.connection_factory()
+        connection = await self.connection_factory()
         temp_object_key: str | None = None
         try:
             cursor = connection.cursor()
-            kb_row = self.knowledge_base_repository.get_by_code(cursor, request.kb_code)
+            kb_row = await self.knowledge_base_repository.get_by_code(
+                cursor, request.kb_code
+            )
             if not kb_row:
                 raise KnowledgeBaseValidationError(
                     f"knowledge base not found: {request.kb_code}"
@@ -65,17 +67,19 @@ class KnowledgeItemIngestionService:
             knowledge_base_id = self._row_id(kb_row)
 
             try:
-                file_entry_row = self.knowledge_fs_entry_repository.create_file_entry(
-                    cursor,
-                    knowledge_base_id=knowledge_base_id,
-                    full_path=normalized_object_path,
-                    file_description=request.file_description,
+                file_entry_row = (
+                    await self.knowledge_fs_entry_repository.create_file_entry(
+                        cursor,
+                        knowledge_base_id=knowledge_base_id,
+                        full_path=normalized_object_path,
+                        file_description=request.file_description,
+                    )
                 )
             except ValueError as exc:
                 raise KnowledgeBaseValidationError(str(exc)) from exc
 
             fs_entry_id = self._row_id(file_entry_row)
-            temp_object_key = self.object_storage.upload_temp_object(
+            temp_object_key = await self.object_storage.upload_temp_object(
                 f"upload-{knowledge_base_id}-{fs_entry_id}",
                 request.file_content,
                 content_type=mime_type,
@@ -85,7 +89,7 @@ class KnowledgeItemIngestionService:
             final_object_key = (
                 f"kb/{knowledge_base_id}/fs-entry/{fs_entry_id}/original{suffix}"
             )
-            self.knowledge_fs_entry_repository.update_file_entry_storage(
+            await self.knowledge_fs_entry_repository.update_file_entry_storage(
                 cursor,
                 fs_entry_id=fs_entry_id,
                 file_description=request.file_description,
@@ -95,8 +99,8 @@ class KnowledgeItemIngestionService:
                 mime_type=mime_type,
                 checksum=checksum,
             )
-            connection.commit()
-            self.object_storage.promote_temp_object(
+            await connection.commit()
+            await self.object_storage.promote_temp_object(
                 temp_object_key,
                 final_object_key,
                 bucket_name=self.object_storage.bucket_name,
@@ -107,17 +111,17 @@ class KnowledgeItemIngestionService:
                 file_description=request.file_description,
             )
         except Exception:
-            connection.rollback()
+            await connection.rollback()
             if temp_object_key is not None:
-                self.object_storage.delete_object_quietly(
+                await self.object_storage.delete_object_quietly(
                     temp_object_key,
                     bucket_name=self.object_storage.bucket_name,
                 )
             raise
         finally:
-            connection.close()
+            await connection.close()
 
-    def file_to_markdown_index(
+    async def file_to_markdown_index(
         self, request: FileToMarkdownIndexRequest, *, document_chunking_service: Any
     ) -> None:
         """Download uploaded file, parse to markdown, chunk, embed, and persist."""
@@ -130,19 +134,21 @@ class KnowledgeItemIngestionService:
         if not normalized_file_path:
             raise KnowledgeBaseValidationError("file_path must not be empty")
 
-        connection = self.connection_factory()
+        connection = await self.connection_factory()
         markdown_temp_object_key: str | None = None
         try:
             cursor = connection.cursor()
 
-            kb_row = self.knowledge_base_repository.get_by_code(cursor, request.kb_code)
+            kb_row = await self.knowledge_base_repository.get_by_code(
+                cursor, request.kb_code
+            )
             if not kb_row:
                 raise KnowledgeBaseValidationError(
                     f"knowledge base not found: {request.kb_code}"
                 )
             knowledge_base_id = self._row_id(kb_row)
 
-            file_row = self.knowledge_fs_entry_repository.get_file_by_path(
+            file_row = await self.knowledge_fs_entry_repository.get_file_by_path(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
                 full_path=normalized_file_path,
@@ -161,7 +167,7 @@ class KnowledgeItemIngestionService:
                 file_row.get("file_bucket_name") or self.object_storage.bucket_name
             )
 
-            file_bytes = self.object_storage.download_object(
+            file_bytes = await self.object_storage.download_object(
                 file_object_key, bucket_name=file_bucket_name
             )
 
@@ -202,20 +208,22 @@ class KnowledgeItemIngestionService:
             markdown_object_key = (
                 f"kb/{knowledge_base_id}/fs-entry/{fs_entry_id}/markdown.md"
             )
-            markdown_temp_object_key = self.object_storage.upload_temp_object(
+            markdown_temp_object_key = await self.object_storage.upload_temp_object(
                 f"ftmi-{knowledge_base_id}-{fs_entry_id}",
                 markdown_bytes,
                 content_type="text/markdown; charset=utf-8",
                 bucket_name=self.object_storage.markdown_bucket_name,
             )
 
-            chunk_rows = self.knowledge_item_chunk_repository.replace_for_fs_entry(
-                cursor,
-                fs_entry_id=fs_entry_id,
-                chunks=[chunk.model_dump() for chunk in chunks],
+            chunk_rows = (
+                await self.knowledge_item_chunk_repository.replace_for_fs_entry(
+                    cursor,
+                    fs_entry_id=fs_entry_id,
+                    chunks=[chunk.model_dump() for chunk in chunks],
+                )
             )
             chunk_id_by_no = {row["chunk_no"]: self._row_id(row) for row in chunk_rows}
-            self.knowledge_item_chunk_repository.replace_embeddings(
+            await self.knowledge_item_chunk_repository.replace_embeddings(
                 cursor,
                 embeddings=[
                     {
@@ -227,7 +235,7 @@ class KnowledgeItemIngestionService:
             )
 
             line_count = markdown_content.count("\n") + 1
-            self.knowledge_fs_entry_repository.update_markdown_metadata(
+            await self.knowledge_fs_entry_repository.update_markdown_metadata(
                 cursor,
                 fs_entry_id=fs_entry_id,
                 markdown_bucket_name=self.object_storage.markdown_bucket_name,
@@ -235,16 +243,16 @@ class KnowledgeItemIngestionService:
                 line_count=line_count,
             )
 
-            self.retrieval_projection_repository.refresh_for_fs_entry(
+            await self.retrieval_projection_repository.refresh_for_fs_entry(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
                 fs_entry_id=fs_entry_id,
                 full_path=normalized_file_path,
             )
 
-            connection.commit()
+            await connection.commit()
 
-            self.object_storage.promote_temp_object(
+            await self.object_storage.promote_temp_object(
                 markdown_temp_object_key,
                 markdown_object_key,
                 bucket_name=self.object_storage.markdown_bucket_name,
@@ -257,17 +265,17 @@ class KnowledgeItemIngestionService:
                 len(chunks),
             )
         except Exception:
-            connection.rollback()
+            await connection.rollback()
             if markdown_temp_object_key is not None:
-                self.object_storage.delete_object_quietly(
+                await self.object_storage.delete_object_quietly(
                     markdown_temp_object_key,
                     bucket_name=self.object_storage.markdown_bucket_name,
                 )
             raise
         finally:
-            connection.close()
+            await connection.close()
 
-    def delete_knowledge_item(
+    async def delete_knowledge_item(
         self, request: DeleteKnowledgeItemRequest
     ) -> DeleteKnowledgeItemResponse:
         """Logically delete one file entry and clear derived artifacts."""
@@ -276,16 +284,18 @@ class KnowledgeItemIngestionService:
             request.kb_code,
             request.file_path,
         )
-        connection = self.connection_factory()
+        connection = await self.connection_factory()
         try:
             cursor = connection.cursor()
-            kb_row = self.knowledge_base_repository.get_by_code(cursor, request.kb_code)
+            kb_row = await self.knowledge_base_repository.get_by_code(
+                cursor, request.kb_code
+            )
             if not kb_row:
                 raise KnowledgeBaseValidationError(
                     f"knowledge base not found: {request.kb_code}"
                 )
             knowledge_base_id = self._row_id(kb_row)
-            file_row = self.knowledge_fs_entry_repository.get_file_by_path(
+            file_row = await self.knowledge_fs_entry_repository.get_file_by_path(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
                 full_path=request.file_path.strip("/"),
@@ -295,12 +305,12 @@ class KnowledgeItemIngestionService:
                     f"knowledge item not found: {request.file_path}"
                 )
             fs_entry_id = int(file_row["kid"])
-            self.knowledge_fs_entry_repository.soft_delete_file_entry(
+            await self.knowledge_fs_entry_repository.soft_delete_file_entry(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
                 fs_entry_id=fs_entry_id,
             )
-            cursor.execute(
+            await cursor.execute(
                 """
                 DELETE FROM knowledge_chunk_retrieval_mv
                 WHERE knowledge_base_id = %(knowledge_base_id)s
@@ -311,7 +321,7 @@ class KnowledgeItemIngestionService:
                     "fs_entry_id": fs_entry_id,
                 },
             )
-            cursor.execute(
+            await cursor.execute(
                 """
                 DELETE FROM knowledge_fetch_cache_index
                 WHERE knowledge_base_id = %(knowledge_base_id)s
@@ -322,18 +332,18 @@ class KnowledgeItemIngestionService:
                     "fs_entry_id": fs_entry_id,
                 },
             )
-            connection.commit()
+            await connection.commit()
             file_bucket_name = file_row.get("file_bucket_name")
             file_object_key = file_row.get("file_object_key")
             markdown_bucket_name = file_row.get("markdown_bucket_name")
             markdown_object_key = file_row.get("markdown_object_key")
             if file_object_key:
-                self.object_storage.delete_object_quietly(
+                await self.object_storage.delete_object_quietly(
                     file_object_key,
                     bucket_name=file_bucket_name or self.object_storage.bucket_name,
                 )
             if markdown_object_key:
-                self.object_storage.delete_object_quietly(
+                await self.object_storage.delete_object_quietly(
                     markdown_object_key,
                     bucket_name=markdown_bucket_name
                     or self.object_storage.markdown_bucket_name,
@@ -344,10 +354,10 @@ class KnowledgeItemIngestionService:
                 is_deleted=True,
             )
         except Exception:
-            connection.rollback()
+            await connection.rollback()
             raise
         finally:
-            connection.close()
+            await connection.close()
 
     def _validate_chunk_embedding_dimensions(self, chunks: list[Any]) -> None:
         """Ensure all write-index embeddings match the configured dimension."""

@@ -51,7 +51,7 @@ class KnowledgeItemSearchService:
             merged.values(), key=lambda item: (-item["score"], -item["chunk_id"])
         )
 
-    def search_v2(self, request: SearchRequest) -> list[SearchHit]:
+    async def search_v2(self, request: SearchRequest) -> list[SearchHit]:
         """Execute hybrid retrieval and return documented search results."""
         logger.info(
             "knowledge_item_search_service.search_v2 started: query=%s, kb_code_count=%s, top_k=%s, search_mode=%s",
@@ -60,22 +60,22 @@ class KnowledgeItemSearchService:
             request.top_k,
             request.search_mode,
         )
-        query_embedding = self.embedding_query_service.embed_query(request.query)
+        query_embedding = await self.embedding_query_service.embed_query(request.query)
         logger.info(
             "knowledge_item_search_service.search_v2 embedding finished: embedding_dimension=%s",
             len(query_embedding),
         )
-        connection = self.connection_factory()
+        connection = await self.connection_factory()
         try:
             cursor = connection.cursor()
-            text_hits = self.search_repository.search_text_v2(
+            text_hits = await self.search_repository.search_text_v2(
                 cursor,
                 query=request.query,
                 kb_codes=request.kb_codes,
                 file_type_list=request.file_type_list,
                 limit=request.top_k * 3,
             )
-            vector_hits = self.search_repository.search_vector_v2(
+            vector_hits = await self.search_repository.search_vector_v2(
                 cursor,
                 query_embedding=query_embedding,
                 kb_codes=request.kb_codes,
@@ -88,7 +88,7 @@ class KnowledgeItemSearchService:
                 len(vector_hits),
             )
         finally:
-            connection.close()
+            await connection.close()
 
         merged = self._merge_hits(text_hits=text_hits, vector_hits=vector_hits)
         items = [

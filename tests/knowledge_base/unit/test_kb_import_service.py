@@ -25,6 +25,10 @@ from by_qa.knowledge_base.services.knowledge_item_ingestion_service import (
 from by_qa.knowledge_common.schemas import KnowledgeItemChunkPayload
 
 
+async def _async_return(value):
+    return value
+
+
 class FakeConnection:
     """Simple transaction double."""
 
@@ -36,13 +40,13 @@ class FakeConnection:
     def cursor(self):
         return self.cursor_obj
 
-    def commit(self):
+    async def commit(self):
         self.committed = True
 
-    def rollback(self):
+    async def rollback(self):
         self.rolled_back = True
 
-    def close(self):
+    async def close(self):
         return None
 
 
@@ -52,7 +56,7 @@ class FakeServiceCursor:
     def __init__(self):
         self.executed = []
 
-    def execute(self, sql, params=None):
+    async def execute(self, sql, params=None):
         self.executed.append((sql, params))
 
 
@@ -65,7 +69,7 @@ class FakeKnowledgeBaseRepository:
         self.existing_by_name = {}
         self.default_lookup_result = default_lookup_result
 
-    def create_knowledge_base(self, cursor, **kwargs):
+    async def create_knowledge_base(self, cursor, **kwargs):
         self.calls.append(("create_knowledge_base", kwargs))
         row = {
             "kid": 7,
@@ -75,11 +79,11 @@ class FakeKnowledgeBaseRepository:
         self.default_lookup_result = row
         return row
 
-    def get_by_name(self, cursor, kb_name):
+    async def get_by_name(self, cursor, kb_name):
         self.calls.append(("get_by_name", {"kb_name": kb_name}))
         return self.existing_by_name.get(kb_name)
 
-    def get_by_code(self, cursor, kb_code):
+    async def get_by_code(self, cursor, kb_code):
         self.calls.append(("get_by_code", {"kb_code": kb_code}))
         if kb_code in self.existing_by_code:
             row = self.existing_by_code[kb_code]
@@ -88,16 +92,16 @@ class FakeKnowledgeBaseRepository:
             return row
         return self.default_lookup_result
 
-    def get_any_by_code(self, cursor, kb_code):
+    async def get_any_by_code(self, cursor, kb_code):
         self.calls.append(("get_any_by_code", {"kb_code": kb_code}))
         if kb_code in self.existing_by_code:
             return self.existing_by_code[kb_code]
         return self.default_lookup_result
 
-    def soft_delete_by_code(self, cursor, *, kb_code):
+    async def soft_delete_by_code(self, cursor, *, kb_code):
         self.calls.append(("soft_delete_by_code", {"kb_code": kb_code}))
 
-    def update_knowledge_base(self, cursor, *, kb_code, updates):
+    async def update_knowledge_base(self, cursor, *, kb_code, updates):
         self.calls.append(
             ("update_knowledge_base", {"kb_code": kb_code, "updates": updates})
         )
@@ -107,7 +111,7 @@ class FakeKnowledgeBaseRepository:
         for key, value in updates.items():
             existing[key] = value
 
-    def update_root_entry(self, cursor, *, knowledge_base_id, root_entry_id):
+    async def update_root_entry(self, cursor, *, knowledge_base_id, root_entry_id):
         self.calls.append(
             (
                 "update_root_entry",
@@ -329,7 +333,7 @@ class FakeKnowledgeFsEntryRepository:
             ],
         }
 
-    def ensure_root_entry(self, cursor, *, knowledge_base_id, kb_name):
+    async def ensure_root_entry(self, cursor, *, knowledge_base_id, kb_name):
         self.calls.append(
             (
                 "ensure_root_entry",
@@ -338,7 +342,7 @@ class FakeKnowledgeFsEntryRepository:
         )
         return self.root_entry
 
-    def rename_entry(self, cursor, *, entry_id, new_name):
+    async def rename_entry(self, cursor, *, entry_id, new_name):
         self.calls.append(
             ("rename_entry", {"entry_id": entry_id, "new_name": new_name})
         )
@@ -346,7 +350,7 @@ class FakeKnowledgeFsEntryRepository:
         if entry is not None:
             entry["name"] = new_name
 
-    def create_directory_entry(
+    async def create_directory_entry(
         self, cursor, *, knowledge_base_id, full_path, directory_description=None
     ):
         self.calls.append(
@@ -374,7 +378,7 @@ class FakeKnowledgeFsEntryRepository:
             ),
         }
 
-    def create_file_entry(
+    async def create_file_entry(
         self, cursor, *, knowledge_base_id, full_path, file_description=None
     ):
         self.calls.append(
@@ -402,10 +406,12 @@ class FakeKnowledgeFsEntryRepository:
             ),
         }
 
-    def update_file_entry_storage(self, cursor, **kwargs):
+    async def update_file_entry_storage(self, cursor, **kwargs):
         self.calls.append(("update_file_entry_storage", kwargs))
 
-    def list_subtree_entry_ids(self, cursor, *, knowledge_base_id, root_fs_entry_id):
+    async def list_subtree_entry_ids(
+        self, cursor, *, knowledge_base_id, root_fs_entry_id
+    ):
         self.calls.append(
             (
                 "list_subtree_entry_ids",
@@ -417,7 +423,7 @@ class FakeKnowledgeFsEntryRepository:
         )
         return [81, 82, 83]
 
-    def soft_delete_subtree(self, cursor, *, knowledge_base_id, root_fs_entry_id):
+    async def soft_delete_subtree(self, cursor, *, knowledge_base_id, root_fs_entry_id):
         self.calls.append(
             (
                 "soft_delete_subtree",
@@ -428,7 +434,9 @@ class FakeKnowledgeFsEntryRepository:
             )
         )
 
-    def ensure_file_entry(self, cursor, *, knowledge_base_id, root_entry_id, full_path):
+    async def ensure_file_entry(
+        self, cursor, *, knowledge_base_id, root_entry_id, full_path
+    ):
         self.calls.append(
             (
                 "ensure_file_entry",
@@ -444,28 +452,28 @@ class FakeKnowledgeFsEntryRepository:
             raise ValueError(f"parent directory not found: {parent_path}")
         return {**self.file_entry, "full_path": full_path}
 
-    def list_root_entries(self, cursor, *, kb_codes):
+    async def list_root_entries(self, cursor, *, kb_codes):
         self.calls.append(("list_root_entries", {"kb_codes": kb_codes}))
         entries = []
         for kb_code in kb_codes:
             entries.extend(self.root_entries_by_kb_code.get(kb_code, []))
         return entries
 
-    def list_root_nodes(self, cursor, *, kb_codes):
+    async def list_root_nodes(self, cursor, *, kb_codes):
         self.calls.append(("list_root_nodes", {"kb_codes": kb_codes}))
         nodes = []
         for kb_code in kb_codes:
             nodes.extend(self.root_nodes_by_kb_code.get(kb_code, []))
         return nodes
 
-    def list_all_root_nodes(self, cursor):
+    async def list_all_root_nodes(self, cursor):
         self.calls.append(("list_all_root_nodes", {}))
         nodes = []
         for node_list in self.root_nodes_by_kb_code.values():
             nodes.extend(node_list)
         return nodes
 
-    def get_directory_by_path(self, cursor, *, knowledge_base_id, full_path):
+    async def get_directory_by_path(self, cursor, *, knowledge_base_id, full_path):
         self.calls.append(
             (
                 "get_directory_by_path",
@@ -479,7 +487,7 @@ class FakeKnowledgeFsEntryRepository:
             return self.directory_entry
         return None
 
-    def list_children_by_parent_entry_id(
+    async def list_children_by_parent_entry_id(
         self, cursor, *, knowledge_base_id, parent_entry_id
     ):
         self.calls.append(
@@ -493,7 +501,7 @@ class FakeKnowledgeFsEntryRepository:
         )
         return self.directory_child_rows_by_parent.get(parent_entry_id, [])
 
-    def get_file_by_path(self, cursor, *, knowledge_base_id, full_path):
+    async def get_file_by_path(self, cursor, *, knowledge_base_id, full_path):
         self.calls.append(
             (
                 "get_file_by_path",
@@ -505,11 +513,13 @@ class FakeKnowledgeFsEntryRepository:
         )
         return self.file_entry_by_path.get(full_path)
 
-    def get_entry_by_id(self, cursor, *, entry_id):
+    async def get_entry_by_id(self, cursor, *, entry_id):
         self.calls.append(("get_entry_by_id", {"entry_id": entry_id}))
         return self.entry_by_id.get(entry_id)
 
-    def get_child_entry(self, cursor, *, knowledge_base_id, parent_entry_id, name):
+    async def get_child_entry(
+        self, cursor, *, knowledge_base_id, parent_entry_id, name
+    ):
         self.calls.append(
             (
                 "get_child_entry",
@@ -524,7 +534,7 @@ class FakeKnowledgeFsEntryRepository:
             (knowledge_base_id, parent_entry_id, name)
         )
 
-    def get_virtual_path_by_entry_id(self, cursor, *, entry_id):
+    async def get_virtual_path_by_entry_id(self, cursor, *, entry_id):
         self.calls.append(("get_virtual_path_by_entry_id", {"entry_id": entry_id}))
         entry = self.entry_by_id.get(entry_id)
         if entry is None:
@@ -535,19 +545,19 @@ class FakeKnowledgeFsEntryRepository:
             return f"考勤制度/{entry['name']}"
         return None
 
-    def list_children(self, cursor, *, parent_path_ltree):
+    async def list_children(self, cursor, *, parent_path_ltree):
         self.calls.append(("list_children", {"parent_path_ltree": parent_path_ltree}))
         if parent_path_ltree == self.directory_entry["path_ltree"]:
             return list(self.directory_children)
         return []
 
-    def list_child_nodes(self, cursor, *, parent_path_ltree):
+    async def list_child_nodes(self, cursor, *, parent_path_ltree):
         self.calls.append(
             ("list_child_nodes", {"parent_path_ltree": parent_path_ltree})
         )
         return list(self.child_nodes_by_parent.get(parent_path_ltree, []))
 
-    def list_entries_by_path_pattern(
+    async def list_entries_by_path_pattern(
         self, cursor, *, path_regex, ancestor_path_ltree=None
     ):
         self.calls.append(
@@ -558,7 +568,7 @@ class FakeKnowledgeFsEntryRepository:
         )
         return list(self.pattern_matches)
 
-    def get_current_file_version_by_entry_id(self, cursor, *, fs_entry_id):
+    async def get_current_file_version_by_entry_id(self, cursor, *, fs_entry_id):
         self.calls.append(
             ("get_current_file_version_by_entry_id", {"fs_entry_id": fs_entry_id})
         )
@@ -581,7 +591,7 @@ class FakeKnowledgeFsEntryRepository:
             }
         return None
 
-    def soft_delete_by_knowledge_base_id(self, cursor, *, knowledge_base_id):
+    async def soft_delete_by_knowledge_base_id(self, cursor, *, knowledge_base_id):
         self.calls.append(
             (
                 "soft_delete_by_knowledge_base_id",
@@ -589,7 +599,7 @@ class FakeKnowledgeFsEntryRepository:
             )
         )
 
-    def soft_delete_file_entry(self, cursor, *, knowledge_base_id, fs_entry_id):
+    async def soft_delete_file_entry(self, cursor, *, knowledge_base_id, fs_entry_id):
         self.calls.append(
             (
                 "soft_delete_file_entry",
@@ -597,7 +607,7 @@ class FakeKnowledgeFsEntryRepository:
             )
         )
 
-    def update_markdown_metadata(
+    async def update_markdown_metadata(
         self,
         cursor,
         *,
@@ -625,7 +635,7 @@ class FakeKnowledgeItemChunkRepository:
     def __init__(self):
         self.calls = []
 
-    def replace_for_version(self, cursor, **kwargs):
+    async def replace_for_version(self, cursor, **kwargs):
         self.calls.append(("replace_for_version", kwargs))
         chunks = kwargs["chunks"]
         return [
@@ -633,10 +643,10 @@ class FakeKnowledgeItemChunkRepository:
             for item in chunks
         ]
 
-    def replace_embeddings(self, cursor, **kwargs):
+    async def replace_embeddings(self, cursor, **kwargs):
         self.calls.append(("replace_embeddings", kwargs))
 
-    def replace_for_fs_entry(self, cursor, *, fs_entry_id, chunks):
+    async def replace_for_fs_entry(self, cursor, *, fs_entry_id, chunks):
         self.calls.append(
             (
                 "replace_for_fs_entry",
@@ -655,19 +665,19 @@ class FakeRetrievalProjectionRepository:
     def __init__(self):
         self.calls = []
 
-    def refresh_for_item(self, cursor, **kwargs):
+    async def refresh_for_item(self, cursor, **kwargs):
         self.calls.append(("refresh_for_item", kwargs))
 
-    def delete_for_knowledge_base(self, cursor, **kwargs):
+    async def delete_for_knowledge_base(self, cursor, **kwargs):
         self.calls.append(("delete_for_knowledge_base", kwargs))
 
-    def delete_for_item(self, cursor, **kwargs):
+    async def delete_for_item(self, cursor, **kwargs):
         self.calls.append(("delete_for_item", kwargs))
 
-    def delete_for_fs_entry_ids(self, cursor, **kwargs):
+    async def delete_for_fs_entry_ids(self, cursor, **kwargs):
         self.calls.append(("delete_for_fs_entry_ids", kwargs))
 
-    def refresh_for_fs_entry(
+    async def refresh_for_fs_entry(
         self, cursor, *, knowledge_base_id, fs_entry_id, full_path
     ):
         self.calls.append(
@@ -699,7 +709,7 @@ class FakeObjectStorage:
             ): b"line1\nline2\nline3\n",
         }
 
-    def upload_temp_object(
+    async def upload_temp_object(
         self, import_request_id, content, *, content_type, bucket_name=None
     ):
         self.uploaded.append((import_request_id, content, content_type, bucket_name))
@@ -715,15 +725,15 @@ class FakeObjectStorage:
     ):
         return f"kb/{knowledge_base_id}/item/{knowledge_item_id}/version/{version}/markdown"
 
-    def promote_temp_object(
+    async def promote_temp_object(
         self, temp_object_key, final_object_key, *, bucket_name=None
     ):
         self.promoted.append((temp_object_key, final_object_key, bucket_name))
 
-    def delete_object_quietly(self, object_key, *, bucket_name=None):
+    async def delete_object_quietly(self, object_key, *, bucket_name=None):
         self.deleted.append((object_key, bucket_name))
 
-    def download_object(self, object_key, *, bucket_name=None):
+    async def download_object(self, object_key, *, bucket_name=None):
         self.downloaded.append((object_key, bucket_name))
         return self.object_payloads[(bucket_name or self.bucket_name, object_key)]
 
@@ -739,7 +749,7 @@ class FakeKnowledgeFetchCacheRepository:
         self.calls = []
         self.entries_by_fs_entry_id = {}
 
-    def upsert_cache_entry(self, cursor, **kwargs):
+    async def upsert_cache_entry(self, cursor, **kwargs):
         self.calls.append(("upsert_cache_entry", kwargs))
         self.entries_by_fs_entry_id[kwargs["fs_entry_id"]] = {
             "kid": 301,
@@ -751,7 +761,7 @@ class FakeKnowledgeFetchCacheRepository:
         }
         return {"kid": 301}
 
-    def get_by_fs_entry_id(self, cursor, *, fs_entry_id):
+    async def get_by_fs_entry_id(self, cursor, *, fs_entry_id):
         self.calls.append(
             (
                 "get_by_fs_entry_id",
@@ -760,7 +770,7 @@ class FakeKnowledgeFetchCacheRepository:
         )
         return self.entries_by_fs_entry_id.get(fs_entry_id)
 
-    def touch_cache_entry(self, cursor, *, cache_entry_id, cache_ttl_seconds):
+    async def touch_cache_entry(self, cursor, *, cache_entry_id, cache_ttl_seconds):
         self.calls.append(
             (
                 "touch_cache_entry",
@@ -772,18 +782,18 @@ class FakeKnowledgeFetchCacheRepository:
         )
 
 
-def test_create_knowledge_base_commits_and_returns_business_fields():
+async def test_create_knowledge_base_commits_and_returns_business_fields():
     """Knowledge base creation should generate kb_code from the persisted row id."""
     connection = FakeConnection()
     knowledge_base_repository = FakeKnowledgeBaseRepository(default_lookup_result=None)
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=knowledge_base_repository,
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
     )
 
-    response = service.create_knowledge_base(
+    response = await service.create_knowledge_base(
         CreateKnowledgeBaseRequest(
             kb_name="人力制度知识库",
             kb_description="公司人事制度与流程文档",
@@ -801,7 +811,7 @@ def test_create_knowledge_base_commits_and_returns_business_fields():
     assert knowledge_fs_entry_repository.calls == []
 
 
-def test_create_knowledge_base_rejects_duplicate_name():
+async def test_create_knowledge_base_rejects_duplicate_name():
     """Knowledge base creation should reject duplicate kb names."""
     connection = FakeConnection()
     knowledge_base_repository = FakeKnowledgeBaseRepository(default_lookup_result=None)
@@ -811,13 +821,13 @@ def test_create_knowledge_base_rejects_duplicate_name():
     }
     fs_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=knowledge_base_repository,
         knowledge_fs_entry_repository=fs_repository,
     )
 
     try:
-        service.create_knowledge_base(
+        await service.create_knowledge_base(
             CreateKnowledgeBaseRequest(
                 kb_name="人力制度知识库",
                 kb_description="公司人事制度与流程文档",
@@ -835,7 +845,7 @@ def test_create_knowledge_base_rejects_duplicate_name():
     assert fs_repository.calls == []
 
 
-def test_delete_knowledge_base_marks_kb_and_descendants_deleted():
+async def test_delete_knowledge_base_marks_kb_and_descendants_deleted():
     """Deleting one knowledge base should logically delete the KB, fs entries, and retrieval rows."""
     connection = FakeConnection()
     knowledge_base_repository = FakeKnowledgeBaseRepository(
@@ -849,12 +859,12 @@ def test_delete_knowledge_base_marks_kb_and_descendants_deleted():
     )
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=knowledge_base_repository,
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
     )
 
-    response = service.delete_knowledge_base(
+    response = await service.delete_knowledge_base(
         DeleteKnowledgeBaseRequest(kb_code="hr-policy")
     )
 
@@ -878,7 +888,7 @@ def test_delete_knowledge_base_marks_kb_and_descendants_deleted():
     ) in connection.cursor_obj.executed
 
 
-def test_update_knowledge_base_commits_and_returns_success():
+async def test_update_knowledge_base_commits_and_returns_success():
     """Updating a KB should persist documented fields and commit."""
     connection = FakeConnection()
     knowledge_base_repository = FakeKnowledgeBaseRepository(
@@ -893,12 +903,12 @@ def test_update_knowledge_base_commits_and_returns_success():
     )
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=knowledge_base_repository,
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
     )
 
-    response = service.update_knowledge_base(
+    response = await service.update_knowledge_base(
         UpdateKnowledgeBaseRequest(
             knCode="hr-policy",
             knName="新知识库名称",
@@ -924,18 +934,18 @@ def test_update_knowledge_base_commits_and_returns_success():
     )
 
 
-def test_update_knowledge_base_rejects_missing_kb():
+async def test_update_knowledge_base_rejects_missing_kb():
     """Updating a KB should fail when kb_code does not exist."""
     connection = FakeConnection()
     knowledge_base_repository = FakeKnowledgeBaseRepository(default_lookup_result=None)
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=knowledge_base_repository,
         knowledge_fs_entry_repository=FakeKnowledgeFsEntryRepository(),
     )
 
     try:
-        service.update_knowledge_base(
+        await service.update_knowledge_base(
             UpdateKnowledgeBaseRequest(
                 knCode="missing-kb",
                 knName="新知识库名称",
@@ -949,7 +959,7 @@ def test_update_knowledge_base_rejects_missing_kb():
     assert connection.rolled_back is True
 
 
-def test_update_knowledge_base_rejects_duplicate_name():
+async def test_update_knowledge_base_rejects_duplicate_name():
     """Updating a KB should reject duplicate kb names."""
     connection = FakeConnection()
     knowledge_base_repository = FakeKnowledgeBaseRepository(
@@ -967,13 +977,13 @@ def test_update_knowledge_base_rejects_duplicate_name():
         "kb_name": "法务制度知识库",
     }
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=knowledge_base_repository,
         knowledge_fs_entry_repository=FakeKnowledgeFsEntryRepository(),
     )
 
     try:
-        service.update_knowledge_base(
+        await service.update_knowledge_base(
             UpdateKnowledgeBaseRequest(
                 knCode="hr-policy",
                 knName="法务制度知识库",
@@ -987,7 +997,7 @@ def test_update_knowledge_base_rejects_duplicate_name():
     assert connection.rolled_back is True
 
 
-def test_update_knowledge_base_keeps_omitted_fields_unchanged():
+async def test_update_knowledge_base_keeps_omitted_fields_unchanged():
     """Omitted fields should not be overwritten when updating a KB."""
     connection = FakeConnection()
     knowledge_base_repository = FakeKnowledgeBaseRepository(
@@ -1004,12 +1014,12 @@ def test_update_knowledge_base_keeps_omitted_fields_unchanged():
     )
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=knowledge_base_repository,
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
     )
 
-    response = service.update_knowledge_base(
+    response = await service.update_knowledge_base(
         UpdateKnowledgeBaseRequest(
             kb_code="hr-policy",
             kb_name="新知识库名称",
@@ -1026,7 +1036,7 @@ def test_update_knowledge_base_keeps_omitted_fields_unchanged():
     ) in knowledge_base_repository.calls
 
 
-def test_update_knowledge_base_clears_fields_only_when_null_is_explicit():
+async def test_update_knowledge_base_clears_fields_only_when_null_is_explicit():
     """Explicit null should clear mutable nullable fields."""
     connection = FakeConnection()
     knowledge_base_repository = FakeKnowledgeBaseRepository(
@@ -1042,12 +1052,12 @@ def test_update_knowledge_base_clears_fields_only_when_null_is_explicit():
         }
     )
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=knowledge_base_repository,
         knowledge_fs_entry_repository=FakeKnowledgeFsEntryRepository(),
     )
 
-    response = service.update_knowledge_base(
+    response = await service.update_knowledge_base(
         UpdateKnowledgeBaseRequest(
             kb_code="hr-policy",
             kb_description=None,
@@ -1064,7 +1074,7 @@ def test_update_knowledge_base_clears_fields_only_when_null_is_explicit():
     ) in knowledge_base_repository.calls
 
 
-def test_create_directory_commits_and_returns_business_fields():
+async def test_create_directory_commits_and_returns_business_fields():
     """Directory creation should commit and return only business fields."""
     connection = FakeConnection()
     knowledge_base_repository = FakeKnowledgeBaseRepository(
@@ -1078,12 +1088,12 @@ def test_create_directory_commits_and_returns_business_fields():
     )
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=knowledge_base_repository,
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
     )
 
-    response = service.create_directory(
+    response = await service.create_directory(
         CreateDirectoryRequest(
             knCode="hr-policy",
             directoryPath="/考勤制度/归档",
@@ -1105,12 +1115,12 @@ def test_create_directory_commits_and_returns_business_fields():
     ) in knowledge_fs_entry_repository.calls
 
 
-def test_create_directory_supports_recursive_creation():
+async def test_create_directory_supports_recursive_creation():
     """Directory creation should support recursive parent creation."""
     connection = FakeConnection()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=FakeKnowledgeBaseRepository(
             default_lookup_result={
                 "kid": 7,
@@ -1123,7 +1133,7 @@ def test_create_directory_supports_recursive_creation():
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
     )
 
-    response = service.create_directory(
+    response = await service.create_directory(
         CreateDirectoryRequest(
             knCode="hr-policy",
             directoryPath="/missing-dir/归档",
@@ -1135,7 +1145,7 @@ def test_create_directory_supports_recursive_creation():
     assert connection.committed is True
 
 
-def test_delete_directory_marks_subtree_deleted_and_clears_projection():
+async def test_delete_directory_marks_subtree_deleted_and_clears_projection():
     """Deleting a directory should logically delete its subtree and retrieval rows."""
     connection = FakeConnection()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
@@ -1150,7 +1160,7 @@ def test_delete_directory_marks_subtree_deleted_and_clears_projection():
     }
     retrieval_projection_repository = FakeRetrievalProjectionRepository()
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=FakeKnowledgeBaseRepository(
             default_lookup_result={
                 "kid": 7,
@@ -1166,7 +1176,7 @@ def test_delete_directory_marks_subtree_deleted_and_clears_projection():
         retrieval_projection_repository=retrieval_projection_repository,
     )
 
-    response = service.delete_directory(
+    response = await service.delete_directory(
         DeleteDirectoryRequest(
             knCode="hr-policy",
             directoryPath="/考勤制度/归档",
@@ -1199,11 +1209,11 @@ def test_delete_directory_marks_subtree_deleted_and_clears_projection():
     )
 
 
-def test_delete_directory_rejects_missing_directory():
+async def test_delete_directory_rejects_missing_directory():
     """Deleting a directory should fail when the path does not exist."""
     connection = FakeConnection()
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=FakeKnowledgeBaseRepository(
             default_lookup_result={
                 "kid": 7,
@@ -1220,7 +1230,7 @@ def test_delete_directory_rejects_missing_directory():
     )
 
     try:
-        service.delete_directory(
+        await service.delete_directory(
             DeleteDirectoryRequest(
                 knCode="hr-policy",
                 directoryPath="/考勤制度/归档",
@@ -1234,7 +1244,7 @@ def test_delete_directory_rejects_missing_directory():
     assert connection.rolled_back is True
 
 
-def test_update_directory_renames_directory_by_path():
+async def test_update_directory_renames_directory_by_path():
     """Updating a directory should rename the matched path entry."""
     connection = FakeConnection()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
@@ -1256,7 +1266,7 @@ def test_update_directory_renames_directory_by_path():
         "path_ltree": "d1_a.d2_b",
     }
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=FakeKnowledgeBaseRepository(
             default_lookup_result={
                 "kid": 7,
@@ -1271,7 +1281,7 @@ def test_update_directory_renames_directory_by_path():
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
     )
 
-    response = service.update_directory(
+    response = await service.update_directory(
         UpdateDirectoryRequest(
             knCode="hr-policy",
             directoryPath="/考勤制度/归档",
@@ -1293,7 +1303,7 @@ def test_update_directory_renames_directory_by_path():
     ) in knowledge_fs_entry_repository.calls
 
 
-def test_update_directory_allows_same_name_without_conflict():
+async def test_update_directory_allows_same_name_without_conflict():
     """Renaming to the current name should not trigger a sibling conflict."""
     connection = FakeConnection()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
@@ -1322,7 +1332,7 @@ def test_update_directory_allows_same_name_without_conflict():
         "entry_type": "DIRECTORY",
     }
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=FakeKnowledgeBaseRepository(
             default_lookup_result={
                 "kid": 7,
@@ -1337,7 +1347,7 @@ def test_update_directory_allows_same_name_without_conflict():
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
     )
 
-    response = service.update_directory(
+    response = await service.update_directory(
         UpdateDirectoryRequest(
             knCode="hr-policy",
             directoryPath="/考勤制度/归档",
@@ -1349,7 +1359,7 @@ def test_update_directory_allows_same_name_without_conflict():
     assert connection.committed is True
 
 
-def test_update_directory_rejects_sibling_name_conflict():
+async def test_update_directory_rejects_sibling_name_conflict():
     """Updating a directory should reject sibling name conflicts."""
     connection = FakeConnection()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
@@ -1372,7 +1382,7 @@ def test_update_directory_rejects_sibling_name_conflict():
         "entry_type": "DIRECTORY",
     }
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=FakeKnowledgeBaseRepository(
             default_lookup_result={
                 "kid": 7,
@@ -1388,7 +1398,7 @@ def test_update_directory_rejects_sibling_name_conflict():
     )
 
     try:
-        service.update_directory(
+        await service.update_directory(
             UpdateDirectoryRequest(
                 knCode="hr-policy",
                 directoryPath="/考勤制度/归档",
@@ -1403,7 +1413,7 @@ def test_update_directory_rejects_sibling_name_conflict():
     assert connection.rolled_back is True
 
 
-def test_delete_knowledge_item_marks_file_entry_deleted_and_clears_artifacts():
+async def test_delete_knowledge_item_marks_file_entry_deleted_and_clears_artifacts():
     """Deleting one file should logically delete the file entry and clear derived artifacts."""
     connection = FakeConnection()
     object_storage = FakeObjectStorage()
@@ -1422,7 +1432,7 @@ def test_delete_knowledge_item_marks_file_entry_deleted_and_clears_artifacts():
         "markdown_object_key": "kb/7/fs-entry/71/markdown.md",
     }
     service = KnowledgeItemIngestionService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=FakeKnowledgeBaseRepository(
             default_lookup_result={
                 "id": 7,
@@ -1439,7 +1449,7 @@ def test_delete_knowledge_item_marks_file_entry_deleted_and_clears_artifacts():
         embedding_dimension=2,
     )
 
-    response = service.delete_knowledge_item(
+    response = await service.delete_knowledge_item(
         DeleteKnowledgeItemRequest(kb_code="hr-policy", file_path="/Policies/delete.md")
     )
 
@@ -1472,12 +1482,12 @@ def test_delete_knowledge_item_marks_file_entry_deleted_and_clears_artifacts():
     ) in object_storage.deleted
 
 
-def test_create_knowledge_base_emits_internal_key_node_logs(monkeypatch):
+async def test_create_knowledge_base_emits_internal_key_node_logs(monkeypatch):
     """Knowledge base creation should log persistence and commit steps."""
     connection = FakeConnection()
     knowledge_base_repository = FakeKnowledgeBaseRepository(default_lookup_result=None)
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=knowledge_base_repository,
         knowledge_fs_entry_repository=FakeKnowledgeFsEntryRepository(),
     )
@@ -1491,7 +1501,7 @@ def test_create_knowledge_base_emits_internal_key_node_logs(monkeypatch):
         ),
     )
 
-    response = service.create_knowledge_base(
+    response = await service.create_knowledge_base(
         CreateKnowledgeBaseRequest(
             kb_name="人力制度知识库",
             kb_description=None,
@@ -1507,13 +1517,13 @@ def test_create_knowledge_base_emits_internal_key_node_logs(monkeypatch):
     ]
 
 
-def test_upload_file_commits_object_and_updates_fs_entry_storage():
+async def test_upload_file_commits_object_and_updates_fs_entry_storage():
     """Multipart upload should only persist original file metadata on the fs entry."""
     connection = FakeConnection()
     storage = FakeObjectStorage()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeItemIngestionService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=FakeKnowledgeBaseRepository(
             default_lookup_result={
                 "id": 7,
@@ -1528,7 +1538,7 @@ def test_upload_file_commits_object_and_updates_fs_entry_storage():
         embedding_dimension=2,
     )
 
-    response = service.upload_file(
+    response = await service.upload_file(
         KnowledgeItemUploadRequest(
             knCode="hr-policy",
             filePath="/dir1/item-1.pdf",
@@ -1571,13 +1581,13 @@ def test_upload_file_commits_object_and_updates_fs_entry_storage():
     ]
 
 
-def test_upload_file_recursively_creates_missing_parent_directories():
+async def test_upload_file_recursively_creates_missing_parent_directories():
     """Multipart upload should recursively create missing parent directories."""
     connection = FakeConnection()
     storage = FakeObjectStorage()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeItemIngestionService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=FakeKnowledgeBaseRepository(
             default_lookup_result={
                 "id": 7,
@@ -1592,7 +1602,7 @@ def test_upload_file_recursively_creates_missing_parent_directories():
         embedding_dimension=2,
     )
 
-    response = service.upload_file(
+    response = await service.upload_file(
         KnowledgeItemUploadRequest(
             knCode="hr-policy",
             filePath="/missing-dir/item-1.pdf",
@@ -1621,19 +1631,19 @@ def test_upload_file_recursively_creates_missing_parent_directories():
     ]
 
 
-def test_list_dir_root_returns_top_level_entries():
+async def test_list_dir_root_returns_top_level_entries():
     """Root listing should return top-level entries inside the requested knowledge base."""
     connection = FakeConnection()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=FakeKnowledgeBaseRepository(
             default_lookup_result={"kid": 7, "kb_name": "人力制度知识库"}
         ),
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
     )
 
-    response = service.list_dir(
+    response = await service.list_dir(
         KnowledgeItemListDirRequest(kb_code="hr-policy", directory_path="/")
     )
 
@@ -1648,19 +1658,19 @@ def test_list_dir_root_returns_top_level_entries():
     ]
 
 
-def test_list_dir_directory_path_returns_direct_children_only():
+async def test_list_dir_directory_path_returns_direct_children_only():
     """Directory path should resolve the directory and list its direct children."""
     connection = FakeConnection()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=FakeKnowledgeBaseRepository(
             default_lookup_result={"kid": 7, "kb_name": "人力制度知识库"}
         ),
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
     )
 
-    response = service.list_dir(
+    response = await service.list_dir(
         KnowledgeItemListDirRequest(kb_code="hr-policy", directory_path="/dir1")
     )
 
@@ -1685,12 +1695,12 @@ def test_list_dir_directory_path_returns_direct_children_only():
     ]
 
 
-def test_list_dir_literal_missing_path_raises_not_found():
+async def test_list_dir_literal_missing_path_raises_not_found():
     """List-dir should raise not-found when the requested literal path does not exist."""
     connection = FakeConnection()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=FakeKnowledgeBaseRepository(
             default_lookup_result={"kid": 7, "kb_name": "人力制度知识库"}
         ),
@@ -1698,7 +1708,7 @@ def test_list_dir_literal_missing_path_raises_not_found():
     )
 
     try:
-        service.list_dir(
+        await service.list_dir(
             KnowledgeItemListDirRequest(kb_code="hr-policy", directory_path="/missing")
         )
     except KnowledgeBaseValidationError as exc:
@@ -1714,19 +1724,19 @@ def test_list_dir_literal_missing_path_raises_not_found():
     ]
 
 
-def test_glob_pattern_matches_one_segment_at_a_time():
+async def test_glob_pattern_matches_one_segment_at_a_time():
     """Glob should match pathRule with * limited to one path segment."""
     connection = FakeConnection()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=FakeKnowledgeBaseRepository(
             default_lookup_result={"kid": 7, "kb_name": "人力制度知识库"}
         ),
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
     )
 
-    response = service.glob(
+    response = await service.glob(
         KnowledgeItemGlobRequest(kb_code="hr-policy", path_rule="/dir1/*.md")
     )
 
@@ -1750,12 +1760,12 @@ def test_glob_pattern_matches_one_segment_at_a_time():
     ]
 
 
-def test_glob_rejects_double_star_multi_level_matching():
+async def test_glob_rejects_double_star_multi_level_matching():
     """Glob should reject ** because only single-level * matching is supported."""
     connection = FakeConnection()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=FakeKnowledgeBaseRepository(
             default_lookup_result={"kid": 7, "kb_name": "人力制度知识库"}
         ),
@@ -1763,7 +1773,7 @@ def test_glob_rejects_double_star_multi_level_matching():
     )
 
     try:
-        service.glob(
+        await service.glob(
             KnowledgeItemGlobRequest(kb_code="hr-policy", path_rule="/dir1/**/*.md")
         )
     except KnowledgeBaseValidationError as exc:
@@ -1774,12 +1784,12 @@ def test_glob_rejects_double_star_multi_level_matching():
     assert knowledge_fs_entry_repository.calls == []
 
 
-def test_list_dir_raises_when_knowledge_base_is_missing():
+async def test_list_dir_raises_when_knowledge_base_is_missing():
     """List-dir should fail when knCode does not resolve to a knowledge base."""
     connection = FakeConnection()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=FakeKnowledgeBaseRepository(
             default_lookup_result=None
         ),
@@ -1787,7 +1797,7 @@ def test_list_dir_raises_when_knowledge_base_is_missing():
     )
 
     try:
-        service.list_dir(
+        await service.list_dir(
             KnowledgeItemListDirRequest(kb_code="missing-kb", directory_path="/")
         )
     except KnowledgeBaseValidationError as exc:
@@ -1798,7 +1808,7 @@ def test_list_dir_raises_when_knowledge_base_is_missing():
     assert knowledge_fs_entry_repository.calls == []
 
 
-def test_download_file_returns_original_bytes(tmp_path):
+async def test_download_file_returns_original_bytes(tmp_path):
     """Download-file should fetch the current original object bytes."""
     connection = FakeConnection()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
@@ -1808,7 +1818,7 @@ def test_download_file_returns_original_bytes(tmp_path):
     )
     cache_repository = FakeKnowledgeFetchCacheRepository()
     service = KnowledgeBaseService(
-        connection_factory=lambda: connection,
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=FakeKnowledgeBaseRepository(
             default_lookup_result={"kid": 7, "kb_name": "人力制度知识库"}
         ),
@@ -1832,7 +1842,7 @@ def test_download_file_returns_original_bytes(tmp_path):
         "file_size": 128,
     }
 
-    response = service.download_file(
+    response = await service.download_file(
         KnowledgeItemDownloadRequest(
             kb_code="hr-policy",
             file_path="/dir1/doc.pdf",
@@ -1885,14 +1895,14 @@ class FakeDocumentChunkingService:
         return self.chunks_result
 
 
-def test_file_to_markdown_index_kb_not_found():
+async def test_file_to_markdown_index_kb_not_found():
     """fileToMarkdownIndex returns error when knowledge base does not exist."""
     import pytest
 
     kb_repo = FakeKnowledgeBaseRepository(default_lookup_result=None)
     fs_repo = FakeKnowledgeFsEntryRepository()
     service = KnowledgeItemIngestionService(
-        connection_factory=FakeConnection,
+        connection_factory=lambda: _async_return(FakeConnection()),
         knowledge_base_repository=kb_repo,
         knowledge_fs_entry_repository=fs_repo,
         knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
@@ -1904,12 +1914,12 @@ def test_file_to_markdown_index_kb_not_found():
         {"knCode": "999", "filePath": "/doc.pdf"}
     )
     with pytest.raises(KnowledgeBaseValidationError, match="knowledge base not found"):
-        service.file_to_markdown_index(
+        await service.file_to_markdown_index(
             request, document_chunking_service=FakeDocumentChunkingService()
         )
 
 
-def test_file_to_markdown_index_file_not_found():
+async def test_file_to_markdown_index_file_not_found():
     """fileToMarkdownIndex returns error when file does not exist."""
     import pytest
 
@@ -1924,7 +1934,7 @@ def test_file_to_markdown_index_file_not_found():
     fs_repo = FakeKnowledgeFsEntryRepository()
     fs_repo.file_entry_by_path = {}
     service = KnowledgeItemIngestionService(
-        connection_factory=FakeConnection,
+        connection_factory=lambda: _async_return(FakeConnection()),
         knowledge_base_repository=kb_repo,
         knowledge_fs_entry_repository=fs_repo,
         knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
@@ -1936,12 +1946,12 @@ def test_file_to_markdown_index_file_not_found():
         {"knCode": "1", "filePath": "/nonexistent.pdf"}
     )
     with pytest.raises(KnowledgeBaseValidationError, match="file not found"):
-        service.file_to_markdown_index(
+        await service.file_to_markdown_index(
             request, document_chunking_service=FakeDocumentChunkingService()
         )
 
 
-def test_file_to_markdown_index_file_not_uploaded():
+async def test_file_to_markdown_index_file_not_uploaded():
     """fileToMarkdownIndex returns error when file has no uploaded content."""
     import pytest
 
@@ -1965,7 +1975,7 @@ def test_file_to_markdown_index_file_not_uploaded():
         }
     }
     service = KnowledgeItemIngestionService(
-        connection_factory=FakeConnection,
+        connection_factory=lambda: _async_return(FakeConnection()),
         knowledge_base_repository=kb_repo,
         knowledge_fs_entry_repository=fs_repo,
         knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
@@ -1979,12 +1989,12 @@ def test_file_to_markdown_index_file_not_uploaded():
     with pytest.raises(
         KnowledgeBaseValidationError, match="file has not been uploaded"
     ):
-        service.file_to_markdown_index(
+        await service.file_to_markdown_index(
             request, document_chunking_service=FakeDocumentChunkingService()
         )
 
 
-def test_file_to_markdown_index_success():
+async def test_file_to_markdown_index_success():
     """fileToMarkdownIndex completes full pipeline successfully."""
     kb_repo = FakeKnowledgeBaseRepository(
         default_lookup_result={
@@ -2013,7 +2023,7 @@ def test_file_to_markdown_index_success():
     )
     chunking_service = FakeDocumentChunkingService()
     service = KnowledgeItemIngestionService(
-        connection_factory=FakeConnection,
+        connection_factory=lambda: _async_return(FakeConnection()),
         knowledge_base_repository=kb_repo,
         knowledge_fs_entry_repository=fs_repo,
         knowledge_item_chunk_repository=chunk_repo,
@@ -2024,7 +2034,9 @@ def test_file_to_markdown_index_success():
     request = FileToMarkdownIndexRequest.model_validate(
         {"knCode": "1", "filePath": "/制度/人事/请假制度.pdf"}
     )
-    service.file_to_markdown_index(request, document_chunking_service=chunking_service)
+    await service.file_to_markdown_index(
+        request, document_chunking_service=chunking_service
+    )
 
     # Verify document chunking was called
     assert len(chunking_service.extract_calls) == 1

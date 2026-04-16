@@ -41,7 +41,7 @@ API_MODULES = (
         name="knowledge_base",
         route_module="by_qa.knowledge_base.api.routes",
         register_function="register_routes",
-        required_packages=("fastapi", "minio", "psycopg"),
+        required_packages=("fastapi", "aioboto3", "psycopg"),
         register_kwargs_factory=lambda: {
             "get_knowledge_base_service": resolve_knowledge_base_service,
             "get_knowledge_item_ingestion_service": (
@@ -181,32 +181,47 @@ def get_instant_search_engine() -> None:
 
 def get_knowledge_base_service():
     """Get or create the knowledge-base metadata service."""
+    return _knowledge_base_service
+
+
+async def _get_or_build_knowledge_base_service():
+    """Get or build the knowledge-base metadata service."""
     global _knowledge_base_service
     if _knowledge_base_service is None:
         from by_qa.knowledge_base.infrastructure.runtime import (
             build_knowledge_base_service,
         )
 
-        _knowledge_base_service = build_knowledge_base_service(settings)
+        _knowledge_base_service = await build_knowledge_base_service(settings)
     return _knowledge_base_service
 
 
 def get_knowledge_item_ingestion_service():
     """Get or create the knowledge-item ingestion service."""
+    return _knowledge_item_ingestion_service
+
+
+async def _get_or_build_knowledge_item_ingestion_service():
+    """Get or build the knowledge-item ingestion service."""
     global _knowledge_item_ingestion_service
     if _knowledge_item_ingestion_service is None:
         from by_qa.knowledge_base.infrastructure.runtime import (
             build_knowledge_item_ingestion_service,
         )
 
-        _knowledge_item_ingestion_service = build_knowledge_item_ingestion_service(
-            settings
+        _knowledge_item_ingestion_service = (
+            await build_knowledge_item_ingestion_service(settings)
         )
     return _knowledge_item_ingestion_service
 
 
 def get_knowledge_item_search_service():
     """Get or create the knowledge-item search service."""
+    return _knowledge_item_search_service
+
+
+async def _get_or_build_knowledge_item_search_service():
+    """Get or build the knowledge-item search service."""
     global _knowledge_item_search_service
     if _knowledge_item_search_service is None:
         from by_qa.knowledge_base.infrastructure.runtime import (
@@ -219,6 +234,11 @@ def get_knowledge_item_search_service():
 
 def get_knowledge_fetch_cache_cleanup_service():
     """Get or create the fetched-file cache cleanup service."""
+    return _knowledge_fetch_cache_cleanup_service
+
+
+async def _get_or_build_knowledge_fetch_cache_cleanup_service():
+    """Get or build the fetched-file cache cleanup service."""
     global _knowledge_fetch_cache_cleanup_service
     if _knowledge_fetch_cache_cleanup_service is None:
         from by_qa.knowledge_base.infrastructure.runtime import (
@@ -241,19 +261,19 @@ def get_document_chunking_service():
     return _document_chunking_service
 
 
-def resolve_knowledge_base_service():
+async def resolve_knowledge_base_service():
     """Resolve the KB service dynamically so tests can monkeypatch the factory."""
-    return get_knowledge_base_service()
+    return await _get_or_build_knowledge_base_service()
 
 
-def resolve_knowledge_item_ingestion_service():
+async def resolve_knowledge_item_ingestion_service():
     """Resolve the ingestion service dynamically so tests can monkeypatch the factory."""
-    return get_knowledge_item_ingestion_service()
+    return await _get_or_build_knowledge_item_ingestion_service()
 
 
-def resolve_knowledge_item_search_service():
+async def resolve_knowledge_item_search_service():
     """Resolve the search service dynamically so tests can monkeypatch the factory."""
-    return get_knowledge_item_search_service()
+    return await _get_or_build_knowledge_item_search_service()
 
 
 def resolve_document_chunking_service():
@@ -295,7 +315,7 @@ def _register_api_modules(application) -> tuple[list[str], dict[str, list[str]]]
     return loaded_modules, skipped_modules
 
 
-def _initialize_knowledge_base_runtime(enabled_modules: list[str]) -> None:
+async def _initialize_knowledge_base_runtime(enabled_modules: list[str]) -> None:
     """Initialize optional runtime services for the knowledge-base module."""
     if "knowledge_base" not in enabled_modules:
         logger.info("knowledge_base lifecycle skipped: module_not_loaded")
@@ -308,24 +328,25 @@ def _initialize_knowledge_base_runtime(enabled_modules: list[str]) -> None:
     from by_qa.knowledge_base.infrastructure.database import build_connection_factory
     from by_qa.knowledge_base.infrastructure.runtime import build_bootstrap_service
 
-    kb_connection = build_connection_factory(settings)()
+    kb_connection = await build_connection_factory(settings)()
     try:
-        build_bootstrap_service(settings).apply(kb_connection)
-        get_knowledge_base_service()
-        get_knowledge_item_ingestion_service()
-        get_knowledge_fetch_cache_cleanup_service().start()
+        await build_bootstrap_service(settings).apply(kb_connection)
+        await _get_or_build_knowledge_base_service()
+        await _get_or_build_knowledge_item_ingestion_service()
+        cleanup = await _get_or_build_knowledge_fetch_cache_cleanup_service()
+        await cleanup.start()
         logger.info("knowledge_base lifecycle initialized successfully")
     finally:
-        kb_connection.close()
+        await kb_connection.close()
 
 
-def _shutdown_knowledge_base_runtime(enabled_modules: list[str]) -> None:
+async def _shutdown_knowledge_base_runtime(enabled_modules: list[str]) -> None:
     """Stop optional runtime services when the application shuts down."""
     if (
         "knowledge_base" in enabled_modules
         and _knowledge_fetch_cache_cleanup_service is not None
     ):
-        _knowledge_fetch_cache_cleanup_service.stop()
+        await _knowledge_fetch_cache_cleanup_service.stop()
         logger.info("knowledge_base lifecycle stopped")
 
 
@@ -340,11 +361,11 @@ async def lifespan(application):
         "application startup: enabled_modules=%s",
         ",".join(enabled_modules) if enabled_modules else "none",
     )
-    _initialize_knowledge_base_runtime(enabled_modules)
+    await _initialize_knowledge_base_runtime(enabled_modules)
 
     yield
 
-    _shutdown_knowledge_base_runtime(enabled_modules)
+    await _shutdown_knowledge_base_runtime(enabled_modules)
     await _unregister_service(application)
 
 

@@ -100,15 +100,22 @@ async def test_lifespan_logs_configuration_and_registers_service(monkeypatch):
     monkeypatch.setattr(
         main_module.logger, "warning", lambda *args: warning_calls.append(args)
     )
+
+    async def fake_initialize(enabled_modules):
+        recorded["initialized"] = enabled_modules
+
+    async def fake_shutdown(enabled_modules):
+        recorded["shutdown"] = enabled_modules
+
     monkeypatch.setattr(
         main_module,
         "_initialize_knowledge_base_runtime",
-        lambda enabled_modules: recorded.update(initialized=enabled_modules),
+        fake_initialize,
     )
     monkeypatch.setattr(
         main_module,
         "_shutdown_knowledge_base_runtime",
-        lambda enabled_modules: recorded.update(shutdown=enabled_modules),
+        fake_shutdown,
     )
 
     async with main_module.lifespan(fake_application):

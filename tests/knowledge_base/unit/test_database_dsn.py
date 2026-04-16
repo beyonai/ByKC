@@ -1,9 +1,10 @@
-from unittest.mock import patch
-
 from psycopg.conninfo import conninfo_to_dict
 
 from by_qa.config import Settings
-from by_qa.knowledge_base.infrastructure.database import normalize_opengauss_dsn
+from by_qa.knowledge_base.infrastructure.database import (
+    build_connection_factory,
+    normalize_opengauss_dsn,
+)
 
 
 def test_normalize_opengauss_dsn_converts_jdbc_schema_parameter():
@@ -52,21 +53,44 @@ def test_normalize_opengauss_dsn_does_not_duplicate_public_schema():
     assert params["options"] == "-c search_path=byai,public"
 
 
-def test_connection_factory_uses_normalized_dsn():
+async def test_connection_factory_uses_normalized_dsn(monkeypatch):
     settings = Settings(
         KB_OPENGAUSS_DSN=(
             "postgresql://gaussdb:secret@127.0.0.1:15432/postgres"
             "?currentSchema=byai&characterEncoding=utf8"
         )
     )
+    calls = []
 
-    from by_qa.knowledge_base.infrastructure.database import build_connection_factory
+    async def fake_connect(dsn, **_kwargs):
+        calls.append(dsn)
+        return object()
 
-    with patch(
-        "by_qa.knowledge_base.infrastructure.database.Connection.connect"
-    ) as connect:
-        build_connection_factory(settings)()
+    monkeypatch.setattr(
+        "by_qa.knowledge_base.infrastructure.database.AsyncConnection.connect",
+        fake_connect,
+    )
+    await build_connection_factory(settings)()
 
-    dsn = connect.call_args.args[0]
-    params = conninfo_to_dict(dsn)
+    params = conninfo_to_dict(calls[0])
     assert params["options"] == "-c search_path=byai,public"
+
+
+async def test_build_connection_factory_uses_async_connection(monkeypatch):
+    calls = []
+
+    async def fake_connect(*args, **kwargs):
+        calls.append((args, kwargs))
+        return object()
+
+    monkeypatch.setattr(
+        "by_qa.knowledge_base.infrastructure.database.AsyncConnection.connect",
+        fake_connect,
+    )
+    settings = Settings(KB_OPENGAUSS_DSN="postgresql://u:p@localhost:5432/db")
+
+    connection = await build_connection_factory(settings)()
+
+    assert connection is not None
+    assert calls[0][1]["autocommit"] is False
+    assert calls[0][1]["prepare_threshold"] == 0

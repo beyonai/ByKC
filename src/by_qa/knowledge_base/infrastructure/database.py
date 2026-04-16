@@ -1,9 +1,9 @@
 """Database infrastructure helpers for knowledge base ingestion."""
 
-from typing import Callable
+from typing import Awaitable, Callable
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
-from psycopg import Connection
+from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 
 from by_qa.config import Settings
@@ -65,11 +65,13 @@ def _build_search_path(schema: str) -> str:
     return ",".join(schemas)
 
 
-def build_connection_factory(settings: Settings) -> Callable[[], Connection]:
-    """Build a sync psycopg connection factory for knowledge base persistence."""
+def build_connection_factory(
+    settings: Settings,
+) -> Callable[[], Awaitable[AsyncConnection]]:
+    """Build an async psycopg connection factory for knowledge base persistence."""
 
-    def connect() -> Connection:
-        return Connection.connect(
+    async def connect() -> AsyncConnection:
+        return await AsyncConnection.connect(
             normalize_opengauss_dsn(settings.kb_opengauss_dsn),
             autocommit=False,
             prepare_threshold=0,

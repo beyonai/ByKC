@@ -8,3 +8,4 @@ agent_data/
 data/opengauss/
 data/minio/
 .env
+.worktrees/

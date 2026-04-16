@@ -43,14 +43,14 @@ from by_qa.knowledge_base.services.knowledge_item_search_service import (
 def validate_knowledge_base_settings(settings: Settings) -> None:
     """Fail fast with a clear message when KB runtime settings are incomplete."""
     missing_fields: list[str] = []
-    if not settings.kb_opengauss_dsn:
-        missing_fields.append("KB_OPENGAUSS_DSN")
+    if not settings.resolved_kb_opengauss_dsn:
+        missing_fields.append("DB_HOST/DB_USER/DB_PASS")
     if not settings.kb_minio_endpoint:
-        missing_fields.append("KB_MINIO_ENDPOINT")
+        missing_fields.append("MINIO_ENDPOINT")
     if not settings.kb_minio_access_key:
-        missing_fields.append("KB_MINIO_ACCESS_KEY")
+        missing_fields.append("MINIO_ACCESS_KEY")
     if not settings.kb_minio_secret_key:
-        missing_fields.append("KB_MINIO_SECRET_KEY")
+        missing_fields.append("MINIO_SECRET_KEY")
     if not settings.kb_minio_bucket:
         missing_fields.append("KB_MINIO_BUCKET")
     if not settings.kb_minio_markdown_bucket:

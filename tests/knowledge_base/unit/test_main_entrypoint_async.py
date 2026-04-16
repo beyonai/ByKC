@@ -82,7 +82,6 @@ async def test_lifespan_logs_configuration_and_registers_service(monkeypatch):
         redis_username="",
         redis_password="admin123",
         redis_database=0,
-        kb_opengauss_dsn="",
         kb_minio_endpoint="127.0.0.1:19000",
         kb_minio_bucket="knowledge-base",
         embedding_model_name="",
@@ -185,5 +184,5 @@ async def test_lifespan_logs_configuration_and_registers_service(monkeypatch):
     ) in info_calls
     assert (
         "application startup configuration gaps: missing=%s",
-        "KB_OPENGAUSS_DSN,EMBEDDING_MODEL_NAME",
+        "DB_HOST/DB_USER/DB_PASS,EMBEDDING_MODEL_NAME",
     ) in warning_calls

@@ -10,10 +10,9 @@ from by_qa.knowledge_base.services.errors import KnowledgeBaseConfigurationError
 def test_settings_accept_kb_ingestion_env_vars():
     """Settings should expose KB ingestion infrastructure configuration."""
     settings = Settings(
-        KB_OPENGAUSS_DSN="postgresql://gaussdb:pass@127.0.0.1:15432/postgres?sslmode=disable",
-        KB_MINIO_ENDPOINT="127.0.0.1:19000",
-        KB_MINIO_ACCESS_KEY="minioadmin",
-        KB_MINIO_SECRET_KEY="minioadmin",
+        MINIO_ENDPOINT="127.0.0.1:19000",
+        MINIO_ACCESS_KEY="minioadmin",
+        MINIO_SECRET_KEY="minioadmin",
         KB_MINIO_BUCKET="knowledge-base",
         KB_MINIO_MARKDOWN_BUCKET="knowledge-base-markdown",
         EMBEDDING_MODEL_NAME="bge-m3",
@@ -24,13 +23,68 @@ def test_settings_accept_kb_ingestion_env_vars():
         EMBEDDING_BATCH_MAX_TEXTS=12,
     )
 
-    assert settings.kb_opengauss_dsn.startswith("postgresql://")
     assert settings.kb_minio_endpoint == "127.0.0.1:19000"
     assert settings.kb_minio_bucket == "knowledge-base"
     assert settings.kb_minio_markdown_bucket == "knowledge-base-markdown"
     assert settings.embedding_model_name == "bge-m3"
     assert settings.embedding_dimension == 1024
     assert settings.embedding_batch_max_texts == 12
+
+
+def test_settings_accept_shared_db_env_vars():
+    """Settings should expose shared database connection parts."""
+    settings = Settings(
+        DB_HOST="10.10.168.204",
+        DB_PORT=5432,
+        DB_SCHEMA="byai",
+        DB_USER="gaussdb",
+        DB_PASS="Admin@123",
+    )
+
+    assert settings.db_host == "10.10.168.204"
+    assert settings.db_port == 5432
+    assert settings.db_schema == "byai"
+    assert settings.db_user == "gaussdb"
+    assert settings.db_pass == "Admin@123"
+    assert settings.resolved_kb_opengauss_dsn == settings.build_opengauss_dsn()
+    assert (
+        settings.resolved_checkpointer_opengauss_dsn == settings.build_opengauss_dsn()
+    )
+
+
+def test_settings_ignore_removed_database_env_vars():
+    """Legacy DSN and backend env vars should no longer configure the app."""
+    settings = Settings(
+        KB_OPENGAUSS_DSN="postgresql://legacy:secret@127.0.0.1:5432/postgres",
+        CHECKPOINTER_BACKEND="opengauss",
+        CHECKPOINTER_OPENGAUSS_DSN="postgresql://legacy:secret@127.0.0.1:5432/postgres",
+        DB_HOST="",
+        DB_USER="",
+        DB_PASS="",
+    )
+
+    assert settings.resolved_kb_opengauss_dsn == ""
+    assert settings.resolved_checkpointer_opengauss_dsn == ""
+    assert settings.checkpointer_backend == "sqlite"
+
+
+def test_settings_ignore_removed_minio_env_vars():
+    """Legacy KB_MINIO_* env vars should no longer configure object storage."""
+    settings = Settings(
+        KB_MINIO_ENDPOINT="legacy-endpoint",
+        KB_MINIO_ACCESS_KEY="legacy-access",
+        KB_MINIO_SECRET_KEY="legacy-secret",
+        KB_MINIO_SECURE=True,
+        MINIO_ENDPOINT="new-endpoint",
+        MINIO_ACCESS_KEY="new-access",
+        MINIO_SECRET_KEY="new-secret",
+        MINIO_SECURE=False,
+    )
+
+    assert settings.kb_minio_endpoint == "new-endpoint"
+    assert settings.kb_minio_access_key == "new-access"
+    assert settings.kb_minio_secret_key == "new-secret"
+    assert settings.kb_minio_secure is False
 
 
 def test_settings_expose_embedding_batch_max_texts_default():
@@ -54,10 +108,12 @@ def test_validate_knowledge_base_settings_rejects_missing_runtime_config():
     )
 
     settings = Settings(
-        KB_OPENGAUSS_DSN="",
-        KB_MINIO_ENDPOINT="",
-        KB_MINIO_ACCESS_KEY="",
-        KB_MINIO_SECRET_KEY="",
+        DB_HOST="",
+        DB_USER="",
+        DB_PASS="",
+        MINIO_ENDPOINT="",
+        MINIO_ACCESS_KEY="",
+        MINIO_SECRET_KEY="",
         KB_MINIO_BUCKET="",
         KB_MINIO_MARKDOWN_BUCKET="",
         EMBEDDING_MODEL_NAME="",
@@ -68,7 +124,7 @@ def test_validate_knowledge_base_settings_rejects_missing_runtime_config():
         validate_knowledge_base_settings(settings)
     except KnowledgeBaseConfigurationError as exc:
         message = str(exc)
-        assert "KB_OPENGAUSS_DSN" in message
+        assert "DB_HOST/DB_USER/DB_PASS" in message
         assert "EMBEDDING_MODEL_NAME" in message
     else:
         raise AssertionError("expected KnowledgeBaseConfigurationError")

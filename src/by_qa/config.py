@@ -4,6 +4,7 @@ import ipaddress
 import socket
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import quote, urlencode
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -79,15 +80,20 @@ class Settings(BaseSettings):
 
     agent_data_path: Path = Field(default=Path("agent_data"), alias="AGENT_DATA_PATH")
 
-    kb_opengauss_dsn: str = Field(default="", alias="KB_OPENGAUSS_DSN")
-    kb_minio_endpoint: str = Field(default="127.0.0.1:19000", alias="KB_MINIO_ENDPOINT")
-    kb_minio_access_key: str = Field(default="", alias="KB_MINIO_ACCESS_KEY")
-    kb_minio_secret_key: str = Field(default="", alias="KB_MINIO_SECRET_KEY")
+    db_host: str = Field(default="", alias="DB_HOST")
+    db_port: int = Field(default=5432, alias="DB_PORT")
+    db_schema: str = Field(default="", alias="DB_SCHEMA")
+    db_user: str = Field(default="", alias="DB_USER")
+    db_pass: str = Field(default="", alias="DB_PASS")
+
+    kb_minio_endpoint: str = Field(default="127.0.0.1:19000", alias="MINIO_ENDPOINT")
+    kb_minio_access_key: str = Field(default="", alias="MINIO_ACCESS_KEY")
+    kb_minio_secret_key: str = Field(default="", alias="MINIO_SECRET_KEY")
     kb_minio_bucket: str = Field(default="knowledge-base", alias="KB_MINIO_BUCKET")
     kb_minio_markdown_bucket: str = Field(
         default="knowledge-base-markdown", alias="KB_MINIO_MARKDOWN_BUCKET"
     )
-    kb_minio_secure: bool = Field(default=False, alias="KB_MINIO_SECURE")
+    kb_minio_secure: bool = Field(default=False, alias="MINIO_SECURE")
 
     embedding_model_name: str = Field(default="", alias="EMBEDDING_MODEL_NAME")
     embedding_base_url: str = Field(default="", alias="EMBEDDING_BASE_URL")
@@ -127,12 +133,8 @@ class Settings(BaseSettings):
     instant_search_min_sentence_tokens: int = Field(
         default=50, alias="INSTANT_SEARCH_MIN_SENTENCE_TOKENS"
     )
-    checkpointer_backend: str = Field(default="sqlite", alias="CHECKPOINTER_BACKEND")
     checkpointer_sqlite_path: str = Field(
         default="./data/checkpoints.db", alias="CHECKPOINTER_SQLITE_PATH"
-    )
-    checkpointer_opengauss_dsn: str = Field(
-        default="", alias="CHECKPOINTER_OPENGAUSS_DSN"
     )
     kb_fetch_cache_ttl_seconds: int = Field(
         default=24 * 60 * 60, alias="KB_FETCH_CACHE_TTL_SECONDS"
@@ -178,6 +180,41 @@ class Settings(BaseSettings):
     def kb_cache_path(self) -> Path:
         """Get fetched-file cache path."""
         return self.agent_data_path / "kb_cache"
+
+    @property
+    def resolved_kb_opengauss_dsn(self) -> str:
+        """Get the configured KB openGauss DSN."""
+        return self.build_opengauss_dsn()
+
+    @property
+    def resolved_checkpointer_opengauss_dsn(self) -> str:
+        """Get the configured checkpointer openGauss DSN."""
+        return self.build_opengauss_dsn()
+
+    @property
+    def checkpointer_backend(self) -> str:
+        """Get the default checkpointer backend."""
+        return "sqlite"
+
+    def build_opengauss_dsn(self) -> str:
+        """Build an openGauss DSN from shared DB_* settings."""
+        if not self.db_host or not self.db_user or not self.db_pass:
+            return ""
+
+        user = quote(self.db_user, safe="")
+        password = quote(self.db_pass, safe="")
+        dsn = f"postgresql://{user}:{password}@{self.db_host}:{self.db_port}/postgres"
+        schema = self.db_schema.strip()
+        if schema:
+            search_path = schema
+            if "public" not in [part.strip().lower() for part in schema.split(",")]:
+                search_path = f"{schema},public"
+            query = urlencode(
+                {"options": f"-c search_path={search_path}"},
+                quote_via=quote,
+            )
+            dsn = f"{dsn}?{query}"
+        return dsn
 
     def ensure_directories(self) -> None:
         """Ensure all required directories exist."""

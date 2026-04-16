@@ -13,9 +13,10 @@ from by_qa.config import Settings
 from by_qa.knowledge_base.infrastructure.database import build_connection_factory
 from by_qa.knowledge_common.schemas import KnowledgeItemChunkPayload
 
-DEFAULT_DSN = (
-    "postgresql://gaussdb:OpenGauss%232026@127.0.0.1:15432/postgres?sslmode=disable"
-)
+DEFAULT_DB_HOST = "127.0.0.1"
+DEFAULT_DB_PORT = "15432"
+DEFAULT_DB_USER = "gaussdb"
+DEFAULT_DB_PASS = "OpenGauss#2026"
 
 
 class FakeDocumentChunkingService:
@@ -57,15 +58,19 @@ class FakeDocumentChunkingService:
 
 def _kb_settings() -> Settings:
     return Settings(
-        KB_OPENGAUSS_DSN=os.getenv("KB_OPENGAUSS_DSN", DEFAULT_DSN),
-        KB_MINIO_ENDPOINT=os.getenv("KB_MINIO_ENDPOINT", "127.0.0.1:19000"),
-        KB_MINIO_ACCESS_KEY=os.getenv("KB_MINIO_ACCESS_KEY", "minioadmin"),
-        KB_MINIO_SECRET_KEY=os.getenv("KB_MINIO_SECRET_KEY", "minioadmin"),
+        DB_HOST=os.getenv("DB_HOST", DEFAULT_DB_HOST),
+        DB_PORT=int(os.getenv("DB_PORT", DEFAULT_DB_PORT)),
+        DB_SCHEMA=os.getenv("DB_SCHEMA", ""),
+        DB_USER=os.getenv("DB_USER", DEFAULT_DB_USER),
+        DB_PASS=os.getenv("DB_PASS", DEFAULT_DB_PASS),
+        MINIO_ENDPOINT=os.getenv("MINIO_ENDPOINT", "127.0.0.1:19000"),
+        MINIO_ACCESS_KEY=os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
+        MINIO_SECRET_KEY=os.getenv("MINIO_SECRET_KEY", "minioadmin"),
         KB_MINIO_BUCKET=os.getenv("KB_MINIO_BUCKET", "knowledge-base"),
         KB_MINIO_MARKDOWN_BUCKET=os.getenv(
             "KB_MINIO_MARKDOWN_BUCKET", "knowledge-base-markdown"
         ),
-        KB_MINIO_SECURE=False,
+        MINIO_SECURE=False,
         EMBEDDING_MODEL_NAME=os.getenv("EMBEDDING_MODEL_NAME", "bge-m3"),
         EMBEDDING_BASE_URL="https://embedding.example.com",
         EMBEDDING_API_KEY="secret",

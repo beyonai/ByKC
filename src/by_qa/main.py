@@ -64,7 +64,7 @@ def _get_startup_configuration_summary() -> dict[str, Any]:
         "checkpointer_backend": settings.checkpointer_backend,
         "agent_data_path": str(settings.agent_data_path),
         "knowledge_base_configured": bool(
-            settings.kb_opengauss_dsn and settings.embedding_model_name
+            _get_resolved_kb_opengauss_dsn() and settings.embedding_model_name
         ),
         "document_chunking_configured": bool(
             settings.embedding_model_name and settings.embedding_base_url
@@ -77,14 +77,25 @@ def _get_startup_configuration_gaps() -> list[str]:
     """Return the names of key startup settings that are currently missing."""
     missing: list[str] = []
 
-    if not settings.kb_opengauss_dsn:
-        missing.append("KB_OPENGAUSS_DSN")
+    if not _get_resolved_kb_opengauss_dsn():
+        missing.append("DB_HOST/DB_USER/DB_PASS")
     if not settings.embedding_model_name:
         missing.append("EMBEDDING_MODEL_NAME")
     if not settings.llm_api_key:
         missing.append("LLM_API_KEY")
 
     return missing
+
+
+def _get_resolved_kb_opengauss_dsn() -> str:
+    """Return the KB openGauss DSN from full Settings or lightweight test doubles."""
+    resolved = getattr(settings, "resolved_kb_opengauss_dsn", None)
+    if resolved:
+        return resolved
+    build_opengauss_dsn = getattr(settings, "build_opengauss_dsn", None)
+    if callable(build_opengauss_dsn):
+        return build_opengauss_dsn()
+    return ""
 
 
 def _log_startup_configuration() -> None:
@@ -321,7 +332,7 @@ async def _initialize_knowledge_base_runtime(enabled_modules: list[str]) -> None
         logger.info("knowledge_base lifecycle skipped: module_not_loaded")
         return
 
-    if not settings.kb_opengauss_dsn or not settings.embedding_model_name:
+    if not settings.resolved_kb_opengauss_dsn or not settings.embedding_model_name:
         logger.info("knowledge_base lifecycle skipped: configuration_incomplete")
         return
 

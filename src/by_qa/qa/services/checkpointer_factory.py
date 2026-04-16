@@ -6,6 +6,7 @@ import sqlite3
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
+from psycopg import sql
 
 from by_qa.config import Settings, get_settings
 
@@ -33,6 +34,16 @@ except ImportError:
     AsyncOpenGaussSaver = None
 
 
+def _resolve_opengauss_dsn(settings: Settings, dsn: str | None) -> str:
+    """Resolve explicit or shared DB_* openGauss DSN settings."""
+    if dsn:
+        return dsn
+    build_opengauss_dsn = getattr(settings, "build_opengauss_dsn", None)
+    if callable(build_opengauss_dsn):
+        return build_opengauss_dsn()
+    return getattr(settings, "resolved_checkpointer_opengauss_dsn", "")
+
+
 def _create_sync_opengauss_saver(
     settings: Settings,
     dsn: str | None,
@@ -43,9 +54,11 @@ def _create_sync_opengauss_saver(
             "openGauss backend requires langgraph-checkpoint-postgres to be installed"
         )
 
-    opengauss_dsn = dsn or settings.checkpointer_opengauss_dsn
+    opengauss_dsn = _resolve_opengauss_dsn(settings, dsn)
     if not opengauss_dsn:
-        raise ValueError("CHECKPOINTER_OPENGAUSS_DSN is required for opengauss backend")
+        raise ValueError(
+            "DB_HOST, DB_USER, and DB_PASS are required for opengauss backend"
+        )
 
     from psycopg import Connection
     from psycopg.rows import dict_row
@@ -56,6 +69,7 @@ def _create_sync_opengauss_saver(
         prepare_threshold=0,
         row_factory=dict_row,
     )
+    _ensure_schema(conn, getattr(settings, "db_schema", ""))
     return OpenGaussSaver(conn)
 
 
@@ -69,9 +83,11 @@ async def _create_async_opengauss_saver(
             "openGauss backend requires langgraph-checkpoint-postgres to be installed"
         )
 
-    opengauss_dsn = dsn or settings.checkpointer_opengauss_dsn
+    opengauss_dsn = _resolve_opengauss_dsn(settings, dsn)
     if not opengauss_dsn:
-        raise ValueError("CHECKPOINTER_OPENGAUSS_DSN is required for opengauss backend")
+        raise ValueError(
+            "DB_HOST, DB_USER, and DB_PASS are required for opengauss backend"
+        )
 
     from psycopg import AsyncConnection
     from psycopg.rows import dict_row
@@ -82,7 +98,28 @@ async def _create_async_opengauss_saver(
         prepare_threshold=0,
         row_factory=dict_row,
     )
+    await _ensure_schema_async(conn, getattr(settings, "db_schema", ""))
     return AsyncOpenGaussSaver(conn)
+
+
+def _ensure_schema(connection, schema: str) -> None:
+    """Create the configured schema when DB_SCHEMA is set."""
+    schema = schema.strip()
+    if not schema:
+        return
+    connection.execute(
+        sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(schema))
+    )
+
+
+async def _ensure_schema_async(connection, schema: str) -> None:
+    """Create the configured schema when DB_SCHEMA is set."""
+    schema = schema.strip()
+    if not schema:
+        return
+    await connection.execute(
+        sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(schema))
+    )
 
 
 def create_checkpointer(
@@ -113,7 +150,7 @@ def create_checkpointer(
 
     if backend == "opengauss":
         saver = _create_sync_opengauss_saver(
-            settings, opengauss_dsn or settings.checkpointer_opengauss_dsn
+            settings, _resolve_opengauss_dsn(settings, opengauss_dsn)
         )
         saver.setup()
         return saver
@@ -154,7 +191,7 @@ async def create_checkpointer_async(
 
     if backend == "opengauss":
         saver = await _create_async_opengauss_saver(
-            settings, opengauss_dsn or settings.checkpointer_opengauss_dsn
+            settings, _resolve_opengauss_dsn(settings, opengauss_dsn)
         )
         await saver.setup()
         return saver

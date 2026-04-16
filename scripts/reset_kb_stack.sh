@@ -54,18 +54,34 @@ export_required_value() {
   export "${key}=${value}"
 }
 
+export_optional_value() {
+  local key="$1"
+  local value="${!key-}"
+
+  if [[ -z "${value}" ]]; then
+    value="$(read_env_file_value "${key}")"
+  fi
+
+  export "${key}=${value}"
+}
+
 required_keys=(
-  "KB_OPENGAUSS_DSN"
-  "KB_MINIO_ENDPOINT"
-  "KB_MINIO_ACCESS_KEY"
-  "KB_MINIO_SECRET_KEY"
+  "DB_HOST"
+  "DB_PORT"
+  "DB_USER"
+  "DB_PASS"
+  "MINIO_ENDPOINT"
+  "MINIO_ACCESS_KEY"
+  "MINIO_SECRET_KEY"
   "KB_MINIO_BUCKET"
   "KB_MINIO_MARKDOWN_BUCKET"
-  "KB_MINIO_SECURE"
+  "MINIO_SECURE"
 )
 
 for key in "${required_keys[@]}"; do
   export_required_value "${key}"
 done
+
+export_optional_value "DB_SCHEMA"
 
 PYTHONPATH=. .venv/bin/python scripts/reset_kb_data.py

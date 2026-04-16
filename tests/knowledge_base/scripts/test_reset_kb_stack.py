@@ -22,8 +22,14 @@ def _prepare_reset_script(tmp_path: Path) -> Path:
     fake_python = venv_bin / "python"
     fake_python.write_text(
         "#!/bin/bash\n"
-        "printf '%s\\n' \"KB_OPENGAUSS_DSN=$KB_OPENGAUSS_DSN\"\n"
-        "printf '%s\\n' \"KB_MINIO_ENDPOINT=$KB_MINIO_ENDPOINT\"\n"
+        "printf '%s\\n' \"DB_HOST=$DB_HOST\"\n"
+        "printf '%s\\n' \"DB_PORT=$DB_PORT\"\n"
+        "printf '%s\\n' \"DB_SCHEMA=$DB_SCHEMA\"\n"
+        "printf '%s\\n' \"DB_USER=$DB_USER\"\n"
+        "printf '%s\\n' \"DB_PASS=$DB_PASS\"\n"
+        "printf '%s\\n' \"MINIO_ENDPOINT=$MINIO_ENDPOINT\"\n"
+        "printf '%s\\n' \"MINIO_ACCESS_KEY=$MINIO_ACCESS_KEY\"\n"
+        "printf '%s\\n' \"MINIO_SECRET_KEY=$MINIO_SECRET_KEY\"\n"
         "printf '%s\\n' \"KB_MINIO_BUCKET=$KB_MINIO_BUCKET\"\n"
         "printf '%s\\n' \"KB_MINIO_MARKDOWN_BUCKET=$KB_MINIO_MARKDOWN_BUCKET\"\n",
         encoding="utf-8",
@@ -38,13 +44,17 @@ def test_reset_kb_stack_loads_missing_values_from_root_env(tmp_path):
     (tmp_path / ".env").write_text(
         "\n".join(
             [
-                "KB_OPENGAUSS_DSN=postgresql://gaussdb:secret@127.0.0.1:15432/postgres?sslmode=disable",
-                "KB_MINIO_ENDPOINT=127.0.0.1:19000",
-                "KB_MINIO_ACCESS_KEY=minioadmin",
-                "KB_MINIO_SECRET_KEY=minioadmin",
+                "DB_HOST=127.0.0.1",
+                "DB_PORT=15432",
+                "DB_SCHEMA=byai",
+                "DB_USER=gaussdb",
+                "DB_PASS=secret",
+                "MINIO_ENDPOINT=127.0.0.1:19000",
+                "MINIO_ACCESS_KEY=minioadmin",
+                "MINIO_SECRET_KEY=minioadmin",
                 "KB_MINIO_BUCKET=knowledge-base",
                 "KB_MINIO_MARKDOWN_BUCKET=knowledge-base-markdown",
-                "KB_MINIO_SECURE=false",
+                "MINIO_SECURE=false",
             ]
         )
         + "\n",
@@ -61,10 +71,14 @@ def test_reset_kb_stack_loads_missing_values_from_root_env(tmp_path):
     )
 
     assert result.returncode == 0
-    assert (
-        "KB_OPENGAUSS_DSN=postgresql://gaussdb:secret@127.0.0.1:15432/postgres?sslmode=disable"
-        in result.stdout
-    )
+    assert "DB_HOST=127.0.0.1" in result.stdout
+    assert "DB_PORT=15432" in result.stdout
+    assert "DB_SCHEMA=byai" in result.stdout
+    assert "DB_USER=gaussdb" in result.stdout
+    assert "DB_PASS=secret" in result.stdout
+    assert "MINIO_ENDPOINT=127.0.0.1:19000" in result.stdout
+    assert "MINIO_ACCESS_KEY=minioadmin" in result.stdout
+    assert "MINIO_SECRET_KEY=minioadmin" in result.stdout
     assert "KB_MINIO_BUCKET=knowledge-base" in result.stdout
     assert "KB_MINIO_MARKDOWN_BUCKET=knowledge-base-markdown" in result.stdout
 
@@ -75,13 +89,17 @@ def test_reset_kb_stack_prefers_environment_over_root_env(tmp_path):
     (tmp_path / ".env").write_text(
         "\n".join(
             [
-                "KB_OPENGAUSS_DSN=postgresql://gaussdb:dotenv@127.0.0.1:15432/postgres?sslmode=disable",
-                "KB_MINIO_ENDPOINT=dotenv-endpoint",
-                "KB_MINIO_ACCESS_KEY=dotenv-access",
-                "KB_MINIO_SECRET_KEY=dotenv-secret",
+                "DB_HOST=dotenv-host",
+                "DB_PORT=15432",
+                "DB_SCHEMA=dotenv-schema",
+                "DB_USER=dotenv-user",
+                "DB_PASS=dotenv-pass",
+                "MINIO_ENDPOINT=dotenv-endpoint",
+                "MINIO_ACCESS_KEY=dotenv-access",
+                "MINIO_SECRET_KEY=dotenv-secret",
                 "KB_MINIO_BUCKET=dotenv-bucket",
                 "KB_MINIO_MARKDOWN_BUCKET=dotenv-markdown-bucket",
-                "KB_MINIO_SECURE=false",
+                "MINIO_SECURE=false",
             ]
         )
         + "\n",
@@ -91,13 +109,17 @@ def test_reset_kb_stack_prefers_environment_over_root_env(tmp_path):
     env = {"PATH": os.environ["PATH"]}
     env.update(
         {
-            "KB_OPENGAUSS_DSN": "postgresql://gaussdb:env@127.0.0.1:15432/postgres?sslmode=disable",
-            "KB_MINIO_ENDPOINT": "env-endpoint",
-            "KB_MINIO_ACCESS_KEY": "env-access",
-            "KB_MINIO_SECRET_KEY": "env-secret",
+            "DB_HOST": "env-host",
+            "DB_PORT": "5432",
+            "DB_SCHEMA": "env-schema",
+            "DB_USER": "env-user",
+            "DB_PASS": "env-pass",
+            "MINIO_ENDPOINT": "env-endpoint",
+            "MINIO_ACCESS_KEY": "env-access",
+            "MINIO_SECRET_KEY": "env-secret",
             "KB_MINIO_BUCKET": "env-bucket",
             "KB_MINIO_MARKDOWN_BUCKET": "env-markdown-bucket",
-            "KB_MINIO_SECURE": "true",
+            "MINIO_SECURE": "true",
         }
     )
 
@@ -111,10 +133,14 @@ def test_reset_kb_stack_prefers_environment_over_root_env(tmp_path):
     )
 
     assert result.returncode == 0
-    assert (
-        "KB_OPENGAUSS_DSN=postgresql://gaussdb:env@127.0.0.1:15432/postgres?sslmode=disable"
-        in result.stdout
-    )
+    assert "DB_HOST=env-host" in result.stdout
+    assert "DB_PORT=5432" in result.stdout
+    assert "DB_SCHEMA=env-schema" in result.stdout
+    assert "DB_USER=env-user" in result.stdout
+    assert "DB_PASS=env-pass" in result.stdout
+    assert "MINIO_ENDPOINT=env-endpoint" in result.stdout
+    assert "MINIO_ACCESS_KEY=env-access" in result.stdout
+    assert "MINIO_SECRET_KEY=env-secret" in result.stdout
     assert "KB_MINIO_BUCKET=env-bucket" in result.stdout
     assert "KB_MINIO_MARKDOWN_BUCKET=env-markdown-bucket" in result.stdout
 
@@ -133,4 +159,4 @@ def test_reset_kb_stack_fails_when_required_values_are_missing(tmp_path):
     )
 
     assert result.returncode != 0
-    assert "Missing required config: KB_OPENGAUSS_DSN" in result.stderr
+    assert "Missing required config: DB_HOST" in result.stderr

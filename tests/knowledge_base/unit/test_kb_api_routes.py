@@ -1029,7 +1029,7 @@ def test_create_knowledge_base_route_maps_configuration_error_to_documented_erro
 
     class MisconfiguredKBService(FakeKBService):
         async def create_knowledge_base(self, request):
-            raise KnowledgeBaseConfigurationError("KB_OPENGAUSS_DSN is required")
+            raise KnowledgeBaseConfigurationError("DB_HOST/DB_USER/DB_PASS is required")
 
     client = make_test_client(monkeypatch, MisconfiguredKBService())
     response = client.post(
@@ -1042,7 +1042,7 @@ def test_create_knowledge_base_route_maps_configuration_error_to_documented_erro
     assert response.status_code == 200
     assert response.json() == {
         "resultCode": "-1",
-        "resultMsg": "KB_OPENGAUSS_DSN is required",
+        "resultMsg": "DB_HOST/DB_USER/DB_PASS is required",
         "resultObject": {},
     }
 

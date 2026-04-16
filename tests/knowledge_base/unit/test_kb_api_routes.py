@@ -490,7 +490,7 @@ def test_delete_knowledge_item_route_returns_business_response(monkeypatch):
     client = make_test_client(monkeypatch, service)
 
     response = client.post(
-        "/api/v1/knowledge-items/delete",
+        "/api/v1/knowledgeItems/delete",
         json={
             "knCode": "hr-policy",
             "filePath": "/考勤制度/异常考勤处理办法.pdf",
@@ -513,7 +513,7 @@ def test_delete_knowledge_item_route_maps_request_validation_to_documented_error
     client = make_test_client(monkeypatch, service)
 
     response = client.post(
-        "/api/v1/knowledge-items/delete",
+        "/api/v1/knowledgeItems/delete",
         json={"knCode": "hr-policy"},
     )
 
@@ -1081,7 +1081,7 @@ def test_search_route_returns_chunk_oriented_business_response(monkeypatch):
     client = make_test_client(monkeypatch, service)
 
     response = client.post(
-        "/api/v1/knowledge-items/search",
+        "/api/v1/knowledgeItems/search",
         json={
             "query": "员工请假制度怎么规定",
             "knCodeList": ["hr-policy"],
@@ -1120,7 +1120,7 @@ def test_search_route_emits_summary_logs(monkeypatch):
     client = make_test_client(monkeypatch, service)
 
     response = client.post(
-        "/api/v1/knowledge-items/search",
+        "/api/v1/knowledgeItems/search",
         json={
             "query": "员工请假制度怎么规定",
             "knCodeList": ["hr-policy"],
@@ -1146,7 +1146,7 @@ def test_search_route_maps_validation_error_to_documented_error(monkeypatch):
 
     client = make_test_client(monkeypatch, BrokenSearchService())
     response = client.post(
-        "/api/v1/knowledge-items/search",
+        "/api/v1/knowledgeItems/search",
         json={
             "query": "员工请假制度怎么规定",
             "knCodeList": ["hr-policy"],
@@ -1174,7 +1174,7 @@ def test_search_route_maps_configuration_error_to_documented_error(monkeypatch):
 
     client = make_test_client(monkeypatch, BrokenSearchService())
     response = client.post(
-        "/api/v1/knowledge-items/search",
+        "/api/v1/knowledgeItems/search",
         json={
             "query": "员工请假制度怎么规定",
             "knCodeList": ["hr-policy"],
@@ -1195,7 +1195,7 @@ def test_search_route_rejects_invalid_search_mode(monkeypatch):
     """Search should reject requests with invalid searchMode."""
     client = make_test_client(monkeypatch, FakeKBService())
     response = client.post(
-        "/api/v1/knowledge-items/search",
+        "/api/v1/knowledgeItems/search",
         json={
             "query": "test",
             "knCodeList": ["kb1"],
@@ -1213,7 +1213,7 @@ def test_search_route_rejects_non_positive_top_k(monkeypatch):
     """Search should reject requests with topK <= 0."""
     client = make_test_client(monkeypatch, FakeKBService())
     response = client.post(
-        "/api/v1/knowledge-items/search",
+        "/api/v1/knowledgeItems/search",
         json={
             "query": "test",
             "knCodeList": ["kb1"],

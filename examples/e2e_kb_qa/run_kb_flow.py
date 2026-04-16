@@ -78,7 +78,7 @@ def main() -> None:
             import_result = post_multipart_api(
                 client,
                 base_url=base_url,
-                path="/api/v1/knowledge-items/import",
+                path="/api/v1/knowledgeItems/import",
                 data={
                     "knCode": kb_code,
                     "filePath": file_path,

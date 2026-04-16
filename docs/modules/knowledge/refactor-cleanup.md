@@ -21,7 +21,7 @@
 - `readFile`
 - `downloadFile`
 - `fileToMarkdownIndex`
-- `knowledge-items/search`
+- `knowledgeItems/search`
 
 凡是不再属于上述接口、或者仍然依赖旧模型字段（如 `directory_code`、`file_code`、`version`、`source_code`、`type_code`、`current_version_id`）的实现，都列入清理范围。
 
@@ -103,7 +103,7 @@
 - `src/by_qa/knowledge_base/api/routes.py`
   - `update_file`
   - `_map_update_file_validation_error`
-  - 对应路径：`/api/v1/knowledge-items/update`
+  - 对应路径：`/api/v1/knowledgeItems/update`
   - 原因：当前接口文档不包含“修改文件元数据”接口。
 
 - `src/by_qa/knowledge_base/api/routes.py`
@@ -121,7 +121,7 @@
 - `src/by_qa/knowledge_base/api/routes.py`
   - `import_knowledge_item`
   - `_map_import_validation_error`
-  - 对应路径：`/api/v1/knowledge-items/import`
+  - 对应路径：`/api/v1/knowledgeItems/import`
   - 原因：当前文档中的上传接口已经实现为 `/api/v1/knowledgeItems/import`，且请求体为 `multipart/form-data`；现有这条旧路由仍是 JSON 导入模型，后续可删除。
 
 ### 3. 无生产引用的旧根节点辅助查询
@@ -452,7 +452,7 @@
 
 在"知识检索"接口完成后，新增确认：
 
-- `knowledgeItems/search` 路由已从 `/api/v1/knowledge-items/search` 改为 `/api/v1/knowledgeItems/search`。
+- `knowledgeItems/search` 路由已从 `/api/v1/knowledgeItems/search` 改为 `/api/v1/knowledgeItems/search`。
 - 入参已改为 `query`、`knCodeList`、`topK`、`fileTypeList`、`searchMode`，不再保留 `kb_codes`、`top_k`、`vector_top_k`、`text_top_k`、`source_codes`、`type_codes` 旧字段。
 - `searchMode` 参数已接受（`fullTextRecall`、`embedding`、`mixedRecall`），但当前始终执行混合检索。
 - 返回已改为文档化信封（`resultCode` / `resultMsg` / `resultObject`），命中项字段为 `knCode`、`filePath`、`chunkNo`、`chunkId`、`chunkText`、`score`、`imagePath`、`startLine`、`endLine`。
@@ -467,8 +467,8 @@
 所有接口迁移完成后，执行了全面代码清理：
 
 ### 已删除的路由
-- `/api/v1/knowledge-items/update` — 不在当前接口文档
-- `/api/v1/knowledge-items/import`（旧 JSON 导入）— 已被 `/api/v1/knowledgeItems/import`（multipart）取代
+- `/api/v1/knowledgeItems/update` — 不在当前接口文档
+- `/api/v1/knowledgeItems/import`（旧 JSON 导入）— 已被 `/api/v1/knowledgeItems/import`（multipart）取代
 - `/api/v1/write-file` — 不在当前接口文档
 - `/api/v1/write-index` — 不在当前接口文档
 - `/api/v1/file-to-markdown`、`/api/v1/build-markdown-index`、`/api/v1/file-to-markdown-index` — knowledge_build 三个路由全部弃用，功能已由 `/api/v1/fileToMarkdownIndex` 完全取代

@@ -13,7 +13,7 @@ def test_retrieval_config_requires_service_name_and_path():
                     "kb_code": "hr-policy",
                     "kb_name": "HR",
                     "service_name": "",
-                    "path": "/api/v1/knowledge-items/search",
+                    "path": "/api/v1/knowledgeItems/search",
                 }
             ]
         )

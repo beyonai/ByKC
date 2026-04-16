@@ -57,7 +57,7 @@ async def test_stream_search_passes_runtime_context_into_langgraph():
                             "kb_name": "人力制度知识库",
                             "kb_description": "公司人事制度与流程",
                             "service_name": "kb-search-service-a",
-                            "path": "/api/v1/knowledge-items/search",
+                            "path": "/api/v1/knowledgeItems/search",
                         }
                     ]
                 }
@@ -92,7 +92,7 @@ async def test_stream_search_passes_runtime_context_into_langgraph():
             kb_name="人力制度知识库",
             kb_description="公司人事制度与流程",
             service_name="kb-search-service-a",
-            path="/api/v1/knowledge-items/search",
+            path="/api/v1/knowledgeItems/search",
         )
     ]
 

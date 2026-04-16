@@ -111,7 +111,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["knowledge-items/search"] --> B["解析 query 与过滤条件"]
+    A["knowledgeItems/search"] --> B["解析 query 与过滤条件"]
     B --> C["文本召回"]
     B --> D["向量召回"]
     C --> E["服务层融合排序"]

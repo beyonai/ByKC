@@ -21,19 +21,19 @@ def test_build_remote_search_requests_groups_kb_codes_by_service_and_path():
                     kb_code="hr-policy",
                     kb_name="HR",
                     service_name="kb-search-service-a",
-                    path="/api/v1/knowledge-items/search",
+                    path="/api/v1/knowledgeItems/search",
                 ),
                 KnowledgeBaseConfig(
                     kb_code="finance-policy",
                     kb_name="Finance",
                     service_name="kb-search-service-a",
-                    path="/api/v1/knowledge-items/search",
+                    path="/api/v1/knowledgeItems/search",
                 ),
                 KnowledgeBaseConfig(
                     kb_code="legal-policy",
                     kb_name="Legal",
                     service_name="kb-search-service-b",
-                    path="/api/v1/knowledge-items/search",
+                    path="/api/v1/knowledgeItems/search",
                 ),
             ],
             source_codes=["oa"],
@@ -48,7 +48,7 @@ def test_build_remote_search_requests_groups_kb_codes_by_service_and_path():
 
     assert requests == [
         (
-            ("kb-search-service-a", "/api/v1/knowledge-items/search"),
+            ("kb-search-service-a", "/api/v1/knowledgeItems/search"),
             {
                 "query": "员工请假制度",
                 "knCodeList": ["hr-policy", "finance-policy"],
@@ -57,7 +57,7 @@ def test_build_remote_search_requests_groups_kb_codes_by_service_and_path():
             },
         ),
         (
-            ("kb-search-service-b", "/api/v1/knowledge-items/search"),
+            ("kb-search-service-b", "/api/v1/knowledgeItems/search"),
             {
                 "query": "员工请假制度",
                 "knCodeList": ["legal-policy"],
@@ -98,7 +98,7 @@ async def test_search_knowledge_items_uses_framework_client():
                     kb_code="hr-policy",
                     kb_name="HR",
                     service_name="kb-search-service-a",
-                    path="/api/v1/knowledge-items/search",
+                    path="/api/v1/knowledgeItems/search",
                 )
             ],
             source_codes=["oa"],
@@ -137,7 +137,7 @@ async def test_search_knowledge_items_uses_framework_client():
 
     assert recorded == {
         "service_name": "kb-search-service-a",
-        "path": "/api/v1/knowledge-items/search",
+        "path": "/api/v1/knowledgeItems/search",
         "json": {
             "query": "员工请假制度",
             "knCodeList": ["hr-policy"],

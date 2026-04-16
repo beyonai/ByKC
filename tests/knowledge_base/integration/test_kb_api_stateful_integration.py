@@ -157,9 +157,9 @@ def _upload_file(
     file_content: bytes,
     content_type: str = "text/markdown",
 ) -> None:
-    """Upload a file via the multipart /api/v1/knowledge-items/import endpoint."""
+    """Upload a file via the multipart /api/v1/knowledgeItems/import endpoint."""
     response = client.post(
-        "/api/v1/knowledge-items/import",
+        "/api/v1/knowledgeItems/import",
         data={"knCode": kb_code, "filePath": file_path},
         files={"fileContent": (file_path.split("/")[-1], file_content, content_type)},
     )
@@ -175,7 +175,7 @@ def _upload_and_build_file(
     content_type: str = "text/markdown",
 ) -> None:
     """Upload a file and build its markdown index."""
-    # Step 1: Upload via multipart /api/v1/knowledge-items/import
+    # Step 1: Upload via multipart /api/v1/knowledgeItems/import
     _upload_file(
         client,
         kb_code=kb_code,
@@ -398,7 +398,7 @@ def test_success_responses_follow_documented_path_contract(monkeypatch, tmp_path
             json={"knCode": kb_code, "filePath": file_path},
         )
         search_response = client.post(
-            "/api/v1/knowledge-items/search",
+            "/api/v1/knowledgeItems/search",
             json={
                 "query": "line2",
                 "knCodeList": [kb_code],
@@ -1040,7 +1040,7 @@ def test_deleting_a_single_file_removes_it_from_follow_up_browse_and_read(
         )
 
         delete_response = client.post(
-            "/api/v1/knowledge-items/delete",
+            "/api/v1/knowledgeItems/delete",
             json={"knCode": kb_code, "filePath": "/Policies/delete.md"},
         )
         list_after = client.post(
@@ -1262,7 +1262,7 @@ def test_search_returns_hits_for_content_imported_through_upload_and_build(
         )
 
         search_response = client.post(
-            "/api/v1/knowledge-items/search",
+            "/api/v1/knowledgeItems/search",
             json={
                 "query": "vacation carryover",
                 "knCodeList": [kb_code],
@@ -1311,7 +1311,7 @@ def test_search_respects_file_type_filter(monkeypatch, tmp_path):
             content_type="text/plain",
         )
         filtered = client.post(
-            "/api/v1/knowledge-items/search",
+            "/api/v1/knowledgeItems/search",
             json={
                 "query": "annual leave handbook",
                 "knCodeList": [kb_code],
@@ -1365,7 +1365,7 @@ def test_search_path_updates_after_middle_directory_rename(monkeypatch, tmp_path
             file_content=b"rename target sentence\n",
         )
         before = client.post(
-            "/api/v1/knowledge-items/search",
+            "/api/v1/knowledgeItems/search",
             json={
                 "query": "rename target",
                 "knCodeList": [kb_code],
@@ -1382,7 +1382,7 @@ def test_search_path_updates_after_middle_directory_rename(monkeypatch, tmp_path
             },
         )
         after = client.post(
-            "/api/v1/knowledge-items/search",
+            "/api/v1/knowledgeItems/search",
             json={
                 "query": "rename target",
                 "knCodeList": [kb_code],
@@ -1432,7 +1432,7 @@ def test_search_results_disappear_after_single_file_delete(monkeypatch, tmp_path
             file_content=b"search should disappear\n",
         )
         before = client.post(
-            "/api/v1/knowledge-items/search",
+            "/api/v1/knowledgeItems/search",
             json={
                 "query": "disappear",
                 "knCodeList": [kb_code],
@@ -1441,11 +1441,11 @@ def test_search_results_disappear_after_single_file_delete(monkeypatch, tmp_path
             },
         )
         delete_response = client.post(
-            "/api/v1/knowledge-items/delete",
+            "/api/v1/knowledgeItems/delete",
             json={"knCode": kb_code, "filePath": "/Policies/delete-search.md"},
         )
         after = client.post(
-            "/api/v1/knowledge-items/search",
+            "/api/v1/knowledgeItems/search",
             json={
                 "query": "disappear",
                 "knCodeList": [kb_code],
@@ -1498,7 +1498,7 @@ def test_search_results_disappear_after_middle_directory_delete(monkeypatch, tmp
             file_content=b"subtree search disappears\n",
         )
         before = client.post(
-            "/api/v1/knowledge-items/search",
+            "/api/v1/knowledgeItems/search",
             json={
                 "query": "subtree disappears",
                 "knCodeList": [kb_code],
@@ -1511,7 +1511,7 @@ def test_search_results_disappear_after_middle_directory_delete(monkeypatch, tmp
             json={"knCode": kb_code, "directoryPath": "/Policies/Archive"},
         )
         after = client.post(
-            "/api/v1/knowledge-items/search",
+            "/api/v1/knowledgeItems/search",
             json={
                 "query": "subtree disappears",
                 "knCodeList": [kb_code],
@@ -1560,7 +1560,7 @@ def test_deleting_a_knowledge_base_removes_root_visibility_readability_and_searc
             "/api/v1/listDir", json={"knCode": kb_code, "directoryPath": "/"}
         )
         search_before = client.post(
-            "/api/v1/knowledge-items/search",
+            "/api/v1/knowledgeItems/search",
             json={
                 "query": "removal search",
                 "knCodeList": [kb_code],
@@ -1585,7 +1585,7 @@ def test_deleting_a_knowledge_base_removes_root_visibility_readability_and_searc
             },
         )
         search_after = client.post(
-            "/api/v1/knowledge-items/search",
+            "/api/v1/knowledgeItems/search",
             json={
                 "query": "removal search",
                 "knCodeList": [kb_code],
@@ -1829,7 +1829,7 @@ def test_search_supports_multi_kb_combinations(monkeypatch, tmp_path):
             content_type="text/plain",
         )
         filtered = client.post(
-            "/api/v1/knowledge-items/search",
+            "/api/v1/knowledgeItems/search",
             json={
                 "query": "annual leave matrix",
                 "knCodeList": [kb_one_code, kb_two_code],
@@ -1917,7 +1917,7 @@ def test_search_returns_configuration_error_when_runtime_service_fails(monkeypat
 
     with TestClient(main_module.app) as client:
         response = client.post(
-            "/api/v1/knowledge-items/search",
+            "/api/v1/knowledgeItems/search",
             json={
                 "query": "demo",
                 "knCodeList": ["demo"],

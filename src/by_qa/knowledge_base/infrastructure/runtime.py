@@ -67,26 +67,28 @@ def validate_knowledge_base_settings(settings: Settings) -> None:
         )
 
 
-def build_object_storage(settings: Settings) -> KnowledgeBaseObjectStorage:
-    """Build the MinIO-backed object storage service."""
+async def build_object_storage(settings: Settings) -> KnowledgeBaseObjectStorage:
+    """Build the async S3-compatible object storage service."""
     validate_knowledge_base_settings(settings)
-    from minio import Minio
+    import aioboto3
 
-    client = Minio(
-        endpoint=settings.kb_minio_endpoint,
+    scheme = "https" if settings.kb_minio_secure else "http"
+    endpoint = settings.kb_minio_endpoint.removeprefix("http://").removeprefix(
+        "https://"
+    )
+    endpoint_url = f"{scheme}://{endpoint}"
+
+    storage = KnowledgeBaseObjectStorage(
+        session=aioboto3.Session(),
+        endpoint_url=endpoint_url,
         access_key=settings.kb_minio_access_key,
         secret_key=settings.kb_minio_secret_key,
         secure=settings.kb_minio_secure,
-    )
-    if not client.bucket_exists(settings.kb_minio_bucket):
-        client.make_bucket(settings.kb_minio_bucket)
-    if not client.bucket_exists(settings.kb_minio_markdown_bucket):
-        client.make_bucket(settings.kb_minio_markdown_bucket)
-    return KnowledgeBaseObjectStorage(
-        client=client,
         bucket_name=settings.kb_minio_bucket,
         markdown_bucket_name=settings.kb_minio_markdown_bucket,
     )
+    await storage.ensure_buckets()
+    return storage
 
 
 def build_bootstrap_service(settings: Settings) -> KnowledgeBaseSchemaBootstrapService:
@@ -98,7 +100,7 @@ def build_bootstrap_service(settings: Settings) -> KnowledgeBaseSchemaBootstrapS
     )
 
 
-def build_knowledge_base_service(settings: Settings) -> KnowledgeBaseService:
+async def build_knowledge_base_service(settings: Settings) -> KnowledgeBaseService:
     """Build the knowledge base metadata service."""
     validate_knowledge_base_settings(settings)
     return KnowledgeBaseService(
@@ -107,7 +109,7 @@ def build_knowledge_base_service(settings: Settings) -> KnowledgeBaseService:
         knowledge_fs_entry_repository=KnowledgeFsEntryRepository(),
         retrieval_projection_repository=RetrievalProjectionRepository(),
         knowledge_fetch_cache_repository=KnowledgeFetchCacheRepository(),
-        object_storage=build_object_storage(settings),
+        object_storage=await build_object_storage(settings),
         cache_root=settings.kb_cache_path,
         cache_ttl_seconds=settings.kb_fetch_cache_ttl_seconds,
     )
@@ -125,7 +127,7 @@ def build_knowledge_fetch_cache_cleanup_service(
     )
 
 
-def build_knowledge_item_ingestion_service(
+async def build_knowledge_item_ingestion_service(
     settings: Settings,
 ) -> KnowledgeItemIngestionService:
     """Build the document ingestion service."""
@@ -139,7 +141,7 @@ def build_knowledge_item_ingestion_service(
             bootstrap.embedding_table_name
         ),
         retrieval_projection_repository=RetrievalProjectionRepository(),
-        object_storage=build_object_storage(settings),
+        object_storage=await build_object_storage(settings),
         embedding_dimension=settings.embedding_dimension,
     )
 

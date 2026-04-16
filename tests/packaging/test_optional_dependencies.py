@@ -24,6 +24,7 @@ def test_default_dependencies_do_not_include_capability_specific_packages():
 
     assert all(not dep.startswith("fastapi") for dep in dependencies)
     assert all(not dep.startswith("minio") for dep in dependencies)
+    assert all(not dep.startswith("aioboto3") for dep in dependencies)
     assert all(not dep.startswith("psycopg") for dep in dependencies)
     assert all(not dep.startswith("uvicorn") for dep in dependencies)
     assert all(not dep.startswith("langchain-openai") for dep in dependencies)
@@ -57,5 +58,6 @@ def test_knowledge_group_includes_document_parsing_dependencies():
     knowledge = set(project["optional-dependencies"]["knowledge"])
 
     assert any(dep.startswith("fastapi") for dep in knowledge)
+    assert any(dep.startswith("aioboto3") for dep in knowledge)
     assert any(dep.startswith("langchain-text-splitters") for dep in knowledge)
     assert any(dep.startswith("python-pptx") for dep in knowledge)

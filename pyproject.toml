@@ -36,7 +36,7 @@ by-qa = "by_qa.main:main"
 [project.optional-dependencies]
 knowledge = [
     "fastapi>=0.115.0",
-    "minio>=7.2.15",
+    "aioboto3>=13.0.0",
     "psycopg[binary]>=3.2.0",
     "python-multipart>=0.0.12",
     "uvicorn[standard]>=0.32.0",
@@ -61,7 +61,7 @@ qa = [
 ]
 all = [
     "fastapi>=0.115.0",
-    "minio>=7.2.15",
+    "aioboto3>=13.0.0",
     "psycopg[binary]>=3.2.0",
     "python-multipart>=0.0.12",
     "uvicorn[standard]>=0.32.0",

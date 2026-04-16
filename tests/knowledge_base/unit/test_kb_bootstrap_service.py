@@ -148,7 +148,7 @@ def test_split_sql_statements_handles_multiple_top_level_statements():
     ]
 
 
-def test_apply_adds_existing_extension_schemas_to_search_path(tmp_path: Path):
+async def test_apply_adds_existing_extension_schemas_to_search_path(tmp_path: Path):
     """Bootstrap should resolve extension types even when they live outside the app schema."""
 
     (tmp_path / "001_demo.sql").write_text(
@@ -167,19 +167,19 @@ def test_apply_adds_existing_extension_schemas_to_search_path(tmp_path: Path):
                 [{"nspname": "gaussdb"}, {"nspname": "public"}],
             ]
 
-        def __enter__(self):
+        async def __aenter__(self):
             return self
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
 
-        def execute(self, statement, params=None):
+        async def execute(self, statement, params=None):
             self.executed.append((statement, params))
 
-        def fetchone(self):
+        async def fetchone(self):
             return self._fetchone_results.pop(0)
 
-        def fetchall(self):
+        async def fetchall(self):
             return self._fetchall_results.pop(0)
 
     class FakeConnection:
@@ -190,7 +190,7 @@ def test_apply_adds_existing_extension_schemas_to_search_path(tmp_path: Path):
         def cursor(self):
             return self.cursor_instance
 
-        def commit(self):
+        async def commit(self):
             self.commit_called = True
 
     service = KnowledgeBaseSchemaBootstrapService(
@@ -200,7 +200,7 @@ def test_apply_adds_existing_extension_schemas_to_search_path(tmp_path: Path):
     )
     connection = FakeConnection()
 
-    service.apply(connection)
+    await service.apply(connection)
 
     set_config_call = connection.cursor_instance.executed[2]
     assert "set_config('search_path'" in set_config_call[0]
@@ -211,7 +211,7 @@ def test_apply_adds_existing_extension_schemas_to_search_path(tmp_path: Path):
     assert connection.commit_called
 
 
-def test_apply_rejects_existing_embedding_table_with_mismatched_dimension():
+async def test_apply_rejects_existing_embedding_table_with_mismatched_dimension():
     """Bootstrap should fail fast when an existing embedding table uses another vector size."""
 
     class FakeCursor:
@@ -223,17 +223,20 @@ def test_apply_rejects_existing_embedding_table_with_mismatched_dimension():
                 (1,),
             ]
 
-        def __enter__(self):
+        async def __aenter__(self):
             return self
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
 
-        def execute(self, statement, params=None):
+        async def execute(self, statement, params=None):
             self.executed.append(statement)
 
-        def fetchone(self):
+        async def fetchone(self):
             return self._results.pop(0)
+
+        async def fetchall(self):
+            return []
 
     class FakeConnection:
         def __init__(self):
@@ -243,7 +246,7 @@ def test_apply_rejects_existing_embedding_table_with_mismatched_dimension():
         def cursor(self):
             return self.cursor_instance
 
-        def commit(self):
+        async def commit(self):
             self.commit_called = True
 
     service = KnowledgeBaseSchemaBootstrapService(
@@ -253,7 +256,7 @@ def test_apply_rejects_existing_embedding_table_with_mismatched_dimension():
     connection = FakeConnection()
 
     try:
-        service.apply(connection)
+        await service.apply(connection)
     except KnowledgeBaseConfigurationError as exc:
         message = str(exc)
         assert "chunk_embedding_bge_m3" in message
@@ -265,7 +268,7 @@ def test_apply_rejects_existing_embedding_table_with_mismatched_dimension():
     assert not connection.commit_called
 
 
-def test_apply_rejects_existing_embedding_table_with_dict_rows():
+async def test_apply_rejects_existing_embedding_table_with_dict_rows():
     """Bootstrap should also handle psycopg dict_row results from the real runtime."""
 
     class FakeCursor:
@@ -276,17 +279,20 @@ def test_apply_rejects_existing_embedding_table_with_dict_rows():
                 {"count": 1},
             ]
 
-        def __enter__(self):
+        async def __aenter__(self):
             return self
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def execute(self, statement, params=None):
+        async def __aexit__(self, exc_type, exc, tb):
             return None
 
-        def fetchone(self):
+        async def execute(self, statement, params=None):
+            return None
+
+        async def fetchone(self):
             return self._results.pop(0)
+
+        async def fetchall(self):
+            return []
 
     class FakeConnection:
         def __init__(self):
@@ -295,7 +301,7 @@ def test_apply_rejects_existing_embedding_table_with_dict_rows():
         def cursor(self):
             return self.cursor_instance
 
-        def commit(self):
+        async def commit(self):
             raise AssertionError("commit should not be called")
 
     service = KnowledgeBaseSchemaBootstrapService(
@@ -304,7 +310,7 @@ def test_apply_rejects_existing_embedding_table_with_dict_rows():
     )
 
     try:
-        service.apply(FakeConnection())
+        await service.apply(FakeConnection())
     except KnowledgeBaseConfigurationError as exc:
         assert "vector(3)" in str(exc)
     else:

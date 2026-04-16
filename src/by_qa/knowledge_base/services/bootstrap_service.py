@@ -164,14 +164,14 @@ class KnowledgeBaseSchemaBootstrapService:
                 statements.extend(split_sql_statements(self._render_template(content)))
         return statements
 
-    def apply(self, connection) -> None:
-        """Apply knowledge base schema DDL using an open connection."""
-        with connection.cursor() as cursor:
-            self._prepare_extension_search_path(cursor)
-            self._validate_embedding_table(cursor)
+    async def apply(self, connection) -> None:
+        """Apply knowledge base schema DDL using an open async connection."""
+        async with connection.cursor() as cursor:
+            await self._prepare_extension_search_path(cursor)
+            await self._validate_embedding_table(cursor)
             for statement in self.build_schema_statements():
-                cursor.execute(statement)
-        connection.commit()
+                await cursor.execute(statement)
+        await connection.commit()
 
     def _render_template(self, template: str) -> str:
         """Render the small SQL template surface used by dynamic vector tables."""
@@ -184,9 +184,9 @@ class KnowledgeBaseSchemaBootstrapService:
         )
         return rendered
 
-    def _validate_embedding_table(self, cursor) -> None:
+    async def _validate_embedding_table(self, cursor) -> None:
         """Fail fast when an existing embedding table uses another vector dimension."""
-        cursor.execute(
+        await cursor.execute(
             """
             SELECT format_type(a.atttypid, a.atttypmod)
             FROM pg_attribute a
@@ -200,7 +200,7 @@ class KnowledgeBaseSchemaBootstrapService:
             """,
             {"table_name": self.embedding_table_name},
         )
-        row = cursor.fetchone()
+        row = await cursor.fetchone()
         if row is None:
             return
 
@@ -209,10 +209,10 @@ class KnowledgeBaseSchemaBootstrapService:
         if existing_type == expected_type:
             return
 
-        cursor.execute(
+        await cursor.execute(
             f"SELECT count(*) FROM {self.embedding_table_name}",
         )
-        row_count = self._get_scalar_value(cursor.fetchone(), "count")
+        row_count = self._get_scalar_value(await cursor.fetchone(), "count")
         raise KnowledgeBaseConfigurationError(
             f"Embedding table {self.embedding_table_name} uses {existing_type}, "
             f"but EMBEDDING_DIMENSION={self.embedding_dimension} requires {expected_type}. "
@@ -220,12 +220,14 @@ class KnowledgeBaseSchemaBootstrapService:
             "before starting the service."
         )
 
-    def _prepare_extension_search_path(self, cursor) -> None:
+    async def _prepare_extension_search_path(self, cursor) -> None:
         """Include existing extension schemas in this connection's search path."""
-        cursor.execute("SELECT current_schema() AS current_schema")
-        current_schema = self._get_scalar_value(cursor.fetchone(), "current_schema")
+        await cursor.execute("SELECT current_schema() AS current_schema")
+        current_schema = self._get_scalar_value(
+            await cursor.fetchone(), "current_schema"
+        )
 
-        cursor.execute(
+        await cursor.execute(
             """
             SELECT n.nspname
             FROM pg_extension e
@@ -235,7 +237,7 @@ class KnowledgeBaseSchemaBootstrapService:
             """
         )
         extension_schemas = [
-            self._get_scalar_value(row, "nspname") for row in self._fetchall(cursor)
+            self._get_scalar_value(row, "nspname") for row in await cursor.fetchall()
         ]
 
         schemas = self._dedupe_schema_names(
@@ -248,7 +250,7 @@ class KnowledgeBaseSchemaBootstrapService:
         if not schemas:
             return
 
-        cursor.execute(
+        await cursor.execute(
             "SELECT set_config('search_path', %(search_path)s, false)",
             {
                 "search_path": ",".join(
@@ -287,10 +289,3 @@ class KnowledgeBaseSchemaBootstrapService:
         if isinstance(row, dict):
             return row[key]
         return row[0]
-
-    @staticmethod
-    def _fetchall(cursor) -> list:
-        fetchall = getattr(cursor, "fetchall", None)
-        if not callable(fetchall):
-            return []
-        return list(fetchall())

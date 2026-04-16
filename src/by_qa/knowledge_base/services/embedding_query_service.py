@@ -20,7 +20,7 @@ class EmbeddingQueryService:
         self.model_name = model_name
         self.timeout = timeout
 
-    def embed_query(self, query: str) -> list[float]:
+    async def embed_query(self, query: str) -> list[float]:
         """Embed a search query using an OpenAI-compatible embedding API."""
         if not self.base_url:
             raise KnowledgeBaseConfigurationError(
@@ -32,13 +32,13 @@ class EmbeddingQueryService:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
         try:
-            response = httpx.post(
-                f"{self.base_url}/embeddings",
-                headers=headers,
-                json={"model": self.model_name, "input": query},
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.base_url}/embeddings",
+                    headers=headers,
+                    json={"model": self.model_name, "input": query},
+                )
+                response.raise_for_status()
         except httpx.HTTPError as exc:
             raise KnowledgeBaseConfigurationError(
                 f"embedding service request failed: {exc}"

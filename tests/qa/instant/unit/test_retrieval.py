@@ -146,3 +146,46 @@ async def test_search_knowledge_items_uses_framework_client():
         },
     }
     assert results[0]["content"] == "第二条 异常考勤需提交说明。"
+
+
+@pytest.mark.asyncio
+async def test_search_knowledge_items_returns_remote_search_errors():
+    runtime_context = InstantSearchRuntimeContext(
+        retrieval=InstantQARetrievalConfig(
+            knowledge_bases=[
+                KnowledgeBaseConfig(
+                    kb_code="hr-policy",
+                    kb_name="HR",
+                    service_name="kb-search-service-a",
+                    path="/api/v1/knowledgeItems/search",
+                )
+            ]
+        )
+    )
+
+    async def fake_post(*, service_name, path, json):
+        del service_name
+        del path
+        del json
+        raise RuntimeError("search service unavailable")
+
+    with patch(
+        "by_qa.qa.instant.runtime.retrieval.post_discovered_json",
+        side_effect=fake_post,
+    ):
+        results = await search_knowledge_items("员工请假制度", runtime_context)
+
+    assert results == [
+        {
+            "content": "knowledge base search failed(service_name=kb-search-service-a, path=/api/v1/knowledgeItems/search): search service unavailable",
+            "source": "kb-search-service-a/api/v1/knowledgeItems/search",
+            "source_type": "knowledge_base",
+            "score": 0.0,
+            "is_error": True,
+            "error": "search service unavailable",
+            "error_type": "RuntimeError",
+            "service_name": "kb-search-service-a",
+            "path": "/api/v1/knowledgeItems/search",
+            "kb_codes": ["hr-policy"],
+        }
+    ]

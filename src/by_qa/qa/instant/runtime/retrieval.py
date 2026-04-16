@@ -27,6 +27,28 @@ def _format_search_hit(item: dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _format_search_error(
+    *,
+    service_name: str,
+    path: str,
+    kb_codes: list[str],
+    exc: Exception,
+) -> Dict[str, Any]:
+    """Return retrieval-shaped metadata for a failed remote KB search."""
+    return {
+        "content": f"knowledge base search failed(service_name={service_name}, path={path}): {exc}",
+        "source": f"{service_name}{path}",
+        "source_type": "knowledge_base",
+        "score": 0.0,
+        "is_error": True,
+        "error": str(exc),
+        "error_type": type(exc).__name__,
+        "service_name": service_name,
+        "path": path,
+        "kb_codes": kb_codes,
+    }
+
+
 def _get_kb_field(knowledge_base: KnowledgeBaseConfig, field_name: str) -> Any:
     """Access knowledge-base config fields from the typed config object."""
     return getattr(knowledge_base, field_name)
@@ -122,6 +144,14 @@ async def search_knowledge_items(
                 path,
                 request_payload["knCodeList"],
                 items,
+            )
+            aggregated_results.append(
+                _format_search_error(
+                    service_name=service_name,
+                    path=path,
+                    kb_codes=request_payload["knCodeList"],
+                    exc=items,
+                )
             )
             continue
         aggregated_results.extend(_format_search_hit(item) for item in items)

@@ -474,13 +474,15 @@ async def async_main() -> None:
             "Install by-qa[knowledge] or by-qa[all]."
         ) from exc
 
-    uvicorn.run(
+    config = uvicorn.Config(
         "by_qa.main:create_app",
         host=settings.host,
         port=settings.port,
-        reload=True,
+        reload=False,
         factory=True,
     )
+    server = uvicorn.Server(config)
+    await server.serve()
 
 
 def main() -> None:

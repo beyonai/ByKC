@@ -24,24 +24,37 @@ def test_main_runs_async_entrypoint(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_async_main_runs_uvicorn(monkeypatch):
-    """The async entrypoint should preserve the existing uvicorn invocation."""
+    """The async entrypoint should use uvicorn.Server.serve."""
     recorded = {}
 
+    class FakeServer:
+        def __init__(self, config):
+            recorded["config"] = config
+
+        async def serve(self):
+            recorded["served"] = True
+
     fake_uvicorn = SimpleNamespace(
-        run=lambda *args, **kwargs: recorded.update(args=args, kwargs=kwargs)
+        Config=lambda *args, **kwargs: SimpleNamespace(
+            app=args[0] if args else kwargs.get("app"),
+            host=kwargs.get("host"),
+            port=kwargs.get("port"),
+            reload=kwargs.get("reload"),
+            factory=kwargs.get("factory"),
+        ),
+        Server=FakeServer,
     )
 
     monkeypatch.setitem(__import__("sys").modules, "uvicorn", fake_uvicorn)
 
     await main_module.async_main()
 
-    assert recorded["args"] == ("by_qa.main:create_app",)
-    assert recorded["kwargs"] == {
-        "host": main_module.settings.host,
-        "port": main_module.settings.port,
-        "reload": True,
-        "factory": True,
-    }
+    assert recorded["served"] is True
+    cfg = recorded["config"]
+    assert cfg.host == main_module.settings.host
+    assert cfg.port == main_module.settings.port
+    assert cfg.reload is False
+    assert cfg.factory is True
 
 
 @pytest.mark.asyncio

@@ -167,6 +167,7 @@ class KnowledgeBaseSchemaBootstrapService:
     def apply(self, connection) -> None:
         """Apply knowledge base schema DDL using an open connection."""
         with connection.cursor() as cursor:
+            self._prepare_extension_search_path(cursor)
             self._validate_embedding_table(cursor)
             for statement in self.build_schema_statements():
                 cursor.execute(statement)
@@ -219,6 +220,65 @@ class KnowledgeBaseSchemaBootstrapService:
             "before starting the service."
         )
 
+    def _prepare_extension_search_path(self, cursor) -> None:
+        """Include existing extension schemas in this connection's search path."""
+        cursor.execute("SELECT current_schema() AS current_schema")
+        current_schema = self._get_scalar_value(cursor.fetchone(), "current_schema")
+
+        cursor.execute(
+            """
+            SELECT n.nspname
+            FROM pg_extension e
+            JOIN pg_namespace n ON n.oid = e.extnamespace
+            WHERE e.extname IN ('ltree', 'pg_trgm')
+            ORDER BY e.extname
+            """
+        )
+        extension_schemas = [
+            self._get_scalar_value(row, "nspname") for row in self._fetchall(cursor)
+        ]
+
+        schemas = self._dedupe_schema_names(
+            [
+                current_schema,
+                *extension_schemas,
+                "public",
+            ]
+        )
+        if not schemas:
+            return
+
+        cursor.execute(
+            "SELECT set_config('search_path', %(search_path)s, false)",
+            {
+                "search_path": ",".join(
+                    self._format_search_path_schema(s) for s in schemas
+                )
+            },
+        )
+
+    @staticmethod
+    def _dedupe_schema_names(schemas: list[str | None]) -> list[str]:
+        """Return schema names without blanks or duplicates, preserving order."""
+        seen: set[str] = set()
+        result: list[str] = []
+        for schema in schemas:
+            if not schema:
+                continue
+            normalized = schema.strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            result.append(normalized)
+        return result
+
+    @staticmethod
+    def _format_search_path_schema(schema: str) -> str:
+        """Quote schema names only when they are not safe unquoted identifiers."""
+        if re.fullmatch(r"[a-z_][a-z0-9_]*", schema):
+            return schema
+        return '"' + schema.replace('"', '""') + '"'
+
     @staticmethod
     def _get_scalar_value(row, key: str):
         """Read a single-column result from either tuple-like or mapping-like rows."""
@@ -227,3 +287,10 @@ class KnowledgeBaseSchemaBootstrapService:
         if isinstance(row, dict):
             return row[key]
         return row[0]
+
+    @staticmethod
+    def _fetchall(cursor) -> list:
+        fetchall = getattr(cursor, "fetchall", None)
+        if not callable(fetchall):
+            return []
+        return list(fetchall())

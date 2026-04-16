@@ -148,6 +148,69 @@ def test_split_sql_statements_handles_multiple_top_level_statements():
     ]
 
 
+def test_apply_adds_existing_extension_schemas_to_search_path(tmp_path: Path):
+    """Bootstrap should resolve extension types even when they live outside the app schema."""
+
+    (tmp_path / "001_demo.sql").write_text(
+        "CREATE TABLE demo (path ltree);",
+        encoding="utf-8",
+    )
+
+    class FakeCursor:
+        def __init__(self):
+            self.executed: list[tuple[str, dict | None]] = []
+            self._fetchone_results = [
+                {"current_schema": "byai"},
+                None,
+            ]
+            self._fetchall_results = [
+                [{"nspname": "gaussdb"}, {"nspname": "public"}],
+            ]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, statement, params=None):
+            self.executed.append((statement, params))
+
+        def fetchone(self):
+            return self._fetchone_results.pop(0)
+
+        def fetchall(self):
+            return self._fetchall_results.pop(0)
+
+    class FakeConnection:
+        def __init__(self):
+            self.cursor_instance = FakeCursor()
+            self.commit_called = False
+
+        def cursor(self):
+            return self.cursor_instance
+
+        def commit(self):
+            self.commit_called = True
+
+    service = KnowledgeBaseSchemaBootstrapService(
+        embedding_model_name="bge-m3",
+        embedding_dimension=1024,
+        sql_directory=tmp_path,
+    )
+    connection = FakeConnection()
+
+    service.apply(connection)
+
+    set_config_call = connection.cursor_instance.executed[2]
+    assert "set_config('search_path'" in set_config_call[0]
+    assert set_config_call[1] == {"search_path": "byai,gaussdb,public"}
+    assert (
+        connection.cursor_instance.executed[-1][0] == "CREATE TABLE demo (path ltree);"
+    )
+    assert connection.commit_called
+
+
 def test_apply_rejects_existing_embedding_table_with_mismatched_dimension():
     """Bootstrap should fail fast when an existing embedding table uses another vector size."""
 
@@ -155,6 +218,7 @@ def test_apply_rejects_existing_embedding_table_with_mismatched_dimension():
         def __init__(self):
             self.executed: list[str] = []
             self._results = [
+                ("byai",),
                 ("vector(3)",),
                 (1,),
             ]
@@ -207,6 +271,7 @@ def test_apply_rejects_existing_embedding_table_with_dict_rows():
     class FakeCursor:
         def __init__(self):
             self._results = [
+                {"current_schema": "byai"},
                 {"format_type": "vector(3)"},
                 {"count": 1},
             ]

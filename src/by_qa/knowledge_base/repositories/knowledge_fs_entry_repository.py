@@ -9,7 +9,7 @@ from typing import Any
 class KnowledgeFsEntryRepository:
     """Repository for filesystem entries backing knowledge items."""
 
-    def create_directory_entry(
+    async def create_directory_entry(
         self,
         cursor: Any,
         *,
@@ -27,7 +27,7 @@ class KnowledgeFsEntryRepository:
         path_segments = normalized_path.split("/")
 
         for index, segment in enumerate(path_segments[:-1], start=1):
-            existing = self._get_child_entry(
+            existing = await self._get_child_entry(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
                 parent_entry_id=current_parent_id,
@@ -43,7 +43,7 @@ class KnowledgeFsEntryRepository:
                 current_path_ltree = self._row_value(existing, "path_ltree")
                 continue
 
-            parent_directory = self._insert_directory_entry(
+            parent_directory = await self._insert_directory_entry(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
                 parent_entry_id=current_parent_id,
@@ -55,7 +55,7 @@ class KnowledgeFsEntryRepository:
             current_parent_id = self._row_id(parent_directory)
             current_path_ltree = self._row_value(parent_directory, "path_ltree")
 
-        existing_directory = self._get_child_entry(
+        existing_directory = await self._get_child_entry(
             cursor,
             knowledge_base_id=knowledge_base_id,
             parent_entry_id=current_parent_id,
@@ -64,7 +64,7 @@ class KnowledgeFsEntryRepository:
         if existing_directory is not None:
             raise ValueError(f"directory path already exists: {normalized_path}")
 
-        return self._insert_directory_entry(
+        return await self._insert_directory_entry(
             cursor,
             knowledge_base_id=knowledge_base_id,
             parent_entry_id=current_parent_id,
@@ -74,7 +74,7 @@ class KnowledgeFsEntryRepository:
             description=directory_description,
         )
 
-    def create_file_entry(
+    async def create_file_entry(
         self,
         cursor: Any,
         *,
@@ -92,7 +92,7 @@ class KnowledgeFsEntryRepository:
         path_segments = normalized_path.split("/")
 
         for index, segment in enumerate(path_segments[:-1], start=1):
-            existing = self._get_child_entry(
+            existing = await self._get_child_entry(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
                 parent_entry_id=current_parent_id,
@@ -108,7 +108,7 @@ class KnowledgeFsEntryRepository:
                 current_path_ltree = self._row_value(existing, "path_ltree")
                 continue
 
-            parent_directory = self._insert_directory_entry(
+            parent_directory = await self._insert_directory_entry(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
                 parent_entry_id=current_parent_id,
@@ -120,7 +120,7 @@ class KnowledgeFsEntryRepository:
             current_parent_id = self._row_id(parent_directory)
             current_path_ltree = self._row_value(parent_directory, "path_ltree")
 
-        existing_file = self._get_child_entry(
+        existing_file = await self._get_child_entry(
             cursor,
             knowledge_base_id=knowledge_base_id,
             parent_entry_id=current_parent_id,
@@ -129,12 +129,11 @@ class KnowledgeFsEntryRepository:
         if existing_file is not None:
             raise ValueError(f"file path already exists: /{normalized_path}")
 
-        fetchone = getattr(cursor, "fetchone", None)
         label = self._path_label("f", len(path_segments), path_segments[-1])
         path_ltree = (
             f"{current_path_ltree}.{label}" if current_path_ltree is not None else label
         )
-        cursor.execute(
+        await cursor.execute(
             """
             INSERT INTO knowledge_fs_entry (
                 knowledge_base_id,
@@ -187,9 +186,9 @@ class KnowledgeFsEntryRepository:
                 "description": file_description,
             },
         )
-        return fetchone() if callable(fetchone) else None
+        return await cursor.fetchone()
 
-    def update_file_entry_storage(
+    async def update_file_entry_storage(
         self,
         cursor: Any,
         *,
@@ -202,7 +201,7 @@ class KnowledgeFsEntryRepository:
         checksum: str,
     ) -> None:
         """Persist uploaded file object metadata on one file entry."""
-        cursor.execute(
+        await cursor.execute(
             """
             UPDATE knowledge_fs_entry
             SET description = %(description)s,
@@ -227,7 +226,7 @@ class KnowledgeFsEntryRepository:
             },
         )
 
-    def _insert_directory_entry(
+    async def _insert_directory_entry(
         self,
         cursor: Any,
         *,
@@ -239,12 +238,11 @@ class KnowledgeFsEntryRepository:
         description: str | None,
     ) -> dict[str, Any] | None:
         """Insert one directory node under an existing parent."""
-        fetchone = getattr(cursor, "fetchone", None)
         label = self._path_label("d", depth, name)
         path_ltree = (
             f"{parent_path_ltree}.{label}" if parent_path_ltree is not None else label
         )
-        cursor.execute(
+        await cursor.execute(
             """
             INSERT INTO knowledge_fs_entry (
                 knowledge_base_id,
@@ -281,9 +279,9 @@ class KnowledgeFsEntryRepository:
                 "description": description,
             },
         )
-        return fetchone() if callable(fetchone) else None
+        return await cursor.fetchone()
 
-    def get_directory_by_path(
+    async def get_directory_by_path(
         self, cursor: Any, *, knowledge_base_id: int, full_path: str
     ) -> dict[str, Any] | None:
         """Look up one directory entry by its knowledge-base-relative path."""
@@ -295,7 +293,7 @@ class KnowledgeFsEntryRepository:
         current_parent_id: int | None = None
         current: dict[str, Any] | None = None
         for segment in path_segments:
-            current = self._get_child_entry(
+            current = await self._get_child_entry(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
                 parent_entry_id=current_parent_id,
@@ -306,7 +304,7 @@ class KnowledgeFsEntryRepository:
             current_parent_id = self._row_id(current)
         return current if current.get("entry_type") == "DIRECTORY" else None
 
-    def get_file_by_path(
+    async def get_file_by_path(
         self, cursor: Any, *, knowledge_base_id: int, full_path: str
     ) -> dict[str, Any] | None:
         """Look up one file entry by its knowledge-base-relative path."""
@@ -318,7 +316,7 @@ class KnowledgeFsEntryRepository:
         current_parent_id: int | None = None
         current: dict[str, Any] | None = None
         for segment in path_segments:
-            current = self._get_child_entry(
+            current = await self._get_child_entry(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
                 parent_entry_id=current_parent_id,
@@ -329,9 +327,9 @@ class KnowledgeFsEntryRepository:
             current_parent_id = self._row_id(current)
         if current is None or current.get("entry_type") != "FILE":
             return None
-        return self._get_entry_by_id(cursor, entry_id=self._row_id(current))
+        return await self._get_entry_by_id(cursor, entry_id=self._row_id(current))
 
-    def list_children_by_parent_entry_id(
+    async def list_children_by_parent_entry_id(
         self,
         cursor: Any,
         *,
@@ -340,7 +338,7 @@ class KnowledgeFsEntryRepository:
     ) -> list[dict[str, Any]]:
         """List direct children under one knowledge-base-relative directory."""
         if parent_entry_id is None:
-            cursor.execute(
+            await cursor.execute(
                 """
                 SELECT
                     fs.kid,
@@ -366,7 +364,7 @@ class KnowledgeFsEntryRepository:
                 {"knowledge_base_id": knowledge_base_id},
             )
         else:
-            cursor.execute(
+            await cursor.execute(
                 """
                 SELECT
                     fs.kid,
@@ -394,10 +392,12 @@ class KnowledgeFsEntryRepository:
                     "parent_entry_id": parent_entry_id,
                 },
             )
-        return self._fetchall(cursor)
+        return await self._fetchall(cursor)
 
-    def _get_entry_by_id(self, cursor: Any, *, entry_id: int) -> dict[str, Any] | None:
-        cursor.execute(
+    async def _get_entry_by_id(
+        self, cursor: Any, *, entry_id: int
+    ) -> dict[str, Any] | None:
+        await cursor.execute(
             """
             SELECT
                 kid,
@@ -422,10 +422,9 @@ class KnowledgeFsEntryRepository:
             """,
             {"entry_id": entry_id},
         )
-        fetchone = getattr(cursor, "fetchone", None)
-        return fetchone() if callable(fetchone) else None
+        return await cursor.fetchone()
 
-    def _get_child_entry(
+    async def _get_child_entry(
         self,
         cursor: Any,
         *,
@@ -434,7 +433,7 @@ class KnowledgeFsEntryRepository:
         name: str,
     ) -> dict[str, Any] | None:
         if parent_entry_id is None:
-            cursor.execute(
+            await cursor.execute(
                 """
                 SELECT
                     kid,
@@ -465,7 +464,7 @@ class KnowledgeFsEntryRepository:
                 },
             )
         else:
-            cursor.execute(
+            await cursor.execute(
                 """
                 SELECT
                     kid,
@@ -496,14 +495,13 @@ class KnowledgeFsEntryRepository:
                     "name": name,
                 },
             )
-        fetchone = getattr(cursor, "fetchone", None)
-        return fetchone() if callable(fetchone) else None
+        return await cursor.fetchone()
 
-    def soft_delete_by_knowledge_base_id(
+    async def soft_delete_by_knowledge_base_id(
         self, cursor: Any, *, knowledge_base_id: int
     ) -> None:
         """Logically delete all filesystem entries under one knowledge base."""
-        cursor.execute(
+        await cursor.execute(
             """
             UPDATE knowledge_fs_entry
             SET is_deleted = TRUE,
@@ -513,11 +511,11 @@ class KnowledgeFsEntryRepository:
             {"knowledge_base_id": knowledge_base_id},
         )
 
-    def soft_delete_file_entry(
+    async def soft_delete_file_entry(
         self, cursor: Any, *, knowledge_base_id: int, fs_entry_id: int
     ) -> None:
         """Logically delete one file entry by id."""
-        cursor.execute(
+        await cursor.execute(
             """
             UPDATE knowledge_fs_entry
             SET is_deleted = TRUE,
@@ -528,11 +526,11 @@ class KnowledgeFsEntryRepository:
             {"knowledge_base_id": knowledge_base_id, "fs_entry_id": fs_entry_id},
         )
 
-    def list_subtree_entry_ids(
+    async def list_subtree_entry_ids(
         self, cursor: Any, *, knowledge_base_id: int, root_fs_entry_id: int
     ) -> list[int]:
         """List filesystem entry ids within one directory subtree, including the root."""
-        cursor.execute(
+        await cursor.execute(
             """
             SELECT fs.kid
             FROM knowledge_fs_entry fs
@@ -548,13 +546,13 @@ class KnowledgeFsEntryRepository:
                 "root_fs_entry_id": root_fs_entry_id,
             },
         )
-        return [int(row["kid"]) for row in self._fetchall(cursor)]
+        return [int(row["kid"]) for row in await self._fetchall(cursor)]
 
-    def soft_delete_subtree(
+    async def soft_delete_subtree(
         self, cursor: Any, *, knowledge_base_id: int, root_fs_entry_id: int
     ) -> None:
         """Logically delete one directory subtree, including the root entry."""
-        cursor.execute(
+        await cursor.execute(
             """
             UPDATE knowledge_fs_entry fs
             SET is_deleted = TRUE,
@@ -572,11 +570,13 @@ class KnowledgeFsEntryRepository:
             },
         )
 
-    def get_entry_by_id(self, cursor: Any, *, entry_id: int) -> dict[str, Any] | None:
+    async def get_entry_by_id(
+        self, cursor: Any, *, entry_id: int
+    ) -> dict[str, Any] | None:
         """Fetch one filesystem entry by id."""
-        return self._get_entry_by_id(cursor, entry_id=entry_id)
+        return await self._get_entry_by_id(cursor, entry_id=entry_id)
 
-    def get_child_entry(
+    async def get_child_entry(
         self,
         cursor: Any,
         *,
@@ -585,16 +585,18 @@ class KnowledgeFsEntryRepository:
         name: str,
     ) -> dict[str, Any] | None:
         """Fetch one direct child entry by parent and name."""
-        return self._get_child_entry(
+        return await self._get_child_entry(
             cursor,
             knowledge_base_id=knowledge_base_id,
             parent_entry_id=parent_entry_id,
             name=name,
         )
 
-    def get_virtual_path_by_entry_id(self, cursor: Any, *, entry_id: int) -> str | None:
+    async def get_virtual_path_by_entry_id(
+        self, cursor: Any, *, entry_id: int
+    ) -> str | None:
         """Build the virtual path for one filesystem entry, excluding the KB root name."""
-        cursor.execute(
+        await cursor.execute(
             """
             WITH RECURSIVE item_path AS (
                 SELECT kid, parent_entry_id, name, depth, is_root
@@ -613,8 +615,7 @@ class KnowledgeFsEntryRepository:
             """,
             {"entry_id": entry_id},
         )
-        fetchone = getattr(cursor, "fetchone", None)
-        row = fetchone() if callable(fetchone) else None
+        row = await cursor.fetchone()
         if row is None:
             return None
         if isinstance(row, dict):
@@ -625,9 +626,9 @@ class KnowledgeFsEntryRepository:
             )
         return str(row[0]) if row else None
 
-    def rename_entry(self, cursor: Any, *, entry_id: int, new_name: str) -> None:
+    async def rename_entry(self, cursor: Any, *, entry_id: int, new_name: str) -> None:
         """Rename one filesystem entry and rebuild its subtree path prefix."""
-        cursor.execute(
+        await cursor.execute(
             """
             SELECT kid, parent_entry_id, path_ltree, depth
             FROM knowledge_fs_entry
@@ -636,8 +637,7 @@ class KnowledgeFsEntryRepository:
             """,
             {"entry_id": entry_id},
         )
-        fetchone = getattr(cursor, "fetchone", None)
-        target = fetchone() if callable(fetchone) else None
+        target = await cursor.fetchone()
         if target is None:
             return
 
@@ -648,7 +648,7 @@ class KnowledgeFsEntryRepository:
         new_path_ltree = (
             f"{current_parent_path}.{new_label}" if current_parent_path else new_label
         )
-        cursor.execute(
+        await cursor.execute(
             """
             UPDATE knowledge_fs_entry fs
             SET name = CASE
@@ -677,13 +677,10 @@ class KnowledgeFsEntryRepository:
             },
         )
 
-    def _fetchall(self, cursor: Any) -> list[dict[str, Any]]:
-        fetchall = getattr(cursor, "fetchall", None)
-        if callable(fetchall):
-            return list(fetchall())
-        return []
+    async def _fetchall(self, cursor: Any) -> list[dict[str, Any]]:
+        return list(await cursor.fetchall())
 
-    def update_markdown_metadata(
+    async def update_markdown_metadata(
         self,
         cursor: Any,
         *,
@@ -693,7 +690,7 @@ class KnowledgeFsEntryRepository:
         line_count: int,
     ) -> None:
         """Update the markdown sidecar metadata on a file entry."""
-        cursor.execute(
+        await cursor.execute(
             """
             UPDATE knowledge_fs_entry
             SET markdown_bucket_name = %(markdown_bucket_name)s,

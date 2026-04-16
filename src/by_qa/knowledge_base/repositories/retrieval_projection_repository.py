@@ -6,11 +6,11 @@ from typing import Any
 class RetrievalProjectionRepository:
     """Repository for the current-version retrieval projection."""
 
-    def delete_for_fs_entry_ids(
+    async def delete_for_fs_entry_ids(
         self, cursor: Any, *, knowledge_base_id: int, fs_entry_ids: list[int]
     ) -> None:
         """Delete retrieval projection rows for one filesystem subtree."""
-        cursor.execute(
+        await cursor.execute(
             """
             DELETE FROM knowledge_item_chunk_retrieval_mv
             WHERE knowledge_base_id = %(knowledge_base_id)s
@@ -22,7 +22,7 @@ class RetrievalProjectionRepository:
             },
         )
 
-    def refresh_for_fs_entry(
+    async def refresh_for_fs_entry(
         self,
         cursor: Any,
         *,
@@ -31,7 +31,7 @@ class RetrievalProjectionRepository:
         full_path: str,
     ) -> None:
         """Rebuild retrieval projection rows for one file entry."""
-        cursor.execute(
+        await cursor.execute(
             """
             DELETE FROM knowledge_chunk_retrieval_mv
             WHERE knowledge_base_id = %(knowledge_base_id)s
@@ -42,7 +42,7 @@ class RetrievalProjectionRepository:
                 "fs_entry_id": fs_entry_id,
             },
         )
-        cursor.execute(
+        await cursor.execute(
             """
             INSERT INTO knowledge_chunk_retrieval_mv (
                 chunk_id,

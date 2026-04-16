@@ -25,26 +25,26 @@ class FakeCursor:
         self._fetchone_results = list(fetchone_results or [])
         self._fetchall_results = list(fetchall_results or [])
 
-    def execute(self, sql, params=None):
+    async def execute(self, sql, params=None):
         self.executed.append((sql, params))
 
-    def fetchone(self):
+    async def fetchone(self):
         if self._fetchone_results:
             return self._fetchone_results.pop(0)
         return None
 
-    def fetchall(self):
+    async def fetchall(self):
         if self._fetchall_results:
             return self._fetchall_results.pop(0)
         return []
 
 
-def test_create_knowledge_base_executes_insert_sql():
+async def test_create_knowledge_base_executes_insert_sql():
     """Knowledge base creation should emit a plain insert statement."""
     repo = KnowledgeBaseRepository()
     cursor = FakeCursor(fetchone_results=[{"kid": 7}])
 
-    repo.create_knowledge_base(
+    await repo.create_knowledge_base(
         cursor,
         kb_name="人力制度知识库",
         kb_description=None,
@@ -56,12 +56,12 @@ def test_create_knowledge_base_executes_insert_sql():
     assert "returning kid" in cursor.executed[0][0].lower()
 
 
-def test_get_knowledge_base_by_name_queries_active_row():
+async def test_get_knowledge_base_by_name_queries_active_row():
     """Knowledge base name lookup should only target active rows."""
     repo = KnowledgeBaseRepository()
     cursor = FakeCursor(fetchone_results=[{"kid": 7, "kb_name": "人力制度知识库"}])
 
-    repo.get_by_name(cursor, "人力制度知识库")
+    await repo.get_by_name(cursor, "人力制度知识库")
 
     sql, params = cursor.executed[0]
     lowered = sql.lower()
@@ -71,12 +71,12 @@ def test_get_knowledge_base_by_name_queries_active_row():
     assert params == {"kb_name": "人力制度知识库"}
 
 
-def test_soft_delete_knowledge_base_updates_is_deleted_flag():
+async def test_soft_delete_knowledge_base_updates_is_deleted_flag():
     """Knowledge base deletion should update the logical-delete flag instead of removing rows."""
     repo = KnowledgeBaseRepository()
     cursor = FakeCursor()
 
-    repo.soft_delete_by_code(cursor, kb_code="hr-policy")
+    await repo.soft_delete_by_code(cursor, kb_code="hr-policy")
 
     sql, params = cursor.executed[0]
     lowered = sql.lower()
@@ -85,12 +85,12 @@ def test_soft_delete_knowledge_base_updates_is_deleted_flag():
     assert params == {"kb_code": "hr-policy"}
 
 
-def test_update_knowledge_base_executes_update_sql():
+async def test_update_knowledge_base_executes_update_sql():
     """Knowledge base updates should emit a plain update statement."""
     repo = KnowledgeBaseRepository()
     cursor = FakeCursor()
 
-    repo.update_knowledge_base(
+    await repo.update_knowledge_base(
         cursor,
         kb_code="hr-policy",
         updates={
@@ -109,12 +109,12 @@ def test_update_knowledge_base_executes_update_sql():
     assert params["kb_name"] == "新知识库名称"
 
 
-def test_update_knowledge_base_only_updates_provided_fields():
+async def test_update_knowledge_base_only_updates_provided_fields():
     """Partial KB updates should not emit assignments for omitted fields."""
     repo = KnowledgeBaseRepository()
     cursor = FakeCursor()
 
-    repo.update_knowledge_base(
+    await repo.update_knowledge_base(
         cursor,
         kb_code="hr-policy",
         updates={"kb_name": "新知识库名称"},
@@ -127,7 +127,7 @@ def test_update_knowledge_base_only_updates_provided_fields():
     assert params == {"kb_code": "hr-policy", "kb_name": "新知识库名称"}
 
 
-def test_create_directory_entry_executes_insert_sql():
+async def test_create_directory_entry_executes_insert_sql():
     """Directory creation should emit a directory insert statement."""
     repo = KnowledgeFsEntryRepository()
     cursor = FakeCursor(
@@ -156,7 +156,7 @@ def test_create_directory_entry_executes_insert_sql():
         ]
     )
 
-    repo.create_directory_entry(
+    await repo.create_directory_entry(
         cursor,
         knowledge_base_id=7,
         full_path="考勤制度/归档",
@@ -175,7 +175,7 @@ def test_create_directory_entry_executes_insert_sql():
     assert params["name"] == "归档"
 
 
-def test_create_directory_entry_recursively_creates_missing_parents():
+async def test_create_directory_entry_recursively_creates_missing_parents():
     """Directory creation should support recursive parent creation."""
     repo = KnowledgeFsEntryRepository()
     cursor = FakeCursor(
@@ -205,7 +205,7 @@ def test_create_directory_entry_recursively_creates_missing_parents():
         ]
     )
 
-    repo.create_directory_entry(
+    await repo.create_directory_entry(
         cursor,
         knowledge_base_id=7,
         full_path="考勤制度/归档",
@@ -225,7 +225,7 @@ def test_create_directory_entry_recursively_creates_missing_parents():
     assert insert_statements[1][1]["parent_entry_id"] == 80
 
 
-def test_create_file_entry_inserts_file_row_without_old_status_columns():
+async def test_create_file_entry_inserts_file_row_without_old_status_columns():
     """File creation should insert a FILE entry without old status/metadata columns."""
     repo = KnowledgeFsEntryRepository()
     cursor = FakeCursor(
@@ -254,7 +254,7 @@ def test_create_file_entry_inserts_file_row_without_old_status_columns():
         ]
     )
 
-    repo.create_file_entry(
+    await repo.create_file_entry(
         cursor,
         knowledge_base_id=7,
         full_path="考勤制度/考勤制度.pdf",
@@ -274,7 +274,7 @@ def test_create_file_entry_inserts_file_row_without_old_status_columns():
     assert params["description"] == "原始文件"
 
 
-def test_create_file_entry_recursively_creates_missing_parents():
+async def test_create_file_entry_recursively_creates_missing_parents():
     """File creation should support recursive parent-directory creation."""
     repo = KnowledgeFsEntryRepository()
     cursor = FakeCursor(
@@ -315,7 +315,7 @@ def test_create_file_entry_recursively_creates_missing_parents():
         ]
     )
 
-    repo.create_file_entry(
+    await repo.create_file_entry(
         cursor,
         knowledge_base_id=7,
         full_path="考勤制度/归档/考勤制度.pdf",
@@ -334,7 +334,7 @@ def test_create_file_entry_recursively_creates_missing_parents():
     assert insert_statements[2][1]["parent_entry_id"] == 81
 
 
-def test_get_file_by_path_resolves_file_under_current_path_model():
+async def test_get_file_by_path_resolves_file_under_current_path_model():
     """File lookup should traverse knowledge-base-relative paths and return storage metadata."""
     repo = KnowledgeFsEntryRepository()
     cursor = FakeCursor(
@@ -379,7 +379,7 @@ def test_get_file_by_path_resolves_file_under_current_path_model():
         ]
     )
 
-    row = repo.get_file_by_path(
+    row = await repo.get_file_by_path(
         cursor,
         knowledge_base_id=7,
         full_path="考勤制度/考勤制度.pdf",
@@ -391,7 +391,7 @@ def test_get_file_by_path_resolves_file_under_current_path_model():
     assert len(cursor.executed) == 3
 
 
-def test_list_children_by_parent_entry_id_uses_current_fs_entry_columns():
+async def test_list_children_by_parent_entry_id_uses_current_fs_entry_columns():
     """Directory listing should read direct children from knowledge_fs_entry only."""
     repo = KnowledgeFsEntryRepository()
     cursor = FakeCursor(
@@ -403,7 +403,7 @@ def test_list_children_by_parent_entry_id_uses_current_fs_entry_columns():
         ]
     )
 
-    rows = repo.list_children_by_parent_entry_id(
+    rows = await repo.list_children_by_parent_entry_id(
         cursor,
         knowledge_base_id=7,
         parent_entry_id=80,
@@ -422,12 +422,12 @@ def test_list_children_by_parent_entry_id_uses_current_fs_entry_columns():
     assert params == {"knowledge_base_id": 7, "parent_entry_id": 80}
 
 
-def test_update_file_entry_storage_updates_new_storage_columns():
+async def test_update_file_entry_storage_updates_new_storage_columns():
     """File upload should persist object-storage metadata on the fs entry row."""
     repo = KnowledgeFsEntryRepository()
     cursor = FakeCursor()
 
-    repo.update_file_entry_storage(
+    await repo.update_file_entry_storage(
         cursor,
         fs_entry_id=81,
         file_description="原始文件",
@@ -451,12 +451,12 @@ def test_update_file_entry_storage_updates_new_storage_columns():
     assert params["file_bucket_name"] == "knowledge-base"
 
 
-def test_soft_delete_directory_subtree_updates_descendants():
+async def test_soft_delete_directory_subtree_updates_descendants():
     """Directory subtree deletion should update all descendant filesystem entries."""
     repo = KnowledgeFsEntryRepository()
     cursor = FakeCursor()
 
-    repo.soft_delete_subtree(cursor, knowledge_base_id=7, root_fs_entry_id=81)
+    await repo.soft_delete_subtree(cursor, knowledge_base_id=7, root_fs_entry_id=81)
 
     sql, params = cursor.executed[0]
     lowered = sql.lower()
@@ -465,12 +465,12 @@ def test_soft_delete_directory_subtree_updates_descendants():
     assert params == {"knowledge_base_id": 7, "root_fs_entry_id": 81}
 
 
-def test_get_knowledge_base_by_code_filters_deleted_rows():
+async def test_get_knowledge_base_by_code_filters_deleted_rows():
     """Knowledge base lookup should ignore logically deleted rows in SQL."""
     repo = KnowledgeBaseRepository()
     cursor = FakeCursor()
 
-    repo.get_by_code(cursor, "hr-policy")
+    await repo.get_by_code(cursor, "hr-policy")
 
     sql, params = cursor.executed[0]
     assert "kid = %(kb_code)s::bigint" in sql
@@ -478,12 +478,12 @@ def test_get_knowledge_base_by_code_filters_deleted_rows():
     assert params == {"kb_code": "hr-policy"}
 
 
-def test_soft_delete_fs_entries_by_kb_updates_is_deleted_flag():
+async def test_soft_delete_fs_entries_by_kb_updates_is_deleted_flag():
     """Bulk filesystem deletion should use logical-delete updates."""
     repo = KnowledgeFsEntryRepository()
     cursor = FakeCursor()
 
-    repo.soft_delete_by_knowledge_base_id(cursor, knowledge_base_id=7)
+    await repo.soft_delete_by_knowledge_base_id(cursor, knowledge_base_id=7)
 
     sql, params = cursor.executed[0]
     lowered = sql.lower()
@@ -492,12 +492,12 @@ def test_soft_delete_fs_entries_by_kb_updates_is_deleted_flag():
     assert params == {"knowledge_base_id": 7}
 
 
-def test_soft_delete_fs_file_entry_updates_is_deleted_flag():
+async def test_soft_delete_fs_file_entry_updates_is_deleted_flag():
     """Single-file filesystem deletion should use logical-delete updates."""
     repo = KnowledgeFsEntryRepository()
     cursor = FakeCursor()
 
-    repo.soft_delete_file_entry(cursor, knowledge_base_id=7, fs_entry_id=71)
+    await repo.soft_delete_file_entry(cursor, knowledge_base_id=7, fs_entry_id=71)
 
     sql, params = cursor.executed[0]
     lowered = sql.lower()
@@ -507,7 +507,7 @@ def test_soft_delete_fs_file_entry_updates_is_deleted_flag():
     assert params == {"knowledge_base_id": 7, "fs_entry_id": 71}
 
 
-def test_rename_entry_updates_name_and_path_ltree_prefix():
+async def test_rename_entry_updates_name_and_path_ltree_prefix():
     """Directory rename should rebuild the entry path prefix without the openGauss subpath edge-case."""
     repo = KnowledgeFsEntryRepository()
     cursor = FakeCursor(
@@ -521,7 +521,7 @@ def test_rename_entry_updates_name_and_path_ltree_prefix():
         ]
     )
 
-    repo.rename_entry(cursor, entry_id=81, new_name="新目录")
+    await repo.rename_entry(cursor, entry_id=81, new_name="新目录")
 
     assert (
         "select kid, parent_entry_id, path_ltree, depth"
@@ -549,12 +549,12 @@ def test_rename_entry_updates_name_and_path_ltree_prefix():
     assert params["new_path_ltree"] != "d1_parent.d2_old"
 
 
-def test_upsert_fetch_cache_entry_persists_cache_identity_and_expiry():
+async def test_upsert_fetch_cache_entry_persists_cache_identity_and_expiry():
     """Fetch cache upsert should store the current file-node cache identity."""
     repo = KnowledgeFetchCacheRepository()
     cursor = FakeCursor(fetchone_results=[{"kid": 300}])
 
-    repo.upsert_cache_entry(
+    await repo.upsert_cache_entry(
         cursor,
         knowledge_base_id=7,
         fs_entry_id=71,
@@ -588,12 +588,12 @@ def test_upsert_fetch_cache_entry_persists_cache_identity_and_expiry():
     )
 
 
-def test_get_cache_entry_by_fs_entry_id_queries_live_cache_row():
+async def test_get_cache_entry_by_fs_entry_id_queries_live_cache_row():
     """Fetch should look up a cache record by file-node id."""
     repo = KnowledgeFetchCacheRepository()
     cursor = FakeCursor()
 
-    repo.get_by_fs_entry_id(cursor, fs_entry_id=71)
+    await repo.get_by_fs_entry_id(cursor, fs_entry_id=71)
 
     sql, params = cursor.executed[0]
     lowered = sql.lower()
@@ -602,12 +602,12 @@ def test_get_cache_entry_by_fs_entry_id_queries_live_cache_row():
     assert params == {"fs_entry_id": 71}
 
 
-def test_mark_expired_ready_entries_as_evicting_uses_skip_locked_batching():
+async def test_mark_expired_ready_entries_as_evicting_uses_skip_locked_batching():
     """Cleanup should promote expired READY rows to EVICTING in bounded batches."""
     repo = KnowledgeFetchCacheRepository()
     cursor = FakeCursor()
 
-    repo.mark_expired_ready_entries_as_evicting(cursor, batch_size=100)
+    await repo.mark_expired_ready_entries_as_evicting(cursor, batch_size=100)
 
     sql, params = cursor.executed[0]
     lowered = sql.lower()
@@ -617,12 +617,12 @@ def test_mark_expired_ready_entries_as_evicting_uses_skip_locked_batching():
     assert params == {"batch_size": 100}
 
 
-def test_list_cleanup_candidates_targets_evicting_and_error_rows():
+async def test_list_cleanup_candidates_targets_evicting_and_error_rows():
     """Cleanup workers should reload in-flight and failed rows for retry."""
     repo = KnowledgeFetchCacheRepository()
     cursor = FakeCursor()
 
-    repo.list_cleanup_candidates(cursor, batch_size=50)
+    await repo.list_cleanup_candidates(cursor, batch_size=50)
 
     sql, params = cursor.executed[0]
     lowered = sql.lower()
@@ -632,12 +632,12 @@ def test_list_cleanup_candidates_targets_evicting_and_error_rows():
     assert params == {"batch_size": 50}
 
 
-def test_delete_retrieval_projection_for_fs_entry_ids_executes_targeted_delete():
+async def test_delete_retrieval_projection_for_fs_entry_ids_executes_targeted_delete():
     """Directory deletion should clear projection rows for the subtree fs_entry ids."""
     repo = RetrievalProjectionRepository()
     cursor = FakeCursor()
 
-    repo.delete_for_fs_entry_ids(
+    await repo.delete_for_fs_entry_ids(
         cursor,
         knowledge_base_id=7,
         fs_entry_ids=[81, 82, 83],
@@ -651,12 +651,12 @@ def test_delete_retrieval_projection_for_fs_entry_ids_executes_targeted_delete()
     assert params == {"knowledge_base_id": 7, "fs_entry_ids": [81, 82, 83]}
 
 
-def test_replace_chunks_clears_existing_embeddings_before_deleting_old_chunks():
+async def test_replace_chunks_clears_existing_embeddings_before_deleting_old_chunks():
     """Replacing version chunks should delete dynamic embeddings before old chunk rows."""
     repo = KnowledgeItemChunkRepository("chunk_embedding_bge_m3")
     cursor = FakeCursor()
 
-    repo.replace_for_version(
+    await repo.replace_for_version(
         cursor,
         knowledge_item_id=10,
         knowledge_item_version_id=22,
@@ -672,12 +672,12 @@ def test_replace_chunks_clears_existing_embeddings_before_deleting_old_chunks():
     assert "select kid" in first_sql
 
 
-def test_replace_embeddings_serializes_vectors_as_literal_strings():
+async def test_replace_embeddings_serializes_vectors_as_literal_strings():
     """Dynamic vector inserts should serialize python lists into vector literals."""
     repo = KnowledgeItemChunkRepository("chunk_embedding_bge_m3")
     cursor = FakeCursor()
 
-    repo.replace_embeddings(
+    await repo.replace_embeddings(
         cursor,
         embeddings=[{"chunk_id": 101, "embedding": [0.1, 0.2, 0.3]}],
     )

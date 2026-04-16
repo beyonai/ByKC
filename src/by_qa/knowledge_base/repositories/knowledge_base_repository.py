@@ -6,9 +6,9 @@ from typing import Any
 class KnowledgeBaseRepository:
     """Repository for knowledge base metadata."""
 
-    def get_by_name(self, cursor: Any, kb_name: str) -> dict[str, Any] | None:
+    async def get_by_name(self, cursor: Any, kb_name: str) -> dict[str, Any] | None:
         """Fetch an active knowledge base by name."""
-        cursor.execute(
+        await cursor.execute(
             """
             SELECT kid, kb_name, kb_description, is_deleted
             FROM knowledge_base
@@ -17,10 +17,9 @@ class KnowledgeBaseRepository:
             """,
             {"kb_name": kb_name},
         )
-        fetchone = getattr(cursor, "fetchone", None)
-        return fetchone() if callable(fetchone) else None
+        return await cursor.fetchone()
 
-    def create_knowledge_base(
+    async def create_knowledge_base(
         self,
         cursor: Any,
         *,
@@ -28,7 +27,7 @@ class KnowledgeBaseRepository:
         kb_description: str | None,
     ) -> dict[str, Any] | None:
         """Insert a knowledge base."""
-        cursor.execute(
+        await cursor.execute(
             """
             INSERT INTO knowledge_base (
                 kb_name,
@@ -49,12 +48,11 @@ class KnowledgeBaseRepository:
                 "kb_description": kb_description,
             },
         )
-        fetchone = getattr(cursor, "fetchone", None)
-        return fetchone() if callable(fetchone) else None
+        return await cursor.fetchone()
 
-    def get_by_code(self, cursor: Any, kb_code: str) -> dict[str, Any] | None:
+    async def get_by_code(self, cursor: Any, kb_code: str) -> dict[str, Any] | None:
         """Fetch a knowledge base by business code."""
-        cursor.execute(
+        await cursor.execute(
             """
             SELECT kid, kb_name, kb_description, is_deleted
             FROM knowledge_base
@@ -63,12 +61,11 @@ class KnowledgeBaseRepository:
             """,
             {"kb_code": kb_code},
         )
-        fetchone = getattr(cursor, "fetchone", None)
-        return fetchone() if callable(fetchone) else None
+        return await cursor.fetchone()
 
-    def soft_delete_by_code(self, cursor: Any, *, kb_code: str) -> None:
+    async def soft_delete_by_code(self, cursor: Any, *, kb_code: str) -> None:
         """Logically delete one knowledge base."""
-        cursor.execute(
+        await cursor.execute(
             """
             UPDATE knowledge_base
             SET is_deleted = TRUE,
@@ -78,7 +75,7 @@ class KnowledgeBaseRepository:
             {"kb_code": kb_code},
         )
 
-    def update_knowledge_base(
+    async def update_knowledge_base(
         self,
         cursor: Any,
         *,
@@ -99,7 +96,7 @@ class KnowledgeBaseRepository:
         if not assignments:
             return
 
-        cursor.execute(
+        await cursor.execute(
             f"""
             UPDATE knowledge_base
             SET {", ".join(assignments)},

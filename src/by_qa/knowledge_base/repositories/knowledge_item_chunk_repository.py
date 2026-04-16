@@ -9,7 +9,7 @@ class KnowledgeItemChunkRepository:
     def __init__(self, embedding_table_name: str):
         self.embedding_table_name = embedding_table_name
 
-    def replace_for_version(
+    async def replace_for_version(
         self,
         cursor: Any,
         *,
@@ -18,7 +18,7 @@ class KnowledgeItemChunkRepository:
         chunks: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """Replace chunk rows for one version and return their ids."""
-        cursor.execute(
+        await cursor.execute(
             f"""
             DELETE FROM {self.embedding_table_name}
             WHERE chunk_id IN (
@@ -29,7 +29,7 @@ class KnowledgeItemChunkRepository:
             """,
             {"knowledge_item_version_id": knowledge_item_version_id},
         )
-        cursor.execute(
+        await cursor.execute(
             """
             DELETE FROM knowledge_item_chunk
             WHERE knowledge_item_version_id = %(knowledge_item_version_id)s
@@ -37,9 +37,8 @@ class KnowledgeItemChunkRepository:
             {"knowledge_item_version_id": knowledge_item_version_id},
         )
         created_rows: list[dict[str, Any]] = []
-        fetchone = getattr(cursor, "fetchone", None)
         for chunk in chunks:
-            cursor.execute(
+            await cursor.execute(
                 """
                 INSERT INTO knowledge_item_chunk (
                     knowledge_item_id,
@@ -80,20 +79,19 @@ class KnowledgeItemChunkRepository:
                     "chunk_text": chunk["chunk_text"],
                 },
             )
-            if callable(fetchone):
-                row = fetchone()
-                if row is not None:
-                    created_rows.append(row)
+            row = await cursor.fetchone()
+            if row is not None:
+                created_rows.append(row)
         return created_rows
 
-    def replace_embeddings(
+    async def replace_embeddings(
         self, cursor: Any, *, embeddings: list[dict[str, Any]]
     ) -> None:
         """Replace chunk embeddings in the dynamic embedding table."""
         if not embeddings:
             return
         chunk_ids = [item["chunk_id"] for item in embeddings]
-        cursor.execute(
+        await cursor.execute(
             f"""
             DELETE FROM {self.embedding_table_name}
             WHERE chunk_id = ANY(%(chunk_ids)s)
@@ -104,7 +102,7 @@ class KnowledgeItemChunkRepository:
             vector_literal = (
                 "[" + ",".join(str(value) for value in item["embedding"]) + "]"
             )
-            cursor.execute(
+            await cursor.execute(
                 f"""
                 INSERT INTO {self.embedding_table_name} (
                     chunk_id,
@@ -122,7 +120,7 @@ class KnowledgeItemChunkRepository:
                 {"chunk_id": item["chunk_id"], "embedding": vector_literal},
             )
 
-    def replace_for_fs_entry(
+    async def replace_for_fs_entry(
         self,
         cursor: Any,
         *,
@@ -130,7 +128,7 @@ class KnowledgeItemChunkRepository:
         chunks: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """Replace chunk rows for one fs_entry and return their ids."""
-        cursor.execute(
+        await cursor.execute(
             f"""
             DELETE FROM {self.embedding_table_name}
             WHERE chunk_id IN (
@@ -141,7 +139,7 @@ class KnowledgeItemChunkRepository:
             """,
             {"fs_entry_id": fs_entry_id},
         )
-        cursor.execute(
+        await cursor.execute(
             """
             DELETE FROM knowledge_chunk
             WHERE fs_entry_id = %(fs_entry_id)s
@@ -149,9 +147,8 @@ class KnowledgeItemChunkRepository:
             {"fs_entry_id": fs_entry_id},
         )
         created_rows: list[dict[str, Any]] = []
-        fetchone = getattr(cursor, "fetchone", None)
         for chunk in chunks:
-            cursor.execute(
+            await cursor.execute(
                 """
                 INSERT INTO knowledge_chunk (
                     fs_entry_id,
@@ -183,8 +180,7 @@ class KnowledgeItemChunkRepository:
                     "chunk_text": chunk["chunk_text"],
                 },
             )
-            if callable(fetchone):
-                row = fetchone()
-                if row is not None:
-                    created_rows.append(row)
+            row = await cursor.fetchone()
+            if row is not None:
+                created_rows.append(row)
         return created_rows

@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from by_qa.core.exceptions import LLMGenerationError
 from by_qa.qa.services.llm_service import LLMService
 
 
@@ -23,7 +24,7 @@ def _mock_settings():
 
 
 @pytest.mark.asyncio
-async def test_generate_returns_error_string_when_model_call_fails():
+async def test_generate_raises_stable_error_when_model_call_fails():
     with patch(
         "by_qa.qa.services.llm_service.get_settings", return_value=_mock_settings()
     ):
@@ -38,13 +39,15 @@ async def test_generate_returns_error_string_when_model_call_fails():
             {"ainvoke": AsyncMock(side_effect=RuntimeError("boom"))},
         )(),
     ):
-        result = await service.generate([{"role": "user", "content": "hi"}])
+        with pytest.raises(LLMGenerationError) as exc_info:
+            await service.generate([{"role": "user", "content": "hi"}])
 
-    assert result == "Error: boom"
+    assert exc_info.value.message == "LLM generation failed"
+    assert exc_info.value.details == {"error": "boom"}
 
 
 @pytest.mark.asyncio
-async def test_generate_returns_json_error_when_json_mode_fails():
+async def test_generate_raises_stable_error_when_json_mode_fails():
     with patch(
         "by_qa.qa.services.llm_service.get_settings", return_value=_mock_settings()
     ):
@@ -59,11 +62,11 @@ async def test_generate_returns_json_error_when_json_mode_fails():
             {"ainvoke": AsyncMock(side_effect=RuntimeError("boom"))},
         )(),
     ):
-        result = await service.generate(
-            [{"role": "user", "content": "hi"}], json_mode=True
-        )
+        with pytest.raises(LLMGenerationError) as exc_info:
+            await service.generate([{"role": "user", "content": "hi"}], json_mode=True)
 
-    assert result == '{"error": "LLM generation failed: boom"}'
+    assert exc_info.value.message == "LLM generation failed"
+    assert exc_info.value.details == {"error": "boom"}
 
 
 @pytest.mark.asyncio

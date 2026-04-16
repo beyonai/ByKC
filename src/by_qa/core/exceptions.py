@@ -13,6 +13,9 @@ class DeepSearchError(Exception):
         self.message = message
         self.details = details or {}
 
+    def __str__(self) -> str:
+        return f"{self.message}: {self.details}"
+
 
 class SearchError(DeepSearchError):
     """Exception raised when search execution fails."""
@@ -40,5 +43,11 @@ class RetrievalError(DeepSearchError):
 
 class GenerationError(DeepSearchError):
     """Exception raised when answer generation fails."""
+
+    pass
+
+
+class LLMGenerationError(GenerationError):
+    """Exception raised when LLM generation fails."""
 
     pass

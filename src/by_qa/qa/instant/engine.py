@@ -256,7 +256,13 @@ class InstantQAEngine:
             info("[stream_search] Completed successfully")
         except Exception as exc:
             error("[stream_search] Error occurred - error: %s", traceback.format_exc())
-            yield StreamEvent.error(error=str(exc), error_type=type(exc).__name__)
+            yield StreamEvent.error(
+                error=str(exc),
+                error_type=type(exc).__name__,
+                role=role,
+                instance_id=instance_id,
+                parent_ids=parent_ids,
+            )
 
 
 InstantSearchEngine = InstantQAEngine

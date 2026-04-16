@@ -6,6 +6,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_openai import ChatOpenAI
 
 from by_qa.config import get_settings
+from by_qa.core.exceptions import LLMGenerationError
 
 
 class LLMService:
@@ -74,11 +75,10 @@ class LLMService:
                 response = await model.ainvoke(normalized)
             return response.content
         except Exception as exc:  # pylint: disable=broad-exception-caught
-            return (
-                f'{{"error": "LLM generation failed: {str(exc)}"}}'
-                if json_mode
-                else f"Error: {str(exc)}"
-            )
+            raise LLMGenerationError(
+                message="LLM generation failed",
+                details={"error": str(exc)},
+            ) from exc
 
     async def generate_stream(
         self,

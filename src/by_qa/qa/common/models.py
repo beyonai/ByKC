@@ -252,6 +252,7 @@ class StreamEvent(BaseModel):
         error: str,
         role: str | None = None,
         instance_id: str | None = None,
+        parent_ids: list[str] | None = None,
         **kwargs,
     ) -> "StreamEvent":
         return cls(
@@ -259,6 +260,7 @@ class StreamEvent(BaseModel):
             data={"error": error, **kwargs},
             role=role,
             instance_id=instance_id,
+            parent_ids=parent_ids,
         )
 
     @classmethod

@@ -125,12 +125,12 @@ def register_routes(
             request.kb_description is not None,
         )
         try:
-            service = get_knowledge_base_service()
+            service = await get_knowledge_base_service()
             logger.info(
                 "create_knowledge_base resolved service: service_class=%s",
                 service.__class__.__name__,
             )
-            result = service.create_knowledge_base(request)
+            result = await service.create_knowledge_base(request)
             logger.info(
                 "create_knowledge_base service call succeeded: kb_code=%s",
                 result.kb_code,
@@ -191,8 +191,8 @@ def register_routes(
             "delete_knowledge_base request received: kb_code=%s", request.kb_code
         )
         try:
-            service = get_knowledge_base_service()
-            service.delete_knowledge_base(request)
+            service = await get_knowledge_base_service()
+            await service.delete_knowledge_base(request)
         except KnowledgeBaseConfigurationError as exc:
             return _documented_error_response(
                 result_msg=str(exc),
@@ -237,8 +237,8 @@ def register_routes(
             "kb_description" in request.model_fields_set,
         )
         try:
-            service = get_knowledge_base_service()
-            service.update_knowledge_base(request)
+            service = await get_knowledge_base_service()
+            await service.update_knowledge_base(request)
         except KnowledgeBaseConfigurationError as exc:
             return _documented_error_response(
                 result_msg=str(exc),
@@ -281,8 +281,8 @@ def register_routes(
             request.directory_description is not None,
         )
         try:
-            service = get_knowledge_base_service()
-            service.create_directory(request)
+            service = await get_knowledge_base_service()
+            await service.create_directory(request)
         except KnowledgeBaseConfigurationError as exc:
             return _documented_error_response(
                 result_msg=str(exc),
@@ -328,8 +328,8 @@ def register_routes(
             request.directory_path,
         )
         try:
-            service = get_knowledge_base_service()
-            service.delete_directory(request)
+            service = await get_knowledge_base_service()
+            await service.delete_directory(request)
         except KnowledgeBaseConfigurationError as exc:
             return _documented_error_response(
                 result_msg=str(exc),
@@ -374,8 +374,8 @@ def register_routes(
             request.directory_name,
         )
         try:
-            service = get_knowledge_base_service()
-            service.update_directory(request)
+            service = await get_knowledge_base_service()
+            await service.update_directory(request)
         except KnowledgeBaseConfigurationError as exc:
             return _documented_error_response(
                 result_msg=str(exc),
@@ -443,8 +443,8 @@ def register_routes(
             request.file_name,
         )
         try:
-            service = get_knowledge_item_ingestion_service()
-            service.upload_file(request)
+            service = await get_knowledge_item_ingestion_service()
+            await service.upload_file(request)
         except KnowledgeBaseConfigurationError as exc:
             return _documented_error_response(
                 result_msg=str(exc),
@@ -488,8 +488,8 @@ def register_routes(
             request.file_path,
         )
         try:
-            service = get_knowledge_item_ingestion_service()
-            service.delete_knowledge_item(request)
+            service = await get_knowledge_item_ingestion_service()
+            await service.delete_knowledge_item(request)
         except KnowledgeBaseConfigurationError as exc:
             return _documented_error_response(
                 result_msg=str(exc),
@@ -531,9 +531,9 @@ def register_routes(
             )
 
         try:
-            service = get_knowledge_item_ingestion_service()
+            service = await get_knowledge_item_ingestion_service()
             chunking_service = get_document_chunking_service()
-            service.file_to_markdown_index(
+            await service.file_to_markdown_index(
                 request, document_chunking_service=chunking_service
             )
         except KnowledgeBaseConfigurationError as exc:
@@ -577,8 +577,8 @@ def register_routes(
             request.search_mode,
         )
         try:
-            service = get_knowledge_item_search_service()
-            items = service.search_v2(request)
+            service = await get_knowledge_item_search_service()
+            items = await service.search_v2(request)
             logger.info(
                 "search_knowledge_items service call succeeded: returned_count=%s, top_k=%s",
                 len(items),
@@ -623,12 +623,12 @@ def register_routes(
             request.directory_path,
         )
         try:
-            service = get_knowledge_base_service()
+            service = await get_knowledge_base_service()
             logger.info(
                 "list_dir resolved service: service_class=%s",
                 service.__class__.__name__,
             )
-            result = service.list_dir(request)
+            result = await service.list_dir(request)
             logger.info(
                 "list_dir service call succeeded: directory_path=%s, item_count=%s",
                 request.directory_path,
@@ -695,12 +695,12 @@ def register_routes(
             request.path_rule,
         )
         try:
-            service = get_knowledge_base_service()
+            service = await get_knowledge_base_service()
             logger.info(
                 "glob resolved service: service_class=%s",
                 service.__class__.__name__,
             )
-            result = service.glob(request)
+            result = await service.glob(request)
             logger.info(
                 "glob service call succeeded: path_rule=%s, item_count=%s",
                 request.path_rule,
@@ -769,8 +769,8 @@ def register_routes(
             request.end_line,
         )
         try:
-            service = get_knowledge_base_service()
-            result = service.read_file(request)
+            service = await get_knowledge_base_service()
+            result = await service.read_file(request)
             logger.info(
                 "read_file service call succeeded: file_path=%s, returned_bytes=%s",
                 request.file_path,
@@ -822,12 +822,12 @@ def register_routes(
             request.file_path,
         )
         try:
-            service = get_knowledge_base_service()
+            service = await get_knowledge_base_service()
             logger.info(
                 "download_file resolved service: service_class=%s",
                 service.__class__.__name__,
             )
-            result = service.download_file(request)
+            result = await service.download_file(request)
             logger.info(
                 "download_file service call succeeded: file_path=%s, returned_bytes=%s",
                 request.file_path,

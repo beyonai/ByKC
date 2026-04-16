@@ -31,7 +31,7 @@ class FakeKBService:
         self.created_directory_requests = []
         self.import_calls = []
 
-    def create_knowledge_base(self, request):
+    async def create_knowledge_base(self, request):
         self.created_requests.append(request)
         return CreateKnowledgeBaseResponse(
             kb_code="7",
@@ -39,7 +39,7 @@ class FakeKBService:
             kb_description=request.kb_description,
         )
 
-    def create_directory(self, request):
+    async def create_directory(self, request):
         self.created_directory_requests.append(request)
         return CreateDirectoryResponse(
             kb_code=request.kb_code,
@@ -47,38 +47,38 @@ class FakeKBService:
             directory_description=request.directory_description,
         )
 
-    def delete_directory(self, request):
+    async def delete_directory(self, request):
         return DeleteDirectoryResponse(
             kb_code=request.kb_code,
             directory_path=request.directory_path,
             is_deleted=True,
         )
 
-    def update_directory(self, request):
+    async def update_directory(self, request):
         return UpdateDirectoryResponse(
             kb_code=request.kb_code,
             directory_path="/考勤制度/历史归档",
             directory_name=request.directory_name,
         )
 
-    def delete_knowledge_base(self, request):
+    async def delete_knowledge_base(self, request):
         return DeleteKnowledgeBaseResponse(kb_code=request.kb_code, is_deleted=True)
 
-    def update_knowledge_base(self, request):
+    async def update_knowledge_base(self, request):
         return UpdateKnowledgeBaseResponse(
             kb_code=request.kb_code,
             kb_name=request.kb_name or "人力制度知识库",
             kb_description=request.kb_description,
         )
 
-    def delete_knowledge_item(self, request):
+    async def delete_knowledge_item(self, request):
         return DeleteKnowledgeItemResponse(
             kb_code=request.kb_code,
             file_path=request.file_path,
             is_deleted=True,
         )
 
-    def upload_file(self, request):
+    async def upload_file(self, request):
         self.import_calls.append(request)
         return KnowledgeItemUploadResponse(
             kb_code=request.kb_code,
@@ -86,12 +86,12 @@ class FakeKBService:
             file_description=request.file_description,
         )
 
-    def file_to_markdown_index(  # pylint: disable=unused-argument
+    async def file_to_markdown_index(  # pylint: disable=unused-argument
         self, request, *, document_chunking_service
     ):
         return None
 
-    def search_v2(self, request):
+    async def search_v2(self, request):
         return [
             SearchHit(
                 kn_code="hr-policy",
@@ -106,7 +106,7 @@ class FakeKBService:
             )
         ]
 
-    def list_dir(self, request):
+    async def list_dir(self, request):
         return KnowledgeItemListDirResponse(
             items=[
                 KnowledgeItemListDirItem(
@@ -118,7 +118,7 @@ class FakeKBService:
             ]
         )
 
-    def glob(self, request):
+    async def glob(self, request):
         return KnowledgeItemListDirResponse(
             items=[
                 KnowledgeItemListDirItem(
@@ -130,7 +130,7 @@ class FakeKBService:
             ]
         )
 
-    def read_file(self, request):
+    async def read_file(self, request):
         return {
             "knCode": request.kb_code,
             "filePath": request.file_path,
@@ -140,7 +140,7 @@ class FakeKBService:
             "reachedEof": True,
         }
 
-    def download_file(self, request):
+    async def download_file(self, request):
         return {
             "filename": "doc.pdf",
             "media_type": "application/pdf",
@@ -150,11 +150,17 @@ class FakeKBService:
 
 def make_test_client(monkeypatch, service):
     """Create a TestClient with unrelated startup dependencies stubbed out."""
-    monkeypatch.setattr("by_qa.main.get_knowledge_base_service", lambda: service)
+
+    async def get_service():
+        return service
+
+    monkeypatch.setattr("by_qa.main._get_or_build_knowledge_base_service", get_service)
     monkeypatch.setattr(
-        "by_qa.main.get_knowledge_item_ingestion_service", lambda: service
+        "by_qa.main._get_or_build_knowledge_item_ingestion_service", get_service
     )
-    monkeypatch.setattr("by_qa.main.get_knowledge_item_search_service", lambda: service)
+    monkeypatch.setattr(
+        "by_qa.main._get_or_build_knowledge_item_search_service", get_service
+    )
     monkeypatch.setattr("by_qa.main.get_document_chunking_service", lambda: object())
     monkeypatch.setattr("by_qa.main.get_adapter", lambda: object())
     monkeypatch.setattr("by_qa.main.get_instant_search_engine", lambda: object())
@@ -240,7 +246,7 @@ def test_create_knowledge_base_route_maps_duplicate_name_to_documented_error(
     """Create-knowledge-base duplicate names should use the documented error envelope."""
 
     class DuplicateNameKBService(FakeKBService):
-        def create_knowledge_base(self, request):
+        async def create_knowledge_base(self, request):
             raise KnowledgeBaseValidationError(
                 f"knowledge base name already exists: {request.kb_name}"
             )
@@ -305,7 +311,7 @@ def test_update_knowledge_base_route_maps_duplicate_name_to_documented_error(
     """Update-knowledge-base duplicate names should use the documented error envelope."""
 
     class DuplicateNameKBService(FakeKBService):
-        def update_knowledge_base(self, request):
+        async def update_knowledge_base(self, request):
             raise KnowledgeBaseValidationError(
                 f"knowledge base name already exists: {request.kb_name}"
             )
@@ -330,7 +336,7 @@ def test_update_knowledge_base_route_maps_unexpected_exception_to_documented_err
     """Update-knowledge-base unexpected failures should use the documented error envelope."""
 
     class BrokenKBService(FakeKBService):
-        def update_knowledge_base(self, request):
+        async def update_knowledge_base(self, request):
             raise RuntimeError('column "kb_code" does not exist')
 
     client = make_test_client(monkeypatch, BrokenKBService())
@@ -394,7 +400,7 @@ def test_delete_directory_route_maps_missing_directory_to_documented_error(monke
     """Delete-directory should use the documented error envelope when the directory does not exist."""
 
     class BrokenKBService(FakeKBService):
-        def delete_directory(self, request):
+        async def delete_directory(self, request):
             raise KnowledgeBaseValidationError(
                 f"directory not found: {request.directory_path}"
             )
@@ -442,7 +448,7 @@ def test_update_directory_route_maps_name_conflict_to_documented_error(monkeypat
     """Update-directory should use the documented error envelope for sibling name conflicts."""
 
     class BrokenKBService(FakeKBService):
-        def update_directory(self, request):
+        async def update_directory(self, request):
             raise KnowledgeBaseValidationError(
                 f"directory name already exists under parent: {request.directory_name}"
             )
@@ -605,7 +611,7 @@ def test_list_dir_route_maps_validation_error_to_standard_error(monkeypatch):
     """List-dir business validation should use the standardized error envelope."""
 
     class BrokenKBService(FakeKBService):
-        def list_dir(self, request):
+        async def list_dir(self, request):
             raise KnowledgeBaseValidationError("path contains invalid segments")
 
     client = make_test_client(monkeypatch, BrokenKBService())
@@ -629,7 +635,7 @@ def test_list_dir_route_maps_missing_directory_to_documented_error(monkeypatch):
     """List-dir missing paths should map to the standardized not-found response."""
 
     class BrokenKBService(FakeKBService):
-        def list_dir(self, request):
+        async def list_dir(self, request):
             raise KnowledgeBaseValidationError(
                 f"directory not found: {request.directory_path}"
             )
@@ -655,7 +661,7 @@ def test_list_dir_route_maps_configuration_error_to_documented_error(monkeypatch
     """List-dir configuration failures should use the standardized error envelope."""
 
     class BrokenKBService(FakeKBService):
-        def list_dir(self, request):
+        async def list_dir(self, request):
             raise KnowledgeBaseConfigurationError("KB runtime is not configured")
 
     client = make_test_client(monkeypatch, BrokenKBService())
@@ -726,7 +732,7 @@ def test_glob_route_maps_validation_error_to_standard_error(monkeypatch):
     """Glob business validation should use the standardized error envelope."""
 
     class BrokenKBService(FakeKBService):
-        def glob(self, request):
+        async def glob(self, request):
             raise KnowledgeBaseValidationError("path contains invalid segments")
 
     client = make_test_client(monkeypatch, BrokenKBService())
@@ -750,7 +756,7 @@ def test_glob_route_maps_configuration_error_to_documented_error(monkeypatch):
     """Glob configuration failures should use the standardized error envelope."""
 
     class BrokenKBService(FakeKBService):
-        def glob(self, request):
+        async def glob(self, request):
             raise KnowledgeBaseConfigurationError("KB runtime is not configured")
 
     client = make_test_client(monkeypatch, BrokenKBService())
@@ -803,7 +809,7 @@ def test_read_file_route_returns_full_content_without_line_range(monkeypatch):
     """Read-file should return all content when startLine/endLine are omitted."""
 
     class FullReadKBService(FakeKBService):
-        def read_file(self, request):
+        async def read_file(self, request):
             return {
                 "knCode": request.kb_code,
                 "filePath": request.file_path,
@@ -850,7 +856,7 @@ def test_download_file_route_supports_non_ascii_filename(monkeypatch):
     """Download-file should encode non-ASCII filenames safely in headers."""
 
     class UnicodeFilenameKBService(FakeKBService):
-        def download_file(self, request):
+        async def download_file(self, request):
             return {
                 "filename": "开源项目最佳实践汇报.md",
                 "media_type": "text/markdown",
@@ -880,7 +886,7 @@ def test_download_file_route_maps_validation_error_to_documented_error(monkeypat
     """Download-file validation errors should use the documented JSON envelope."""
 
     class BrokenKBService(FakeKBService):
-        def download_file(self, request):
+        async def download_file(self, request):
             raise KnowledgeBaseValidationError(f"file not found: {request.file_path}")
 
     client = make_test_client(monkeypatch, BrokenKBService())
@@ -920,7 +926,7 @@ def test_read_file_route_maps_validation_error_to_documented_error(monkeypatch):
     """Read-file business validation should use the documented error envelope."""
 
     class BrokenKBService(FakeKBService):
-        def read_file(self, request):
+        async def read_file(self, request):
             raise KnowledgeBaseValidationError("startLine must be greater than 0")
 
     client = make_test_client(monkeypatch, BrokenKBService())
@@ -946,7 +952,7 @@ def test_read_file_route_maps_not_found_to_documented_error(monkeypatch):
     """Read-file missing files should use the documented error envelope."""
 
     class BrokenKBService(FakeKBService):
-        def read_file(self, request):
+        async def read_file(self, request):
             raise KnowledgeBaseValidationError(f"file not found: {request.file_path}")
 
     client = make_test_client(monkeypatch, BrokenKBService())
@@ -970,7 +976,7 @@ def test_read_file_route_maps_file_not_built_to_documented_error(monkeypatch):
     """Read-file should return an error when the file has not been built."""
 
     class NotBuiltKBService(FakeKBService):
-        def read_file(self, request):
+        async def read_file(self, request):
             raise KnowledgeBaseValidationError(f"file not built: {request.file_path}")
 
     client = make_test_client(monkeypatch, NotBuiltKBService())
@@ -994,7 +1000,7 @@ def test_read_file_route_maps_configuration_error_to_documented_error(monkeypatc
     """Read-file configuration failures should use the documented error envelope."""
 
     class BrokenKBService(FakeKBService):
-        def read_file(self, request):
+        async def read_file(self, request):
             raise KnowledgeBaseConfigurationError("read file runtime is not configured")
 
     client = make_test_client(monkeypatch, BrokenKBService())
@@ -1022,7 +1028,7 @@ def test_create_knowledge_base_route_maps_configuration_error_to_documented_erro
     """Missing KB runtime configuration should surface as a documented error response."""
 
     class MisconfiguredKBService(FakeKBService):
-        def create_knowledge_base(self, request):
+        async def create_knowledge_base(self, request):
             raise KnowledgeBaseConfigurationError("KB_OPENGAUSS_DSN is required")
 
     client = make_test_client(monkeypatch, MisconfiguredKBService())
@@ -1047,17 +1053,18 @@ def test_create_knowledge_base_route_maps_unexpected_exception_to_standard_error
     """Unexpected route failures should still use the standard KB error envelope."""
 
     class BrokenKBService(FakeKBService):
-        def create_knowledge_base(self, request):
+        async def create_knowledge_base(self, request):
             raise RuntimeError("duplicate key value violates unique constraint")
 
+    async def get_broken():
+        return BrokenKBService()
+
+    monkeypatch.setattr("by_qa.main._get_or_build_knowledge_base_service", get_broken)
     monkeypatch.setattr(
-        "by_qa.main.get_knowledge_base_service", lambda: BrokenKBService()
+        "by_qa.main._get_or_build_knowledge_item_ingestion_service", get_broken
     )
     monkeypatch.setattr(
-        "by_qa.main.get_knowledge_item_ingestion_service", lambda: BrokenKBService()
-    )
-    monkeypatch.setattr(
-        "by_qa.main.get_knowledge_item_search_service", lambda: BrokenKBService()
+        "by_qa.main._get_or_build_knowledge_item_search_service", get_broken
     )
     monkeypatch.setattr("by_qa.main.get_adapter", lambda: object())
     monkeypatch.setattr("by_qa.main.get_instant_search_engine", lambda: object())
@@ -1141,7 +1148,7 @@ def test_search_route_maps_validation_error_to_documented_error(monkeypatch):
     """Search business validation should use the documented error envelope."""
 
     class BrokenSearchService(FakeKBService):
-        def search_v2(self, request):
+        async def search_v2(self, request):
             raise KnowledgeBaseValidationError("knCodeList must not be empty")
 
     client = make_test_client(monkeypatch, BrokenSearchService())
@@ -1167,7 +1174,7 @@ def test_search_route_maps_configuration_error_to_documented_error(monkeypatch):
     """Search configuration failures should use the documented error envelope."""
 
     class BrokenSearchService(FakeKBService):
-        def search_v2(self, request):
+        async def search_v2(self, request):
             raise KnowledgeBaseConfigurationError(
                 "EMBEDDING_BASE_URL is required for retrieval"
             )
@@ -1250,7 +1257,7 @@ def test_file_to_markdown_index_kb_not_found(monkeypatch):
     """POST /api/v1/fileToMarkdownIndex returns error when KB not found."""
 
     class FailingService(FakeKBService):
-        def file_to_markdown_index(self, request, *, document_chunking_service):
+        async def file_to_markdown_index(self, request, *, document_chunking_service):
             raise KnowledgeBaseValidationError(
                 f"knowledge base not found: {request.kb_code}"
             )

@@ -46,7 +46,9 @@ class FakeS3Client:
     async def create_bucket(self, **kwargs):
         self.calls.append(("create_bucket", kwargs))
 
-    async def generate_presigned_url(self, _client_method, Params, _expires_in):  # pylint: disable=invalid-name
+    async def generate_presigned_url(
+        self, _client_method, Params, _expires_in=None, **_kwargs
+    ):  # pylint: disable=invalid-name
         return f"https://example.test/{Params['Bucket']}/{Params['Key']}"
 
 

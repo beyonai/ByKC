@@ -28,6 +28,12 @@
 - 保留 `knowledge_fetch_cache_index`，因为本地文件缓存仍然需要
 - chunk 直接从属于文件节点，不再从属于旧的 item/version 体系
 
+## 异步运行时
+
+数据库（psycopg `AsyncConnection`）、对象存储（aioboto3 S3 客户端）和 embedding 网络请求（httpx `AsyncClient`）均为原生异步 I/O，不使用线程池兼容层。
+
+**已知残留同步工作：** `file_to_markdown_index` 中的文档解析（`extract_text_from_file`）和 chunk 切片（`chunk_and_embed`）仍在请求路径内同步执行，因为底层解析库（pymupdf、python-docx 等）不支持异步。大文件解析应在后续版本中迁移到 worker/后台构建流水线。
+
 ## 整体结构
 
 知识模块采用“双存储层 + 一条构建链路”设计：

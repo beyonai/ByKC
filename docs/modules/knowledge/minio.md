@@ -2,7 +2,7 @@
 
 ## 背景
 
-知识模块采用“openGauss 管结构化元数据，MinIO 管文件内容”的双存储架构。数据库负责维护知识库、文件树、文档版本、chunk 与检索投影；MinIO 负责保存原始文件内容和 Markdown sidecar。
+知识模块采用”openGauss 管结构化元数据，MinIO 管文件内容”的双存储架构。数据库负责维护知识库、文件树、文档版本、chunk 与检索投影；MinIO 负责保存原始文件内容和 Markdown sidecar。
 
 相关文档：
 
@@ -10,6 +10,12 @@
 - [design.md](./design.md)
 - [api.md](./api.md)
 - [process.md](./process.md)
+
+## 客户端实现
+
+应用运行时使用 `aioboto3` 提供的异步 S3 兼容客户端访问 MinIO。`KnowledgeBaseObjectStorage` 的所有方法均为 `async def`，通过 `aioboto3.Session().client(“s3”, ...)` 上下文管理器发起请求。
+
+运维脚本（`scripts/reset_kb_data.py`）不在 FastAPI 请求路径内，使用同步 `boto3` 客户端，通过 `asyncio.run` 调用异步数据库操作。
 
 ## 设计目标
 

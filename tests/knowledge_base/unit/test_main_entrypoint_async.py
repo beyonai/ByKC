@@ -58,6 +58,176 @@ async def test_async_main_runs_uvicorn(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_knowledge_item_services_receive_model_config_provider(monkeypatch):
+    """Main runtime wiring should pass the configured provider into KB services."""
+    provider = object()
+    recorded = {}
+
+    async def fake_build_ingestion(settings, provider=None):
+        recorded["ingestion"] = (settings, provider)
+        return "ingestion-service"
+
+    async def fake_build_search(settings, provider=None):
+        recorded["search"] = (settings, provider)
+        return "search-service"
+
+    fake_runtime = SimpleNamespace(
+        build_knowledge_item_ingestion_service=fake_build_ingestion,
+        build_knowledge_item_search_service=fake_build_search,
+    )
+
+    def fake_import(name, global_vars=None, local_vars=None, fromlist=(), level=0):
+        if name == "by_qa.knowledge_base.infrastructure.runtime":
+            return fake_runtime
+        return original_import(name, global_vars, local_vars, fromlist, level)
+
+    original_import = __import__
+    monkeypatch.setattr(main_module, "model_config_provider", provider)
+    monkeypatch.setattr(__import__("builtins"), "__import__", fake_import)
+    monkeypatch.setattr(main_module, "_knowledge_item_ingestion_service", None)
+    monkeypatch.setattr(main_module, "_knowledge_item_search_service", None)
+
+    ingestion_service = (
+        await main_module._get_or_build_knowledge_item_ingestion_service()
+    )
+    search_service = await main_module._get_or_build_knowledge_item_search_service()
+
+    assert ingestion_service == "ingestion-service"
+    assert search_service == "search-service"
+    assert recorded["ingestion"] == (main_module.settings, provider)
+    assert recorded["search"] == (main_module.settings, provider)
+
+
+@pytest.mark.asyncio
+async def test_document_chunking_service_uses_model_config_provider(monkeypatch):
+    """Document chunking should use provider embedding config in API runtime wiring."""
+    recorded = {}
+
+    async def fake_get_config(model_type):
+        recorded["model_type"] = model_type
+        return SimpleNamespace(
+            model_name="custom-embedding",
+            base_url="https://embedding.example.com/v1",
+            api_key="secret",
+            dimension=1024,
+            batch_max_texts=32,
+        )
+
+    provider = SimpleNamespace(get_config=fake_get_config)
+
+    def fake_build_document_chunking_service(settings, embedding_config=None):
+        recorded["build"] = (settings, embedding_config)
+        return "chunking-service"
+
+    fake_runtime = SimpleNamespace(
+        build_document_chunking_service=fake_build_document_chunking_service
+    )
+
+    def fake_import(name, global_vars=None, local_vars=None, fromlist=(), level=0):
+        if name == "by_qa.knowledge_build.runtime":
+            return fake_runtime
+        return original_import(name, global_vars, local_vars, fromlist, level)
+
+    original_import = __import__
+    monkeypatch.setattr(main_module, "model_config_provider", provider)
+    monkeypatch.setattr(__import__("builtins"), "__import__", fake_import)
+    monkeypatch.setattr(main_module, "_document_chunking_service", None)
+
+    service = await main_module.resolve_document_chunking_service()
+
+    assert service == "chunking-service"
+    assert recorded["model_type"] == "embedding"
+    settings, embedding_config = recorded["build"]
+    assert settings is main_module.settings
+    assert embedding_config.model_name == "custom-embedding"
+
+
+@pytest.mark.asyncio
+async def test_knowledge_base_lifecycle_uses_provider_embedding_config(monkeypatch):
+    """KB lifecycle should initialize when embedding config comes from provider."""
+    recorded = {}
+
+    async def fake_get_config(model_type):
+        recorded["model_type"] = model_type
+        return SimpleNamespace(model_name="custom-embedding", dimension=1024)
+
+    provider = SimpleNamespace(get_config=fake_get_config)
+    fake_settings = SimpleNamespace(
+        resolved_kb_opengauss_dsn="postgresql://gaussdb:secret@127.0.0.1/postgres",
+        embedding_model_name="",
+    )
+
+    class FakeConnection:
+        async def close(self):
+            recorded["closed"] = True
+
+    def fake_connection_factory(settings):
+        recorded["connection_settings"] = settings
+
+        async def build_connection():
+            return FakeConnection()
+
+        return build_connection
+
+    class FakeBootstrap:
+        async def apply(self, connection):
+            recorded["bootstrap_connection"] = connection
+
+    async def fake_build_bootstrap_service(settings, provider=None):
+        recorded["bootstrap"] = (settings, provider)
+        return FakeBootstrap()
+
+    async def fake_build_metadata_service():
+        recorded["metadata_service"] = True
+
+    async def fake_build_ingestion_service():
+        recorded["ingestion_service"] = True
+
+    class FakeCleanup:
+        async def start(self):
+            recorded["cleanup_started"] = True
+
+    async def fake_build_cleanup_service():
+        return FakeCleanup()
+
+    monkeypatch.setattr(main_module, "settings", fake_settings)
+    monkeypatch.setattr(main_module, "model_config_provider", provider)
+    monkeypatch.setattr(
+        "by_qa.knowledge_base.infrastructure.database.build_connection_factory",
+        fake_connection_factory,
+    )
+    monkeypatch.setattr(
+        "by_qa.knowledge_base.infrastructure.runtime.build_bootstrap_service",
+        fake_build_bootstrap_service,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "_get_or_build_knowledge_base_service",
+        fake_build_metadata_service,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "_get_or_build_knowledge_item_ingestion_service",
+        fake_build_ingestion_service,
+    )
+    monkeypatch.setattr(
+        main_module,
+        "_get_or_build_knowledge_fetch_cache_cleanup_service",
+        fake_build_cleanup_service,
+    )
+
+    await main_module._initialize_knowledge_base_runtime(["knowledge_base"])
+
+    assert recorded["model_type"] == "embedding"
+    assert recorded["connection_settings"] is fake_settings
+    assert recorded["bootstrap"] == (fake_settings, provider)
+    assert recorded["metadata_service"] is True
+    assert recorded["ingestion_service"] is True
+    assert recorded["cleanup_started"] is True
+    assert recorded["closed"] is True
+
+
+@pytest.mark.asyncio
 async def test_lifespan_logs_configuration_and_registers_service(monkeypatch):
     """Lifespan should log startup configuration and register the service."""
     info_calls = []

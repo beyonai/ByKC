@@ -2,6 +2,7 @@
 
 import json
 import mimetypes
+from inspect import isawaitable
 from pathlib import PurePosixPath
 from typing import Any, Optional
 from urllib.parse import quote
@@ -74,6 +75,14 @@ def _documented_error_response(
             "resultObject": result_object or {},
         },
     )
+
+
+async def _resolve_maybe_async(factory):
+    """Resolve a dependency factory that may be synchronous or asynchronous."""
+    result = factory()
+    if isawaitable(result):
+        return await result
+    return result
 
 
 def _ensure_leading_slash(path: str) -> str:
@@ -532,7 +541,7 @@ def register_routes(
 
         try:
             service = await get_knowledge_item_ingestion_service()
-            chunking_service = get_document_chunking_service()
+            chunking_service = await _resolve_maybe_async(get_document_chunking_service)
             await service.file_to_markdown_index(
                 request, document_chunking_service=chunking_service
             )

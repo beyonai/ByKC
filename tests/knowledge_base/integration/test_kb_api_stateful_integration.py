@@ -102,8 +102,7 @@ def _set_document_chunking_service(
     monkeypatch: pytest.MonkeyPatch,
     service: FakeDocumentChunkingService,
 ) -> None:
-    monkeypatch.setattr(main_module, "get_document_chunking_service", lambda: service)
-    monkeypatch.setattr(main_module, "_document_chunking_service", None)
+    monkeypatch.setattr(main_module, "_document_chunking_service", service)
 
 
 async def _set_search_service(

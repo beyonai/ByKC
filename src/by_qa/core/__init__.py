@@ -26,12 +26,14 @@ from by_qa.core.model_config import (
     EnvModelConfigProvider,
     ModelConfig,
     ModelConfigProvider,
+    load_model_config_provider,
 )
 
 __all__ = [
     "EnvModelConfigProvider",
     "ModelConfig",
     "ModelConfigProvider",
+    "load_model_config_provider",
     "get_logger",
     "setup_logger",
     "set_session_id",

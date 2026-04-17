@@ -15,8 +15,10 @@ from redis.asyncio import Redis
 
 from by_qa.config import get_settings
 from by_qa.core import logger
+from by_qa.core.model_config import load_model_config_provider
 
 settings = get_settings()
+model_config_provider = load_model_config_provider()
 
 _knowledge_base_service: Any | None = None
 _knowledge_item_ingestion_service: Any | None = None
@@ -203,7 +205,9 @@ async def _get_or_build_knowledge_base_service():
             build_knowledge_base_service,
         )
 
-        _knowledge_base_service = await build_knowledge_base_service(settings)
+        _knowledge_base_service = await build_knowledge_base_service(
+            settings, provider=model_config_provider
+        )
     return _knowledge_base_service
 
 
@@ -221,7 +225,9 @@ async def _get_or_build_knowledge_item_ingestion_service():
         )
 
         _knowledge_item_ingestion_service = (
-            await build_knowledge_item_ingestion_service(settings)
+            await build_knowledge_item_ingestion_service(
+                settings, provider=model_config_provider
+            )
         )
     return _knowledge_item_ingestion_service
 
@@ -240,7 +246,7 @@ async def _get_or_build_knowledge_item_search_service():
         )
 
         _knowledge_item_search_service = await build_knowledge_item_search_service(
-            settings
+            settings, provider=model_config_provider
         )
     return _knowledge_item_search_service
 
@@ -274,6 +280,19 @@ def get_document_chunking_service():
     return _document_chunking_service
 
 
+async def _get_or_build_document_chunking_service():
+    """Get or build the document chunking service with configured embedding provider."""
+    global _document_chunking_service
+    if _document_chunking_service is None:
+        from by_qa.knowledge_build.runtime import build_document_chunking_service
+
+        embedding_config = await model_config_provider.get_config("embedding")
+        _document_chunking_service = build_document_chunking_service(
+            settings, embedding_config=embedding_config
+        )
+    return _document_chunking_service
+
+
 async def resolve_knowledge_base_service():
     """Resolve the KB service dynamically so tests can monkeypatch the factory."""
     return await _get_or_build_knowledge_base_service()
@@ -289,9 +308,9 @@ async def resolve_knowledge_item_search_service():
     return await _get_or_build_knowledge_item_search_service()
 
 
-def resolve_document_chunking_service():
+async def resolve_document_chunking_service():
     """Resolve the document chunking service dynamically for optional modules."""
-    return get_document_chunking_service()
+    return await _get_or_build_document_chunking_service()
 
 
 def _detect_missing_packages(required_packages: tuple[str, ...]) -> list[str]:
@@ -334,7 +353,12 @@ async def _initialize_knowledge_base_runtime(enabled_modules: list[str]) -> None
         logger.info("knowledge_base lifecycle skipped: module_not_loaded")
         return
 
-    if not settings.resolved_kb_opengauss_dsn or not settings.embedding_model_name:
+    if not settings.resolved_kb_opengauss_dsn:
+        logger.info("knowledge_base lifecycle skipped: configuration_incomplete")
+        return
+
+    embedding_config = await model_config_provider.get_config("embedding")
+    if not embedding_config.model_name:
         logger.info("knowledge_base lifecycle skipped: configuration_incomplete")
         return
 
@@ -343,7 +367,9 @@ async def _initialize_knowledge_base_runtime(enabled_modules: list[str]) -> None
 
     kb_connection = await build_connection_factory(settings)()
     try:
-        bootstrap = await build_bootstrap_service(settings)
+        bootstrap = await build_bootstrap_service(
+            settings, provider=model_config_provider
+        )
         await bootstrap.apply(kb_connection)
         await _get_or_build_knowledge_base_service()
         await _get_or_build_knowledge_item_ingestion_service()

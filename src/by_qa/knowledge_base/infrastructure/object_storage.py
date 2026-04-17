@@ -1,6 +1,12 @@
 """Object storage helpers for knowledge base ingestion."""
 
+import asyncio
 from typing import Any
+
+from botocore.exceptions import ClientError
+
+_TRANSIENT_BUCKET_STATUS_CODES = {500, 502, 503, 504}
+_MISSING_BUCKET_ERROR_CODES = {"404", "NoSuchBucket", "NotFound"}
 
 
 class KnowledgeBaseObjectStorage:
@@ -16,6 +22,8 @@ class KnowledgeBaseObjectStorage:
         secure: bool,
         bucket_name: str,
         markdown_bucket_name: str,
+        bucket_ready_retries: int = 3,
+        bucket_ready_retry_delay_seconds: float = 0.5,
     ):
         self.session = session
         self.endpoint_url = endpoint_url
@@ -24,6 +32,8 @@ class KnowledgeBaseObjectStorage:
         self.secure = secure
         self.bucket_name = bucket_name
         self.markdown_bucket_name = markdown_bucket_name
+        self.bucket_ready_retries = bucket_ready_retries
+        self.bucket_ready_retry_delay_seconds = bucket_ready_retry_delay_seconds
 
     def _client(self):
         return self.session.client(
@@ -50,9 +60,39 @@ class KnowledgeBaseObjectStorage:
         async with self._client() as s3:
             for bucket in (self.bucket_name, self.markdown_bucket_name):
                 try:
-                    await s3.head_bucket(Bucket=bucket)
-                except Exception:
-                    await s3.create_bucket(Bucket=bucket)
+                    await self._call_bucket_operation_with_retry(
+                        s3.head_bucket, Bucket=bucket
+                    )
+                except Exception as exc:
+                    if not self._is_missing_bucket_error(exc):
+                        raise
+                    await self._call_bucket_operation_with_retry(
+                        s3.create_bucket, Bucket=bucket
+                    )
+
+    async def _call_bucket_operation_with_retry(self, operation, **kwargs):
+        attempts = max(1, self.bucket_ready_retries)
+        for attempt in range(attempts):
+            try:
+                return await operation(**kwargs)
+            except ClientError as exc:
+                if attempt >= attempts - 1 or not self._is_transient_bucket_error(exc):
+                    raise
+                await asyncio.sleep(self.bucket_ready_retry_delay_seconds)
+        return None
+
+    @staticmethod
+    def _is_transient_bucket_error(exc: ClientError) -> bool:
+        status_code = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        return status_code in _TRANSIENT_BUCKET_STATUS_CODES
+
+    @staticmethod
+    def _is_missing_bucket_error(exc: Exception) -> bool:
+        if not isinstance(exc, ClientError):
+            return True
+        error_code = exc.response.get("Error", {}).get("Code")
+        status_code = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        return error_code in _MISSING_BUCKET_ERROR_CODES or status_code == 404
 
     async def upload_temp_object(
         self, import_request_id, content, *, content_type, bucket_name=None

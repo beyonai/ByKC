@@ -117,6 +117,14 @@ cp .env.example .env
 - embedding 配置
 - 即时问答模型与运行时配置
 
+默认情况下，模型配置来自 `.env` 中的 `LLM_*`、`EMBEDDING_*` 和各角色模型变量。pip 安装后如果需要接入自建配置中心或模型网关，可以将 provider 包安装到同一个 Python 环境，并设置：
+
+```bash
+BY_QA_MODEL_CONFIG_PROVIDER=my_provider.package:CustomModelConfigProvider
+```
+
+该 provider 需要实现 `by_qa.core.ModelConfigProvider` 协议，返回 `by_qa.core.ModelConfig`。未设置时服务继续使用内置的环境变量 provider。
+
 如果使用 `knowledge_base`，需要同时准备 openGauss、MinIO、Redis 和 embedding 相关配置；如果运行完整的 `by-qa` 服务，`qa.instant` 也会复用同一套运行时基础设施。其中 Redis 是必需项，因为项目依赖 `by-framework` 提供运行时基础能力。
 
 ## 中间件依赖

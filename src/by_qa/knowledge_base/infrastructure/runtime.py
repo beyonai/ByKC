@@ -1,7 +1,7 @@
 """Runtime wiring helpers for knowledge base services."""
 
 from by_qa.config import Settings
-from by_qa.core.model_config import ModelConfigProvider
+from by_qa.core.model_config import ModelConfig, ModelConfigProvider
 from by_qa.knowledge_base.infrastructure.database import build_connection_factory
 from by_qa.knowledge_base.infrastructure.object_storage import (
     KnowledgeBaseObjectStorage,
@@ -41,7 +41,12 @@ from by_qa.knowledge_base.services.knowledge_item_search_service import (
 )
 
 
-def validate_knowledge_base_settings(settings: Settings) -> None:
+def validate_knowledge_base_settings(
+    settings: Settings,
+    *,
+    embedding_config: ModelConfig | None = None,
+    require_embedding: bool = True,
+) -> None:
     """Fail fast with a clear message when KB runtime settings are incomplete."""
     missing_fields: list[str] = []
     if not settings.resolved_kb_opengauss_dsn:
@@ -56,10 +61,21 @@ def validate_knowledge_base_settings(settings: Settings) -> None:
         missing_fields.append("KB_MINIO_BUCKET")
     if not settings.kb_minio_markdown_bucket:
         missing_fields.append("KB_MINIO_MARKDOWN_BUCKET")
-    if not settings.embedding_model_name:
-        missing_fields.append("EMBEDDING_MODEL_NAME")
-    if settings.embedding_dimension <= 0:
-        missing_fields.append("EMBEDDING_DIMENSION")
+    if require_embedding:
+        embedding_model_name = (
+            embedding_config.model_name
+            if embedding_config
+            else settings.embedding_model_name
+        )
+        embedding_dimension = (
+            embedding_config.dimension
+            if embedding_config and embedding_config.dimension is not None
+            else settings.embedding_dimension
+        )
+        if not embedding_model_name:
+            missing_fields.append("EMBEDDING_MODEL_NAME")
+        if embedding_dimension <= 0:
+            missing_fields.append("EMBEDDING_DIMENSION")
 
     if missing_fields:
         raise KnowledgeBaseConfigurationError(
@@ -68,9 +84,11 @@ def validate_knowledge_base_settings(settings: Settings) -> None:
         )
 
 
-async def build_object_storage(settings: Settings) -> KnowledgeBaseObjectStorage:
+async def build_object_storage(
+    settings: Settings, *, embedding_config: ModelConfig | None = None
+) -> KnowledgeBaseObjectStorage:
     """Build the async S3-compatible object storage service."""
-    validate_knowledge_base_settings(settings)
+    validate_knowledge_base_settings(settings, embedding_config=embedding_config)
     import aioboto3
 
     scheme = "https" if settings.kb_minio_secure else "http"
@@ -97,30 +115,39 @@ async def build_bootstrap_service(
     provider: ModelConfigProvider | None = None,
 ) -> KnowledgeBaseSchemaBootstrapService:
     """Build the schema bootstrap service for the configured embedding model."""
-    validate_knowledge_base_settings(settings)
     if provider is not None:
         embedding_config = await provider.get_config("embedding")
         model_name = embedding_config.model_name
         dimension = embedding_config.dimension or settings.embedding_dimension
     else:
+        embedding_config = None
         model_name = settings.embedding_model_name
         dimension = settings.embedding_dimension
+    validate_knowledge_base_settings(settings, embedding_config=embedding_config)
     return KnowledgeBaseSchemaBootstrapService(
         embedding_model_name=model_name,
         embedding_dimension=dimension,
     )
 
 
-async def build_knowledge_base_service(settings: Settings) -> KnowledgeBaseService:
+async def build_knowledge_base_service(
+    settings: Settings,
+    provider: ModelConfigProvider | None = None,
+) -> KnowledgeBaseService:
     """Build the knowledge base metadata service."""
-    validate_knowledge_base_settings(settings)
+    embedding_config = (
+        await provider.get_config("embedding") if provider is not None else None
+    )
+    validate_knowledge_base_settings(settings, embedding_config=embedding_config)
     return KnowledgeBaseService(
         connection_factory=build_connection_factory(settings),
         knowledge_base_repository=KnowledgeBaseRepository(),
         knowledge_fs_entry_repository=KnowledgeFsEntryRepository(),
         retrieval_projection_repository=RetrievalProjectionRepository(),
         knowledge_fetch_cache_repository=KnowledgeFetchCacheRepository(),
-        object_storage=await build_object_storage(settings),
+        object_storage=await build_object_storage(
+            settings, embedding_config=embedding_config
+        ),
         cache_root=settings.kb_cache_path,
         cache_ttl_seconds=settings.kb_fetch_cache_ttl_seconds,
     )
@@ -130,7 +157,7 @@ def build_knowledge_fetch_cache_cleanup_service(
     settings: Settings,
 ) -> KnowledgeFetchCacheCleanupService:
     """Build the periodic fetched-file cache cleanup service."""
-    validate_knowledge_base_settings(settings)
+    validate_knowledge_base_settings(settings, require_embedding=False)
     return KnowledgeFetchCacheCleanupService(
         connection_factory=build_connection_factory(settings),
         knowledge_fetch_cache_repository=KnowledgeFetchCacheRepository(),
@@ -143,13 +170,14 @@ async def build_knowledge_item_ingestion_service(
     provider: ModelConfigProvider | None = None,
 ) -> KnowledgeItemIngestionService:
     """Build the document ingestion service."""
-    validate_knowledge_base_settings(settings)
-    bootstrap = await build_bootstrap_service(settings, provider=provider)
     if provider is not None:
         embedding_config = await provider.get_config("embedding")
         dimension = embedding_config.dimension or settings.embedding_dimension
     else:
+        embedding_config = None
         dimension = settings.embedding_dimension
+    validate_knowledge_base_settings(settings, embedding_config=embedding_config)
+    bootstrap = await build_bootstrap_service(settings, provider=provider)
     return KnowledgeItemIngestionService(
         connection_factory=build_connection_factory(settings),
         knowledge_base_repository=KnowledgeBaseRepository(),
@@ -158,7 +186,9 @@ async def build_knowledge_item_ingestion_service(
             bootstrap.embedding_table_name
         ),
         retrieval_projection_repository=RetrievalProjectionRepository(),
-        object_storage=await build_object_storage(settings),
+        object_storage=await build_object_storage(
+            settings, embedding_config=embedding_config
+        ),
         embedding_dimension=dimension,
     )
 
@@ -168,7 +198,10 @@ async def build_knowledge_item_search_service(
     provider: ModelConfigProvider | None = None,
 ) -> KnowledgeItemSearchService:
     """Build the knowledge-base hybrid retrieval service."""
-    validate_knowledge_base_settings(settings)
+    embedding_config = (
+        await provider.get_config("embedding") if provider is not None else None
+    )
+    validate_knowledge_base_settings(settings, embedding_config=embedding_config)
     bootstrap = await build_bootstrap_service(settings, provider=provider)
     return KnowledgeItemSearchService(
         connection_factory=build_connection_factory(settings),

@@ -2,6 +2,8 @@
 
 from datetime import timedelta
 
+from botocore.exceptions import ClientError
+
 from by_qa.knowledge_base.infrastructure.object_storage import (
     KnowledgeBaseObjectStorage,
 )
@@ -189,3 +191,35 @@ async def test_ensure_buckets_creates_missing_buckets():
     call_names = [c[0] for c in client.calls]
     assert call_names.count("head_bucket") == 2
     assert call_names.count("create_bucket") == 2
+
+
+async def test_ensure_buckets_retries_transient_head_bucket_errors():
+    """Startup should tolerate a brief MinIO readiness window."""
+
+    class StartingS3Client(FakeS3Client):
+        def __init__(self):
+            super().__init__()
+            self._head_attempts = {}
+
+        async def head_bucket(self, **kwargs):
+            self.calls.append(("head_bucket", kwargs))
+            bucket = kwargs["Bucket"]
+            attempts = self._head_attempts.get(bucket, 0)
+            self._head_attempts[bucket] = attempts + 1
+            if attempts == 0:
+                raise ClientError(
+                    {
+                        "Error": {"Code": "502", "Message": "Bad Gateway"},
+                        "ResponseMetadata": {"HTTPStatusCode": 502},
+                    },
+                    "HeadBucket",
+                )
+
+    client = StartingS3Client()
+    service = _make_service(client)
+
+    await service.ensure_buckets()
+
+    call_names = [c[0] for c in client.calls]
+    assert call_names.count("head_bucket") == 4
+    assert "create_bucket" not in call_names

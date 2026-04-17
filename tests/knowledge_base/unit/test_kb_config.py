@@ -130,6 +130,36 @@ def test_validate_knowledge_base_settings_rejects_missing_runtime_config():
         raise AssertionError("expected KnowledgeBaseConfigurationError")
 
 
+def test_validate_knowledge_base_settings_accepts_provider_embedding_config():
+    """Knowledge-base validation should allow embedding settings from a provider."""
+    from by_qa.core.model_config import ModelConfig
+    from by_qa.knowledge_base.infrastructure.runtime import (
+        validate_knowledge_base_settings,
+    )
+
+    settings = Settings(
+        DB_HOST="127.0.0.1",
+        DB_USER="gaussdb",
+        DB_PASS="secret",
+        MINIO_ENDPOINT="127.0.0.1:19000",
+        MINIO_ACCESS_KEY="minio",
+        MINIO_SECRET_KEY="secret",
+        KB_MINIO_BUCKET="knowledge-base",
+        KB_MINIO_MARKDOWN_BUCKET="knowledge-base-markdown",
+        EMBEDDING_MODEL_NAME="",
+        EMBEDDING_DIMENSION=0,
+    )
+    embedding_config = ModelConfig(
+        model_name="custom-embedding",
+        temperature=0.0,
+        base_url="https://embedding.example.com/v1",
+        api_key="secret",
+        dimension=1024,
+    )
+
+    validate_knowledge_base_settings(settings, embedding_config=embedding_config)
+
+
 def test_settings_env_file_is_pinned_to_project_root():
     """Settings should read the project .env regardless of process cwd."""
     env_file = Settings.model_config["env_file"]

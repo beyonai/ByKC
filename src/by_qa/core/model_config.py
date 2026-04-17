@@ -1,6 +1,8 @@
 """Pluggable model configuration interface for LLM and embedding services."""
 
 from dataclasses import dataclass
+from importlib import import_module
+from os import getenv
 from typing import Protocol, runtime_checkable
 
 from by_qa.config import get_settings
@@ -83,4 +85,31 @@ class EnvModelConfigProvider:
         raise ValueError(f"Unknown model_type: {model_type!r}")
 
 
-__all__ = ["EnvModelConfigProvider", "ModelConfig", "ModelConfigProvider"]
+def load_model_config_provider() -> ModelConfigProvider:
+    """Load the configured model provider, falling back to environment settings."""
+    provider_path = getenv("BY_QA_MODEL_CONFIG_PROVIDER", "").strip()
+    if not provider_path:
+        return EnvModelConfigProvider()
+
+    module_name, separator, attribute_name = provider_path.partition(":")
+    if not separator or not module_name or not attribute_name:
+        raise ValueError(
+            "BY_QA_MODEL_CONFIG_PROVIDER must use the 'module:attribute' format."
+        )
+
+    module = import_module(module_name)
+    provider_factory = getattr(module, attribute_name)
+    provider = provider_factory() if callable(provider_factory) else provider_factory
+    if not isinstance(provider, ModelConfigProvider):
+        raise TypeError(
+            "BY_QA_MODEL_CONFIG_PROVIDER must resolve to a ModelConfigProvider."
+        )
+    return provider
+
+
+__all__ = [
+    "EnvModelConfigProvider",
+    "ModelConfig",
+    "ModelConfigProvider",
+    "load_model_config_provider",
+]

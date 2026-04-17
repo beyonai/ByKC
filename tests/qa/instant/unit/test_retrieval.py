@@ -49,6 +49,7 @@ def test_build_remote_search_requests_groups_kb_codes_by_service_and_path():
     assert requests == [
         (
             ("kb-search-service-a", "/api/v1/knowledgeItems/search"),
+            None,
             {
                 "query": "员工请假制度",
                 "knCodeList": ["hr-policy", "finance-policy"],
@@ -58,10 +59,71 @@ def test_build_remote_search_requests_groups_kb_codes_by_service_and_path():
         ),
         (
             ("kb-search-service-b", "/api/v1/knowledgeItems/search"),
+            None,
             {
                 "query": "员工请假制度",
                 "knCodeList": ["legal-policy"],
                 "topK": 5,
+                "searchMode": "mixedRecall",
+            },
+        ),
+    ]
+
+
+def test_build_remote_search_requests_aggregates_headers_by_service():
+    runtime_context = InstantSearchRuntimeContext(
+        retrieval=InstantQARetrievalConfig(
+            knowledge_bases=[
+                KnowledgeBaseConfig(
+                    kb_code="hr-policy",
+                    kb_name="HR",
+                    service_name="kb-search-service-a",
+                    path="/api/v1/knowledgeItems/search",
+                    headers={"Authorization": "Bearer service-token"},
+                ),
+                KnowledgeBaseConfig(
+                    kb_code="finance-policy",
+                    kb_name="Finance",
+                    service_name="kb-search-service-a",
+                    path="/api/v1/knowledgeItems/search",
+                    headers={"X-Tenant": "tenant-a"},
+                ),
+                KnowledgeBaseConfig(
+                    kb_code="legal-policy",
+                    kb_name="Legal",
+                    service_name="kb-search-service-a",
+                    path="/api/v1/knowledgeItems/searchByMeta",
+                ),
+            ]
+        )
+    )
+
+    requests = _build_remote_search_requests("员工请假制度", runtime_context)
+
+    assert requests == [
+        (
+            ("kb-search-service-a", "/api/v1/knowledgeItems/search"),
+            {
+                "Authorization": "Bearer service-token",
+                "X-Tenant": "tenant-a",
+            },
+            {
+                "query": "员工请假制度",
+                "knCodeList": ["hr-policy", "finance-policy"],
+                "topK": 20,
+                "searchMode": "mixedRecall",
+            },
+        ),
+        (
+            ("kb-search-service-a", "/api/v1/knowledgeItems/searchByMeta"),
+            {
+                "Authorization": "Bearer service-token",
+                "X-Tenant": "tenant-a",
+            },
+            {
+                "query": "员工请假制度",
+                "knCodeList": ["legal-policy"],
+                "topK": 20,
                 "searchMode": "mixedRecall",
             },
         ),
@@ -146,6 +208,49 @@ async def test_search_knowledge_items_uses_framework_client():
         },
     }
     assert results[0]["content"] == "第二条 异常考勤需提交说明。"
+
+
+@pytest.mark.asyncio
+async def test_search_knowledge_items_forwards_knowledge_base_headers():
+    runtime_context = InstantSearchRuntimeContext(
+        retrieval=InstantQARetrievalConfig(
+            knowledge_bases=[
+                KnowledgeBaseConfig(
+                    kb_code="hr-policy",
+                    kb_name="HR",
+                    service_name="kb-search-service-a",
+                    path="/api/v1/knowledgeItems/search",
+                    headers={"Authorization": "Bearer hr-token"},
+                )
+            ]
+        )
+    )
+    recorded = {}
+
+    async def fake_post(*, service_name, path, json, headers):
+        recorded["service_name"] = service_name
+        recorded["path"] = path
+        recorded["json"] = json
+        recorded["headers"] = headers
+        return {"resultObject": {"data": []}}
+
+    with patch(
+        "by_qa.qa.instant.runtime.retrieval.post_discovered_json",
+        side_effect=fake_post,
+    ):
+        await search_knowledge_items("员工请假制度", runtime_context)
+
+    assert recorded == {
+        "service_name": "kb-search-service-a",
+        "path": "/api/v1/knowledgeItems/search",
+        "json": {
+            "query": "员工请假制度",
+            "knCodeList": ["hr-policy"],
+            "topK": 20,
+            "searchMode": "mixedRecall",
+        },
+        "headers": {"Authorization": "Bearer hr-token"},
+    }
 
 
 @pytest.mark.asyncio

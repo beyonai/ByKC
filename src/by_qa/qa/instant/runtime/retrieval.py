@@ -59,13 +59,17 @@ async def _search_remote_knowledge_base(
     service_name: str,
     path: str,
     request_payload: dict[str, Any],
+    headers: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Call one discovered knowledge-base search API and return raw items."""
-    payload = await post_discovered_json(
-        service_name=service_name,
-        path=path,
-        json=request_payload,
-    )
+    request_kwargs: dict[str, Any] = {
+        "service_name": service_name,
+        "path": path,
+        "json": request_payload,
+    }
+    if headers:
+        request_kwargs["headers"] = headers
+    payload = await post_discovered_json(**request_kwargs)
     response_data = payload.get("resultObject", {})
     items = response_data.get("data", [])
     if not isinstance(items, list):
@@ -78,26 +82,37 @@ async def _search_remote_knowledge_base(
 def _build_remote_search_requests(
     query: str,
     runtime_context: InstantSearchRuntimeContext,
-) -> list[tuple[tuple[str, str], dict[str, Any]]]:
+) -> list[tuple[tuple[str, str], dict[str, str] | None, dict[str, Any]]]:
     """Build one API request per distinct service+path, grouped by kb_codes."""
     retrieval = runtime_context.retrieval
     grouped_kb_codes: dict[tuple[str, str], list[str]] = {}
+    service_headers: dict[str, dict[str, str]] = {}
 
     for knowledge_base in retrieval.knowledge_bases:
         kb_code = _get_kb_field(knowledge_base, "kb_code")
         service_name = _get_kb_field(knowledge_base, "service_name")
         path = _get_kb_field(knowledge_base, "path")
+        headers = _get_kb_field(knowledge_base, "headers")
         if not kb_code or not service_name or not path:
             continue
-        grouped_codes = grouped_kb_codes.setdefault((service_name, path), [])
+        normalized_headers = dict(headers) if headers else None
+        if normalized_headers:
+            # Headers are service-level credentials/options. The same service_name
+            # may expose multiple APIs, so collect headers once per service and
+            # apply the merged result to every request for that service. If a
+            # duplicate header key appears, the later config value wins.
+            service_headers.setdefault(service_name, {}).update(normalized_headers)
+        group_key = (service_name, path)
+        grouped_codes = grouped_kb_codes.setdefault(group_key, [])
         if kb_code not in grouped_codes:
             grouped_codes.append(kb_code)
 
-    requests: list[tuple[tuple[str, str], dict[str, Any]]] = []
-    for service_target, kb_codes in grouped_kb_codes.items():
+    requests: list[tuple[tuple[str, str], dict[str, str] | None, dict[str, Any]]] = []
+    for (service_name, path), kb_codes in grouped_kb_codes.items():
         requests.append(
             (
-                service_target,
+                (service_name, path),
+                service_headers.get(service_name) or None,
                 {
                     "query": query,
                     "knCodeList": kb_codes,
@@ -129,14 +144,18 @@ async def search_knowledge_items(
                 service_name=service_name,
                 path=path,
                 request_payload=request_payload,
+                headers=headers,
             )
-            for (service_name, path), request_payload in requests
+            for (service_name, path), headers, request_payload in requests
         ],
         return_exceptions=True,
     )
 
     aggregated_results: list[dict[str, Any]] = []
-    for ((service_name, path), request_payload), items in zip(requests, responses):
+    for ((service_name, path), headers, request_payload), items in zip(
+        requests, responses
+    ):
+        del headers
         if isinstance(items, Exception):
             error(
                 "[instant_search.retrieval] remote KB search failed: service_name=%s, path=%s, kb_codes=%s, error=%s",

@@ -46,6 +46,7 @@ async def request_discovered_json(
     service_name: str,
     path: str,
     json: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Call a discovered HTTP service and return the parsed JSON body."""
     discovery_client = _build_discovery_client()
@@ -54,11 +55,16 @@ async def request_discovered_json(
             discovery_client,
             retry_config=_build_retry_config(),
         ) as client:
+            request_kwargs: dict[str, Any] = {
+                "method": method,
+                "service_name": service_name,
+                "path": path,
+                "json": json,
+            }
+            if headers:
+                request_kwargs["headers"] = headers
             response = await client._request_with_discovery(
-                method=method,
-                service_name=service_name,
-                path=path,
-                json=json,
+                **request_kwargs,
             )
         if not response.is_success:
             raise RuntimeError(
@@ -77,6 +83,7 @@ async def post_discovered_json(
     service_name: str,
     path: str,
     json: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """POST JSON to a discovered service and return the parsed JSON body."""
     return await request_discovered_json(
@@ -84,6 +91,7 @@ async def post_discovered_json(
         service_name=service_name,
         path=path,
         json=json,
+        headers=headers,
     )
 
 

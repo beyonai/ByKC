@@ -13,6 +13,7 @@ class KnowledgeBaseConfig:
     service_name: str
     path: str
     kb_description: str | None = None
+    headers: dict[str, str] | None = None
 
 
 @dataclass

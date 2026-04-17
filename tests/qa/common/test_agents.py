@@ -20,7 +20,6 @@ def _mock_llm_service():
 def _mock_settings():
     settings = type("Settings", (), {})()
     settings.decomposer_max_sub_queries = 3
-    settings.context_max_tokens = 4096
     return settings
 
 

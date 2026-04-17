@@ -1,6 +1,5 @@
 """Result aggregator for synthesizing search results into answers."""
 
-from by_qa.config import get_settings
 from by_qa.qa.services.llm_service import LLMService
 
 
@@ -75,7 +74,6 @@ class ResultAggregatorAgent:
 4. 保持客观，不要添加检索结果中没有的信息"""
 
     def __init__(self, llm_service: LLMService):
-        self.max_tokens = get_settings().context_max_tokens
         self._llm_service = llm_service
 
     async def aggregate(

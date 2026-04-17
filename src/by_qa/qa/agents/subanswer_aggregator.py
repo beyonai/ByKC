@@ -1,6 +1,5 @@
 """Sub-answer aggregator for synthesizing sub-query answers into final answer."""
 
-from by_qa.config import get_settings
 from by_qa.qa.services.llm_service import LLMService
 
 
@@ -39,7 +38,6 @@ class SubAnswerAggregatorAgent:
 4. 回答应该直接回应用户的原始问题"""
 
     def __init__(self, llm_service: LLMService):
-        self.max_tokens = get_settings().context_max_tokens
         self._llm_service = llm_service
 
     def _build_sub_answers_context(self, sub_answers: list[dict]) -> str:

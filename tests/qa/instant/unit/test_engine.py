@@ -11,7 +11,6 @@ from by_qa.qa.instant.engine import InstantQAEngine
 
 def _mock_settings():
     settings = type("Settings", (), {})()
-    settings.context_max_tokens = 4096
     return settings
 
 

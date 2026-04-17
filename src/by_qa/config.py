@@ -144,7 +144,6 @@ class Settings(BaseSettings):
     embedding_max_model_len: int | None = Field(
         default=None, alias="EMBEDDING_MAX_MODEL_LEN"
     )
-    context_max_tokens: int = Field(default=128000, alias="CONTEXT_MAX_TOKENS")
     instant_search_max_context_ratio: float = Field(
         default=0.8, alias="INSTANT_SEARCH_MAX_CONTEXT_RATIO"
     )

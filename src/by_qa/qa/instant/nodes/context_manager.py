@@ -202,8 +202,7 @@ async def context_manager_node(
     del config_unused
     total_results = len(state["retrieval_results"])
     info(f"[context_manager] Managing context for {total_results} results")
-    settings = get_settings()
-    available_tokens = calculate_available_tokens(settings.context_max_tokens)
+    available_tokens = calculate_available_tokens(128000)
     truncated_results, truncated_ids_unused = truncate_retrieval_results_round_robin(
         state["retrieval_results"], available_tokens
     )

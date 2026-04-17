@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 import by_qa.main as main_module
 from by_qa.config import Settings
+from by_qa.core.model_config import ModelConfig
 from by_qa.knowledge_base.infrastructure.runtime import (
     build_knowledge_item_search_service,
 )
@@ -63,6 +64,25 @@ class FakeEmbeddingQueryService:
         return self.embedding
 
 
+class FakeModelConfigProvider:
+    """Stable model config provider isolated from local .env values."""
+
+    def __init__(self, settings: Settings):
+        self.settings = settings
+
+    async def get_config(self, model_type: str) -> ModelConfig:
+        if model_type != "embedding":
+            raise ValueError(f"Unexpected model_type: {model_type!r}")
+        return ModelConfig(
+            model_name=self.settings.embedding_model_name,
+            temperature=0.0,
+            base_url=self.settings.embedding_base_url,
+            api_key=self.settings.embedding_api_key,
+            dimension=self.settings.embedding_dimension,
+            distance_metric=self.settings.embedding_distance_metric,
+        )
+
+
 def _kb_settings(*, agent_data_path=None) -> Settings:
     updates = {
         "DB_HOST": os.getenv("DB_HOST", DEFAULT_DB_HOST),
@@ -91,6 +111,9 @@ def _kb_settings(*, agent_data_path=None) -> Settings:
 
 def _reset_runtime(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
     monkeypatch.setattr(main_module, "settings", settings)
+    monkeypatch.setattr(
+        main_module, "model_config_provider", FakeModelConfigProvider(settings)
+    )
     monkeypatch.setattr(main_module, "_knowledge_base_service", None)
     monkeypatch.setattr(main_module, "_knowledge_item_ingestion_service", None)
     monkeypatch.setattr(main_module, "_knowledge_item_search_service", None)
@@ -133,7 +156,9 @@ def _create_kb(client: TestClient, kb_name: str) -> str:
         json={"knName": kb_name},
     )
     assert response.status_code == 200, response.text
-    return response.json()["resultObject"]["knCode"]
+    payload = response.json()
+    assert payload["resultCode"] == "0", payload
+    return payload["resultObject"]["knCode"]
 
 
 def _create_directory(
@@ -204,7 +229,7 @@ def test_create_directory_returns_success_then_duplicate_path_conflict(monkeypat
     settings = _kb_settings()
     _reset_runtime(monkeypatch, settings)
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
 
     with TestClient(main_module.app) as client:
         kb_code = _create_kb(client, kb_name)
@@ -240,7 +265,7 @@ def test_create_empty_knowledge_base_exposes_root_and_rejects_duplicate_name(
     settings = _kb_settings()
     _reset_runtime(monkeypatch, settings)
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
 
     with TestClient(main_module.app) as client:
         first = client.post(
@@ -273,7 +298,7 @@ def test_create_directory_creates_parents_and_exposes_new_child_at_parent_level(
     settings = _kb_settings()
     _reset_runtime(monkeypatch, settings)
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
 
     with TestClient(main_module.app) as client:
         kb_code = _create_kb(client, kb_name)
@@ -317,7 +342,7 @@ def test_upload_and_build_makes_markdown_readable(monkeypatch, tmp_path):
         FakeDocumentChunkingService(markdown_text="line1\nline2\nline3\n"),
     )
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
     file_path = "/Policies/manual.md"
     markdown_content = "line1\nline2\nline3\n"
 
@@ -361,7 +386,7 @@ async def test_success_responses_follow_documented_path_contract(monkeypatch, tm
     )
     await _set_search_service(monkeypatch, settings)
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
     file_path = "/Policies/manual.md"
     markdown_content = "line1\nline2\nline3\n"
 
@@ -440,7 +465,7 @@ async def test_directory_rename_updates_parent_and_child_queries(monkeypatch, tm
         FakeDocumentChunkingService(markdown_text="alpha\nbeta\ngamma\n"),
     )
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
 
     with TestClient(main_module.app) as client:
         kb_code = _create_kb(client, kb_name)
@@ -537,7 +562,7 @@ def test_directory_delete_removes_subtree_from_follow_up_queries(monkeypatch, tm
         FakeDocumentChunkingService(markdown_text="line1\nline2\n"),
     )
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
 
     with TestClient(main_module.app) as client:
         kb_code = _create_kb(client, kb_name)
@@ -599,7 +624,7 @@ def test_upload_and_build_into_a_multilevel_directory_tree(monkeypatch, tmp_path
         FakeDocumentChunkingService(markdown_text="# Handbook\n\nalpha\nbeta\ngamma\n"),
     )
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
     original_bytes = b"%PDF-1.4 fake handbook bytes"
 
     with TestClient(main_module.app) as client:
@@ -688,7 +713,7 @@ def test_multilevel_directory_tree_lists_direct_children_and_supports_glob_match
         FakeDocumentChunkingService(markdown_text="content\n"),
     )
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
 
     with TestClient(main_module.app) as client:
         kb_code = _create_kb(client, kb_name)
@@ -758,7 +783,7 @@ def test_renaming_a_middle_directory_updates_all_descendant_paths(
         FakeDocumentChunkingService(markdown_text="line1\nline2\nline3\n"),
     )
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
 
     with TestClient(main_module.app) as client:
         kb_code = _create_kb(client, kb_name)
@@ -873,7 +898,7 @@ def test_deleting_a_middle_directory_removes_the_entire_descendant_subtree(
         FakeDocumentChunkingService(markdown_text="content\n"),
     )
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
 
     with TestClient(main_module.app) as client:
         kb_code = _create_kb(client, kb_name)
@@ -967,8 +992,8 @@ def test_updating_kb_name_does_not_affect_file_paths(monkeypatch, tmp_path):
         FakeDocumentChunkingService(markdown_text="guide-line1\nguide-line2\n"),
     )
 
-    old_name = f"Integration KB {uuid4().hex[:4]}"
-    new_name = f"Renamed KB {uuid4().hex[:4]}"
+    old_name = f"Integration KB {uuid4().hex[:12]}"
+    new_name = f"Renamed KB {uuid4().hex[:12]}"
 
     with TestClient(main_module.app) as client:
         kb_code = _create_kb(client, old_name)
@@ -1021,7 +1046,7 @@ def test_deleting_a_single_file_removes_it_from_follow_up_browse_and_read(
         FakeDocumentChunkingService(markdown_text="content\n"),
     )
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
 
     with TestClient(main_module.app) as client:
         kb_code = _create_kb(client, kb_name)
@@ -1092,7 +1117,7 @@ def test_read_file_rejects_invalid_markdown_line_windows(monkeypatch, tmp_path):
         FakeDocumentChunkingService(markdown_text="w1\nw2\nw3\n"),
     )
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
 
     with TestClient(main_module.app) as client:
         kb_code = _create_kb(client, kb_name)
@@ -1152,7 +1177,7 @@ def test_download_file_returns_original_bytes_with_non_ascii_filename(
         ),
     )
 
-    kb_name = f"DEMO知识库{uuid4().hex[:4]}"
+    kb_name = f"DEMO知识库{uuid4().hex[:12]}"
     file_path = "/考勤制度/开源项目最佳实践汇报.md"
     original_content = "# 最佳实践\n\n第一条：保持接口清晰。\n"
 
@@ -1198,7 +1223,7 @@ def test_download_file_returns_binary_pdf_bytes(monkeypatch, tmp_path):
         FakeDocumentChunkingService(markdown_text="# PDF\n\nbinary content\n"),
     )
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
     original_bytes = b"%PDF-1.4 binary handbook bytes"
 
     with TestClient(main_module.app) as client:
@@ -1247,7 +1272,7 @@ async def test_search_returns_hits_for_content_imported_through_upload_and_build
     )
     await _set_search_service(monkeypatch, settings)
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
     original_bytes = b"%PDF-1.4 faq content"
 
     with TestClient(main_module.app) as client:
@@ -1292,7 +1317,7 @@ async def test_search_respects_file_type_filter(monkeypatch, tmp_path):
     )
     await _set_search_service(monkeypatch, settings)
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
 
     with TestClient(main_module.app) as client:
         kb_code = _create_kb(client, kb_name)
@@ -1343,7 +1368,7 @@ async def test_search_path_updates_after_middle_directory_rename(monkeypatch, tm
     )
     await _set_search_service(monkeypatch, settings)
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
 
     with TestClient(main_module.app) as client:
         kb_code = _create_kb(client, kb_name)
@@ -1420,7 +1445,7 @@ async def test_search_results_disappear_after_single_file_delete(monkeypatch, tm
     )
     await _set_search_service(monkeypatch, settings)
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
 
     with TestClient(main_module.app) as client:
         kb_code = _create_kb(client, kb_name)
@@ -1478,7 +1503,7 @@ async def test_search_results_disappear_after_middle_directory_delete(
     )
     await _set_search_service(monkeypatch, settings)
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
 
     with TestClient(main_module.app) as client:
         kb_code = _create_kb(client, kb_name)
@@ -1546,7 +1571,7 @@ async def test_deleting_a_knowledge_base_removes_root_visibility_readability_and
     )
     await _set_search_service(monkeypatch, settings)
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
 
     with TestClient(main_module.app) as client:
         kb_code = _create_kb(client, kb_name)
@@ -1621,7 +1646,7 @@ def test_renaming_a_multilevel_directory_to_a_sibling_name_conflicts_without_sta
     settings = _kb_settings(agent_data_path=tmp_path)
     _reset_runtime(monkeypatch, settings)
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
 
     with TestClient(main_module.app) as client:
         kb_code = _create_kb(client, kb_name)
@@ -1667,7 +1692,7 @@ def test_read_file_returns_not_built_error_when_file_not_built(monkeypatch, tmp_
     settings = _kb_settings(agent_data_path=tmp_path)
     _reset_runtime(monkeypatch, settings)
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
 
     with TestClient(main_module.app) as client:
         kb_code = _create_kb(client, kb_name)
@@ -1710,7 +1735,7 @@ def test_root_browse_multi_level_browse_and_full_markdown_read_work_together(
         FakeDocumentChunkingService(markdown_text="full-1\nfull-2\nfull-3\n"),
     )
 
-    kb_name = f"Integration KB {uuid4().hex[:4]}"
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
 
     with TestClient(main_module.app) as client:
         kb_code = _create_kb(client, kb_name)
@@ -1771,8 +1796,8 @@ def test_root_browse_lists_directories_in_each_knowledge_base(monkeypatch):
     settings = _kb_settings()
     _reset_runtime(monkeypatch, settings)
 
-    kb_one_name = f"KB One {uuid4().hex[:4]}"
-    kb_two_name = f"KB Two {uuid4().hex[:4]}"
+    kb_one_name = f"KB One {uuid4().hex[:12]}"
+    kb_two_name = f"KB Two {uuid4().hex[:12]}"
 
     with TestClient(main_module.app) as client:
         kb_one_code = _create_kb(client, kb_one_name)
@@ -1805,8 +1830,8 @@ async def test_search_supports_multi_kb_combinations(monkeypatch, tmp_path):
     )
     await _set_search_service(monkeypatch, settings)
 
-    kb_one_name = f"KB One {uuid4().hex[:4]}"
-    kb_two_name = f"KB Two {uuid4().hex[:4]}"
+    kb_one_name = f"KB One {uuid4().hex[:12]}"
+    kb_two_name = f"KB Two {uuid4().hex[:12]}"
 
     with TestClient(main_module.app) as client:
         kb_one_code = _create_kb(client, kb_one_name)
@@ -1946,7 +1971,7 @@ def test_create_kb_returns_configuration_error_when_runtime_settings_are_incompl
         response = client.post(
             "/api/v1/knowledgeBases/create",
             json={
-                "knName": f"KB {uuid4().hex[:4]}",
+                "knName": f"KB {uuid4().hex[:12]}",
                 "kb_name": "Broken Config KB",
                 "status": "ACTIVE",
             },

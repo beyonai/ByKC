@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 import by_qa.main as main_module
 from by_qa.config import Settings
+from by_qa.core.model_config import ModelConfig
 from by_qa.knowledge_base.infrastructure.database import build_connection_factory
 from by_qa.knowledge_common.schemas import KnowledgeItemChunkPayload
 
@@ -56,6 +57,25 @@ class FakeDocumentChunkingService:
         ]
 
 
+class FakeModelConfigProvider:
+    """Stable model config provider isolated from local .env values."""
+
+    def __init__(self, settings: Settings):
+        self.settings = settings
+
+    async def get_config(self, model_type: str) -> ModelConfig:
+        if model_type != "embedding":
+            raise ValueError(f"Unexpected model_type: {model_type!r}")
+        return ModelConfig(
+            model_name=self.settings.embedding_model_name,
+            temperature=0.0,
+            base_url=self.settings.embedding_base_url,
+            api_key=self.settings.embedding_api_key,
+            dimension=self.settings.embedding_dimension,
+            distance_metric=self.settings.embedding_distance_metric,
+        )
+
+
 def _kb_settings() -> Settings:
     return Settings(
         DB_HOST=os.getenv("DB_HOST", DEFAULT_DB_HOST),
@@ -77,6 +97,18 @@ def _kb_settings() -> Settings:
         EMBEDDING_DIMENSION=int(os.getenv("EMBEDDING_DIMENSION", "3")),
         EMBEDDING_DISTANCE_METRIC=os.getenv("EMBEDDING_DISTANCE_METRIC", "cosine"),
     )
+
+
+def _reset_runtime(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
+    monkeypatch.setattr(main_module, "settings", settings)
+    monkeypatch.setattr(
+        main_module, "model_config_provider", FakeModelConfigProvider(settings)
+    )
+    monkeypatch.setattr(main_module, "_knowledge_base_service", None)
+    monkeypatch.setattr(main_module, "_knowledge_item_ingestion_service", None)
+    monkeypatch.setattr(main_module, "_knowledge_item_search_service", None)
+    monkeypatch.setattr(main_module, "_knowledge_fetch_cache_cleanup_service", None)
+    monkeypatch.setattr(main_module, "_document_chunking_service", None)
 
 
 def _create_directory(
@@ -126,24 +158,17 @@ def _upload_and_build_file(
 def test_kb_api_end_to_end_persists_to_opengauss_and_minio(monkeypatch):
     """Creating a KB and uploading+building a document should persist DB and object storage state."""
     settings = _kb_settings()
-    monkeypatch.setattr(main_module, "settings", settings)
-    monkeypatch.setattr(main_module, "_knowledge_base_service", None)
-    monkeypatch.setattr(main_module, "_knowledge_item_ingestion_service", None)
-    monkeypatch.setattr(main_module, "_knowledge_item_search_service", None)
-    monkeypatch.setattr(main_module, "_knowledge_fetch_cache_cleanup_service", None)
-    monkeypatch.setattr(main_module, "_document_chunking_service", None)
+    _reset_runtime(monkeypatch, settings)
 
     fake_chunking = FakeDocumentChunkingService(
         markdown_text="# hello\nreal integration\n"
     )
-    monkeypatch.setattr(
-        main_module, "get_document_chunking_service", lambda: fake_chunking
-    )
+    monkeypatch.setattr(main_module, "_document_chunking_service", fake_chunking)
 
     with TestClient(main_module.app) as client:
         kb_response = client.post(
             "/api/v1/knowledgeBases/create",
-            json={"knName": f"Integration KB {uuid4().hex[:4]}"},
+            json={"knName": f"Integration KB {uuid4().hex[:12]}"},
         )
         assert kb_response.status_code == 200
         kb_code = kb_response.json()["resultObject"]["knCode"]
@@ -190,17 +215,12 @@ def test_kb_api_end_to_end_persists_to_opengauss_and_minio(monkeypatch):
 def test_read_file_requires_build_step(monkeypatch):
     """readFile should fail if the file was uploaded but not built."""
     settings = _kb_settings()
-    monkeypatch.setattr(main_module, "settings", settings)
-    monkeypatch.setattr(main_module, "_knowledge_base_service", None)
-    monkeypatch.setattr(main_module, "_knowledge_item_ingestion_service", None)
-    monkeypatch.setattr(main_module, "_knowledge_item_search_service", None)
-    monkeypatch.setattr(main_module, "_knowledge_fetch_cache_cleanup_service", None)
-    monkeypatch.setattr(main_module, "_document_chunking_service", None)
+    _reset_runtime(monkeypatch, settings)
 
     with TestClient(main_module.app) as client:
         create_resp = client.post(
             "/api/v1/knowledgeBases/create",
-            json={"knName": f"Integration KB {uuid4().hex[:4]}"},
+            json={"knName": f"Integration KB {uuid4().hex[:12]}"},
         )
         assert create_resp.status_code == 200
         kb_code = create_resp.json()["resultObject"]["knCode"]
@@ -239,22 +259,15 @@ def test_read_file_requires_build_step(monkeypatch):
 def test_read_file_succeeds_after_upload_and_build(monkeypatch):
     """readFile should succeed after upload + fileToMarkdownIndex."""
     settings = _kb_settings()
-    monkeypatch.setattr(main_module, "settings", settings)
-    monkeypatch.setattr(main_module, "_knowledge_base_service", None)
-    monkeypatch.setattr(main_module, "_knowledge_item_ingestion_service", None)
-    monkeypatch.setattr(main_module, "_knowledge_item_search_service", None)
-    monkeypatch.setattr(main_module, "_knowledge_fetch_cache_cleanup_service", None)
-    monkeypatch.setattr(main_module, "_document_chunking_service", None)
+    _reset_runtime(monkeypatch, settings)
 
     fake_chunking = FakeDocumentChunkingService(markdown_text="line1\nline2\nline3\n")
-    monkeypatch.setattr(
-        main_module, "get_document_chunking_service", lambda: fake_chunking
-    )
+    monkeypatch.setattr(main_module, "_document_chunking_service", fake_chunking)
 
     with TestClient(main_module.app) as client:
         create_resp = client.post(
             "/api/v1/knowledgeBases/create",
-            json={"knName": f"Integration KB {uuid4().hex[:4]}"},
+            json={"knName": f"Integration KB {uuid4().hex[:12]}"},
         )
         assert create_resp.status_code == 200
         kb_code = create_resp.json()["resultObject"]["knCode"]

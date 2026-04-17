@@ -30,6 +30,10 @@ class LLMService:
     async def _get_streaming_model(self, model_type: str = "generator") -> ChatOpenAI:
         return await self._get_model(model_type=model_type, streaming=True)
 
+    async def get_model_config(self, model_type: str):
+        """Return the ModelConfig for the given model role."""
+        return await self._provider.get_config(model_type)
+
     def _normalize_messages(
         self, messages: list[dict[str, str] | BaseMessage]
     ) -> list[BaseMessage]:

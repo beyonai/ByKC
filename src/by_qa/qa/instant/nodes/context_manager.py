@@ -212,9 +212,7 @@ async def context_manager_node(
         raise RuntimeError(
             "llm_service is required in runtime context for context_manager_node"
         )
-    generator_config = await runtime.context.llm_service._provider.get_config(
-        "generator"
-    )
+    generator_config = await runtime.context.llm_service.get_model_config("generator")
     if generator_config.max_model_len is None:
         raise RuntimeError(
             "GENERATOR_MAX_MODEL_LEN is required for context_manager_node"

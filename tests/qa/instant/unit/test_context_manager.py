@@ -1,5 +1,7 @@
 """Tests for context_manager_node runtime injection."""
 
+from types import SimpleNamespace
+
 import pytest
 
 from by_qa.core.model_config import ModelConfig
@@ -19,17 +21,7 @@ def _make_runtime(max_model_len):
 
     provider = type("P", (), {"get_config": get_config})()
     llm_service = LLMService(provider=provider)
-
-    class FakeContext:
-        pass
-
-    FakeContext.llm_service = llm_service
-
-    class FakeRuntime:
-        pass
-
-    FakeRuntime.context = FakeContext
-    return FakeRuntime
+    return SimpleNamespace(context=SimpleNamespace(llm_service=llm_service))
 
 
 @pytest.mark.asyncio

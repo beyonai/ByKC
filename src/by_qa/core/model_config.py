@@ -15,6 +15,7 @@ class ModelConfig:
     dimension: int | None = None
     distance_metric: str | None = None
     batch_max_texts: int | None = None
+    max_model_len: int | None = None
 
 
 @runtime_checkable
@@ -28,20 +29,45 @@ class EnvModelConfigProvider:
     async def get_config(self, model_type: str) -> ModelConfig:
         settings = get_settings()
         llm_map = {
-            "classifier": (settings.classifier_model, settings.classifier_temp),
-            "retrieval": (settings.retrieval_model, settings.retrieval_temp),
-            "generator": (settings.generator_model, settings.generator_temp),
-            "quality": (settings.quality_model, settings.quality_temp),
-            "decomposer": (settings.decomposer_model, settings.decomposer_temp),
-            "aggregator": (settings.aggregator_model, settings.aggregator_temp),
+            "classifier": (
+                settings.classifier_model,
+                settings.classifier_temp,
+                settings.classifier_max_model_len,
+            ),
+            "retrieval": (
+                settings.retrieval_model,
+                settings.retrieval_temp,
+                settings.retrieval_max_model_len,
+            ),
+            "generator": (
+                settings.generator_model,
+                settings.generator_temp,
+                settings.generator_max_model_len,
+            ),
+            "quality": (
+                settings.quality_model,
+                settings.quality_temp,
+                settings.quality_max_model_len,
+            ),
+            "decomposer": (
+                settings.decomposer_model,
+                settings.decomposer_temp,
+                settings.decomposer_max_model_len,
+            ),
+            "aggregator": (
+                settings.aggregator_model,
+                settings.aggregator_temp,
+                settings.aggregator_max_model_len,
+            ),
         }
         if model_type in llm_map:
-            model_name, temperature = llm_map[model_type]
+            model_name, temperature, max_model_len = llm_map[model_type]
             return ModelConfig(
                 model_name=model_name,
                 temperature=temperature,
                 base_url=settings.llm_base_url,
                 api_key=settings.llm_api_key,
+                max_model_len=max_model_len,
             )
         if model_type == "embedding":
             return ModelConfig(
@@ -52,6 +78,7 @@ class EnvModelConfigProvider:
                 dimension=settings.embedding_dimension,
                 distance_metric=settings.embedding_distance_metric,
                 batch_max_texts=settings.embedding_batch_max_texts,
+                max_model_len=settings.embedding_max_model_len,
             )
         raise ValueError(f"Unknown model_type: {model_type!r}")
 

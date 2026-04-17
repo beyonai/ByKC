@@ -123,6 +123,27 @@ class Settings(BaseSettings):
     )
     aggregator_model: str = Field(default="gpt-4o", alias="AGGREGATOR_MODEL")
     aggregator_temp: float = Field(default=0.7, alias="AGGREGATOR_TEMP")
+    classifier_max_model_len: int | None = Field(
+        default=None, alias="CLASSIFIER_MAX_MODEL_LEN"
+    )
+    retrieval_max_model_len: int | None = Field(
+        default=None, alias="RETRIEVAL_MAX_MODEL_LEN"
+    )
+    generator_max_model_len: int | None = Field(
+        default=None, alias="GENERATOR_MAX_MODEL_LEN"
+    )
+    quality_max_model_len: int | None = Field(
+        default=None, alias="QUALITY_MAX_MODEL_LEN"
+    )
+    decomposer_max_model_len: int | None = Field(
+        default=None, alias="DECOMPOSER_MAX_MODEL_LEN"
+    )
+    aggregator_max_model_len: int | None = Field(
+        default=None, alias="AGGREGATOR_MAX_MODEL_LEN"
+    )
+    embedding_max_model_len: int | None = Field(
+        default=None, alias="EMBEDDING_MAX_MODEL_LEN"
+    )
     context_max_tokens: int = Field(default=128000, alias="CONTEXT_MAX_TOKENS")
     instant_search_max_context_ratio: float = Field(
         default=0.8, alias="INSTANT_SEARCH_MAX_CONTEXT_RATIO"

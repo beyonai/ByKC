@@ -145,7 +145,6 @@ class InstantQAEngine:
                 final_answer="",
                 citations=[],
                 confidence=0.0,
-                max_tokens=128000,
                 messages=[HumanMessage(content=input_data.query)],
                 decomposition_time=None,
                 retrieval_time=None,

@@ -93,7 +93,6 @@ class InstantQAState(TypedDict):
     final_answer: str
     citations: list[dict[str, Any]]
     confidence: float
-    max_tokens: int
     messages: Annotated[list, add_messages]
     decomposition_time: Optional[float]
     retrieval_time: Optional[float]

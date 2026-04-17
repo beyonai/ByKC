@@ -4,11 +4,16 @@ from collections import defaultdict
 from typing import Dict, List, Tuple
 
 from langchain_core.messages import SystemMessage
-from langgraph.graph.state import RunnableConfig
 
 from by_qa.config import get_settings
 from by_qa.core.logger import info
+from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
 from by_qa.qa.instant.state import InstantSearchState, MultiHopState, SingleHopState
+
+try:
+    from langgraph.runtime import Runtime
+except ImportError:
+    Runtime = None  # type: ignore[assignment,misc]
 
 
 def estimate_tokens(text: str) -> int:
@@ -196,13 +201,27 @@ def build_context_for_llm(retrieval_results: List[Dict]) -> str:
 
 async def context_manager_node(
     state: InstantSearchState | SingleHopState | MultiHopState,
-    config_unused: RunnableConfig,
+    runtime: Runtime[InstantSearchRuntimeContext] = None,
 ) -> dict:
     """Context manager node for instant search."""
-    del config_unused
+    if (
+        runtime is None
+        or runtime.context is None
+        or runtime.context.llm_service is None
+    ):
+        raise RuntimeError(
+            "llm_service is required in runtime context for context_manager_node"
+        )
+    generator_config = await runtime.context.llm_service._provider.get_config(
+        "generator"
+    )
+    if generator_config.max_model_len is None:
+        raise RuntimeError(
+            "GENERATOR_MAX_MODEL_LEN is required for context_manager_node"
+        )
     total_results = len(state["retrieval_results"])
     info(f"[context_manager] Managing context for {total_results} results")
-    available_tokens = calculate_available_tokens(128000)
+    available_tokens = calculate_available_tokens(generator_config.max_model_len)
     truncated_results, truncated_ids_unused = truncate_retrieval_results_round_robin(
         state["retrieval_results"], available_tokens
     )

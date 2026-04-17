@@ -1,7 +1,11 @@
 """User-facing configuration for the instant QA capability."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Any, Callable
+
+from by_qa.qa.services.llm_service import LLMService
 
 
 @dataclass
@@ -53,8 +57,7 @@ class InstantQARetrievalConfig:
 class InstantQAConfig:
     """Code-level configuration for instantiating instant QA."""
 
-    model: str | None = None
-    llm_factory: Callable[..., Any] | None = None
+    llm_service: LLMService | None = None
     tools: list[Any] = field(default_factory=list)
     tool_providers: dict[str, Callable[..., list[Any]]] = field(default_factory=dict)
     prompt_overrides: dict[str, str] = field(default_factory=dict)

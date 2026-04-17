@@ -1,7 +1,7 @@
 """Result aggregator for synthesizing search results into answers."""
 
 from by_qa.config import get_settings
-from by_qa.qa.services.llm_service import get_llm_service
+from by_qa.qa.services.llm_service import LLMService
 
 
 def group_results_by_source(retrieval_results: list[dict]) -> dict[str, list[dict]]:
@@ -74,8 +74,9 @@ class ResultAggregatorAgent:
 3. 如果某些结果已被截断，请在回答中说明
 4. 保持客观，不要添加检索结果中没有的信息"""
 
-    def __init__(self):
+    def __init__(self, llm_service: LLMService):
         self.max_tokens = get_settings().context_max_tokens
+        self._llm_service = llm_service
 
     async def aggregate(
         self,
@@ -113,7 +114,7 @@ class ResultAggregatorAgent:
             },
         ]
 
-        llm = get_llm_service()
+        llm = self._llm_service
         response = await llm.generate(
             messages=messages,
             model_type="generator",
@@ -121,17 +122,3 @@ class ResultAggregatorAgent:
         )
 
         return response
-
-
-_aggregator = ResultAggregatorAgent()
-
-
-async def aggregate_results(
-    original_query: str,
-    retrieval_results: list[dict],
-    conversation_history: list[dict] | None = None,
-) -> str:
-    """Aggregate results (convenience function)."""
-    return await _aggregator.aggregate(
-        original_query, retrieval_results, conversation_history
-    )

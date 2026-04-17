@@ -5,10 +5,18 @@ from typing import Any, Dict
 
 from by_qa.core.logger import info
 from by_qa.qa.agents.subanswer_aggregator import SubAnswerAggregatorAgent
+from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
 from by_qa.qa.instant.state import InstantSearchState
 
+try:
+    from langgraph.runtime import Runtime
+except ImportError:
+    Runtime = None
 
-async def subanswer_aggregator_node(state: InstantSearchState) -> Dict[str, Any]:
+
+async def subanswer_aggregator_node(
+    state: InstantSearchState, runtime: Runtime[InstantSearchRuntimeContext] = None
+) -> Dict[str, Any]:
     start_time = time.time()
     sub_answers = state.get("sub_answers", [])
     original_query = state.get("original_query", "")
@@ -20,7 +28,12 @@ async def subanswer_aggregator_node(state: InstantSearchState) -> Dict[str, Any]
             "confidence": 0.0,
             "aggregation_time": time.time() - start_time,
         }
-    aggregator = SubAnswerAggregatorAgent()
+    llm_service = runtime.context.llm_service if runtime and runtime.context else None
+    if llm_service is None:
+        raise RuntimeError(
+            "llm_service is required in runtime context for subanswer_aggregator_node"
+        )
+    aggregator = SubAnswerAggregatorAgent(llm_service=llm_service)
     final_answer = await aggregator.aggregate(
         original_query=original_query, sub_answers=sub_answers
     )

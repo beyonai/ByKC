@@ -22,7 +22,7 @@ from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
 from by_qa.qa.instant.runtime.retrieval import search_knowledge_items
 from by_qa.qa.instant.state import MultiHopState
 from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
-from by_qa.qa.services.llm_service import get_llm_service
+from by_qa.qa.services.llm_service import LLMService
 
 
 def _build_indexed_results(
@@ -233,17 +233,11 @@ async def build_multi_hop_agent_graph(
     system_prompt: str | None = None,
     extra_tools: List[Any] | None = None,
     extra_middleware: List[Any] | None = None,
-    model: Any | None = None,
-    llm_factory: Any | None = None,
+    llm_service: LLMService,
 ):
     """Build the configurable multi-hop agent graph."""
     settings = get_settings()
-    llm_service = get_llm_service()
-    llm = model
-    if llm is None and llm_factory is not None:
-        llm = llm_factory("retrieval")
-    if llm is None:
-        llm = llm_service._get_streaming_model("retrieval")
+    llm = await llm_service._get_streaming_model("retrieval")
     checkpointer = await create_checkpointer_async(settings)
     tools = [parallel_retrieval, next_hop, finalize] + (extra_tools or [])
     middleware = [MultiHopMiddleware(settings)] + (extra_middleware or [])

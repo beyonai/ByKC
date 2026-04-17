@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 
+from by_qa.core.model_config import EnvModelConfigProvider, ModelConfigProvider
 from by_qa.knowledge_base.services.errors import KnowledgeBaseConfigurationError
 
 
@@ -13,30 +14,33 @@ class EmbeddingQueryService:
     """Generate query embeddings from the configured embedding endpoint."""
 
     def __init__(
-        self, *, base_url: str, api_key: str, model_name: str, timeout: float = 30.0
+        self,
+        *,
+        provider: ModelConfigProvider | None = None,
+        timeout: float = 30.0,
     ):
-        self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
-        self.model_name = model_name
+        self._provider = provider or EnvModelConfigProvider()
         self.timeout = timeout
 
     async def embed_query(self, query: str) -> list[float]:
         """Embed a search query using an OpenAI-compatible embedding API."""
-        if not self.base_url:
+        config = await self._provider.get_config("embedding")
+        base_url = config.base_url.rstrip("/")
+        if not base_url:
             raise KnowledgeBaseConfigurationError(
                 "EMBEDDING_BASE_URL is required for retrieval"
             )
 
         headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        if config.api_key:
+            headers["Authorization"] = f"Bearer {config.api_key}"
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.post(
-                    f"{self.base_url}/embeddings",
+                    f"{base_url}/embeddings",
                     headers=headers,
-                    json={"model": self.model_name, "input": query},
+                    json={"model": config.model_name, "input": query},
                 )
                 response.raise_for_status()
         except httpx.HTTPError as exc:

@@ -22,8 +22,16 @@ from by_qa.core.logger import (
     setup_logger,
     warning,
 )
+from by_qa.core.model_config import (
+    EnvModelConfigProvider,
+    ModelConfig,
+    ModelConfigProvider,
+)
 
 __all__ = [
+    "EnvModelConfigProvider",
+    "ModelConfig",
+    "ModelConfigProvider",
     "get_logger",
     "setup_logger",
     "set_session_id",

@@ -5,39 +5,48 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from by_qa.core.exceptions import LLMGenerationError
+from by_qa.core.model_config import ModelConfig
 from by_qa.qa.services.llm_service import LLMService
 
 
-def _mock_settings():
-    settings = type("Settings", (), {})()
-    settings.classifier_model = "classifier-model"
-    settings.classifier_temp = 0.0
-    settings.retrieval_model = "retrieval-model"
-    settings.retrieval_temp = 0.1
-    settings.generator_model = "generator-model"
-    settings.generator_temp = 0.2
-    settings.quality_model = "quality-model"
-    settings.quality_temp = 0.3
-    settings.llm_base_url = "https://example.com/v1"
-    settings.llm_api_key = "secret"
-    return settings
+def _mock_provider():
+    async def get_config(model_type: str) -> ModelConfig:
+        configs = {
+            "classifier": ModelConfig(
+                "classifier-model", 0.0, "https://example.com/v1", "secret"
+            ),
+            "retrieval": ModelConfig(
+                "retrieval-model", 0.1, "https://example.com/v1", "secret"
+            ),
+            "generator": ModelConfig(
+                "generator-model", 0.2, "https://example.com/v1", "secret"
+            ),
+            "quality": ModelConfig(
+                "quality-model", 0.3, "https://example.com/v1", "secret"
+            ),
+        }
+        return configs[model_type]
+
+    provider = type("Provider", (), {"get_config": get_config})()
+    return provider
+
+
+def _mock_model(side_effect=None):
+    return type(
+        "Model",
+        (),
+        {"ainvoke": AsyncMock(side_effect=side_effect)},
+    )()
 
 
 @pytest.mark.asyncio
 async def test_generate_raises_stable_error_when_model_call_fails():
-    with patch(
-        "by_qa.qa.services.llm_service.get_settings", return_value=_mock_settings()
-    ):
-        service = LLMService()
+    service = LLMService(provider=_mock_provider())
 
     with patch.object(
         service,
         "_get_streaming_model",
-        return_value=type(
-            "Model",
-            (),
-            {"ainvoke": AsyncMock(side_effect=RuntimeError("boom"))},
-        )(),
+        new=AsyncMock(return_value=_mock_model(side_effect=RuntimeError("boom"))),
     ):
         with pytest.raises(LLMGenerationError) as exc_info:
             await service.generate([{"role": "user", "content": "hi"}])
@@ -48,19 +57,12 @@ async def test_generate_raises_stable_error_when_model_call_fails():
 
 @pytest.mark.asyncio
 async def test_generate_raises_stable_error_when_json_mode_fails():
-    with patch(
-        "by_qa.qa.services.llm_service.get_settings", return_value=_mock_settings()
-    ):
-        service = LLMService()
+    service = LLMService(provider=_mock_provider())
 
     with patch.object(
         service,
         "_get_streaming_model",
-        return_value=type(
-            "Model",
-            (),
-            {"ainvoke": AsyncMock(side_effect=RuntimeError("boom"))},
-        )(),
+        new=AsyncMock(return_value=_mock_model(side_effect=RuntimeError("boom"))),
     ):
         with pytest.raises(LLMGenerationError) as exc_info:
             await service.generate([{"role": "user", "content": "hi"}], json_mode=True)
@@ -71,19 +73,12 @@ async def test_generate_raises_stable_error_when_json_mode_fails():
 
 @pytest.mark.asyncio
 async def test_check_health_returns_unhealthy_payload_on_failure():
-    with patch(
-        "by_qa.qa.services.llm_service.get_settings", return_value=_mock_settings()
-    ):
-        service = LLMService()
+    service = LLMService(provider=_mock_provider())
 
     with patch.object(
         service,
         "_get_model",
-        return_value=type(
-            "Model",
-            (),
-            {"ainvoke": AsyncMock(side_effect=RuntimeError("down"))},
-        )(),
+        new=AsyncMock(return_value=_mock_model(side_effect=RuntimeError("down"))),
     ):
         result = await service.check_health()
 

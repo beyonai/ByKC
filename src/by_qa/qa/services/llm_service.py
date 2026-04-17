@@ -5,40 +5,30 @@ from typing import Any, AsyncGenerator
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
-from by_qa.config import get_settings
 from by_qa.core.exceptions import LLMGenerationError
+from by_qa.core.model_config import EnvModelConfigProvider, ModelConfigProvider
 
 
 class LLMService:
     """Service for LLM interactions."""
 
-    def __init__(self):
-        self.settings = get_settings()
+    def __init__(self, provider: ModelConfigProvider | None = None):
+        self._provider = provider or EnvModelConfigProvider()
 
-    def _get_model(
+    async def _get_model(
         self, model_type: str = "retrieval", streaming: bool = False
     ) -> ChatOpenAI:
-        model_map = {
-            "classifier": (
-                self.settings.classifier_model,
-                self.settings.classifier_temp,
-            ),
-            "retrieval": (self.settings.retrieval_model, self.settings.retrieval_temp),
-            "generator": (self.settings.generator_model, self.settings.generator_temp),
-            "quality": (self.settings.quality_model, self.settings.quality_temp),
-        }
-        model_name, temperature = model_map.get(model_type, model_map["generator"])
+        config = await self._provider.get_config(model_type)
         return ChatOpenAI(
-            model=model_name,
-            temperature=temperature,
-            base_url=self.settings.llm_base_url,
-            api_key=self.settings.llm_api_key,
+            model=config.model_name,
+            temperature=config.temperature,
+            base_url=config.base_url,
+            api_key=config.api_key,
             streaming=streaming,
         )
 
-    def _get_streaming_model(self, model_type: str = "generator") -> ChatOpenAI:
-        """Get a configured streaming model."""
-        return self._get_model(model_type=model_type, streaming=True)
+    async def _get_streaming_model(self, model_type: str = "generator") -> ChatOpenAI:
+        return await self._get_model(model_type=model_type, streaming=True)
 
     def _normalize_messages(
         self, messages: list[dict[str, str] | BaseMessage]
@@ -65,7 +55,7 @@ class LLMService:
         json_mode: bool = False,
     ) -> str:
         try:
-            model = self._get_streaming_model(model_type=model_type)
+            model = await self._get_streaming_model(model_type=model_type)
             normalized = self._normalize_messages(messages)
             if json_mode:
                 response = await model.ainvoke(
@@ -86,7 +76,7 @@ class LLMService:
         model_type: str = "generator",
     ) -> AsyncGenerator[str, None]:
         try:
-            model = self._get_streaming_model(model_type=model_type)
+            model = await self._get_streaming_model(model_type=model_type)
             normalized = self._normalize_messages(messages)
             async for chunk in model.astream(normalized):
                 if chunk.content:
@@ -102,35 +92,25 @@ class LLMService:
         async for chunk in self.generate_stream(messages, model_type):
             yield chunk
 
-    def bind_tools(self, tools: list[Any], model_type: str = "retrieval") -> Any:
-        model = self._get_streaming_model(model_type=model_type)
+    async def bind_tools(self, tools: list[Any], model_type: str = "retrieval") -> Any:
+        model = await self._get_streaming_model(model_type=model_type)
         return model.bind_tools(tools)
 
     async def ainvoke(self, messages: list[Any], model_type: str = "retrieval") -> Any:
-        model = self._get_streaming_model(model_type=model_type)
+        model = await self._get_streaming_model(model_type=model_type)
         normalized = self._normalize_messages(messages)
         return await model.ainvoke(normalized)
 
     async def check_health(self) -> dict[str, Any]:
         """Check LLM service health."""
         try:
-            model = self._get_model("classifier")
+            model = await self._get_model("classifier")
             await model.ainvoke([HumanMessage(content="Hi")])
+            config = await self._provider.get_config("classifier")
             return {
                 "status": "healthy",
-                "model": self.settings.classifier_model,
+                "model": config.model_name,
                 "response_time": "ok",
             }
         except Exception as exc:  # pylint: disable=broad-exception-caught
             return {"status": "unhealthy", "error": str(exc)}
-
-
-_llm_service: LLMService | None = None
-
-
-def get_llm_service() -> LLMService:
-    """Get or create the QA-scoped LLM service."""
-    global _llm_service
-    if _llm_service is None:
-        _llm_service = LLMService()
-    return _llm_service

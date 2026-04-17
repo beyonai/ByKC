@@ -5,6 +5,11 @@ from typing import Any, Dict, List
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 
+try:
+    from langgraph.runtime import Runtime
+except ImportError:
+    Runtime = None  # type: ignore[assignment,misc]
+
 from by_qa.config import get_settings
 from by_qa.core.logger import error, info
 from by_qa.qa.instant.agents.multi_hop_react import (
@@ -15,7 +20,7 @@ from by_qa.qa.instant.nodes.node_enum import NodeNames
 from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
 from by_qa.qa.instant.state import MultiHopState, SubAnswer
 from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
-from by_qa.qa.services.llm_service import get_llm_service
+from by_qa.qa.services.llm_service import LLMService
 
 
 def _normalize_to_list(value):
@@ -54,7 +59,11 @@ def _calculate_confidence(retrieval_results: List[Dict]) -> float:
     return sum(scores) / len(scores) if scores else 0.0
 
 
-async def multi_hop_summary_node(state: MultiHopState) -> Dict[str, Any]:
+async def multi_hop_summary_node(
+    state: MultiHopState,
+    runtime: Runtime[InstantSearchRuntimeContext] = None,
+    llm: LLMService | None = None,
+) -> Dict[str, Any]:
     sub_query = state.get("sub_query", {})
     intermediate_results = state.get("intermediate_results", [])
     all_retrieval_results = state.get("all_retrieval_results", [])
@@ -98,7 +107,12 @@ async def multi_hop_summary_node(state: MultiHopState) -> Dict[str, Any]:
     intermediate_context = (
         "\n".join(context_parts) if context_parts else "未找到中间步骤信息。"
     )
-    llm = get_llm_service()
+    if llm is None and runtime and runtime.context:
+        llm = runtime.context.llm_service
+    if llm is None:
+        raise RuntimeError(
+            "llm_service is required in runtime context for multi_hop_summary_node"
+        )
     messages = [
         SystemMessage(
             content="""你是一个专业的信息整合专家。你的任务是整合多跳检索的结果，生成最终的综合答案。
@@ -186,23 +200,21 @@ def multi_hop_error_node(state: MultiHopState, error_msg: str) -> Dict[str, Any]
     }
 
 
-async def build_multi_hop_subgraph(config=None):
+async def build_multi_hop_subgraph(config=None, llm_service=None):
     """Build multi-hop subgraph using dedicated agent assembly."""
+    if llm_service is None:
+        raise ValueError("llm_service is required to build the multi-hop subgraph")
     settings = get_settings()
     checkpointer = await create_checkpointer_async(settings)
     config_data = config or {}
     prompt_overrides = getattr(config_data, "prompt_overrides", None)
     tool_providers = getattr(config_data, "tool_providers", None)
     agent_middleware = getattr(config_data, "agent_middleware", None)
-    llm_factory = getattr(config_data, "llm_factory", None)
-    model = getattr(config_data, "model", None)
     tools = getattr(config_data, "tools", None)
     if isinstance(config_data, dict):
         prompt_overrides = prompt_overrides or config_data.get("prompt_overrides", {})
         tool_providers = tool_providers or config_data.get("tool_providers", {})
         agent_middleware = agent_middleware or config_data.get("agent_middleware", {})
-        llm_factory = llm_factory or config_data.get("llm_factory")
-        model = model or config_data.get("model")
         tools = tools or config_data.get("tools", [])
     prompt_overrides = prompt_overrides or {}
     tool_providers = tool_providers or {}
@@ -215,9 +227,9 @@ async def build_multi_hop_subgraph(config=None):
         system_prompt=prompt_overrides.get("multi_hop"),
         extra_tools=[*tools, *provider_tools],
         extra_middleware=_normalize_to_list(agent_middleware.get("multi_hop")),
-        model=model,
-        llm_factory=llm_factory,
+        llm_service=llm_service,
     )
+
     workflow = StateGraph(MultiHopState, context_schema=InstantSearchRuntimeContext)
     workflow.add_node(NodeNames.MULTI_HOP_ENTRY.value, multi_hop_entry_node)
     workflow.add_node(NodeNames.MULTI_HOP_AGENT.value, agent_graph)

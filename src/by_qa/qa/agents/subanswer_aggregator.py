@@ -1,7 +1,7 @@
 """Sub-answer aggregator for synthesizing sub-query answers into final answer."""
 
 from by_qa.config import get_settings
-from by_qa.qa.services.llm_service import get_llm_service
+from by_qa.qa.services.llm_service import LLMService
 
 
 class SubAnswerAggregatorAgent:
@@ -38,8 +38,9 @@ class SubAnswerAggregatorAgent:
 3. 如果某些子查询未能找到答案，说明该部分信息缺失
 4. 回答应该直接回应用户的原始问题"""
 
-    def __init__(self):
+    def __init__(self, llm_service: LLMService):
         self.max_tokens = get_settings().context_max_tokens
+        self._llm_service = llm_service
 
     def _build_sub_answers_context(self, sub_answers: list[dict]) -> str:
         if not sub_answers:
@@ -85,7 +86,7 @@ class SubAnswerAggregatorAgent:
             },
         ]
 
-        llm = get_llm_service()
+        llm = self._llm_service
         response = await llm.generate(
             messages=messages,
             model_type="generator",
@@ -93,14 +94,3 @@ class SubAnswerAggregatorAgent:
         )
 
         return response
-
-
-_subanswer_aggregator = SubAnswerAggregatorAgent()
-
-
-async def aggregate_sub_answers(
-    original_query: str,
-    sub_answers: list[dict],
-) -> str:
-    """Aggregate sub-answers (convenience function)."""
-    return await _subanswer_aggregator.aggregate(original_query, sub_answers)

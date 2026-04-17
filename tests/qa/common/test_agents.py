@@ -1,15 +1,20 @@
-"""Tests for shared QA agents and compatibility helpers."""
+"""Tests for shared QA agents."""
 
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from by_qa.qa.agents.query_decomposer import (
-    QueryDecomposerAgent,
-    decompose_query_with_history,
-)
-from by_qa.qa.agents.result_aggregator import aggregate_results
-from by_qa.qa.agents.subanswer_aggregator import aggregate_sub_answers
+from by_qa.core.model_config import ModelConfig
+from by_qa.qa.agents.query_decomposer import QueryDecomposerAgent
+from by_qa.qa.services.llm_service import LLMService
+
+
+def _mock_llm_service():
+    async def get_config(self, model_type: str) -> ModelConfig:  # pylint: disable=unused-argument
+        return ModelConfig("m", 0.0, "http://x", "k")
+
+    provider = type("P", (), {"get_config": get_config})()
+    return LLMService(provider=provider)
 
 
 def _mock_settings():
@@ -20,7 +25,7 @@ def _mock_settings():
 
 
 @pytest.mark.asyncio
-async def test_decompose_query_with_history_returns_backward_compatible_shape():
+async def test_decompose_with_history_returns_backward_compatible_shape():
     fake_result = type("Result", (), {})()
     fake_result.sub_queries = [
         type(
@@ -38,10 +43,12 @@ async def test_decompose_query_with_history_returns_backward_compatible_shape():
     ]
 
     with patch(
-        "by_qa.qa.agents.query_decomposer.QueryDecomposerAgent.decompose",
-        new=AsyncMock(return_value=fake_result),
+        "by_qa.qa.agents.query_decomposer.get_settings", return_value=_mock_settings()
     ):
-        payload = await decompose_query_with_history("广州呢", "用户问南京办事处营收")
+        agent = QueryDecomposerAgent(llm_service=_mock_llm_service())
+
+    with patch.object(agent, "decompose", new=AsyncMock(return_value=fake_result)):
+        payload = await agent.decompose_with_history("广州呢", "用户问南京办事处营收")
 
     assert payload == [
         {
@@ -55,35 +62,11 @@ async def test_decompose_query_with_history_returns_backward_compatible_shape():
     ]
 
 
-@pytest.mark.asyncio
-async def test_aggregate_results_uses_global_agent():
-    with patch(
-        "by_qa.qa.agents.result_aggregator._aggregator.aggregate",
-        new=AsyncMock(return_value="final-answer"),
-    ) as aggregate:
-        answer = await aggregate_results("问题", [])
-
-    aggregate.assert_awaited_once_with("问题", [], None)
-    assert answer == "final-answer"
-
-
-@pytest.mark.asyncio
-async def test_aggregate_sub_answers_uses_global_agent():
-    with patch(
-        "by_qa.qa.agents.subanswer_aggregator._subanswer_aggregator.aggregate",
-        new=AsyncMock(return_value="final-answer"),
-    ) as aggregate:
-        answer = await aggregate_sub_answers("问题", [])
-
-    aggregate.assert_awaited_once_with("问题", [])
-    assert answer == "final-answer"
-
-
 def test_query_decomposer_keeps_rich_prompt_examples():
     with patch(
         "by_qa.qa.agents.query_decomposer.get_settings", return_value=_mock_settings()
     ):
-        agent = QueryDecomposerAgent()
+        agent = QueryDecomposerAgent(llm_service=_mock_llm_service())
 
     assert "唯一拆分标准" in agent.SYSTEM_PROMPT_WITH_HISTORY
     assert "多轮对话补全" in agent.SYSTEM_PROMPT_WITH_HISTORY

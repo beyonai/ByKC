@@ -5,12 +5,14 @@ from langgraph.types import Send
 
 from by_qa.config import get_settings
 from by_qa.qa.instant.config import InstantSearchAgentConfig
-from by_qa.qa.instant.graphs.workers import get_multi_hop_worker, get_single_hop_worker
+from by_qa.qa.instant.graphs.multi_hop import build_multi_hop_subgraph
+from by_qa.qa.instant.graphs.single_hop import build_single_hop_subgraph
 from by_qa.qa.instant.nodes import NodeNames, name2node
 from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
 from by_qa.qa.instant.runtime.factories import wrap_node
 from by_qa.qa.instant.state import InstantSearchState
 from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
+from by_qa.qa.services.llm_service import LLMService
 
 
 def dispatch_subgraph_workers(state: InstantSearchState):
@@ -53,6 +55,12 @@ async def build_instant_search_graph(
         node_callbacks = config_data.get("node_callbacks", {})
     node_callbacks = node_callbacks or {}
 
+    llm_service = getattr(config_data, "llm_service", None)
+    if isinstance(config_data, dict):
+        llm_service = llm_service or config_data.get("llm_service")
+    if llm_service is None:
+        llm_service = LLMService()
+
     def _node(name: NodeNames):
         return wrap_node(name.value, name2node[name], node_callbacks.get(name.value))
 
@@ -61,8 +69,12 @@ async def build_instant_search_graph(
     builder.add_node(NodeNames.ROUTER.value, _node(NodeNames.ROUTER))
     builder.add_node(NodeNames.FINAL_ANSWER.value, _node(NodeNames.FINAL_ANSWER))
 
-    single_hop_worker = await get_single_hop_worker(config=config)
-    multi_hop_worker = await get_multi_hop_worker(config=config)
+    single_hop_worker = await build_single_hop_subgraph(
+        config=config, llm_service=llm_service
+    )
+    multi_hop_worker = await build_multi_hop_subgraph(
+        config=config, llm_service=llm_service
+    )
     builder.add_node(NodeNames.SINGLE_HOP_WORKER.value, single_hop_worker)
     builder.add_node(NodeNames.MULTI_HOP_WORKER.value, multi_hop_worker)
     builder.add_node(

@@ -118,23 +118,21 @@ async def single_hop_summary_node(state: SingleHopState) -> Dict[str, Any]:
     }
 
 
-async def build_single_hop_subgraph(config=None):
+async def build_single_hop_subgraph(config=None, llm_service=None):
     """Build single-hop subgraph using dedicated agent assembly."""
+    if llm_service is None:
+        raise ValueError("llm_service is required to build the single-hop subgraph")
     settings = get_settings()
     checkpointer = await create_checkpointer_async(settings)
     config_data = config or {}
     prompt_overrides = getattr(config_data, "prompt_overrides", None)
     tool_providers = getattr(config_data, "tool_providers", None)
     agent_middleware = getattr(config_data, "agent_middleware", None)
-    llm_factory = getattr(config_data, "llm_factory", None)
-    model = getattr(config_data, "model", None)
     tools = getattr(config_data, "tools", None)
     if isinstance(config_data, dict):
         prompt_overrides = prompt_overrides or config_data.get("prompt_overrides", {})
         tool_providers = tool_providers or config_data.get("tool_providers", {})
         agent_middleware = agent_middleware or config_data.get("agent_middleware", {})
-        llm_factory = llm_factory or config_data.get("llm_factory")
-        model = model or config_data.get("model")
         tools = tools or config_data.get("tools", [])
     prompt_overrides = prompt_overrides or {}
     tool_providers = tool_providers or {}
@@ -147,8 +145,7 @@ async def build_single_hop_subgraph(config=None):
         system_prompt=prompt_overrides.get("single_hop"),
         extra_tools=[*tools, *provider_tools],
         extra_middleware=_normalize_to_list(agent_middleware.get("single_hop")),
-        model=model,
-        llm_factory=llm_factory,
+        llm_service=llm_service,
     )
 
     workflow = StateGraph(SingleHopState, context_schema=InstantSearchRuntimeContext)

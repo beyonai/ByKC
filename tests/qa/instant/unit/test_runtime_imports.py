@@ -10,7 +10,6 @@ def test_can_import_runtime_modules():
     assert importlib.import_module("by_qa.qa.instant.graphs.main")
     assert importlib.import_module("by_qa.qa.instant.graphs.multi_hop")
     assert importlib.import_module("by_qa.qa.instant.graphs.single_hop")
-    assert importlib.import_module("by_qa.qa.instant.graphs.workers")
     assert importlib.import_module("by_qa.qa.instant.nodes.context_manager")
     assert importlib.import_module("by_qa.qa.instant.nodes.decomposer")
     assert importlib.import_module("by_qa.qa.instant.nodes.final_answer")

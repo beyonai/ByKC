@@ -3,16 +3,24 @@
 import httpx
 import pytest
 
+from by_qa.core.model_config import ModelConfig
 from by_qa.knowledge_base.services.embedding_query_service import EmbeddingQueryService
 from by_qa.knowledge_base.services.errors import KnowledgeBaseConfigurationError
 
 
+def _make_provider(
+    base_url="https://embedding.example.com", api_key="secret", model_name="bge-m3"
+):
+    async def get_config(self, model_type: str) -> ModelConfig:  # pylint: disable=unused-argument
+        return ModelConfig(
+            model_name=model_name, temperature=0.0, base_url=base_url, api_key=api_key
+        )
+
+    return type("Provider", (), {"get_config": get_config})()
+
+
 def _make_service() -> EmbeddingQueryService:
-    return EmbeddingQueryService(
-        base_url="https://embedding.example.com",
-        api_key="secret",
-        model_name="bge-m3",
-    )
+    return EmbeddingQueryService(provider=_make_provider())
 
 
 async def test_embed_query_wraps_http_errors_as_configuration_errors(

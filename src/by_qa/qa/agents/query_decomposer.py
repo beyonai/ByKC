@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from by_qa.config import get_settings
-from by_qa.qa.services.llm_service import get_llm_service
+from by_qa.qa.services.llm_service import LLMService
 
 
 @dataclass
@@ -185,8 +185,9 @@ class QueryDecomposerAgent:
 ```
 """
 
-    def __init__(self):
+    def __init__(self, llm_service: LLMService):
         self.max_sub_queries = get_settings().decomposer_max_sub_queries
+        self._llm_service = llm_service
 
     def _generate_metadata(self, sub_queries: list[SubQuery]) -> dict:
         total = len(sub_queries)
@@ -210,7 +211,7 @@ class QueryDecomposerAgent:
     async def _call_llm(
         self, messages: list[dict], fallback_query: str
     ) -> DecompositionResult:
-        response = await get_llm_service().generate(
+        response = await self._llm_service.generate(
             messages=messages,
             model_type="classifier",
             json_mode=True,
@@ -309,28 +310,3 @@ class QueryDecomposerAgent:
             },
         ]
         return await self._call_llm(messages, query)
-
-
-_decomposer = QueryDecomposerAgent()
-
-
-async def decompose_query_with_history(
-    query: str, conversation_history: str | None = None
-) -> list[dict]:
-    """Decompose a query with conversation history (convenience function)."""
-    return await _decomposer.decompose_with_history(query, conversation_history)
-
-
-async def decompose_query(
-    query: str,
-    conversation_history: str | None = None,
-    analyze_hop_type: bool = True,
-    detect_dependencies: bool = True,
-) -> DecompositionResult:
-    """Convenience function for query decomposition."""
-    return await _decomposer.decompose(
-        query,
-        conversation_history,
-        analyze_hop_type,
-        detect_dependencies,
-    )

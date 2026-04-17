@@ -6,11 +6,14 @@ from typing import Any, Dict, List
 from langchain_core.messages import HumanMessage
 
 from by_qa.core.logger import info
-from by_qa.qa.instant.agents.decomposer import (
-    DecompositionResult,
-    decompose_instant_search_query,
-)
+from by_qa.qa.agents.query_decomposer import DecompositionResult, QueryDecomposerAgent
+from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
 from by_qa.qa.instant.state import InstantSearchState
+
+try:
+    from langgraph.runtime import Runtime
+except ImportError:
+    Runtime = None
 
 
 def _extract_user_queries(messages: List[Any], max_turns: int = 5) -> str:
@@ -40,7 +43,9 @@ def _extract_user_queries(messages: List[Any], max_turns: int = 5) -> str:
     return "\n".join(f"用户: {q}" for q in user_queries)
 
 
-async def decomposer_node(state: InstantSearchState) -> Dict[str, Any]:
+async def decomposer_node(
+    state: InstantSearchState, runtime: Runtime[InstantSearchRuntimeContext] = None
+) -> Dict[str, Any]:
     start_time = time.time()
     original_query = state["original_query"]
     messages = state.get("messages", [])
@@ -50,7 +55,14 @@ async def decomposer_node(state: InstantSearchState) -> Dict[str, Any]:
         info(
             f"[decomposer] Using {len(conversation_history.split(chr(10)))} previous user queries"
         )
-    result: DecompositionResult = await decompose_instant_search_query(
+    llm_service = runtime.context.llm_service if runtime and runtime.context else None
+    if llm_service is None:
+        raise RuntimeError(
+            "llm_service is required in runtime context for decomposer_node"
+        )
+    result: DecompositionResult = await QueryDecomposerAgent(
+        llm_service=llm_service
+    ).decompose(
         query=original_query,
         conversation_history=conversation_history,
         analyze_hop_type=True,

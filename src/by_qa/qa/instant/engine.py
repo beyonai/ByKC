@@ -3,7 +3,7 @@
 import json
 import traceback
 import uuid
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, fields, is_dataclass
 from typing import Any, AsyncGenerator
 
 from langchain_core.messages import HumanMessage
@@ -108,7 +108,12 @@ class InstantQAEngine:
             retrieval_config = InstantSearchRetrievalConfig(**retrieval_config)
         if not isinstance(retrieval_config, InstantSearchRetrievalConfig):
             retrieval_config = InstantSearchRetrievalConfig()
-        return InstantSearchRuntimeContext(retrieval=retrieval_config)
+        from by_qa.qa.services.llm_service import LLMService
+
+        llm_service = self.config.get("llm_service") or LLMService()
+        return InstantSearchRuntimeContext(
+            retrieval=retrieval_config, llm_service=llm_service
+        )
 
     def _get_runtime_context(self) -> InstantSearchRuntimeContext:
         if self._runtime_context is None:
@@ -276,7 +281,18 @@ def create_instant_search_agent(
     if config is None:
         normalized_config: dict[str, Any] = {}
     elif is_dataclass(config):
+        # Extract non-dataclass fields before asdict to avoid unsafe deepcopy
+        non_dc: dict[str, Any] = {}
+        for f in fields(config):
+            val = getattr(config, f.name)
+            if (
+                val is not None
+                and not is_dataclass(val)
+                and not isinstance(val, (dict, list, tuple, str, int, float, bool))
+            ):
+                non_dc[f.name] = val
         normalized_config = asdict(config)
+        normalized_config.update(non_dc)
     else:
         normalized_config = dict(config)
     return InstantSearchAgent(config=normalized_config)

@@ -1,6 +1,7 @@
 """Runtime wiring helpers for knowledge base services."""
 
 from by_qa.config import Settings
+from by_qa.core.model_config import ModelConfigProvider
 from by_qa.knowledge_base.infrastructure.database import build_connection_factory
 from by_qa.knowledge_base.infrastructure.object_storage import (
     KnowledgeBaseObjectStorage,
@@ -148,6 +149,7 @@ async def build_knowledge_item_ingestion_service(
 
 def build_knowledge_item_search_service(
     settings: Settings,
+    provider: ModelConfigProvider | None = None,
 ) -> KnowledgeItemSearchService:
     """Build the knowledge-base hybrid retrieval service."""
     validate_knowledge_base_settings(settings)
@@ -155,9 +157,5 @@ def build_knowledge_item_search_service(
     return KnowledgeItemSearchService(
         connection_factory=build_connection_factory(settings),
         search_repository=KnowledgeItemSearchRepository(bootstrap.embedding_table_name),
-        embedding_query_service=EmbeddingQueryService(
-            base_url=settings.embedding_base_url,
-            api_key=settings.embedding_api_key,
-            model_name=settings.embedding_model_name,
-        ),
+        embedding_query_service=EmbeddingQueryService(provider=provider),
     )

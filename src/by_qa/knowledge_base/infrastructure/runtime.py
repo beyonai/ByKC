@@ -92,12 +92,22 @@ async def build_object_storage(settings: Settings) -> KnowledgeBaseObjectStorage
     return storage
 
 
-def build_bootstrap_service(settings: Settings) -> KnowledgeBaseSchemaBootstrapService:
+async def build_bootstrap_service(
+    settings: Settings,
+    provider: ModelConfigProvider | None = None,
+) -> KnowledgeBaseSchemaBootstrapService:
     """Build the schema bootstrap service for the configured embedding model."""
     validate_knowledge_base_settings(settings)
+    if provider is not None:
+        embedding_config = await provider.get_config("embedding")
+        model_name = embedding_config.model_name
+        dimension = embedding_config.dimension or settings.embedding_dimension
+    else:
+        model_name = settings.embedding_model_name
+        dimension = settings.embedding_dimension
     return KnowledgeBaseSchemaBootstrapService(
-        embedding_model_name=settings.embedding_model_name,
-        embedding_dimension=settings.embedding_dimension,
+        embedding_model_name=model_name,
+        embedding_dimension=dimension,
     )
 
 
@@ -130,10 +140,16 @@ def build_knowledge_fetch_cache_cleanup_service(
 
 async def build_knowledge_item_ingestion_service(
     settings: Settings,
+    provider: ModelConfigProvider | None = None,
 ) -> KnowledgeItemIngestionService:
     """Build the document ingestion service."""
     validate_knowledge_base_settings(settings)
-    bootstrap = build_bootstrap_service(settings)
+    bootstrap = await build_bootstrap_service(settings, provider=provider)
+    if provider is not None:
+        embedding_config = await provider.get_config("embedding")
+        dimension = embedding_config.dimension or settings.embedding_dimension
+    else:
+        dimension = settings.embedding_dimension
     return KnowledgeItemIngestionService(
         connection_factory=build_connection_factory(settings),
         knowledge_base_repository=KnowledgeBaseRepository(),
@@ -143,17 +159,17 @@ async def build_knowledge_item_ingestion_service(
         ),
         retrieval_projection_repository=RetrievalProjectionRepository(),
         object_storage=await build_object_storage(settings),
-        embedding_dimension=settings.embedding_dimension,
+        embedding_dimension=dimension,
     )
 
 
-def build_knowledge_item_search_service(
+async def build_knowledge_item_search_service(
     settings: Settings,
     provider: ModelConfigProvider | None = None,
 ) -> KnowledgeItemSearchService:
     """Build the knowledge-base hybrid retrieval service."""
     validate_knowledge_base_settings(settings)
-    bootstrap = build_bootstrap_service(settings)
+    bootstrap = await build_bootstrap_service(settings, provider=provider)
     return KnowledgeItemSearchService(
         connection_factory=build_connection_factory(settings),
         search_repository=KnowledgeItemSearchRepository(bootstrap.embedding_table_name),

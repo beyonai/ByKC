@@ -106,13 +106,13 @@ def _set_document_chunking_service(
     monkeypatch.setattr(main_module, "_document_chunking_service", None)
 
 
-def _set_search_service(
+async def _set_search_service(
     monkeypatch: pytest.MonkeyPatch,
     settings: Settings,
     *,
     embedding: list[float] | None = None,
 ) -> None:
-    service = build_knowledge_item_search_service(settings)
+    service = await build_knowledge_item_search_service(settings)
     service.embedding_query_service = FakeEmbeddingQueryService(embedding)
     monkeypatch.setattr(main_module, "_knowledge_item_search_service", service)
 
@@ -352,7 +352,7 @@ def test_upload_and_build_makes_markdown_readable(monkeypatch, tmp_path):
 
 
 @pytest.mark.integration
-def test_success_responses_follow_documented_path_contract(monkeypatch, tmp_path):
+async def test_success_responses_follow_documented_path_contract(monkeypatch, tmp_path):
     """Successful responses should follow the documented path semantics."""
     settings = _kb_settings(agent_data_path=tmp_path)
     _reset_runtime(monkeypatch, settings)
@@ -360,7 +360,7 @@ def test_success_responses_follow_documented_path_contract(monkeypatch, tmp_path
         monkeypatch,
         FakeDocumentChunkingService(markdown_text="line1\nline2\nline3\n"),
     )
-    _set_search_service(monkeypatch, settings)
+    await _set_search_service(monkeypatch, settings)
 
     kb_name = f"Integration KB {uuid4().hex[:4]}"
     file_path = "/Policies/manual.md"
@@ -432,7 +432,7 @@ def test_success_responses_follow_documented_path_contract(monkeypatch, tmp_path
 
 
 @pytest.mark.integration
-def test_directory_rename_updates_parent_and_child_queries(monkeypatch, tmp_path):
+async def test_directory_rename_updates_parent_and_child_queries(monkeypatch, tmp_path):
     """Renaming a directory should update browse, match, and read behavior together."""
     settings = _kb_settings(agent_data_path=tmp_path)
     _reset_runtime(monkeypatch, settings)
@@ -1234,7 +1234,7 @@ def test_download_file_returns_binary_pdf_bytes(monkeypatch, tmp_path):
 
 
 @pytest.mark.integration
-def test_search_returns_hits_for_content_imported_through_upload_and_build(
+async def test_search_returns_hits_for_content_imported_through_upload_and_build(
     monkeypatch, tmp_path
 ):
     """Search user should hit content that was uploaded and built through the new flow."""
@@ -1246,7 +1246,7 @@ def test_search_returns_hits_for_content_imported_through_upload_and_build(
             markdown_text="# FAQ\n\nvacation policy carryover\n"
         ),
     )
-    _set_search_service(monkeypatch, settings)
+    await _set_search_service(monkeypatch, settings)
 
     kb_name = f"Integration KB {uuid4().hex[:4]}"
     original_bytes = b"%PDF-1.4 faq content"
@@ -1283,7 +1283,7 @@ def test_search_returns_hits_for_content_imported_through_upload_and_build(
 
 
 @pytest.mark.integration
-def test_search_respects_file_type_filter(monkeypatch, tmp_path):
+async def test_search_respects_file_type_filter(monkeypatch, tmp_path):
     """Search filters should keep only results matching the requested file type constraints."""
     settings = _kb_settings(agent_data_path=tmp_path)
     _reset_runtime(monkeypatch, settings)
@@ -1291,7 +1291,7 @@ def test_search_respects_file_type_filter(monkeypatch, tmp_path):
         monkeypatch,
         FakeDocumentChunkingService(markdown_text="annual leave handbook\n"),
     )
-    _set_search_service(monkeypatch, settings)
+    await _set_search_service(monkeypatch, settings)
 
     kb_name = f"Integration KB {uuid4().hex[:4]}"
 
@@ -1334,7 +1334,7 @@ def test_search_respects_file_type_filter(monkeypatch, tmp_path):
 
 
 @pytest.mark.integration
-def test_search_path_updates_after_middle_directory_rename(monkeypatch, tmp_path):
+async def test_search_path_updates_after_middle_directory_rename(monkeypatch, tmp_path):
     """Search results should follow the new file path after a middle directory rename."""
     settings = _kb_settings(agent_data_path=tmp_path)
     _reset_runtime(monkeypatch, settings)
@@ -1342,7 +1342,7 @@ def test_search_path_updates_after_middle_directory_rename(monkeypatch, tmp_path
         monkeypatch,
         FakeDocumentChunkingService(markdown_text="rename target sentence\n"),
     )
-    _set_search_service(monkeypatch, settings)
+    await _set_search_service(monkeypatch, settings)
 
     kb_name = f"Integration KB {uuid4().hex[:4]}"
 
@@ -1411,7 +1411,7 @@ def test_search_path_updates_after_middle_directory_rename(monkeypatch, tmp_path
 
 
 @pytest.mark.integration
-def test_search_results_disappear_after_single_file_delete(monkeypatch, tmp_path):
+async def test_search_results_disappear_after_single_file_delete(monkeypatch, tmp_path):
     """Deleting a file should remove its chunks from later search results."""
     settings = _kb_settings(agent_data_path=tmp_path)
     _reset_runtime(monkeypatch, settings)
@@ -1419,7 +1419,7 @@ def test_search_results_disappear_after_single_file_delete(monkeypatch, tmp_path
         monkeypatch,
         FakeDocumentChunkingService(markdown_text="search should disappear\n"),
     )
-    _set_search_service(monkeypatch, settings)
+    await _set_search_service(monkeypatch, settings)
 
     kb_name = f"Integration KB {uuid4().hex[:4]}"
 
@@ -1467,7 +1467,9 @@ def test_search_results_disappear_after_single_file_delete(monkeypatch, tmp_path
 
 
 @pytest.mark.integration
-def test_search_results_disappear_after_middle_directory_delete(monkeypatch, tmp_path):
+async def test_search_results_disappear_after_middle_directory_delete(
+    monkeypatch, tmp_path
+):
     """Deleting a middle directory should remove descendant file hits from search results."""
     settings = _kb_settings(agent_data_path=tmp_path)
     _reset_runtime(monkeypatch, settings)
@@ -1475,7 +1477,7 @@ def test_search_results_disappear_after_middle_directory_delete(monkeypatch, tmp
         monkeypatch,
         FakeDocumentChunkingService(markdown_text="subtree search disappears\n"),
     )
-    _set_search_service(monkeypatch, settings)
+    await _set_search_service(monkeypatch, settings)
 
     kb_name = f"Integration KB {uuid4().hex[:4]}"
 
@@ -1533,7 +1535,7 @@ def test_search_results_disappear_after_middle_directory_delete(monkeypatch, tmp
 
 
 @pytest.mark.integration
-def test_deleting_a_knowledge_base_removes_root_visibility_readability_and_search(
+async def test_deleting_a_knowledge_base_removes_root_visibility_readability_and_search(
     monkeypatch, tmp_path
 ):
     """Deleting a knowledge base should hide it from root browse, reads, and search."""
@@ -1543,7 +1545,7 @@ def test_deleting_a_knowledge_base_removes_root_visibility_readability_and_searc
         monkeypatch,
         FakeDocumentChunkingService(markdown_text="knowledge base removal search\n"),
     )
-    _set_search_service(monkeypatch, settings)
+    await _set_search_service(monkeypatch, settings)
 
     kb_name = f"Integration KB {uuid4().hex[:4]}"
 
@@ -1794,7 +1796,7 @@ def test_root_browse_lists_directories_in_each_knowledge_base(monkeypatch):
 
 
 @pytest.mark.integration
-def test_search_supports_multi_kb_combinations(monkeypatch, tmp_path):
+async def test_search_supports_multi_kb_combinations(monkeypatch, tmp_path):
     """Search should honor combined kb filters across multiple knowledge bases."""
     settings = _kb_settings(agent_data_path=tmp_path)
     _reset_runtime(monkeypatch, settings)
@@ -1802,7 +1804,7 @@ def test_search_supports_multi_kb_combinations(monkeypatch, tmp_path):
         monkeypatch,
         FakeDocumentChunkingService(markdown_text="annual leave matrix\n"),
     )
-    _set_search_service(monkeypatch, settings)
+    await _set_search_service(monkeypatch, settings)
 
     kb_one_name = f"KB One {uuid4().hex[:4]}"
     kb_two_name = f"KB Two {uuid4().hex[:4]}"

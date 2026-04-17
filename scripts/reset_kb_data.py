@@ -96,7 +96,7 @@ async def reset_database(settings: Settings) -> str:
                     "embedding_dimension": dimension,
                 }
             )
-            await build_bootstrap_service(bootstrap_settings).apply(connection)
+            await (await build_bootstrap_service(bootstrap_settings)).apply(connection)
         return schema_name
     finally:
         await connection.close()

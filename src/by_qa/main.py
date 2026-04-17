@@ -239,7 +239,9 @@ async def _get_or_build_knowledge_item_search_service():
             build_knowledge_item_search_service,
         )
 
-        _knowledge_item_search_service = build_knowledge_item_search_service(settings)
+        _knowledge_item_search_service = await build_knowledge_item_search_service(
+            settings
+        )
     return _knowledge_item_search_service
 
 
@@ -341,7 +343,8 @@ async def _initialize_knowledge_base_runtime(enabled_modules: list[str]) -> None
 
     kb_connection = await build_connection_factory(settings)()
     try:
-        await build_bootstrap_service(settings).apply(kb_connection)
+        bootstrap = await build_bootstrap_service(settings)
+        await bootstrap.apply(kb_connection)
         await _get_or_build_knowledge_base_service()
         await _get_or_build_knowledge_item_ingestion_service()
         cleanup = await _get_or_build_knowledge_fetch_cache_cleanup_service()

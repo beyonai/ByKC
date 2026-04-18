@@ -6,14 +6,14 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_openai import ChatOpenAI
 
 from by_qa.core.exceptions import LLMGenerationError
-from by_qa.core.model_config import EnvModelConfigProvider, ModelConfigProvider
+from by_qa.core.model_config import ModelConfigProvider, load_model_config_provider
 
 
 class LLMService:
     """Service for LLM interactions."""
 
     def __init__(self, provider: ModelConfigProvider | None = None):
-        self._provider = provider or EnvModelConfigProvider()
+        self._provider = provider or load_model_config_provider()
 
     async def _get_model(
         self, model_type: str = "retrieval", streaming: bool = False

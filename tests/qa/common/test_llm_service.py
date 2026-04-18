@@ -31,6 +31,19 @@ def _mock_provider():
     return provider
 
 
+def test_llm_service_defaults_to_configured_provider(monkeypatch):
+    provider = _mock_provider()
+
+    monkeypatch.setattr(
+        "by_qa.qa.services.llm_service.load_model_config_provider",
+        lambda: provider,
+    )
+
+    service = LLMService()
+
+    assert service._provider is provider
+
+
 def _mock_model(side_effect=None):
     return type(
         "Model",

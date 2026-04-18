@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from uuid import uuid4
 
@@ -123,6 +124,14 @@ def _reset_runtime(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
     monkeypatch.setattr(main_module, "_knowledge_item_search_service", None)
     monkeypatch.setattr(main_module, "_knowledge_fetch_cache_cleanup_service", None)
     monkeypatch.setattr(main_module, "_document_chunking_service", None)
+    monkeypatch.setattr(main_module, "_knowledge_base_schema_initialized", False)
+    monkeypatch.setattr(main_module, "_knowledge_base_schema_lock", asyncio.Lock())
+
+    async def _noop_register(application):  # pylint: disable=unused-argument
+        return None
+
+    monkeypatch.setattr(main_module, "_register_service", _noop_register)
+    monkeypatch.setattr(main_module, "_unregister_service", _noop_register)
 
 
 def _set_document_chunking_service(

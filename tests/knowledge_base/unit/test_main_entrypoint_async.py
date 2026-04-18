@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 
 import by_qa.main as main_module
 
@@ -82,7 +83,7 @@ async def test_knowledge_item_services_receive_model_config_provider(monkeypatch
         return original_import(name, global_vars, local_vars, fromlist, level)
 
     original_import = __import__
-    monkeypatch.setattr(main_module, "model_config_provider", provider)
+    monkeypatch.setattr(main_module, "load_model_config_provider", lambda: provider)
     monkeypatch.setattr(__import__("builtins"), "__import__", fake_import)
     monkeypatch.setattr(main_module, "_knowledge_item_ingestion_service", None)
     monkeypatch.setattr(main_module, "_knowledge_item_search_service", None)
@@ -129,7 +130,7 @@ async def test_document_chunking_service_uses_model_config_provider(monkeypatch)
         return original_import(name, global_vars, local_vars, fromlist, level)
 
     original_import = __import__
-    monkeypatch.setattr(main_module, "model_config_provider", provider)
+    monkeypatch.setattr(main_module, "load_model_config_provider", lambda: provider)
     monkeypatch.setattr(__import__("builtins"), "__import__", fake_import)
     monkeypatch.setattr(main_module, "_document_chunking_service", None)
 
@@ -177,11 +178,11 @@ async def test_knowledge_base_lifecycle_uses_provider_embedding_config(monkeypat
         recorded["bootstrap"] = (settings, provider)
         return FakeBootstrap()
 
-    async def fake_build_metadata_service():
-        recorded["metadata_service"] = True
+    async def fake_build_metadata_service(provider=None):
+        recorded["metadata_service"] = provider
 
-    async def fake_build_ingestion_service():
-        recorded["ingestion_service"] = True
+    async def fake_build_ingestion_service(provider=None):
+        recorded["ingestion_service"] = provider
 
     class FakeCleanup:
         async def start(self):
@@ -191,7 +192,7 @@ async def test_knowledge_base_lifecycle_uses_provider_embedding_config(monkeypat
         return FakeCleanup()
 
     monkeypatch.setattr(main_module, "settings", fake_settings)
-    monkeypatch.setattr(main_module, "model_config_provider", provider)
+    monkeypatch.setattr(main_module, "load_model_config_provider", lambda: provider)
     monkeypatch.setattr(
         "by_qa.knowledge_base.infrastructure.database.build_connection_factory",
         fake_connection_factory,
@@ -221,10 +222,108 @@ async def test_knowledge_base_lifecycle_uses_provider_embedding_config(monkeypat
     assert recorded["model_type"] == "embedding"
     assert recorded["connection_settings"] is fake_settings
     assert recorded["bootstrap"] == (fake_settings, provider)
-    assert recorded["metadata_service"] is True
-    assert recorded["ingestion_service"] is True
+    assert recorded["metadata_service"] is provider
+    assert recorded["ingestion_service"] is provider
     assert recorded["cleanup_started"] is True
     assert recorded["closed"] is True
+
+
+def test_api_requests_receive_distinct_model_config_provider_instances(monkeypatch):
+    """API request handling should create a fresh model provider per request."""
+    providers = []
+    service_providers = []
+    service_settings = []
+
+    def fake_load_model_config_provider():
+        provider = SimpleNamespace(sequence=len(providers))
+        providers.append(provider)
+        return provider
+
+    async def fake_build_search_service(settings, provider=None):
+        service_settings.append(settings)
+        service_providers.append(provider)
+        return SimpleNamespace(provider_sequence=provider.sequence)
+
+    monkeypatch.setattr(
+        main_module, "load_model_config_provider", fake_load_model_config_provider
+    )
+    monkeypatch.setattr(
+        "by_qa.knowledge_base.infrastructure.runtime.build_knowledge_item_search_service",
+        fake_build_search_service,
+    )
+    monkeypatch.setattr(
+        main_module, "_register_api_modules", lambda application: ([], {})
+    )
+    monkeypatch.setattr(main_module, "_knowledge_item_search_service", object())
+
+    application = main_module.create_app()
+
+    @application.get("/api/v1/provider-sequence")
+    async def provider_sequence():
+        service = await main_module.resolve_knowledge_item_search_service()
+        return {"provider_sequence": service.provider_sequence}
+
+    client = TestClient(application)
+
+    first_response = client.get("/api/v1/provider-sequence")
+    second_response = client.get("/api/v1/provider-sequence")
+
+    assert first_response.json() == {"provider_sequence": 0}
+    assert second_response.json() == {"provider_sequence": 1}
+    assert service_providers == providers
+    assert service_settings == [main_module.settings, main_module.settings]
+    assert service_providers[0] is not service_providers[1]
+
+
+def test_api_request_reuses_model_config_provider_within_request(monkeypatch):
+    """All provider-aware resolvers in one API request should share one provider."""
+    providers = []
+    service_providers = []
+    service_settings = []
+
+    def fake_load_model_config_provider():
+        provider = SimpleNamespace(sequence=len(providers))
+        providers.append(provider)
+        return provider
+
+    async def fake_build_search_service(settings, provider=None):
+        service_settings.append(settings)
+        service_providers.append(provider)
+        return SimpleNamespace(provider_sequence=provider.sequence)
+
+    monkeypatch.setattr(
+        main_module, "load_model_config_provider", fake_load_model_config_provider
+    )
+    monkeypatch.setattr(
+        "by_qa.knowledge_base.infrastructure.runtime.build_knowledge_item_search_service",
+        fake_build_search_service,
+    )
+    monkeypatch.setattr(
+        main_module, "_register_api_modules", lambda application: ([], {})
+    )
+    monkeypatch.setattr(main_module, "_knowledge_item_search_service", object())
+
+    application = main_module.create_app()
+
+    @application.get("/api/v1/provider-sequences")
+    async def provider_sequences():
+        first_service = await main_module.resolve_knowledge_item_search_service()
+        second_service = await main_module.resolve_knowledge_item_search_service()
+        return {
+            "provider_sequences": [
+                first_service.provider_sequence,
+                second_service.provider_sequence,
+            ]
+        }
+
+    client = TestClient(application)
+    response = client.get("/api/v1/provider-sequences")
+
+    assert response.json() == {"provider_sequences": [0, 0]}
+    assert len(providers) == 1
+    assert service_settings == [main_module.settings, main_module.settings]
+    assert service_providers[0] is providers[0]
+    assert service_providers[1] is providers[0]
 
 
 @pytest.mark.asyncio

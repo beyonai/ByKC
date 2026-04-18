@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from importlib import import_module
 from importlib.util import find_spec
@@ -18,7 +19,9 @@ from by_qa.core import logger
 from by_qa.core.model_config import load_model_config_provider
 
 settings = get_settings()
-model_config_provider = load_model_config_provider()
+_request_model_config_provider: ContextVar[Any | None] = ContextVar(
+    "request_model_config_provider", default=None
+)
 
 _knowledge_base_service: Any | None = None
 _knowledge_item_ingestion_service: Any | None = None
@@ -54,6 +57,26 @@ API_MODULES = (
         },
     ),
 )
+
+
+def _build_model_config_provider() -> Any:
+    """Build a new model config provider instance."""
+    return load_model_config_provider()
+
+
+def _set_request_model_config_provider(provider: Any) -> Token[Any | None]:
+    """Bind a model config provider to the current request context."""
+    return _request_model_config_provider.set(provider)
+
+
+def _reset_request_model_config_provider(token: Token[Any | None]) -> None:
+    """Clear the current request-bound model config provider."""
+    _request_model_config_provider.reset(token)
+
+
+def _get_request_model_config_provider() -> Any | None:
+    """Return the current request-bound model config provider, if any."""
+    return _request_model_config_provider.get()
 
 
 def _get_startup_configuration_summary() -> dict[str, Any]:
@@ -197,16 +220,24 @@ def get_knowledge_base_service():
     return _knowledge_base_service
 
 
-async def _get_or_build_knowledge_base_service():
+async def _get_or_build_knowledge_base_service(provider: Any | None = None):
     """Get or build the knowledge-base metadata service."""
     global _knowledge_base_service
+    request_provider = _get_request_model_config_provider()
+    if request_provider is not None and provider is None:
+        from by_qa.knowledge_base.infrastructure.runtime import (
+            build_knowledge_base_service,
+        )
+
+        return await build_knowledge_base_service(settings, provider=request_provider)
+
     if _knowledge_base_service is None:
         from by_qa.knowledge_base.infrastructure.runtime import (
             build_knowledge_base_service,
         )
 
         _knowledge_base_service = await build_knowledge_base_service(
-            settings, provider=model_config_provider
+            settings, provider=provider or _build_model_config_provider()
         )
     return _knowledge_base_service
 
@@ -216,9 +247,19 @@ def get_knowledge_item_ingestion_service():
     return _knowledge_item_ingestion_service
 
 
-async def _get_or_build_knowledge_item_ingestion_service():
+async def _get_or_build_knowledge_item_ingestion_service(provider: Any | None = None):
     """Get or build the knowledge-item ingestion service."""
     global _knowledge_item_ingestion_service
+    request_provider = _get_request_model_config_provider()
+    if request_provider is not None and provider is None:
+        from by_qa.knowledge_base.infrastructure.runtime import (
+            build_knowledge_item_ingestion_service,
+        )
+
+        return await build_knowledge_item_ingestion_service(
+            settings, provider=request_provider
+        )
+
     if _knowledge_item_ingestion_service is None:
         from by_qa.knowledge_base.infrastructure.runtime import (
             build_knowledge_item_ingestion_service,
@@ -226,7 +267,7 @@ async def _get_or_build_knowledge_item_ingestion_service():
 
         _knowledge_item_ingestion_service = (
             await build_knowledge_item_ingestion_service(
-                settings, provider=model_config_provider
+                settings, provider=provider or _build_model_config_provider()
             )
         )
     return _knowledge_item_ingestion_service
@@ -237,16 +278,26 @@ def get_knowledge_item_search_service():
     return _knowledge_item_search_service
 
 
-async def _get_or_build_knowledge_item_search_service():
+async def _get_or_build_knowledge_item_search_service(provider: Any | None = None):
     """Get or build the knowledge-item search service."""
     global _knowledge_item_search_service
+    request_provider = _get_request_model_config_provider()
+    if request_provider is not None and provider is None:
+        from by_qa.knowledge_base.infrastructure.runtime import (
+            build_knowledge_item_search_service,
+        )
+
+        return await build_knowledge_item_search_service(
+            settings, provider=request_provider
+        )
+
     if _knowledge_item_search_service is None:
         from by_qa.knowledge_base.infrastructure.runtime import (
             build_knowledge_item_search_service,
         )
 
         _knowledge_item_search_service = await build_knowledge_item_search_service(
-            settings, provider=model_config_provider
+            settings, provider=provider or _build_model_config_provider()
         )
     return _knowledge_item_search_service
 
@@ -280,13 +331,23 @@ def get_document_chunking_service():
     return _document_chunking_service
 
 
-async def _get_or_build_document_chunking_service():
+async def _get_or_build_document_chunking_service(provider: Any | None = None):
     """Get or build the document chunking service with configured embedding provider."""
     global _document_chunking_service
+    request_provider = _get_request_model_config_provider()
+    if request_provider is not None and provider is None:
+        from by_qa.knowledge_build.runtime import build_document_chunking_service
+
+        embedding_config = await request_provider.get_config("embedding")
+        return build_document_chunking_service(
+            settings, embedding_config=embedding_config
+        )
+
     if _document_chunking_service is None:
         from by_qa.knowledge_build.runtime import build_document_chunking_service
 
-        embedding_config = await model_config_provider.get_config("embedding")
+        active_provider = provider or _build_model_config_provider()
+        embedding_config = await active_provider.get_config("embedding")
         _document_chunking_service = build_document_chunking_service(
             settings, embedding_config=embedding_config
         )
@@ -357,6 +418,7 @@ async def _initialize_knowledge_base_runtime(enabled_modules: list[str]) -> None
         logger.info("knowledge_base lifecycle skipped: configuration_incomplete")
         return
 
+    model_config_provider = _build_model_config_provider()
     embedding_config = await model_config_provider.get_config("embedding")
     if not embedding_config.model_name:
         logger.info("knowledge_base lifecycle skipped: configuration_incomplete")
@@ -371,8 +433,10 @@ async def _initialize_knowledge_base_runtime(enabled_modules: list[str]) -> None
             settings, provider=model_config_provider
         )
         await bootstrap.apply(kb_connection)
-        await _get_or_build_knowledge_base_service()
-        await _get_or_build_knowledge_item_ingestion_service()
+        await _get_or_build_knowledge_base_service(provider=model_config_provider)
+        await _get_or_build_knowledge_item_ingestion_service(
+            provider=model_config_provider
+        )
         cleanup = await _get_or_build_knowledge_fetch_cache_cleanup_service()
         await cleanup.start()
         logger.info("knowledge_base lifecycle initialized successfully")
@@ -430,6 +494,21 @@ def create_app():
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @application.middleware("http")
+    async def bind_api_request_model_config_provider(
+        request: Request, call_next
+    ) -> Any:
+        """Create one model config provider for each API request."""
+        if not request.url.path.startswith("/api/v1/"):
+            return await call_next(request)
+
+        provider = _build_model_config_provider()
+        token = _set_request_model_config_provider(provider)
+        try:
+            return await call_next(request)
+        finally:
+            _reset_request_model_config_provider(token)
 
     @application.exception_handler(RequestValidationError)
     async def handle_request_validation_error(

@@ -77,6 +77,22 @@ def test_create_checkpointer_uses_opengauss_saver_and_runs_setup():
     assert saver is fake_saver
 
 
+def test_create_checkpointer_defaults_to_opengauss_backend():
+    settings = _mock_settings()
+    settings.checkpointer_backend = "opengauss"
+    fake_saver = MagicMock()
+
+    with patch(
+        "by_qa.qa.services.checkpointer_factory._create_sync_opengauss_saver",
+        return_value=fake_saver,
+    ) as factory:
+        saver = create_checkpointer(settings=settings)
+
+    factory.assert_called_once_with(settings, settings.build_opengauss_dsn())
+    fake_saver.setup.assert_called_once_with()
+    assert saver is fake_saver
+
+
 def test_create_checkpointer_derives_opengauss_dsn_from_db_parts():
     settings = _mock_settings()
     settings.db_host = "10.10.168.204"

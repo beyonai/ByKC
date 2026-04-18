@@ -154,9 +154,6 @@ class Settings(BaseSettings):
     instant_search_min_sentence_tokens: int = Field(
         default=50, alias="INSTANT_SEARCH_MIN_SENTENCE_TOKENS"
     )
-    checkpointer_sqlite_path: str = Field(
-        default="./data/checkpoints.db", alias="CHECKPOINTER_SQLITE_PATH"
-    )
     kb_fetch_cache_ttl_seconds: int = Field(
         default=24 * 60 * 60, alias="KB_FETCH_CACHE_TTL_SECONDS"
     )
@@ -215,7 +212,7 @@ class Settings(BaseSettings):
     @property
     def checkpointer_backend(self) -> str:
         """Get the default checkpointer backend."""
-        return "sqlite"
+        return "opengauss"
 
     def build_opengauss_dsn(self) -> str:
         """Build an openGauss DSN from shared DB_* settings."""

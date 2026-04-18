@@ -139,7 +139,9 @@ def create_checkpointer(
             raise ImportError(
                 "sqlite backend requires langgraph-checkpoint-sqlite to be installed"
             )
-        path = sqlite_path or settings.checkpointer_sqlite_path
+        path = sqlite_path or getattr(
+            settings, "checkpointer_sqlite_path", "./data/checkpoints.db"
+        )
         conn = sqlite3.connect(path, check_same_thread=False)
         saver = SqliteSaver(conn)
         saver.setup()
@@ -180,7 +182,9 @@ async def create_checkpointer_async(
             )
         import aiosqlite
 
-        path = sqlite_path or settings.checkpointer_sqlite_path
+        path = sqlite_path or getattr(
+            settings, "checkpointer_sqlite_path", "./data/checkpoints.db"
+        )
         conn = await aiosqlite.connect(path)
         saver = AsyncSqliteSaver(conn)
         await saver.setup()

@@ -52,3 +52,9 @@ def test_renderer_hides_node_events_unless_verbose(capsys):
 
     output = capsys.readouterr().out
     assert output == ""
+
+
+def test_instant_qa_example_does_not_configure_sqlite_checkpointer():
+    content = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "CHECKPOINTER_SQLITE_PATH" not in content

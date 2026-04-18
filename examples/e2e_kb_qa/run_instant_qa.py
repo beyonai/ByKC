@@ -114,10 +114,6 @@ async def _run_async(args: argparse.Namespace) -> None:
 
     require_environment(["LLM_API_KEY"])
     os.environ.setdefault("AGENT_DATA_PATH", str(root / "agent_data"))
-    os.environ.setdefault(
-        "CHECKPOINTER_SQLITE_PATH",
-        str(root / "agent_data" / "instant_qa_checkpoints.sqlite"),
-    )
 
     from by_qa.qa.common.models import CoreInput
     from by_qa.qa.instant.engine import InstantQAEngine

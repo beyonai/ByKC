@@ -60,6 +60,7 @@ def test_settings_ignore_removed_database_env_vars():
         KB_OPENGAUSS_DSN="postgresql://legacy:secret@127.0.0.1:5432/postgres",
         CHECKPOINTER_BACKEND="opengauss",
         CHECKPOINTER_OPENGAUSS_DSN="postgresql://legacy:secret@127.0.0.1:5432/postgres",
+        CHECKPOINTER_SQLITE_PATH="/tmp/legacy-checkpoints.db",
         DB_HOST="",
         DB_USER="",
         DB_PASS="",
@@ -67,7 +68,8 @@ def test_settings_ignore_removed_database_env_vars():
 
     assert settings.resolved_kb_opengauss_dsn == ""
     assert settings.resolved_checkpointer_opengauss_dsn == ""
-    assert settings.checkpointer_backend == "sqlite"
+    assert settings.checkpointer_backend == "opengauss"
+    assert not hasattr(settings, "checkpointer_sqlite_path")
 
 
 def test_settings_ignore_removed_minio_env_vars():

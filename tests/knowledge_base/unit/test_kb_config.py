@@ -36,6 +36,7 @@ def test_settings_accept_shared_db_env_vars():
     settings = Settings(
         DB_HOST="10.10.168.204",
         DB_PORT=5432,
+        DB_DATABASE="byqa",
         DB_SCHEMA="byai",
         DB_USER="gaussdb",
         DB_PASS="Admin@123",
@@ -43,6 +44,7 @@ def test_settings_accept_shared_db_env_vars():
 
     assert settings.db_host == "10.10.168.204"
     assert settings.db_port == 5432
+    assert settings.db_database == "byqa"
     assert settings.db_schema == "byai"
     assert settings.db_user == "gaussdb"
     assert settings.db_pass == "Admin@123"

@@ -82,6 +82,7 @@ class Settings(BaseSettings):
 
     db_host: str = Field(default="", alias="DB_HOST")
     db_port: int = Field(default=5432, alias="DB_PORT")
+    db_database: str = Field(default="postgres", alias="DB_DATABASE")
     db_schema: str = Field(default="", alias="DB_SCHEMA")
     db_user: str = Field(default="", alias="DB_USER")
     db_pass: str = Field(default="", alias="DB_PASS")
@@ -223,7 +224,8 @@ class Settings(BaseSettings):
 
         user = quote(self.db_user, safe="")
         password = quote(self.db_pass, safe="")
-        dsn = f"postgresql://{user}:{password}@{self.db_host}:{self.db_port}/postgres"
+        database = quote(self.db_database.strip() or "postgres", safe="")
+        dsn = f"postgresql://{user}:{password}@{self.db_host}:{self.db_port}/{database}"
         schema = self.db_schema.strip()
         if schema:
             search_path = schema

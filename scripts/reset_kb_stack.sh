@@ -83,5 +83,6 @@ for key in "${required_keys[@]}"; do
 done
 
 export_optional_value "DB_SCHEMA"
+export_optional_value "DB_DATABASE"
 
 PYTHONPATH=. .venv/bin/python scripts/reset_kb_data.py

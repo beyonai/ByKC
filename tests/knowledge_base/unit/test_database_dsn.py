@@ -8,6 +8,7 @@ def test_settings_build_opengauss_dsn_from_db_parts():
     settings = Settings(
         DB_HOST="10.10.168.204",
         DB_PORT=5432,
+        DB_DATABASE="byqa",
         DB_SCHEMA="byai",
         DB_USER="gaussdb",
         DB_PASS="Admin@123",
@@ -17,10 +18,24 @@ def test_settings_build_opengauss_dsn_from_db_parts():
 
     assert params["host"] == "10.10.168.204"
     assert params["port"] == "5432"
-    assert params["dbname"] == "postgres"
+    assert params["dbname"] == "byqa"
     assert params["user"] == "gaussdb"
     assert params["password"] == "Admin@123"
     assert params["options"] == "-c search_path=byai,public"
+
+
+def test_settings_build_opengauss_dsn_defaults_database_to_postgres():
+    settings = Settings(
+        DB_HOST="10.10.168.204",
+        DB_PORT=5432,
+        DB_SCHEMA="byai",
+        DB_USER="gaussdb",
+        DB_PASS="Admin@123",
+    )
+
+    params = conninfo_to_dict(settings.build_opengauss_dsn())
+
+    assert params["dbname"] == "postgres"
 
 
 def test_settings_build_opengauss_dsn_omits_search_path_when_schema_blank():

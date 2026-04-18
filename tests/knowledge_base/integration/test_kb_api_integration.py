@@ -16,6 +16,7 @@ from by_qa.knowledge_common.schemas import KnowledgeItemChunkPayload
 
 DEFAULT_DB_HOST = "127.0.0.1"
 DEFAULT_DB_PORT = "15432"
+DEFAULT_DB_DATABASE = "postgres"
 DEFAULT_DB_USER = "gaussdb"
 DEFAULT_DB_PASS = "OpenGauss#2026"
 
@@ -80,6 +81,7 @@ def _kb_settings() -> Settings:
     return Settings(
         DB_HOST=os.getenv("DB_HOST", DEFAULT_DB_HOST),
         DB_PORT=int(os.getenv("DB_PORT", DEFAULT_DB_PORT)),
+        DB_DATABASE=os.getenv("DB_DATABASE", DEFAULT_DB_DATABASE),
         DB_SCHEMA=os.getenv("DB_SCHEMA", ""),
         DB_USER=os.getenv("DB_USER", DEFAULT_DB_USER),
         DB_PASS=os.getenv("DB_PASS", DEFAULT_DB_PASS),

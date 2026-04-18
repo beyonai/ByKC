@@ -24,6 +24,7 @@ def _prepare_reset_script(tmp_path: Path) -> Path:
         "#!/bin/bash\n"
         "printf '%s\\n' \"DB_HOST=$DB_HOST\"\n"
         "printf '%s\\n' \"DB_PORT=$DB_PORT\"\n"
+        "printf '%s\\n' \"DB_DATABASE=$DB_DATABASE\"\n"
         "printf '%s\\n' \"DB_SCHEMA=$DB_SCHEMA\"\n"
         "printf '%s\\n' \"DB_USER=$DB_USER\"\n"
         "printf '%s\\n' \"DB_PASS=$DB_PASS\"\n"
@@ -46,6 +47,7 @@ def test_reset_kb_stack_loads_missing_values_from_root_env(tmp_path):
             [
                 "DB_HOST=127.0.0.1",
                 "DB_PORT=15432",
+                "DB_DATABASE=byqa",
                 "DB_SCHEMA=byai",
                 "DB_USER=gaussdb",
                 "DB_PASS=secret",
@@ -73,6 +75,7 @@ def test_reset_kb_stack_loads_missing_values_from_root_env(tmp_path):
     assert result.returncode == 0
     assert "DB_HOST=127.0.0.1" in result.stdout
     assert "DB_PORT=15432" in result.stdout
+    assert "DB_DATABASE=byqa" in result.stdout
     assert "DB_SCHEMA=byai" in result.stdout
     assert "DB_USER=gaussdb" in result.stdout
     assert "DB_PASS=secret" in result.stdout
@@ -91,6 +94,7 @@ def test_reset_kb_stack_prefers_environment_over_root_env(tmp_path):
             [
                 "DB_HOST=dotenv-host",
                 "DB_PORT=15432",
+                "DB_DATABASE=dotenv-db",
                 "DB_SCHEMA=dotenv-schema",
                 "DB_USER=dotenv-user",
                 "DB_PASS=dotenv-pass",
@@ -111,6 +115,7 @@ def test_reset_kb_stack_prefers_environment_over_root_env(tmp_path):
         {
             "DB_HOST": "env-host",
             "DB_PORT": "5432",
+            "DB_DATABASE": "env-db",
             "DB_SCHEMA": "env-schema",
             "DB_USER": "env-user",
             "DB_PASS": "env-pass",
@@ -135,6 +140,7 @@ def test_reset_kb_stack_prefers_environment_over_root_env(tmp_path):
     assert result.returncode == 0
     assert "DB_HOST=env-host" in result.stdout
     assert "DB_PORT=5432" in result.stdout
+    assert "DB_DATABASE=env-db" in result.stdout
     assert "DB_SCHEMA=env-schema" in result.stdout
     assert "DB_USER=env-user" in result.stdout
     assert "DB_PASS=env-pass" in result.stdout

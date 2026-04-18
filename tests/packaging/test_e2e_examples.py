@@ -27,6 +27,15 @@ def test_e2e_example_readme_documents_end_to_end_flow():
     assert "/api/v1/knowledgeItems/import" in content
     assert "/api/v1/listDir" in content
     assert "/api/v1/glob" in content
+    assert "DB_DATABASE" in content
+
+
+def test_e2e_service_script_exports_database_name():
+    """The service launcher should pass DB_DATABASE through to by-qa."""
+    content = (EXAMPLE_ROOT / "start_kb_service.sh").read_text(encoding="utf-8")
+
+    assert '"DB_DATABASE"' in content
+    assert "export DB_DATABASE" in content
 
 
 def test_root_readme_links_to_packaged_e2e_example():

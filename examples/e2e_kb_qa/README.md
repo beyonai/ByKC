@@ -43,6 +43,7 @@ cp ../../.env.example .env
 - `REDIS_DATABASE`
 - `DB_HOST`
 - `DB_PORT`
+- `DB_DATABASE`
 - `DB_USER`
 - `DB_PASS`
 - `MINIO_ENDPOINT`

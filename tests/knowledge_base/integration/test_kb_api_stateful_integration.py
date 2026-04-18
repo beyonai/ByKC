@@ -114,7 +114,9 @@ def _kb_settings(*, agent_data_path=None) -> Settings:
 def _reset_runtime(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
     monkeypatch.setattr(main_module, "settings", settings)
     monkeypatch.setattr(
-        main_module, "model_config_provider", FakeModelConfigProvider(settings)
+        main_module,
+        "load_model_config_provider",
+        lambda: FakeModelConfigProvider(settings),
     )
     monkeypatch.setattr(main_module, "_knowledge_base_service", None)
     monkeypatch.setattr(main_module, "_knowledge_item_ingestion_service", None)
@@ -127,7 +129,12 @@ def _set_document_chunking_service(
     monkeypatch: pytest.MonkeyPatch,
     service: FakeDocumentChunkingService,
 ) -> None:
-    monkeypatch.setattr(main_module, "_document_chunking_service", service)
+    async def get_service(provider=None):  # pylint: disable=unused-argument
+        return service
+
+    monkeypatch.setattr(
+        main_module, "_get_or_build_document_chunking_service", get_service
+    )
 
 
 async def _set_search_service(
@@ -138,7 +145,13 @@ async def _set_search_service(
 ) -> None:
     service = await build_knowledge_item_search_service(settings)
     service.embedding_query_service = FakeEmbeddingQueryService(embedding)
-    monkeypatch.setattr(main_module, "_knowledge_item_search_service", service)
+
+    async def get_service(provider=None):  # pylint: disable=unused-argument
+        return service
+
+    monkeypatch.setattr(
+        main_module, "_get_or_build_knowledge_item_search_service", get_service
+    )
 
 
 def _disable_kb_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:

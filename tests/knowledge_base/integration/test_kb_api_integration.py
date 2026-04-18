@@ -104,13 +104,27 @@ def _kb_settings() -> Settings:
 def _reset_runtime(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
     monkeypatch.setattr(main_module, "settings", settings)
     monkeypatch.setattr(
-        main_module, "model_config_provider", FakeModelConfigProvider(settings)
+        main_module,
+        "load_model_config_provider",
+        lambda: FakeModelConfigProvider(settings),
     )
     monkeypatch.setattr(main_module, "_knowledge_base_service", None)
     monkeypatch.setattr(main_module, "_knowledge_item_ingestion_service", None)
     monkeypatch.setattr(main_module, "_knowledge_item_search_service", None)
     monkeypatch.setattr(main_module, "_knowledge_fetch_cache_cleanup_service", None)
     monkeypatch.setattr(main_module, "_document_chunking_service", None)
+
+
+def _set_document_chunking_service(
+    monkeypatch: pytest.MonkeyPatch,
+    service: FakeDocumentChunkingService,
+) -> None:
+    async def get_service(provider=None):  # pylint: disable=unused-argument
+        return service
+
+    monkeypatch.setattr(
+        main_module, "_get_or_build_document_chunking_service", get_service
+    )
 
 
 def _create_directory(
@@ -165,7 +179,7 @@ def test_kb_api_end_to_end_persists_to_opengauss_and_minio(monkeypatch):
     fake_chunking = FakeDocumentChunkingService(
         markdown_text="# hello\nreal integration\n"
     )
-    monkeypatch.setattr(main_module, "_document_chunking_service", fake_chunking)
+    _set_document_chunking_service(monkeypatch, fake_chunking)
 
     with TestClient(main_module.app) as client:
         kb_response = client.post(
@@ -264,7 +278,7 @@ def test_read_file_succeeds_after_upload_and_build(monkeypatch):
     _reset_runtime(monkeypatch, settings)
 
     fake_chunking = FakeDocumentChunkingService(markdown_text="line1\nline2\nline3\n")
-    monkeypatch.setattr(main_module, "_document_chunking_service", fake_chunking)
+    _set_document_chunking_service(monkeypatch, fake_chunking)
 
     with TestClient(main_module.app) as client:
         create_resp = client.post(

@@ -161,7 +161,14 @@ def make_test_client(monkeypatch, service):
     monkeypatch.setattr(
         "by_qa.main._get_or_build_knowledge_item_search_service", get_service
     )
-    monkeypatch.setattr("by_qa.main.get_document_chunking_service", lambda: object())
+
+    async def get_document_chunking_service():
+        return object()
+
+    monkeypatch.setattr(
+        "by_qa.main._get_or_build_document_chunking_service",
+        get_document_chunking_service,
+    )
     monkeypatch.setattr("by_qa.main.get_adapter", lambda: object())
     monkeypatch.setattr("by_qa.main.get_instant_search_engine", lambda: object())
     return TestClient(app)

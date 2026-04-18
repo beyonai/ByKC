@@ -39,6 +39,9 @@ uv sync --extra qa
 # Install everything
 uv sync --all-extras
 
+# BeBefore running the service, unit tests, and integration tests, use the following configuration to disable the proxy to avoid failures caused by reverse proxies and other similar issues.
+NO_PROXY=127.0.0.1,localhost HTTPS_PROXY= HTTP_PROXY= no_proxy=127.0.0.1,localhost http_proxy= https_proxy=
+
 # Run the application
 by-qa
 uv run python -m by_qa.main

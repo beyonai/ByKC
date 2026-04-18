@@ -34,6 +34,9 @@ uvicorn by_qa.main:app --reload      # Direct uvicorn
 # Lint and format (pre-commit runs ruff, isort, pylint, pyink)
 uv run pre-commit run --all-files
 
+# BeBefore running the service, unit tests, and integration tests, use the following configuration to disable the proxy to avoid failures caused by reverse proxies and other similar issues.
+NO_PROXY=127.0.0.1,localhost HTTPS_PROXY= HTTP_PROXY= no_proxy=127.0.0.1,localhost http_proxy= https_proxy=
+
 # Run tests by module
 bash scripts/knowledge_base/run_unit_tests.sh
 bash scripts/knowledge_build/run_unit_tests.sh

@@ -39,6 +39,10 @@ async def subanswer_aggregator_node(
     )
     aggregation_time = time.time() - start_time
     info(f"[subanswer_aggregator] Aggregation completed in {aggregation_time:.2f}s ")
+    info(
+        "[subanswer_aggregator] Aggregation generated final answer: "
+        f"query={original_query}, final_answer={final_answer}"
+    )
     return {
         "final_answer": final_answer,
         "aggregation_time": aggregation_time,

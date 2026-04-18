@@ -1,11 +1,24 @@
 """Tests for async-aware application entrypoints."""
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 import by_qa.main as main_module
+
+
+@pytest.fixture(autouse=True)
+def reset_main_runtime_state(monkeypatch):
+    """Keep module-level runtime caches isolated across tests."""
+    monkeypatch.setattr(main_module, "_knowledge_base_service", None)
+    monkeypatch.setattr(main_module, "_knowledge_item_ingestion_service", None)
+    monkeypatch.setattr(main_module, "_knowledge_item_search_service", None)
+    monkeypatch.setattr(main_module, "_knowledge_fetch_cache_cleanup_service", None)
+    monkeypatch.setattr(main_module, "_document_chunking_service", None)
+    monkeypatch.setattr(main_module, "_knowledge_base_schema_initialized", False)
+    monkeypatch.setattr(main_module, "_knowledge_base_schema_lock", asyncio.Lock())
 
 
 def test_main_runs_async_entrypoint(monkeypatch):
@@ -85,8 +98,15 @@ async def test_knowledge_item_services_receive_model_config_provider(monkeypatch
     original_import = __import__
     monkeypatch.setattr(main_module, "load_model_config_provider", lambda: provider)
     monkeypatch.setattr(__import__("builtins"), "__import__", fake_import)
-    monkeypatch.setattr(main_module, "_knowledge_item_ingestion_service", None)
-    monkeypatch.setattr(main_module, "_knowledge_item_search_service", None)
+
+    async def fake_ensure_schema(provider=None):
+        recorded.setdefault("ensured", []).append(provider)
+
+    monkeypatch.setattr(
+        main_module,
+        "_ensure_knowledge_base_schema_initialized",
+        fake_ensure_schema,
+    )
 
     ingestion_service = (
         await main_module._get_or_build_knowledge_item_ingestion_service()
@@ -97,6 +117,7 @@ async def test_knowledge_item_services_receive_model_config_provider(monkeypatch
     assert search_service == "search-service"
     assert recorded["ingestion"] == (main_module.settings, provider)
     assert recorded["search"] == (main_module.settings, provider)
+    assert recorded["ensured"] == [provider, provider]
 
 
 @pytest.mark.asyncio
@@ -144,8 +165,10 @@ async def test_document_chunking_service_uses_model_config_provider(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_knowledge_base_lifecycle_uses_provider_embedding_config(monkeypatch):
-    """KB lifecycle should initialize when embedding config comes from provider."""
+async def test_knowledge_base_schema_initializes_lazily_with_provider_config(
+    monkeypatch,
+):
+    """KB schema bootstrap should run lazily with provider embedding config."""
     recorded = {}
 
     async def fake_get_config(model_type):
@@ -175,14 +198,9 @@ async def test_knowledge_base_lifecycle_uses_provider_embedding_config(monkeypat
             recorded["bootstrap_connection"] = connection
 
     async def fake_build_bootstrap_service(settings, provider=None):
+        await provider.get_config("embedding")
         recorded["bootstrap"] = (settings, provider)
         return FakeBootstrap()
-
-    async def fake_build_metadata_service(provider=None):
-        recorded["metadata_service"] = provider
-
-    async def fake_build_ingestion_service(provider=None):
-        recorded["ingestion_service"] = provider
 
     class FakeCleanup:
         async def start(self):
@@ -203,27 +221,16 @@ async def test_knowledge_base_lifecycle_uses_provider_embedding_config(monkeypat
     )
     monkeypatch.setattr(
         main_module,
-        "_get_or_build_knowledge_base_service",
-        fake_build_metadata_service,
-    )
-    monkeypatch.setattr(
-        main_module,
-        "_get_or_build_knowledge_item_ingestion_service",
-        fake_build_ingestion_service,
-    )
-    monkeypatch.setattr(
-        main_module,
         "_get_or_build_knowledge_fetch_cache_cleanup_service",
         fake_build_cleanup_service,
     )
 
-    await main_module._initialize_knowledge_base_runtime(["knowledge_base"])
+    await main_module._ensure_knowledge_base_schema_initialized(provider=provider)
+    await main_module._ensure_knowledge_base_schema_initialized(provider=provider)
 
     assert recorded["model_type"] == "embedding"
     assert recorded["connection_settings"] is fake_settings
     assert recorded["bootstrap"] == (fake_settings, provider)
-    assert recorded["metadata_service"] is provider
-    assert recorded["ingestion_service"] is provider
     assert recorded["cleanup_started"] is True
     assert recorded["closed"] is True
 
@@ -254,7 +261,16 @@ def test_api_requests_receive_distinct_model_config_provider_instances(monkeypat
     monkeypatch.setattr(
         main_module, "_register_api_modules", lambda application: ([], {})
     )
-    monkeypatch.setattr(main_module, "_knowledge_item_search_service", object())
+
+    async def fake_ensure_schema(provider=None):
+        del provider
+        return None
+
+    monkeypatch.setattr(
+        main_module,
+        "_ensure_knowledge_base_schema_initialized",
+        fake_ensure_schema,
+    )
 
     application = main_module.create_app()
 
@@ -301,7 +317,16 @@ def test_api_request_reuses_model_config_provider_within_request(monkeypatch):
     monkeypatch.setattr(
         main_module, "_register_api_modules", lambda application: ([], {})
     )
-    monkeypatch.setattr(main_module, "_knowledge_item_search_service", object())
+
+    async def fake_ensure_schema(provider=None):
+        del provider
+        return None
+
+    monkeypatch.setattr(
+        main_module,
+        "_ensure_knowledge_base_schema_initialized",
+        fake_ensure_schema,
+    )
 
     application = main_module.create_app()
 
@@ -418,7 +443,7 @@ async def test_lifespan_logs_configuration_and_registers_service(monkeypatch):
     }
     assert recorded["service_registry_client"] is fake_redis_client
     assert recorded["unregistered"] is True
-    assert recorded["initialized"] == []
+    assert "initialized" not in recorded
     assert recorded["shutdown"] == []
     assert (
         "application startup configuration: service_name=%s, host=%s, port=%s, host_machine=%s, checkpointer_backend=%s, agent_data_path=%s, knowledge_base_configured=%s, document_chunking_configured=%s, qa_llm_configured=%s",

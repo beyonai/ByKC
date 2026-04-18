@@ -28,6 +28,8 @@ _knowledge_item_ingestion_service: Any | None = None
 _knowledge_item_search_service: Any | None = None
 _knowledge_fetch_cache_cleanup_service: Any | None = None
 _document_chunking_service: Any | None = None
+_knowledge_base_schema_initialized = False
+_knowledge_base_schema_lock = asyncio.Lock()
 
 
 @dataclass(frozen=True)
@@ -229,6 +231,7 @@ async def _get_or_build_knowledge_base_service(provider: Any | None = None):
             build_knowledge_base_service,
         )
 
+        await _ensure_knowledge_base_schema_initialized(provider=request_provider)
         return await build_knowledge_base_service(settings, provider=request_provider)
 
     if _knowledge_base_service is None:
@@ -236,8 +239,10 @@ async def _get_or_build_knowledge_base_service(provider: Any | None = None):
             build_knowledge_base_service,
         )
 
+        active_provider = provider or _build_model_config_provider()
+        await _ensure_knowledge_base_schema_initialized(provider=active_provider)
         _knowledge_base_service = await build_knowledge_base_service(
-            settings, provider=provider or _build_model_config_provider()
+            settings, provider=active_provider
         )
     return _knowledge_base_service
 
@@ -256,6 +261,7 @@ async def _get_or_build_knowledge_item_ingestion_service(provider: Any | None = 
             build_knowledge_item_ingestion_service,
         )
 
+        await _ensure_knowledge_base_schema_initialized(provider=request_provider)
         return await build_knowledge_item_ingestion_service(
             settings, provider=request_provider
         )
@@ -265,9 +271,11 @@ async def _get_or_build_knowledge_item_ingestion_service(provider: Any | None = 
             build_knowledge_item_ingestion_service,
         )
 
+        active_provider = provider or _build_model_config_provider()
+        await _ensure_knowledge_base_schema_initialized(provider=active_provider)
         _knowledge_item_ingestion_service = (
             await build_knowledge_item_ingestion_service(
-                settings, provider=provider or _build_model_config_provider()
+                settings, provider=active_provider
             )
         )
     return _knowledge_item_ingestion_service
@@ -287,6 +295,7 @@ async def _get_or_build_knowledge_item_search_service(provider: Any | None = Non
             build_knowledge_item_search_service,
         )
 
+        await _ensure_knowledge_base_schema_initialized(provider=request_provider)
         return await build_knowledge_item_search_service(
             settings, provider=request_provider
         )
@@ -296,8 +305,10 @@ async def _get_or_build_knowledge_item_search_service(provider: Any | None = Non
             build_knowledge_item_search_service,
         )
 
+        active_provider = provider or _build_model_config_provider()
+        await _ensure_knowledge_base_schema_initialized(provider=active_provider)
         _knowledge_item_search_service = await build_knowledge_item_search_service(
-            settings, provider=provider or _build_model_config_provider()
+            settings, provider=active_provider
         )
     return _knowledge_item_search_service
 
@@ -414,34 +425,38 @@ async def _initialize_knowledge_base_runtime(enabled_modules: list[str]) -> None
         logger.info("knowledge_base lifecycle skipped: module_not_loaded")
         return
 
-    if not settings.resolved_kb_opengauss_dsn:
-        logger.info("knowledge_base lifecycle skipped: configuration_incomplete")
+    logger.info("knowledge_base lifecycle initialized lazily")
+
+
+async def _ensure_knowledge_base_schema_initialized(
+    provider: Any | None = None,
+) -> None:
+    """Apply KB schema bootstrap on the first runtime request that needs it."""
+    global _knowledge_base_schema_initialized
+    if _knowledge_base_schema_initialized:
         return
 
-    model_config_provider = _build_model_config_provider()
-    embedding_config = await model_config_provider.get_config("embedding")
-    if not embedding_config.model_name:
-        logger.info("knowledge_base lifecycle skipped: configuration_incomplete")
-        return
+    async with _knowledge_base_schema_lock:
+        if _knowledge_base_schema_initialized:
+            return
 
-    from by_qa.knowledge_base.infrastructure.database import build_connection_factory
-    from by_qa.knowledge_base.infrastructure.runtime import build_bootstrap_service
+        active_provider = provider or _build_model_config_provider()
+        from by_qa.knowledge_base.infrastructure.database import (
+            build_connection_factory,
+        )
+        from by_qa.knowledge_base.infrastructure.runtime import build_bootstrap_service
 
-    kb_connection = await build_connection_factory(settings)()
-    try:
-        bootstrap = await build_bootstrap_service(
-            settings, provider=model_config_provider
-        )
-        await bootstrap.apply(kb_connection)
-        await _get_or_build_knowledge_base_service(provider=model_config_provider)
-        await _get_or_build_knowledge_item_ingestion_service(
-            provider=model_config_provider
-        )
+        bootstrap = await build_bootstrap_service(settings, provider=active_provider)
+        kb_connection = await build_connection_factory(settings)()
+        try:
+            await bootstrap.apply(kb_connection)
+        finally:
+            await kb_connection.close()
+
         cleanup = await _get_or_build_knowledge_fetch_cache_cleanup_service()
         await cleanup.start()
-        logger.info("knowledge_base lifecycle initialized successfully")
-    finally:
-        await kb_connection.close()
+        _knowledge_base_schema_initialized = True
+        logger.info("knowledge_base schema initialized lazily")
 
 
 async def _shutdown_knowledge_base_runtime(enabled_modules: list[str]) -> None:
@@ -465,7 +480,6 @@ async def lifespan(application):
         "application startup: enabled_modules=%s",
         ",".join(enabled_modules) if enabled_modules else "none",
     )
-    await _initialize_knowledge_base_runtime(enabled_modules)
 
     yield
 

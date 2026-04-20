@@ -278,21 +278,21 @@ wheels = [
 
 [[package]]
 name = "by-framework"
-version = "0.1.8"
+version = "0.1.10"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
     { name = "redis" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d2/e1/e9efcd415682602a6499a99858ef9dfabba1f825d0d1d82fe6265ed66742/by_framework-0.1.8.tar.gz", hash = "sha256:daaa42bbe28f0d7567eebc3849fb9d008040362f79f77a709c1275e8bd0692e2", size = 179703, upload-time = "2026-04-09T04:10:21.706Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4a/82/f6ebcff58b7fe51122f388370130d599305a9692396986bcc501573dfc47/by_framework-0.1.10.tar.gz", hash = "sha256:117906bed1b89e4a4132c3ebedb5db0556ee1ddf6050d4f004ff24c8f671a987", size = 252379, upload-time = "2026-04-16T08:03:08.308Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d0/aa/a1ede4c5d11c576e94ce312414a8f6df3acc7b7392d64225f8b63c80a979/by_framework-0.1.8-py3-none-any.whl", hash = "sha256:368eed114f1a7bb084b6f76903c7bd15713122bd4a4ab3fc6d85b62ebe56838c", size = 109091, upload-time = "2026-04-09T04:10:20.301Z" },
+    { url = "https://files.pythonhosted.org/packages/61/4c/7cbff4d455267e19348787dc5da3c11be9e0fd1ad4971e0c611f9530df43/by_framework-0.1.10-py3-none-any.whl", hash = "sha256:77ab65422b74a3fede19aa681235172340af895260cd8571de85770b46c90116", size = 116715, upload-time = "2026-04-16T08:03:06.504Z" },
 ]
 
 [[package]]
 name = "by-qa"
-version = "0.1.3"
+version = "0.1.4"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -362,9 +362,9 @@ requires-dist = [
     { name = "aioboto3", marker = "extra == 'knowledge'", specifier = ">=13.0.0" },
     { name = "aiosqlite", marker = "extra == 'all'", specifier = ">=0.20.0" },
     { name = "aiosqlite", marker = "extra == 'qa'", specifier = ">=0.20.0" },
-    { name = "by-framework", marker = "extra == 'all'", specifier = "==0.1.8" },
-    { name = "by-framework", marker = "extra == 'knowledge'", specifier = "==0.1.8" },
-    { name = "by-framework", marker = "extra == 'qa'", specifier = "==0.1.8" },
+    { name = "by-framework", marker = "extra == 'all'", specifier = ">=0.1.10" },
+    { name = "by-framework", marker = "extra == 'knowledge'", specifier = ">=0.1.10" },
+    { name = "by-framework", marker = "extra == 'qa'", specifier = ">=0.1.10" },
     { name = "fastapi", marker = "extra == 'all'", specifier = ">=0.115.0" },
     { name = "fastapi", marker = "extra == 'knowledge'", specifier = ">=0.115.0" },
     { name = "httpx", specifier = ">=0.27.0" },

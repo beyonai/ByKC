@@ -45,6 +45,7 @@ class _HeadingMatch:
     pattern_name: str
     line_no: int
     explicit_level: int | None = None
+    ordered_item_no: int | None = None
 
 
 @dataclass
@@ -163,7 +164,16 @@ class DocumentChunkingService:
                 "python-docx is required for DOCX support: pip install python-docx"
             ) from exc
         doc = Document(io.BytesIO(file_bytes))
-        return "\n\n".join(p.text for p in doc.paragraphs if p.text.strip())
+        parts = [p.text for p in doc.paragraphs if p.text.strip()]
+        for table in doc.tables:
+            rows = []
+            for row in table.rows:
+                cells = [cell.text.strip() for cell in row.cells]
+                if any(cells):
+                    rows.append(" | ".join(cells))
+            if rows:
+                parts.append("\n".join(rows))
+        return "\n\n".join(parts)
 
     @staticmethod
     def _extract_pptx(file_bytes: bytes) -> str:
@@ -225,9 +235,17 @@ class DocumentChunkingService:
 
     def _build_blocks(self, text: str, *, treat_as_markdown: bool) -> list[_TextBlock]:
         lines = self._build_line_entries(text)
-        noise_line_nos = self._detect_noise_line_numbers(lines)
+        noise_line_nos = self._detect_noise_line_numbers(
+            lines, treat_as_markdown=treat_as_markdown
+        )
+        if treat_as_markdown:
+            excluded_line_nos = noise_line_nos | self._detect_code_block_line_numbers(
+                lines
+            )
+        else:
+            excluded_line_nos = noise_line_nos
         heading_levels = self._infer_heading_levels(
-            lines, noise_line_nos, treat_as_markdown=treat_as_markdown
+            lines, excluded_line_nos, treat_as_markdown=treat_as_markdown
         )
         blocks: list[_TextBlock] = []
         index = 0
@@ -291,7 +309,12 @@ class DocumentChunkingService:
             )
         return blocks
 
-    def _detect_noise_line_numbers(self, lines: list[dict]) -> set[int]:
+    def _detect_noise_line_numbers(
+        self, lines: list[dict], *, treat_as_markdown: bool
+    ) -> set[int]:
+        if treat_as_markdown:
+            return set()
+
         stripped_counts: dict[str, int] = {}
         for line in lines:
             stripped = line["content"].strip()
@@ -315,6 +338,35 @@ class DocumentChunkingService:
                 noise_line_nos.add(line["line_no"])
                 continue
         return noise_line_nos
+
+    @staticmethod
+    def _detect_code_block_line_numbers(lines: list[dict]) -> set[int]:
+        """Return line numbers inside fenced code blocks (including the fence lines).
+
+        Lines inside ``` or ~~~ fences must not be matched against heading patterns
+        because code comments like '# filename.yml' would otherwise corrupt the
+        heading stack and produce wrong breadcrumbs.
+        """
+        code_block_lines: set[int] = set()
+        fence_char: str | None = None
+        fence_len: int = 0
+
+        for line in lines:
+            stripped = line["content"].strip()
+            if fence_char is None:
+                m = re.match(r"^(`{3,}|~{3,})", stripped)
+                if m:
+                    fence_char = m.group(1)[0]
+                    fence_len = len(m.group(1))
+                    code_block_lines.add(line["line_no"])
+            else:
+                code_block_lines.add(line["line_no"])
+                m = re.match(r"^(`{3,}|~{3,})\s*$", stripped)
+                if m and m.group(1)[0] == fence_char and len(m.group(1)) >= fence_len:
+                    fence_char = None
+                    fence_len = 0
+
+        return code_block_lines
 
     @staticmethod
     def _build_line_entries(text: str) -> list[dict]:
@@ -369,9 +421,13 @@ class DocumentChunkingService:
             match.line_no = line["line_no"]
             matches.append(match)
 
+        skipped_ordered_list_lines = self._detect_ordered_list_line_numbers(matches)
+
         inferred_levels: dict[str, int] = {}
         next_level = 1
         for match in matches:
+            if match.line_no in skipped_ordered_list_lines:
+                continue
             if match.explicit_level is not None:
                 continue
             if match.pattern_name in inferred_levels:
@@ -381,11 +437,44 @@ class DocumentChunkingService:
 
         heading_levels: dict[int, int] = {}
         for match in matches:
+            if match.line_no in skipped_ordered_list_lines:
+                continue
             if match.explicit_level is not None:
                 heading_levels[match.line_no] = match.explicit_level
             else:
                 heading_levels[match.line_no] = inferred_levels[match.pattern_name]
         return heading_levels
+
+    @staticmethod
+    def _detect_ordered_list_line_numbers(matches: list[_HeadingMatch]) -> set[int]:
+        line_numbers: set[int] = set()
+        index = 0
+        while index < len(matches):
+            match = matches[index]
+            if match.pattern_name != "numeric_dot" or match.ordered_item_no is None:
+                index += 1
+                continue
+
+            run = [match]
+            cursor = index + 1
+            while cursor < len(matches):
+                previous = run[-1]
+                current = matches[cursor]
+                if (
+                    current.pattern_name != "numeric_dot"
+                    or current.ordered_item_no is None
+                    or current.line_no != previous.line_no + 1
+                    or current.ordered_item_no != previous.ordered_item_no + 1
+                ):
+                    break
+                run.append(current)
+                cursor += 1
+
+            if len(run) >= 2:
+                line_numbers.update(item.line_no for item in run)
+            index = cursor
+
+        return line_numbers
 
     def _match_heading_pattern(
         self, line: str, *, treat_as_markdown: bool
@@ -403,18 +492,42 @@ class DocumentChunkingService:
                 continue
             if not re.match(pattern.regex, normalized):
                 continue
+            if not pattern.markdown_only and self._looks_like_inline_body(normalized):
+                continue
+            pattern_name = pattern.name
+            ordered_item_no = None
+            if pattern.name == "numeric_nested":
+                nested_match = re.match(r"^(\d+(?:\.\d+)+)\s+(.+)$", normalized)
+                if nested_match is None:
+                    continue
+                title_text = nested_match.group(2).strip()
+                if not title_text or re.fullmatch(r"[\d.\s]+", normalized):
+                    continue
+                numeric_depth = nested_match.group(1).count(".") + 1
+                pattern_name = f"{pattern.name}_{numeric_depth}"
+            elif pattern.name == "numeric_dot":
+                ordered_match = re.match(r"^(\d+)[.、]\s+(.+)$", normalized)
+                if ordered_match is None:
+                    continue
+                ordered_item_no = int(ordered_match.group(1))
             return _HeadingMatch(
-                pattern_name=pattern.name,
+                pattern_name=pattern_name,
                 line_no=0,
                 explicit_level=pattern.explicit_level,
+                ordered_item_no=ordered_item_no,
             )
         return None
+
+    @staticmethod
+    def _looks_like_inline_body(line: str) -> bool:
+        return bool(re.search(r"[。！？；;!?]", line))
 
     def _build_chunks_from_blocks(
         self, text: str, blocks: list[_TextBlock]
     ) -> list[dict]:
         chunks: list[dict] = []
         heading_stack: list[_TextBlock] = []
+        pending_heading_blocks: list[_TextBlock] = []
         current_body_blocks: list[_TextBlock] = []
         chunk_no = 1
         soft_body_size = max(self.chunk_size, 1)
@@ -422,6 +535,27 @@ class DocumentChunkingService:
             int(soft_body_size * 1.6),
             soft_body_size + max(self.chunk_overlap, 128),
         )
+
+        def remove_pending_heading(block: _TextBlock) -> None:
+            nonlocal pending_heading_blocks
+            pending_heading_blocks = [
+                pending for pending in pending_heading_blocks if pending is not block
+            ]
+
+        def append_heading_chunk(block: _TextBlock) -> None:
+            nonlocal chunk_no
+            chunks.append(
+                {
+                    "chunk_no": chunk_no,
+                    "chunk_text": block.text,
+                    "char_start": block.start_char,
+                    "char_end": block.end_char,
+                    "start_line": block.start_line,
+                    "end_line": block.end_line,
+                }
+            )
+            chunk_no += 1
+            remove_pending_heading(block)
 
         def flush_current() -> None:
             nonlocal chunk_no, current_body_blocks
@@ -445,6 +579,8 @@ class DocumentChunkingService:
                 }
             )
             chunk_no += 1
+            for heading in heading_stack:
+                remove_pending_heading(heading)
             current_body_blocks = []
 
         for block in blocks:
@@ -453,8 +589,11 @@ class DocumentChunkingService:
                 while heading_stack and (heading_stack[-1].level or 99) >= (
                     block.level or 99
                 ):
-                    heading_stack.pop()
+                    popped_heading = heading_stack.pop()
+                    if popped_heading in pending_heading_blocks:
+                        append_heading_chunk(popped_heading)
                 heading_stack.append(block)
+                pending_heading_blocks.append(block)
                 continue
 
             paragraph_parts = self._split_oversized_block(block, text, hard_body_size)
@@ -486,6 +625,8 @@ class DocumentChunkingService:
                 current_body_blocks.append(part)
 
         flush_current()
+        for heading in list(pending_heading_blocks):
+            append_heading_chunk(heading)
         return chunks
 
     @staticmethod

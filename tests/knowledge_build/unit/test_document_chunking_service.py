@@ -1,5 +1,6 @@
 """Tests for document chunking service file type handling."""
 
+import io
 import json as json_lib
 
 import httpx
@@ -37,6 +38,27 @@ def test_extract_text_from_file_accepts_text_types_case_insensitively():
         service.extract_text_from_file(b"name,age\nalice,18\n", "CSV")
         == "name | age\nalice | 18"
     )
+
+
+def test_extract_text_from_docx_includes_table_cells():
+    """DOCX tables should be included in extracted markdown text."""
+    docx = pytest.importorskip("docx")
+    service = _make_service()
+    buffer = io.BytesIO()
+    document = docx.Document()
+    document.add_paragraph("正文段落")
+    table = document.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "措施"
+    table.cell(0, 1).text = "内容"
+    table.cell(1, 0).text = "一"
+    table.cell(1, 1).text = "放宽准入"
+    document.save(buffer)
+
+    text = service.extract_text_from_file(buffer.getvalue(), "docx")
+
+    assert "正文段落" in text
+    assert "措施 | 内容" in text
+    assert "一 | 放宽准入" in text
 
 
 def test_chunk_and_embed_preserves_body_line_numbers_when_prepending_headings(
@@ -141,18 +163,50 @@ def test_chunk_and_embed_skips_repeated_page_noise_and_keeps_body_ranges(
         "Paragraph line 3 continues the same section.\n"
     )
 
-    chunks = service.chunk_and_embed(markdown.encode("utf-8"), filename="input.md")
+    chunks = service.chunk_and_embed(markdown.encode("utf-8"), filename="input.txt")
 
     assert len(chunks) == 1
     assert "report.md" not in chunks[0].chunk_text
     assert "1 / 2" not in chunks[0].chunk_text
     assert "2 / 2" not in chunks[0].chunk_text
-    assert chunks[0].chunk_text.startswith("## Section\n\n")
+    assert chunks[0].chunk_text.startswith("## Section\nParagraph line 1")
     assert chunks[0].chunk_text.endswith(
         "Paragraph line 1\nParagraph line 2\nParagraph line 3 continues the same section."
     )
-    assert chunks[0].start_line == 6
+    assert chunks[0].start_line == 4
     assert chunks[0].end_line == 12
+
+
+def test_chunk_and_embed_keeps_repeated_markdown_filenames_in_markdown_content(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Native markdown can intentionally repeat filenames in project trees."""
+    service = _make_service()
+    service.chunk_size = 300
+    service.chunk_overlap = 0
+    monkeypatch.setattr(
+        service,
+        "_batch_embed",
+        lambda texts: [[0.1, 0.2, 0.3] for _ in texts],
+    )
+
+    markdown = (
+        "# Project Layout\n\n"
+        "```text\n"
+        "├── README.md\n"
+        "├── CHANGELOG.md\n"
+        "```\n\n"
+        "```text\n"
+        "├── README.md\n"
+        "├── CHANGELOG.md\n"
+        "```\n"
+    )
+
+    chunks = service.chunk_and_embed(markdown.encode("utf-8"), filename="input.md")
+    indexed_text = "\n".join(chunk.chunk_text for chunk in chunks)
+
+    assert "├── README.md" in indexed_text
+    assert "├── CHANGELOG.md" in indexed_text
 
 
 def test_chunk_and_embed_keeps_numbered_list_items_in_same_chunk_when_they_fit(
@@ -248,6 +302,168 @@ def test_chunk_and_embed_does_not_split_numbered_colon_list_items_into_headings(
     assert "-. 短期目标（1-2年）：完成基础布局。" in chunks[0].chunk_text
     assert "/. 中期目标（3-5年）：形成产业协同。" in chunks[0].chunk_text
     assert "0. 长期目标（5-10年）：建成领先集群。" in chunks[0].chunk_text
+
+
+def test_chunk_and_embed_keeps_numbered_policy_paragraphs_with_inline_body(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Policy clauses that start with numbering but contain inline body text should be indexed."""
+    service = _make_service()
+    service.chunk_size = 220
+    service.chunk_overlap = 0
+    monkeypatch.setattr(
+        service,
+        "_batch_embed",
+        lambda texts: [[0.1, 0.2, 0.3] for _ in texts],
+    )
+
+    markdown = (
+        "一、总体要求\n\n"
+        "（一）放宽市场准入。支持符合条件的市场主体依法开展业务。\n\n"
+        "（二）完善监管机制。加强事中事后监管，提升协同效率。\n\n"
+        "四、组织实施\n\n"
+        "各部门各单位要高度重视，按照职责分工推进落实。\n"
+    )
+
+    chunks = service.chunk_and_embed(markdown.encode("utf-8"), filename="input.md")
+    indexed_text = "\n".join(chunk.chunk_text for chunk in chunks)
+
+    assert len(chunks) == 2
+    assert "（一）放宽市场准入。支持符合条件的市场主体依法开展业务。" in indexed_text
+    assert "（二）完善监管机制。加强事中事后监管，提升协同效率。" in indexed_text
+    assert "各部门各单位要高度重视" in chunks[1].chunk_text
+
+
+def test_chunk_and_embed_indexes_heading_only_documents(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Documents that contain only headings should still produce searchable chunks."""
+    service = _make_service()
+    monkeypatch.setattr(
+        service,
+        "_batch_embed",
+        lambda texts: [[0.1, 0.2, 0.3] for _ in texts],
+    )
+
+    markdown = "一、总体要求\n\n二、主要任务\n"
+
+    chunks = service.chunk_and_embed(markdown.encode("utf-8"), filename="input.md")
+
+    assert len(chunks) == 2
+    assert chunks[0].chunk_text == "一、总体要求"
+    assert chunks[1].chunk_text == "二、主要任务"
+
+
+def test_chunk_and_embed_indexes_trailing_heading_without_body(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A final heading without following body text should not disappear from the index."""
+    service = _make_service()
+    monkeypatch.setattr(
+        service,
+        "_batch_embed",
+        lambda texts: [[0.1, 0.2, 0.3] for _ in texts],
+    )
+
+    markdown = "一、总体要求\n\n正文内容。\n\n二、主要任务\n"
+
+    chunks = service.chunk_and_embed(markdown.encode("utf-8"), filename="input.md")
+    indexed_text = "\n".join(chunk.chunk_text for chunk in chunks)
+
+    assert len(chunks) == 2
+    assert "正文内容。" in chunks[0].chunk_text
+    assert "二、主要任务" in indexed_text
+
+
+def test_chunk_and_embed_keeps_nested_numeric_parent_with_child_body(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Nested numeric parents should remain context, not standalone heading chunks."""
+    service = _make_service()
+    service.chunk_size = 260
+    service.chunk_overlap = 0
+    monkeypatch.setattr(
+        service,
+        "_batch_embed",
+        lambda texts: [[0.1, 0.2, 0.3] for _ in texts],
+    )
+
+    markdown = (
+        "一、多跳推理质量提升\n\n"
+        "1.2 查询分解优化策略\n\n"
+        "1.2.1 结构化分解方法\n\n"
+        "Question Decomposition for RAG 提出系统化分解框架。\n"
+    )
+
+    chunks = service.chunk_and_embed(markdown.encode("utf-8"), filename="input.md")
+
+    assert len(chunks) == 1
+    assert chunks[0].chunk_text.startswith(
+        "一、多跳推理质量提升\n1.2 查询分解优化策略\n1.2.1 结构化分解方法\n\n"
+    )
+    assert "Question Decomposition for RAG" in chunks[0].chunk_text
+
+
+def test_chunk_and_embed_treats_consecutive_numbered_steps_as_body(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Procedure lists extracted from PDFs should not become one chunk per step."""
+    service = _make_service()
+    service.chunk_size = 260
+    service.chunk_overlap = 0
+    monkeypatch.setattr(
+        service,
+        "_batch_embed",
+        lambda texts: [[0.1, 0.2, 0.3] for _ in texts],
+    )
+
+    markdown = (
+        "1.3 错误传播控制\n\n"
+        "Chain-of-Verification (CoVe)：\n"
+        "1. 生成初始草稿答案\n"
+        "2. 生成验证问题检查关键事实\n"
+        "3. 独立回答验证问题（避免偏见）\n"
+        "4. 发现不一致时生成修正答案\n"
+        "实验显示 CoVe 显著减少错误。\n"
+    )
+
+    chunks = service.chunk_and_embed(markdown.encode("utf-8"), filename="input.md")
+    indexed_text = "\n".join(chunk.chunk_text for chunk in chunks)
+
+    assert len(chunks) == 1
+    assert "1. 生成初始草稿答案" in indexed_text
+    assert "4. 发现不一致时生成修正答案" in indexed_text
+    assert "实验显示 CoVe 显著减少错误。" in indexed_text
+
+
+def test_chunk_and_embed_does_not_treat_decimal_table_values_as_headings(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Numeric table cells like 0.15 should stay with surrounding table content."""
+    service = _make_service()
+    service.chunk_size = 260
+    service.chunk_overlap = 0
+    monkeypatch.setattr(
+        service,
+        "_batch_embed",
+        lambda texts: [[0.1, 0.2, 0.3] for _ in texts],
+    )
+
+    markdown = (
+        "五、关键环节协同优化\n\n"
+        "模块\n"
+        "权重\n"
+        "最终答案\n"
+        "答案正确性\n"
+        "0.15\n"
+        "整体评估用于端到端优化。\n"
+    )
+
+    chunks = service.chunk_and_embed(markdown.encode("utf-8"), filename="input.md")
+
+    assert len(chunks) == 1
+    assert "0.15" in chunks[0].chunk_text
+    assert "整体评估用于端到端优化。" in chunks[0].chunk_text
 
 
 def test_chunk_and_embed_infers_heading_hierarchy_from_document_patterns(
@@ -535,3 +751,83 @@ def test_chunk_and_embed_emits_chunking_and_embedding_stage_logs(
         "document_chunking markdown chunking completed: filename=input.md, chunk_count=2",
         "document_chunking embedding completed: filename=input.md, chunk_count=2",
     ]
+
+
+def test_chunk_and_embed_does_not_treat_code_block_comments_as_headings(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Lines inside fenced code blocks must not be treated as markdown headings.
+
+    A YAML comment like '# .github/workflows/ci.yml' inside a ```yaml block
+    matches the markdown_h1 pattern but must not corrupt the heading stack or
+    split the surrounding body into tiny chunks.
+    """
+    service = _make_service()
+    service.chunk_size = 512
+    monkeypatch.setattr(
+        service,
+        "_batch_embed",
+        lambda texts: [[0.1, 0.2, 0.3] for _ in texts],
+    )
+
+    markdown = (
+        "# Guide\n\n"
+        "## Section One\n\n"
+        "Intro paragraph.\n\n"
+        "```yaml\n"
+        "# .github/workflows/ci.yml\n"
+        "name: CI\n"
+        "on: [push]\n"
+        "```\n\n"
+        "Closing paragraph.\n"
+    )
+
+    chunks = service.chunk_and_embed(markdown.encode("utf-8"), filename="guide.md")
+
+    # The comment inside the code block must NOT become a heading.
+    # All body text (intro + code block + closing) should be in one or two chunks,
+    # not fragmented into many tiny pieces.
+    assert len(chunks) <= 2, f"Expected ≤2 chunks but got {len(chunks)}: " + str(
+        [c.chunk_text[:60] for c in chunks]
+    )
+
+    # The breadcrumb in every chunk must use real document headings only.
+    for chunk in chunks:
+        assert "# .github/workflows/ci.yml" not in chunk.chunk_text or (
+            chunk.chunk_text.count("# .github/workflows/ci.yml") == 1
+            and "```yaml" in chunk.chunk_text
+        ), f"Code block comment leaked into breadcrumb: {chunk.chunk_text!r}"
+
+
+def test_chunk_and_embed_preserves_heading_breadcrumb_after_code_block(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Heading context must remain correct for body paragraphs that follow a code block."""
+    service = _make_service()
+    service.chunk_size = 100
+    monkeypatch.setattr(
+        service,
+        "_batch_embed",
+        lambda texts: [[0.1, 0.2, 0.3] for _ in texts],
+    )
+
+    markdown = (
+        "# Title\n\n"
+        "## Setup\n\n"
+        "Before code.\n\n"
+        "```bash\n"
+        "# install deps\n"
+        "npm install\n"
+        "```\n\n"
+        "After code paragraph.\n"
+    )
+
+    chunks = service.chunk_and_embed(markdown.encode("utf-8"), filename="doc.md")
+
+    # The chunk containing "After code paragraph." must have the real heading breadcrumb.
+    after_chunks = [c for c in chunks if "After code paragraph." in c.chunk_text]
+    assert after_chunks, "No chunk contains 'After code paragraph.'"
+    for chunk in after_chunks:
+        assert chunk.chunk_text.startswith("# Title"), (
+            f"Breadcrumb corrupted after code block: {chunk.chunk_text!r}"
+        )

@@ -13,7 +13,7 @@ from langchain_core.messages import SystemMessage, ToolMessage
 from langgraph.types import Command
 from pydantic import ConfigDict
 
-from by_qa.core import post_discovered_json
+from by_qa.core import logger, post_discovered_json
 from by_qa.core.exceptions import (
     KnowledgeBaseNotFoundOrForbiddenError,
     OperationNotSupportedError,
@@ -112,10 +112,11 @@ class ServiceToolDispatcher:
 
         async def _fn(
             runtime: ToolRuntime[InstantSearchRuntimeContext], **kwargs: Any
-        ) -> list[dict[str, Any]]:
-            return await dispatcher._dispatch(
+        ) -> str:
+            results = await dispatcher._dispatch(
                 spec.operation_type, kwargs, runtime.context
             )
+            return json.dumps(results, ensure_ascii=False)
 
         _fn.__name__ = spec.tool_name
         _fn.__doc__ = spec.description
@@ -127,6 +128,11 @@ class ServiceToolDispatcher:
         payload: dict[str, Any],
         runtime_context: InstantSearchRuntimeContext,
     ) -> list[dict[str, Any]]:
+        logger.info(
+            "[dispatcher] dispatch: operation_type=%s payload=%s",
+            operation_type,
+            payload,
+        )
         if operation_type == OperationType.SEARCH:
             return await self._dispatch_search(payload, runtime_context)
         return await self._dispatch_single_kb(operation_type, payload, runtime_context)

@@ -176,7 +176,7 @@ async def test_dispatch_single_kb_returns_raw_response_on_api_error():
 
 
 @pytest.mark.asyncio
-async def test_dispatch_raises_on_service_exception():
+async def test_dispatch_single_kb_returns_error_entry_on_service_exception():
     kb = _kb("kb1", "svc-a", {OperationType.LIST_DIR: "/api/v1/listDir"})
     ctx = _make_context(kb)
     dispatcher = ServiceToolDispatcher([kb])
@@ -188,40 +188,47 @@ async def test_dispatch_raises_on_service_exception():
         "by_qa.qa.instant.runtime.dispatcher.post_discovered_json",
         side_effect=fake_post,
     ):
-        with pytest.raises(RuntimeError, match="service down"):
-            await dispatcher._dispatch(
-                OperationType.LIST_DIR, {"knCode": "kb1", "directoryPath": "/src"}, ctx
-            )
+        results = await dispatcher._dispatch(
+            OperationType.LIST_DIR, {"knCode": "kb1", "directoryPath": "/src"}, ctx
+        )
+
+    assert results["is_error"] is True
+    assert results["error_type"] == "RuntimeError"
+    assert "service down" in results["error"]
+    assert results["service_name"] == "svc-a"
+    assert results["path"] == "/api/v1/listDir"
 
 
 @pytest.mark.asyncio
-async def test_dispatch_raises_when_kn_code_not_found():
-    from by_qa.core.exceptions import KnowledgeBaseNotFoundOrForbiddenError
-
+async def test_dispatch_single_kb_returns_error_when_kn_code_not_found():
     kb = _kb("kb1", "svc-a", {OperationType.LIST_DIR: "/api/v1/listDir"})
     ctx = _make_context(kb)
     dispatcher = ServiceToolDispatcher([kb])
 
-    with pytest.raises(KnowledgeBaseNotFoundOrForbiddenError, match="unknown-kb"):
-        await dispatcher._dispatch(
-            OperationType.LIST_DIR,
-            {"knCode": "unknown-kb", "directoryPath": "/src"},
-            ctx,
-        )
+    results = await dispatcher._dispatch(
+        OperationType.LIST_DIR,
+        {"knCode": "unknown-kb", "directoryPath": "/src"},
+        ctx,
+    )
+
+    assert results["is_error"] is True
+    assert results["error_type"] == "KnowledgeBaseNotFoundOrForbiddenError"
+    assert "unknown-kb" in results["error"]
 
 
 @pytest.mark.asyncio
-async def test_dispatch_raises_when_operation_not_supported():
-    from by_qa.core.exceptions import OperationNotSupportedError
-
+async def test_dispatch_single_kb_returns_error_when_operation_not_supported():
     kb = _kb("kb1", "svc-a", {OperationType.SEARCH: "/api/v1/knowledgeItems/search"})
     ctx = _make_context(kb)
     dispatcher = ServiceToolDispatcher([kb])
 
-    with pytest.raises(OperationNotSupportedError, match="listDir"):
-        await dispatcher._dispatch(
-            OperationType.LIST_DIR, {"knCode": "kb1", "directoryPath": "/src"}, ctx
-        )
+    results = await dispatcher._dispatch(
+        OperationType.LIST_DIR, {"knCode": "kb1", "directoryPath": "/src"}, ctx
+    )
+
+    assert results["is_error"] is True
+    assert results["error_type"] == "OperationNotSupportedError"
+    assert "listDir" in results["error"]
 
 
 @pytest.mark.asyncio

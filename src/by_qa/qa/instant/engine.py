@@ -48,10 +48,13 @@ def _extract_search_result_chunks(tool_message: Any) -> list[dict[str, Any]]:
     if retrieval_results is not None:
         return retrieval_results
 
-    content = getattr(tool_message, "content", "[]")
-    if isinstance(content, str):
-        return json.loads(content)
-    return content
+    try:
+        content = getattr(tool_message, "content", "[]")
+        if isinstance(content, str):
+            return json.loads(content)
+        return content
+    except Exception:
+        return []
 
 
 class EventFilter:

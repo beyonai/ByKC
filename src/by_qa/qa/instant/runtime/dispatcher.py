@@ -77,6 +77,26 @@ def _format_search_api_error(
     }
 
 
+def _format_operation_error(
+    *,
+    operation_type: OperationType,
+    service_name: str,
+    path: str,
+    exc: Exception,
+) -> dict[str, Any]:
+    return {
+        "resultCode": "-1",
+        "resultMsg": str(exc),
+        "resultObject": {},
+        "is_error": True,
+        "error": str(exc),
+        "error_type": type(exc).__name__,
+        "operation_type": operation_type.value,
+        "service_name": service_name,
+        "path": path,
+    }
+
+
 class ServiceToolDispatcher:
     """Generates LangGraph tools from KnowledgeBaseConfig.operations at graph-build time."""
 
@@ -264,17 +284,31 @@ class ServiceToolDispatcher:
             authorized_codes = [
                 k.kb_code for k in runtime_context.retrieval.knowledge_bases
             ]
-            raise KnowledgeBaseNotFoundOrForbiddenError(
+            exc = KnowledgeBaseNotFoundOrForbiddenError(
                 f"Knowledge base '{kn_code}' not found or access not permitted. "
                 f"Authorized KB codes: {authorized_codes}"
+            )
+            error("[dispatcher] %s failed: %s", operation_type.value, exc)
+            return _format_operation_error(
+                operation_type=operation_type,
+                service_name="",
+                path="",
+                exc=exc,
             )
 
         path = kb.operations.get(operation_type)
         if not path:
             supported = [op.value for op in kb.operations]
-            raise OperationNotSupportedError(
+            exc = OperationNotSupportedError(
                 f"KB '{kn_code}' does not support '{operation_type.value}'. "
                 f"Supported operations: {supported}"
+            )
+            error("[dispatcher] %s failed: %s", operation_type.value, exc)
+            return _format_operation_error(
+                operation_type=operation_type,
+                service_name=kb.service_name,
+                path="",
+                exc=exc,
             )
 
         headers = dict(kb.headers) if kb.headers else None
@@ -286,7 +320,22 @@ class ServiceToolDispatcher:
         if headers:
             kwargs["headers"] = headers
 
-        resp = await post_discovered_json(**kwargs)
+        try:
+            resp = await post_discovered_json(**kwargs)
+        except Exception as exc:  # pragma: no cover - exercised by unit tests
+            error(
+                "[dispatcher] %s failed: service=%s path=%s error=%s",
+                operation_type.value,
+                kb.service_name,
+                path,
+                exc,
+            )
+            return _format_operation_error(
+                operation_type=operation_type,
+                service_name=kb.service_name,
+                path=path,
+                exc=exc,
+            )
         if resp.get("resultCode") != "0":
             result_msg = resp.get("resultMsg", "unknown error")
             error(
@@ -321,7 +370,21 @@ class DispatcherToolMiddleware(AgentMiddleware):
         state = request.state
         counter = state.get("result_counter", 0)
         step = state.get("current_step", 0)
-        raw_results: list[dict[str, Any]] = json.loads(result.content)
+        try:
+            raw_results: list[dict[str, Any]] = json.loads(result.content)
+        except Exception:
+            return Command(
+                update={
+                    "messages": [
+                        ToolMessage(
+                            content=result.content,
+                            artifact=None,
+                            name=request.tool_call["name"],
+                            tool_call_id=request.tool_call["id"],
+                        )
+                    ]
+                }
+            )
 
         indexed = [
             {**item, "index_id": self._index_id_fn(step, counter + i)}

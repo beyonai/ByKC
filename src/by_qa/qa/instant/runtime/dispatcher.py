@@ -4,9 +4,13 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+import json
+from typing import Any, Callable
 
+from langchain.agents.middleware import AgentMiddleware, ToolCallRequest
 from langchain.tools import ToolRuntime, tool
+from langchain_core.messages import SystemMessage, ToolMessage
+from langgraph.types import Command
 
 from by_qa.core import post_discovered_json
 from by_qa.core.logger import error, info
@@ -48,10 +52,6 @@ def _format_error(*, service_name: str, path: str, exc: Exception) -> dict[str, 
         "service_name": service_name,
         "path": path,
     }
-
-
-class KnowledgeBaseNotFoundError(Exception):
-    pass
 
 
 class KnowledgeBaseAccessDeniedError(Exception):
@@ -257,9 +257,58 @@ class ServiceToolDispatcher:
             return [_format_error(service_name=kb.service_name, path=path, exc=exc)]
 
 
+class DispatcherToolMiddleware(AgentMiddleware):
+    """Post-processes dispatcher tool results: injects index_id, artifact, SystemMessage."""
+
+    def __init__(
+        self, index_id_fn: Callable[[int, int], str], follow_up_prompt: str
+    ) -> None:
+        self._index_id_fn = index_id_fn
+        self._follow_up_prompt = follow_up_prompt
+        self._search_tool_name = OPERATION_REGISTRY[OperationType.SEARCH].tool_name
+
+    async def awrap_tool_call(
+        self, request: ToolCallRequest, handler: Callable
+    ) -> ToolMessage | Command:
+        result = await handler(request)
+        if request.tool_call["name"] != self._search_tool_name:
+            return result
+        return self._post_process_search(result, request)
+
+    def _post_process_search(self, result: Any, request: ToolCallRequest) -> Command:
+        state = request.state
+        counter = state.get("result_counter", 0)
+        step = state.get("current_step", 0)
+        raw_results: list[dict[str, Any]] = json.loads(result.content)
+
+        indexed = [
+            {**item, "index_id": self._index_id_fn(step, counter + i)}
+            for i, item in enumerate(raw_results)
+        ]
+        llm_results = [
+            {"index_id": r["index_id"], "content": r["content"]} for r in indexed
+        ]
+
+        return Command(
+            update={
+                "retrieval_results": indexed,
+                "result_counter": counter + len(indexed),
+                "messages": [
+                    ToolMessage(
+                        content=json.dumps(llm_results, ensure_ascii=False),
+                        artifact=raw_results,
+                        name=request.tool_call["name"],
+                        tool_call_id=request.tool_call["id"],
+                    ),
+                    SystemMessage(content=self._follow_up_prompt),
+                ],
+            }
+        )
+
+
 __all__ = [
+    "DispatcherToolMiddleware",
     "KnowledgeBaseAccessDeniedError",
-    "KnowledgeBaseNotFoundError",
     "OperationNotSupportedError",
     "ServiceToolDispatcher",
 ]

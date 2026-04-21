@@ -68,9 +68,11 @@ async def test_dispatch_search_groups_by_service_and_posts():
     async def fake_post(*, service_name, path=None, json, headers=None):  # pylint: disable=unused-argument
         calls.append({"service_name": service_name, "json": json})
         return {
+            "resultCode": "0",
+            "resultMsg": "success",
             "resultObject": {
                 "data": [{"chunkText": "hit", "score": 0.9, "filePath": "/f"}]
-            }
+            },
         }
 
     with patch(
@@ -100,7 +102,7 @@ async def test_dispatch_search_filters_by_kn_code_list():
 
     async def fake_post(*, service_name=None, path=None, json, headers=None):  # pylint: disable=unused-argument
         calls.append(json["knCodeList"])
-        return {"resultObject": {"data": []}}
+        return {"resultCode": "0", "resultMsg": "success", "resultObject": {"data": []}}
 
     with patch(
         "by_qa.qa.instant.runtime.dispatcher.post_discovered_json",
@@ -121,11 +123,13 @@ async def test_dispatch_list_dir_single_post():
 
     async def fake_post(*, service_name=None, path=None, json=None, headers=None):  # pylint: disable=unused-argument
         return {
+            "resultCode": "0",
+            "resultMsg": "success",
             "resultObject": {
                 "data": [
                     {"knCode": "kb1", "name": "/src", "type": "directory", "size": 0}
                 ]
-            }
+            },
         }
 
     with patch(
@@ -142,7 +146,33 @@ async def test_dispatch_list_dir_single_post():
 
 
 @pytest.mark.asyncio
-async def test_dispatch_returns_error_entry_on_exception():
+async def test_dispatch_single_kb_returns_raw_response_on_api_error():
+    kb = _kb("kb1", "svc-a", {OperationType.LIST_DIR: "/api/v1/listDir"})
+    ctx = _make_context(kb)
+    dispatcher = ServiceToolDispatcher([kb])
+
+    api_error_resp = {
+        "resultCode": "-1",
+        "resultMsg": "directory not found: /src",
+        "resultObject": {},
+    }
+
+    async def fake_post(*, service_name=None, path=None, json=None, headers=None):  # pylint: disable=unused-argument
+        return api_error_resp
+
+    with patch(
+        "by_qa.qa.instant.runtime.dispatcher.post_discovered_json",
+        side_effect=fake_post,
+    ):
+        results = await dispatcher._dispatch(
+            OperationType.LIST_DIR, {"knCode": "kb1", "directoryPath": "/src"}, ctx
+        )
+
+    assert results == [api_error_resp]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_raises_on_service_exception():
     kb = _kb("kb1", "svc-a", {OperationType.LIST_DIR: "/api/v1/listDir"})
     ctx = _make_context(kb)
     dispatcher = ServiceToolDispatcher([kb])
@@ -154,45 +184,40 @@ async def test_dispatch_returns_error_entry_on_exception():
         "by_qa.qa.instant.runtime.dispatcher.post_discovered_json",
         side_effect=fake_post,
     ):
-        results = await dispatcher._dispatch(
-            OperationType.LIST_DIR, {"knCode": "kb1", "directoryPath": "/src"}, ctx
-        )
-
-    assert len(results) == 1
-    assert results[0]["is_error"] is True
-    assert "service down" in results[0]["error"]
+        with pytest.raises(RuntimeError, match="service down"):
+            await dispatcher._dispatch(
+                OperationType.LIST_DIR, {"knCode": "kb1", "directoryPath": "/src"}, ctx
+            )
 
 
 @pytest.mark.asyncio
-async def test_dispatch_returns_error_when_kn_code_not_found():
+async def test_dispatch_raises_when_kn_code_not_found():
+    from by_qa.core.exceptions import KnowledgeBaseNotFoundOrForbiddenError
+
     kb = _kb("kb1", "svc-a", {OperationType.LIST_DIR: "/api/v1/listDir"})
     ctx = _make_context(kb)
     dispatcher = ServiceToolDispatcher([kb])
 
-    results = await dispatcher._dispatch(
-        OperationType.LIST_DIR, {"knCode": "unknown-kb", "directoryPath": "/src"}, ctx
-    )
-
-    assert len(results) == 1
-    assert results[0]["is_error"] is True
-    assert "unknown-kb" in results[0]["error"]
-    assert results[0]["error_type"] == "KnowledgeBaseAccessDeniedError"
+    with pytest.raises(KnowledgeBaseNotFoundOrForbiddenError, match="unknown-kb"):
+        await dispatcher._dispatch(
+            OperationType.LIST_DIR,
+            {"knCode": "unknown-kb", "directoryPath": "/src"},
+            ctx,
+        )
 
 
 @pytest.mark.asyncio
-async def test_dispatch_returns_error_when_operation_not_supported():
+async def test_dispatch_raises_when_operation_not_supported():
+    from by_qa.core.exceptions import OperationNotSupportedError
+
     kb = _kb("kb1", "svc-a", {OperationType.SEARCH: "/api/v1/knowledgeItems/search"})
     ctx = _make_context(kb)
     dispatcher = ServiceToolDispatcher([kb])
 
-    results = await dispatcher._dispatch(
-        OperationType.LIST_DIR, {"knCode": "kb1", "directoryPath": "/src"}, ctx
-    )
-
-    assert len(results) == 1
-    assert results[0]["is_error"] is True
-    assert "listDir" in results[0]["error"]
-    assert results[0]["error_type"] == "OperationNotSupportedError"
+    with pytest.raises(OperationNotSupportedError, match="listDir"):
+        await dispatcher._dispatch(
+            OperationType.LIST_DIR, {"knCode": "kb1", "directoryPath": "/src"}, ctx
+        )
 
 
 @pytest.mark.asyncio
@@ -202,7 +227,7 @@ async def test_dispatch_search_returns_error_for_unauthorized_kb_codes():
     dispatcher = ServiceToolDispatcher([kb])
 
     async def fake_post(*, service_name=None, path=None, json=None, headers=None):  # pylint: disable=unused-argument
-        return {"resultObject": {"data": []}}
+        return {"resultCode": "0", "resultMsg": "success", "resultObject": {"data": []}}
 
     with patch(
         "by_qa.qa.instant.runtime.dispatcher.post_discovered_json",
@@ -217,7 +242,7 @@ async def test_dispatch_search_returns_error_for_unauthorized_kb_codes():
     error_entries = [r for r in results if r.get("is_error")]
     assert len(error_entries) == 1
     assert "unauthorized-kb" in error_entries[0]["error"]
-    assert error_entries[0]["error_type"] == "KnowledgeBaseAccessDeniedError"
+    assert error_entries[0]["error_type"] == "KnowledgeBaseNotFoundOrForbiddenError"
 
 
 @pytest.mark.asyncio
@@ -240,3 +265,30 @@ async def test_dispatch_search_returns_error_entry_on_service_exception():
     assert len(results) == 1
     assert results[0]["is_error"] is True
     assert "timeout" in results[0]["error"]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_search_returns_error_entry_on_api_error():
+    kb = _kb("kb1", "svc-a", {OperationType.SEARCH: "/api/v1/knowledgeItems/search"})
+    ctx = _make_context(kb)
+    dispatcher = ServiceToolDispatcher([kb])
+
+    async def fake_post(*, service_name=None, path=None, json=None, headers=None):  # pylint: disable=unused-argument
+        return {
+            "resultCode": "-1",
+            "resultMsg": "topK must be greater than 0",
+            "resultObject": {},
+        }
+
+    with patch(
+        "by_qa.qa.instant.runtime.dispatcher.post_discovered_json",
+        side_effect=fake_post,
+    ):
+        results = await dispatcher._dispatch(
+            OperationType.SEARCH, {"query": "q", "knCodeList": None}, ctx
+        )
+
+    assert len(results) == 1
+    assert results[0]["is_error"] is True
+    assert results[0]["error_type"] == "ApiError"
+    assert "topK must be greater than 0" in results[0]["error"]

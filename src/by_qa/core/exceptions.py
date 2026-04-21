@@ -51,3 +51,15 @@ class LLMGenerationError(GenerationError):
     """Exception raised when LLM generation fails."""
 
     pass
+
+
+class KnowledgeBaseNotFoundOrForbiddenError(DeepSearchError):
+    """Exception raised when a knowledge base is not found or access is not permitted."""
+
+    pass
+
+
+class OperationNotSupportedError(DeepSearchError):
+    """Exception raised when a knowledge base does not support the requested operation."""
+
+    pass

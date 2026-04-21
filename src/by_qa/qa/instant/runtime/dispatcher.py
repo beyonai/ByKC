@@ -11,8 +11,13 @@ from langchain.agents.middleware import AgentMiddleware, ToolCallRequest
 from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import SystemMessage, ToolMessage
 from langgraph.types import Command
+from pydantic import ConfigDict
 
 from by_qa.core import post_discovered_json
+from by_qa.core.exceptions import (
+    KnowledgeBaseNotFoundOrForbiddenError,
+    OperationNotSupportedError,
+)
 from by_qa.core.logger import error, info
 from by_qa.qa.instant.config import KnowledgeBaseConfig
 from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
@@ -23,7 +28,7 @@ from by_qa.qa.instant.runtime.operation_registry import (
 )
 
 
-def _format_search_hit(item: dict[str, Any]) -> dict[str, Any]:
+def _format_search_result(item: dict[str, Any]) -> dict[str, Any]:
     file_path = item.get("filePath") or item.get("file_path", "")
     return {
         "content": item.get("chunkText") or item.get("chunk_text", ""),
@@ -40,9 +45,11 @@ def _format_search_hit(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _format_error(*, service_name: str, path: str, exc: Exception) -> dict[str, Any]:
+def _format_search_error(
+    *, service_name: str, path: str, exc: Exception
+) -> dict[str, Any]:
     return {
-        "content": f"Tool call failed — {exc}",
+        "content": f"Search failed — {exc}",
         "source": f"{service_name}{path}",
         "source_type": "knowledge_base",
         "score": 0.0,
@@ -54,12 +61,20 @@ def _format_error(*, service_name: str, path: str, exc: Exception) -> dict[str, 
     }
 
 
-class KnowledgeBaseAccessDeniedError(Exception):
-    pass
-
-
-class OperationNotSupportedError(Exception):
-    pass
+def _format_search_api_error(
+    *, service_name: str, path: str, result_msg: str
+) -> dict[str, Any]:
+    return {
+        "content": f"Search API error — {result_msg}",
+        "source": f"{service_name}{path}",
+        "source_type": "knowledge_base",
+        "score": 0.0,
+        "is_error": True,
+        "error": result_msg,
+        "error_type": "ApiError",
+        "service_name": service_name,
+        "path": path,
+    }
 
 
 class ServiceToolDispatcher:
@@ -87,6 +102,14 @@ class ServiceToolDispatcher:
     def _make_tool(self, spec: OperationSpec) -> Any:
         dispatcher = self
 
+        # Extend the input schema with extra='allow' so that ToolRuntime injected
+        # by LangGraph's ToolNode passes through _parse_input to the function.
+        extended_schema = type(
+            spec.input_schema.__name__,
+            (spec.input_schema,),
+            {"model_config": ConfigDict(extra="allow", populate_by_name=True)},
+        )
+
         async def _fn(
             runtime: ToolRuntime[InstantSearchRuntimeContext], **kwargs: Any
         ) -> list[dict[str, Any]]:
@@ -96,7 +119,7 @@ class ServiceToolDispatcher:
 
         _fn.__name__ = spec.tool_name
         _fn.__doc__ = spec.description
-        return tool(_fn, args_schema=spec.input_schema)
+        return tool(_fn, args_schema=extended_schema)
 
     async def _dispatch(
         self,
@@ -125,11 +148,13 @@ class ServiceToolDispatcher:
                 code for code in kn_code_list if code not in authorized_codes
             ]
             for code in unauthorized:
-                exc = KnowledgeBaseAccessDeniedError(
-                    f"Access denied: knowledge base '{code}' is not in the authorized KB list."
+                exc = KnowledgeBaseNotFoundOrForbiddenError(
+                    f"Knowledge base '{code}' not found or access not permitted."
                 )
                 error("[dispatcher] search: %s", exc)
-                error_results.append(_format_error(service_name="", path="", exc=exc))
+                error_results.append(
+                    _format_search_error(service_name="", path="", exc=exc)
+                )
             kbs = [kb for kb in kbs if kb.kb_code in kn_code_list]
 
         grouped: dict[tuple[str, str], list[str]] = {}
@@ -187,10 +212,24 @@ class ServiceToolDispatcher:
                     p,
                     resp,
                 )
-                results.append(_format_error(service_name=sn, path=p, exc=resp))
+                results.append(_format_search_error(service_name=sn, path=p, exc=resp))
+                continue
+            if resp.get("resultCode") != "0":
+                result_msg = resp.get("resultMsg", "unknown error")
+                error(
+                    "[dispatcher] search API error: service=%s path=%s resultMsg=%s",
+                    sn,
+                    p,
+                    result_msg,
+                )
+                results.append(
+                    _format_search_api_error(
+                        service_name=sn, path=p, result_msg=result_msg
+                    )
+                )
                 continue
             for item in resp.get("resultObject", {}).get("data", []):
-                results.append(_format_search_hit(item))
+                results.append(_format_search_result(item))
 
         results.sort(key=lambda r: r.get("score", 0.0), reverse=True)
         return error_results + results
@@ -214,22 +253,18 @@ class ServiceToolDispatcher:
             authorized_codes = [
                 k.kb_code for k in runtime_context.retrieval.knowledge_bases
             ]
-            exc = KnowledgeBaseAccessDeniedError(
-                f"Access denied: knowledge base '{kn_code}' is not in the authorized KB list. "
+            raise KnowledgeBaseNotFoundOrForbiddenError(
+                f"Knowledge base '{kn_code}' not found or access not permitted. "
                 f"Authorized KB codes: {authorized_codes}"
             )
-            error("[dispatcher] %s: %s", operation_type.value, exc)
-            return [_format_error(service_name="", path="", exc=exc)]
 
         path = kb.operations.get(operation_type)
         if not path:
             supported = [op.value for op in kb.operations]
-            exc = OperationNotSupportedError(
+            raise OperationNotSupportedError(
                 f"KB '{kn_code}' does not support '{operation_type.value}'. "
                 f"Supported operations: {supported}"
             )
-            error("[dispatcher] %s: %s", operation_type.value, exc)
-            return [_format_error(service_name=kb.service_name, path="", exc=exc)]
 
         headers = dict(kb.headers) if kb.headers else None
         kwargs: dict[str, Any] = {
@@ -240,21 +275,21 @@ class ServiceToolDispatcher:
         if headers:
             kwargs["headers"] = headers
 
-        try:
-            resp = await post_discovered_json(**kwargs)
-            data = resp.get("resultObject", {}).get("data", [])
-            if not isinstance(data, list):
-                data = [data]
-            return data
-        except Exception as exc:
+        resp = await post_discovered_json(**kwargs)
+        if resp.get("resultCode") != "0":
+            result_msg = resp.get("resultMsg", "unknown error")
             error(
-                "[dispatcher] %s failed: service=%s path=%s error=%s",
+                "[dispatcher] %s API error: service=%s path=%s resultMsg=%s",
                 operation_type.value,
                 kb.service_name,
                 path,
-                exc,
+                result_msg,
             )
-            return [_format_error(service_name=kb.service_name, path=path, exc=exc)]
+            return [resp]
+        data = resp.get("resultObject", {}).get("data", [])
+        if not isinstance(data, list):
+            data = [data]
+        return data
 
 
 class DispatcherToolMiddleware(AgentMiddleware):
@@ -308,7 +343,5 @@ class DispatcherToolMiddleware(AgentMiddleware):
 
 __all__ = [
     "DispatcherToolMiddleware",
-    "KnowledgeBaseAccessDeniedError",
-    "OperationNotSupportedError",
     "ServiceToolDispatcher",
 ]

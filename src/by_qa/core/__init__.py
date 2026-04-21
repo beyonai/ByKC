@@ -4,7 +4,9 @@ from by_qa.core.exceptions import (
     ConfigurationError,
     DeepSearchError,
     GenerationError,
+    KnowledgeBaseNotFoundOrForbiddenError,
     LLMGenerationError,
+    OperationNotSupportedError,
     RetrievalError,
     SearchError,
     ValidationError,
@@ -51,6 +53,8 @@ __all__ = [
     "RetrievalError",
     "GenerationError",
     "LLMGenerationError",
+    "KnowledgeBaseNotFoundOrForbiddenError",
+    "OperationNotSupportedError",
     "request_discovered_json",
     "post_discovered_json",
 ]

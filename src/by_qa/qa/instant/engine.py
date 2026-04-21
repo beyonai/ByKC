@@ -43,18 +43,11 @@ USER_VISIBLE_ROLES: dict[str, list[str] | None] = {
 
 
 def _extract_search_result_chunks(tool_message: Any) -> list[dict[str, Any]]:
-    """Prefer raw tool artifact for streaming, with content as a compatibility fallback."""
+    """Read streamed retrieval chunks from tool artifacts only."""
     retrieval_results = getattr(tool_message, "artifact", None)
     if retrieval_results is not None:
         return retrieval_results
-
-    try:
-        content = getattr(tool_message, "content", "[]")
-        if isinstance(content, str):
-            return json.loads(content)
-        return content
-    except Exception:
-        return []
+    return []
 
 
 class EventFilter:

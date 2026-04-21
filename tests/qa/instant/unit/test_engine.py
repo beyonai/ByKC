@@ -6,13 +6,21 @@ import pytest
 
 from by_qa.qa.common.models import CoreInput, StreamEventType
 from by_qa.qa.instant.config import KnowledgeBaseConfig
-from by_qa.qa.instant.engine import InstantQAEngine
+from by_qa.qa.instant.engine import InstantQAEngine, _extract_search_result_chunks
 from by_qa.qa.instant.runtime.operation_registry import OperationType
 
 
 def _mock_settings():
     settings = type("Settings", (), {})()
     return settings
+
+
+def test_extract_search_result_chunks_only_reads_artifact():
+    with_artifact = type("ToolMessage", (), {"artifact": [{"content": "doc-a"}]})()
+    without_artifact = type("ToolMessage", (), {"content": '[{"content": "doc-b"}]'})()
+
+    assert _extract_search_result_chunks(with_artifact) == [{"content": "doc-a"}]
+    assert _extract_search_result_chunks(without_artifact) == []
 
 
 @pytest.mark.asyncio

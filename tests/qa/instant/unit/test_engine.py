@@ -7,6 +7,7 @@ import pytest
 from by_qa.qa.common.models import CoreInput, StreamEventType
 from by_qa.qa.instant.config import KnowledgeBaseConfig
 from by_qa.qa.instant.engine import InstantQAEngine
+from by_qa.qa.instant.runtime.operation_registry import OperationType
 
 
 def _mock_settings():
@@ -56,7 +57,7 @@ async def test_stream_search_passes_runtime_context_into_langgraph():
                             "kb_name": "人力制度知识库",
                             "kb_description": "公司人事制度与流程",
                             "service_name": "kb-search-service-a",
-                            "path": "/api/v1/knowledgeItems/search",
+                            "operations": {"search": "/api/v1/knowledgeItems/search"},
                         }
                     ]
                 }
@@ -91,7 +92,7 @@ async def test_stream_search_passes_runtime_context_into_langgraph():
             kb_name="人力制度知识库",
             kb_description="公司人事制度与流程",
             service_name="kb-search-service-a",
-            path="/api/v1/knowledgeItems/search",
+            operations={OperationType.SEARCH: "/api/v1/knowledgeItems/search"},
         )
     ]
 

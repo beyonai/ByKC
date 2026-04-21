@@ -1,14 +1,20 @@
 """Main graph builder for the instant-search capability."""
 
+from dataclasses import fields
+
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
 from by_qa.config import get_settings
-from by_qa.qa.instant.config import InstantSearchAgentConfig
+from by_qa.qa.instant.config import (
+    InstantSearchAgentConfig,
+    InstantSearchRetrievalConfig,
+)
 from by_qa.qa.instant.graphs.multi_hop import build_multi_hop_subgraph
 from by_qa.qa.instant.graphs.single_hop import build_single_hop_subgraph
 from by_qa.qa.instant.nodes import NodeNames, name2node
 from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
+from by_qa.qa.instant.runtime.dispatcher import ServiceToolDispatcher
 from by_qa.qa.instant.runtime.factories import wrap_node
 from by_qa.qa.instant.state import InstantSearchState
 from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
@@ -61,6 +67,33 @@ async def build_instant_search_graph(
     if llm_service is None:
         llm_service = LLMService()
 
+    tool_providers = getattr(config_data, "tool_providers", None)
+    if isinstance(config_data, dict):
+        tool_providers = tool_providers or config_data.get("tool_providers", {})
+    tool_providers = tool_providers or {}
+
+    if isinstance(config_data, dict):
+        retrieval_raw = config_data.get("retrieval", {})
+        retrieval_cfg = (
+            InstantSearchRetrievalConfig(**retrieval_raw)
+            if isinstance(retrieval_raw, dict)
+            else retrieval_raw
+        )
+    else:
+        retrieval_cfg = getattr(config_data, "retrieval", None)
+
+    kbs = retrieval_cfg.knowledge_bases if retrieval_cfg else []
+    dispatcher = ServiceToolDispatcher(kbs)
+    dispatcher_tools = dispatcher.build_tools()
+
+    merged_providers = dict(tool_providers)
+    for hop in ("single_hop", "multi_hop"):
+        existing = merged_providers.get(hop)
+        if existing:
+            merged_providers[hop] = lambda e=existing, dt=dispatcher_tools: e() + dt
+        else:
+            merged_providers[hop] = lambda dt=dispatcher_tools: dt
+
     def _node(name: NodeNames):
         return wrap_node(name.value, name2node[name], node_callbacks.get(name.value))
 
@@ -69,11 +102,18 @@ async def build_instant_search_graph(
     builder.add_node(NodeNames.ROUTER.value, _node(NodeNames.ROUTER))
     builder.add_node(NodeNames.FINAL_ANSWER.value, _node(NodeNames.FINAL_ANSWER))
 
+    config_with_providers = (
+        dict(config_data)
+        if isinstance(config_data, dict)
+        else {f.name: getattr(config_data, f.name) for f in fields(config_data)}
+    )
+    config_with_providers["tool_providers"] = merged_providers
+
     single_hop_worker = await build_single_hop_subgraph(
-        config=config, llm_service=llm_service
+        config=config_with_providers, llm_service=llm_service
     )
     multi_hop_worker = await build_multi_hop_subgraph(
-        config=config, llm_service=llm_service
+        config=config_with_providers, llm_service=llm_service
     )
     builder.add_node(NodeNames.SINGLE_HOP_WORKER.value, single_hop_worker)
     builder.add_node(NodeNames.MULTI_HOP_WORKER.value, multi_hop_worker)
@@ -84,12 +124,9 @@ async def build_instant_search_graph(
     builder.add_edge(START, NodeNames.DECOMPOSER.value)
     builder.add_edge(NodeNames.DECOMPOSER.value, NodeNames.ROUTER.value)
 
-    def router_dispatcher(state: InstantSearchState):
-        return dispatch_subgraph_workers(state)
-
     builder.add_conditional_edges(
         NodeNames.ROUTER.value,
-        router_dispatcher,
+        dispatch_subgraph_workers,
         [NodeNames.SINGLE_HOP_WORKER.value, NodeNames.MULTI_HOP_WORKER.value],
     )
     builder.add_conditional_edges(

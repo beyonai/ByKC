@@ -22,33 +22,56 @@ class SearchInput(BaseModel):
     kn_code_list: list[str] | None = Field(
         default=None,
         alias="knCodeList",
+        serialization_alias="knCodeList",
         description="List of knowledge base codes to search; searches all configured KBs when omitted",
     )
 
 
 class ListDirInput(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    kn_code: str = Field(alias="knCode", description="Knowledge base code")
+    kn_code: str = Field(
+        alias="knCode", serialization_alias="knCode", description="Knowledge base code"
+    )
     directory_path: str = Field(
-        alias="directoryPath", description="Directory path to list"
+        alias="directoryPath",
+        serialization_alias="directoryPath",
+        description="Directory path to list",
     )
 
 
 class GlobInput(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    kn_code: str = Field(alias="knCode", description="Knowledge base code")
-    path_rule: str = Field(alias="pathRule", description="Glob pattern, e.g. **/*.py")
+    kn_code: str = Field(
+        alias="knCode", serialization_alias="knCode", description="Knowledge base code"
+    )
+    path_rule: str = Field(
+        alias="pathRule",
+        serialization_alias="pathRule",
+        description="Glob pattern, e.g. **/*.py",
+    )
 
 
 class ReadFileInput(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    kn_code: str = Field(alias="knCode", description="Knowledge base code")
-    file_path: str = Field(alias="filePath", description="File path to read")
+    kn_code: str = Field(
+        alias="knCode", serialization_alias="knCode", description="Knowledge base code"
+    )
+    file_path: str = Field(
+        alias="filePath",
+        serialization_alias="filePath",
+        description="File path to read",
+    )
     start_line: int | None = Field(
-        default=None, alias="startLine", description="Start line number (inclusive)"
+        default=None,
+        alias="startLine",
+        serialization_alias="startLine",
+        description="Start line number (inclusive)",
     )
     end_line: int | None = Field(
-        default=None, alias="endLine", description="End line number (inclusive)"
+        default=None,
+        alias="endLine",
+        serialization_alias="endLine",
+        description="End line number (inclusive)",
     )
 
 

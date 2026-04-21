@@ -140,9 +140,13 @@ async def test_dispatch_list_dir_single_post():
             OperationType.LIST_DIR, {"knCode": "kb1", "directoryPath": "/src"}, ctx
         )
 
-    assert results == [
-        {"knCode": "kb1", "name": "/src", "type": "directory", "size": 0}
-    ]
+    assert results == {
+        "resultCode": "0",
+        "resultMsg": "success",
+        "resultObject": {
+            "data": [{"knCode": "kb1", "name": "/src", "type": "directory", "size": 0}]
+        },
+    }
 
 
 @pytest.mark.asyncio
@@ -168,7 +172,7 @@ async def test_dispatch_single_kb_returns_raw_response_on_api_error():
             OperationType.LIST_DIR, {"knCode": "kb1", "directoryPath": "/src"}, ctx
         )
 
-    assert results == [api_error_resp]
+    assert results == api_error_resp
 
 
 @pytest.mark.asyncio

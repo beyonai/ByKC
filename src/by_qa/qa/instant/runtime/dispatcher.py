@@ -113,8 +113,13 @@ class ServiceToolDispatcher:
         async def _fn(
             runtime: ToolRuntime[InstantSearchRuntimeContext], **kwargs: Any
         ) -> str:
+            # kwargs keys are snake_case (Pydantic field names after validation).
+            # Re-serialize to camelCase so the API receives the expected field names.
+            camel_payload = spec.input_schema.model_validate(kwargs).model_dump(
+                by_alias=True, exclude_none=True
+            )
             results = await dispatcher._dispatch(
-                spec.operation_type, kwargs, runtime.context
+                spec.operation_type, camel_payload, runtime.context
             )
             return json.dumps(results, ensure_ascii=False)
 
@@ -127,7 +132,7 @@ class ServiceToolDispatcher:
         operation_type: OperationType,
         payload: dict[str, Any],
         runtime_context: InstantSearchRuntimeContext,
-    ) -> list[dict[str, Any]]:
+    ) -> Any:
         logger.info(
             "[dispatcher] dispatch: operation_type=%s payload=%s",
             operation_type,
@@ -144,8 +149,8 @@ class ServiceToolDispatcher:
     ) -> list[dict[str, Any]]:
         kbs = runtime_context.retrieval.knowledge_bases
         authorized_codes = {kb.kb_code for kb in kbs}
-        kn_code_list: list[str] | None = payload.get("knCodeList") or payload.get(
-            "kn_code_list"
+        kn_code_list: list[str] | None = payload.get("kn_code_list") or payload.get(
+            "knCodeList"
         )
 
         error_results: list[dict[str, Any]] = []
@@ -245,8 +250,8 @@ class ServiceToolDispatcher:
         operation_type: OperationType,
         payload: dict[str, Any],
         runtime_context: InstantSearchRuntimeContext,
-    ) -> list[dict[str, Any]]:
-        kn_code = payload.get("knCode") or payload.get("kn_code", "")
+    ) -> dict[str, Any]:
+        kn_code = payload.get("kn_code") or payload.get("knCode", "")
         kb = next(
             (
                 kb
@@ -291,11 +296,7 @@ class ServiceToolDispatcher:
                 path,
                 result_msg,
             )
-            return [resp]
-        data = resp.get("resultObject", {}).get("data", [])
-        if not isinstance(data, list):
-            data = [data]
-        return data
+        return resp
 
 
 class DispatcherToolMiddleware(AgentMiddleware):

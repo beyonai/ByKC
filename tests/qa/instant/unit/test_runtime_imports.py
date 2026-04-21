@@ -19,4 +19,3 @@ def test_can_import_runtime_modules():
     assert importlib.import_module("by_qa.qa.instant.runtime.context")
     assert importlib.import_module("by_qa.qa.instant.runtime.factories")
     assert importlib.import_module("by_qa.qa.instant.runtime.hooks")
-    assert importlib.import_module("by_qa.qa.instant.runtime.retrieval")

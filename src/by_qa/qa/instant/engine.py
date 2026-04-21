@@ -19,8 +19,11 @@ from by_qa.qa.instant.config import (
     InstantSearchRetrievalConfig,
 )
 from by_qa.qa.instant.graphs.main import NodeNames, build_instant_search_graph
-from by_qa.qa.instant.graphs.multi_hop import parallel_retrieval
 from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
+from by_qa.qa.instant.runtime.operation_registry import (
+    OPERATION_REGISTRY,
+    OperationType,
+)
 from by_qa.qa.instant.state import InstantSearchState
 
 USER_VISIBLE_ROLES: dict[str, list[str] | None] = {
@@ -32,14 +35,14 @@ USER_VISIBLE_ROLES: dict[str, list[str] | None] = {
     NodeNames.MULTI_HOP_WORKER.value: None,
     NodeNames.SUBANSWER_AGGREGATOR.value: None,
     NodeNames.FINAL_ANSWER.value: None,
-    parallel_retrieval.name: None,
+    OPERATION_REGISTRY[OperationType.SEARCH].tool_name: None,
     NodeNames.MULTI_HOP_AGENT.value: None,
     NodeNames.MULTI_HOP_SUMMARY.value: None,
     "model": [StreamEventType.TOKEN.value],
 }
 
 
-def _extract_parallel_retrieval_chunks(tool_message: Any) -> list[dict[str, Any]]:
+def _extract_search_result_chunks(tool_message: Any) -> list[dict[str, Any]]:
     """Prefer raw tool artifact for streaming, with content as a compatibility fallback."""
     retrieval_results = getattr(tool_message, "artifact", None)
     if retrieval_results is not None:
@@ -195,9 +198,9 @@ class InstantQAEngine:
                     elif (
                         role == "tools"
                         and event["data"]["input"]["tool_call"]["name"]
-                        == parallel_retrieval.name
+                        == OPERATION_REGISTRY[OperationType.SEARCH].tool_name
                     ):
-                        role = parallel_retrieval.name
+                        role = OPERATION_REGISTRY[OperationType.SEARCH].tool_name
                         kwargs["content"] = event["data"]["input"]["tool_call"]["args"][
                             "query"
                         ]
@@ -211,14 +214,17 @@ class InstantQAEngine:
                     result = event["data"].get("output", {})
                     if role == "tools":
                         tool_name = event["data"]["input"]["tool_call"]["name"]
-                        if tool_name == parallel_retrieval.name:
+                        if (
+                            tool_name
+                            == OPERATION_REGISTRY[OperationType.SEARCH].tool_name
+                        ):
                             tool_message = result[0].update["messages"][0]
-                            retrieval_results = _extract_parallel_retrieval_chunks(
+                            retrieval_results = _extract_search_result_chunks(
                                 tool_message
                             )
                             yield_event = StreamEvent.search_result_chunks(
                                 chunks=retrieval_results,
-                                role=parallel_retrieval.name,
+                                role=OPERATION_REGISTRY[OperationType.SEARCH].tool_name,
                                 instance_id=instance_id,
                                 parent_ids=parent_ids,
                             )

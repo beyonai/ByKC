@@ -12,10 +12,7 @@ except ImportError:
 
 from by_qa.config import get_settings
 from by_qa.core.logger import error, info
-from by_qa.qa.instant.agents.multi_hop_react import (
-    build_multi_hop_agent_graph,
-    parallel_retrieval,
-)
+from by_qa.qa.instant.agents.multi_hop_react import build_multi_hop_agent_graph
 from by_qa.qa.instant.nodes.node_enum import NodeNames
 from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
 from by_qa.qa.instant.state import MultiHopState, SubAnswer
@@ -250,5 +247,4 @@ __all__ = [
     "multi_hop_entry_node",
     "multi_hop_error_node",
     "multi_hop_summary_node",
-    "parallel_retrieval",
 ]

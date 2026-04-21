@@ -14,6 +14,8 @@ from common import (
     runtime_dir,
 )
 
+from by_qa.qa.instant.runtime.operation_registry import OperationType
+
 
 class EventRenderer:
     """Render stream events with token-first CLI output."""
@@ -131,7 +133,9 @@ async def _run_async(args: argparse.Namespace) -> None:
                         "kb_name": kb_name,
                         "kb_description": "Packaged end-to-end example knowledge base.",
                         "service_name": os.getenv("SERVICE_NAME", "by-qa-manager"),
-                        "path": "/api/v1/knowledgeItems/search",
+                        "operations": {
+                            OperationType.SEARCH: "/api/v1/knowledgeItems/search",
+                        },
                     }
                 ],
                 "top_k": args.top_k,

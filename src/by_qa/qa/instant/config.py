@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from by_qa.qa.instant.runtime.operation_registry import OperationType
 from by_qa.qa.services.llm_service import LLMService
 
 
@@ -15,9 +16,9 @@ class KnowledgeBaseConfig:
     kb_code: str
     kb_name: str
     service_name: str
-    path: str
     kb_description: str | None = None
     headers: dict[str, str] | None = None
+    operations: dict[OperationType, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -32,25 +33,29 @@ class InstantQARetrievalConfig:
     text_top_k: int = 30
 
     def __post_init__(self) -> None:
-        normalized_knowledge_bases: list[KnowledgeBaseConfig] = []
-        for knowledge_base in self.knowledge_bases:
-            if isinstance(knowledge_base, KnowledgeBaseConfig):
-                normalized_knowledge_bases.append(knowledge_base)
+        normalized: list[KnowledgeBaseConfig] = []
+        for kb in self.knowledge_bases:
+            if isinstance(kb, KnowledgeBaseConfig):
+                normalized.append(kb)
                 continue
-            if isinstance(knowledge_base, dict):
-                normalized_knowledge_bases.append(KnowledgeBaseConfig(**knowledge_base))
+            if isinstance(kb, dict):
+                kb = dict(kb)
+                raw_ops = kb.pop("operations", {})
+                ops = {
+                    OperationType(k) if isinstance(k, str) else k: v
+                    for k, v in raw_ops.items()
+                }
+                normalized.append(KnowledgeBaseConfig(**kb, operations=ops))
                 continue
             raise TypeError(
                 "knowledge_bases entries must be dict or KnowledgeBaseConfig"
             )
-        for knowledge_base in normalized_knowledge_bases:
-            if not knowledge_base.service_name:
+        for kb in normalized:
+            if not kb.service_name:
                 raise ValueError(
                     "knowledge_bases entries must define a non-empty service_name"
                 )
-            if not knowledge_base.path:
-                raise ValueError("knowledge_bases entries must define a non-empty path")
-        self.knowledge_bases = normalized_knowledge_bases
+        self.knowledge_bases = normalized
 
 
 @dataclass

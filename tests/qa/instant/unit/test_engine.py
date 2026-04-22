@@ -106,7 +106,7 @@ async def test_stream_search_passes_runtime_context_into_langgraph():
 
 
 @pytest.mark.asyncio
-async def test_stream_search_uses_prefixed_thread_id_for_checkpointer():
+async def test_stream_search_sets_prefixed_thread_id_and_request_run_id():
     with patch("by_qa.qa.instant.engine.get_settings", return_value=_mock_settings()):
         engine = InstantQAEngine()
 
@@ -130,10 +130,12 @@ async def test_stream_search_uses_prefixed_thread_id_for_checkpointer():
     engine._graph = mock_graph
 
     async for unused_event in engine.stream_search(
-        CoreInput(query="Test", session_id="session-42")
+        CoreInput(query="Test", session_id="session-42", message_id="msg-42")
     ):
         del unused_event
 
     assert (
         captured["config"]["configurable"]["thread_id"] == "instant_search_session-42"
     )
+    assert captured["config"]["metadata"]["message_id"] == "msg-42"
+    assert captured["config"]["run_id"] == "msg-42"

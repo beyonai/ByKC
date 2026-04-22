@@ -13,12 +13,22 @@ from by_qa.qa.instant.runtime.operation_registry import (
 )
 
 
-def _make_request(*, state: dict, thread_id: str, tool_call_id: str):
+def _make_request(*, state: dict, run_id: str, thread_id: str, tool_call_id: str):
     class FakeToolCall(dict):
         pass
 
-    class FakeRuntime:
-        config = {"configurable": {"thread_id": thread_id}}
+    fake_execution_info = type("FakeExecutionInfo", (), {"run_id": run_id})()
+    fake_runtime = type(
+        "FakeRuntime",
+        (),
+        {
+            "config": {
+                "metadata": {"session_id": "session-1", "message_id": run_id},
+                "configurable": {"thread_id": thread_id},
+            },
+            "execution_info": fake_execution_info,
+        },
+    )()
 
     class FakeRequest:
         tool_call = FakeToolCall(
@@ -27,7 +37,7 @@ def _make_request(*, state: dict, thread_id: str, tool_call_id: str):
                 "id": tool_call_id,
             }
         )
-        runtime = FakeRuntime()
+        runtime = fake_runtime
 
     FakeRequest.state = state
     return FakeRequest()
@@ -51,6 +61,7 @@ async def test_dispatcher_allocates_contiguous_ids_for_single_request():
     )
     request = _make_request(
         state={"sub_query_idx": 2, "current_step": 1},
+        run_id="run-1",
         thread_id="thread-1",
         tool_call_id="tc-1",
     )
@@ -78,11 +89,13 @@ async def test_dispatcher_allocates_contiguous_ids_across_parallel_calls():
     state = {"sub_query_idx": 0, "current_step": 0}
     request_a = _make_request(
         state=state,
+        run_id="run-1",
         thread_id="thread-1",
         tool_call_id="tc-a",
     )
     request_b = _make_request(
         state=state,
+        run_id="run-1",
         thread_id="thread-1",
         tool_call_id="tc-b",
     )
@@ -107,6 +120,105 @@ async def test_dispatcher_allocates_contiguous_ids_across_parallel_calls():
         key=lambda value: int(value.rsplit("-", 1)[-1]),
     )
     assert all_ids == ["0-0-1", "0-0-2", "0-0-3"]
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_resets_numbering_for_new_run_id_on_same_thread():
+    middleware = DispatcherToolMiddleware(
+        index_id_fn=lambda sub_query_idx,
+        step,
+        item_id: f"{sub_query_idx}-{step}-{item_id}",
+        follow_up_prompt="继续",
+    )
+    state = {"sub_query_idx": 0, "current_step": 0}
+
+    first = await middleware._post_process_search(
+        _make_result([{"content": "doc-a"}]),
+        _make_request(
+            state=state,
+            run_id="run-1",
+            thread_id="thread-1",
+            tool_call_id="tc-a",
+        ),
+    )
+    second = await middleware._post_process_search(
+        _make_result([{"content": "doc-b"}]),
+        _make_request(
+            state=state,
+            run_id="run-2",
+            thread_id="thread-1",
+            tool_call_id="tc-b",
+        ),
+    )
+
+    assert first.update["retrieval_results"][0]["index_id"] == "0-0-1"
+    assert second.update["retrieval_results"][0]["index_id"] == "0-0-1"
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_prefers_execution_info_run_id_over_session_id():
+    middleware = DispatcherToolMiddleware(
+        index_id_fn=lambda sub_query_idx,
+        step,
+        item_id: f"{sub_query_idx}-{step}-{item_id}",
+        follow_up_prompt="继续",
+    )
+    state = {"sub_query_idx": 0, "current_step": 0}
+
+    first = await middleware._post_process_search(
+        _make_result([{"content": "doc-a"}]),
+        _make_request(
+            state=state,
+            run_id="run-1",
+            thread_id="thread-1",
+            tool_call_id="tc-a",
+        ),
+    )
+    second = await middleware._post_process_search(
+        _make_result([{"content": "doc-b"}]),
+        _make_request(
+            state=state,
+            run_id="run-2",
+            thread_id="thread-1",
+            tool_call_id="tc-b",
+        ),
+    )
+
+    assert first.update["retrieval_results"][0]["index_id"] == "0-0-1"
+    assert second.update["retrieval_results"][0]["index_id"] == "0-0-1"
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_prefers_message_id_metadata_over_session_id():
+    middleware = DispatcherToolMiddleware(
+        index_id_fn=lambda sub_query_idx,
+        step,
+        item_id: f"{sub_query_idx}-{step}-{item_id}",
+        follow_up_prompt="继续",
+    )
+    state = {"sub_query_idx": 0, "current_step": 0}
+
+    first = await middleware._post_process_search(
+        _make_result([{"content": "doc-a"}]),
+        _make_request(
+            state=state,
+            run_id="msg-1",
+            thread_id="thread-1",
+            tool_call_id="tc-a",
+        ),
+    )
+    second = await middleware._post_process_search(
+        _make_result([{"content": "doc-b"}]),
+        _make_request(
+            state=state,
+            run_id="msg-2",
+            thread_id="thread-1",
+            tool_call_id="tc-b",
+        ),
+    )
+
+    assert first.update["retrieval_results"][0]["index_id"] == "0-0-1"
+    assert second.update["retrieval_results"][0]["index_id"] == "0-0-1"
 
 
 def test_dispatcher_index_id_fn_uses_sub_query_step_item_shape():

@@ -175,7 +175,10 @@ class InstantQAEngine:
 
             graph = await self._get_graph()
             config = RunnableConfig(
-                callbacks=[], metadata={"session_id": session_id}, recursion_limit=50
+                callbacks=[],
+                metadata={"session_id": session_id, "message_id": message_id},
+                recursion_limit=50,
+                run_id=message_id,
             )
             config["configurable"] = {
                 "thread_id": f"{self.THREAD_ID_PREFIX}_{session_id}"

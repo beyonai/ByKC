@@ -384,12 +384,12 @@ class DispatcherToolMiddleware(AgentMiddleware):
     async def _reserve_item_ids(
         self,
         *,
-        thread_id: str,
+        run_scope_id: str,
         sub_query_idx: int,
         step: int,
         count: int,
     ) -> range:
-        counter_key = (thread_id, sub_query_idx, step)
+        counter_key = (run_scope_id, sub_query_idx, step)
         async with self._counter_lock:
             start = self._result_counters.get(counter_key, 0)
             self._result_counters[counter_key] = start + count
@@ -401,8 +401,13 @@ class DispatcherToolMiddleware(AgentMiddleware):
         state = request.state
         step = state.get("current_step", 0)
         sub_query_idx = int(state.get("sub_query_idx", 0))
-        thread_id = (
-            request.runtime.config.get("configurable", {}).get("thread_id") or "default"
+        execution_info = getattr(request.runtime, "execution_info", None)
+        run_scope_id = (
+            request.runtime.config.get("metadata", {}).get("message_id")
+            or getattr(execution_info, "run_id", None)
+            or request.runtime.config.get("run_id")
+            or request.runtime.config.get("metadata", {}).get("session_id")
+            or "default"
         )
         try:
             raw_results: list[dict[str, Any]] = json.loads(result.content)
@@ -421,7 +426,7 @@ class DispatcherToolMiddleware(AgentMiddleware):
             )
 
         item_ids = await self._reserve_item_ids(
-            thread_id=thread_id,
+            run_scope_id=run_scope_id,
             sub_query_idx=sub_query_idx,
             step=step,
             count=len(raw_results),

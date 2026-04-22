@@ -6,9 +6,10 @@ import uuid
 from dataclasses import asdict, fields, is_dataclass
 from typing import Any, AsyncGenerator
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.types import Command
 
 from by_qa.config import get_settings
 from by_qa.core.logger import error, info, set_message_id, set_session_id
@@ -48,6 +49,28 @@ def _extract_search_result_chunks(tool_message: Any) -> list[dict[str, Any]]:
     if retrieval_results is not None:
         return retrieval_results
     return []
+
+
+def _extract_tool_message(result: Any) -> ToolMessage | None:
+    """Extract the first ToolMessage from various on_chain_end output shapes.
+
+    LangGraph tools can return a ToolMessage directly, a Command wrapping state
+    updates, or a list containing either of those — depending on the execution
+    path (ToolCallGuardMiddleware, dispatcher post-processing, etc.).
+    """
+    if isinstance(result, ToolMessage):
+        return result
+    if isinstance(result, Command):
+        messages = result.update.get("messages", [])
+        for msg in messages:
+            if isinstance(msg, ToolMessage):
+                return msg
+    if isinstance(result, list):
+        for item in result:
+            msg = _extract_tool_message(item)
+            if msg is not None:
+                return msg
+    return None
 
 
 class EventFilter:
@@ -214,19 +237,22 @@ class InstantQAEngine:
                             tool_name
                             == OPERATION_REGISTRY[OperationType.SEARCH].tool_name
                         ):
-                            tool_message = result[0].update["messages"][0]
-                            retrieval_results = _extract_search_result_chunks(
-                                tool_message
-                            )
-                            yield_event = StreamEvent.search_result_chunks(
-                                chunks=retrieval_results,
-                                role=OPERATION_REGISTRY[OperationType.SEARCH].tool_name,
-                                instance_id=instance_id,
-                                parent_ids=parent_ids,
-                            )
-                            filtered_event = event_filter.filter_event(yield_event)
-                            if filtered_event:
-                                yield filtered_event
+                            tool_message = _extract_tool_message(result)
+                            if tool_message is not None:
+                                retrieval_results = _extract_search_result_chunks(
+                                    tool_message
+                                )
+                                yield_event = StreamEvent.search_result_chunks(
+                                    chunks=retrieval_results,
+                                    role=OPERATION_REGISTRY[
+                                        OperationType.SEARCH
+                                    ].tool_name,
+                                    instance_id=instance_id,
+                                    parent_ids=parent_ids,
+                                )
+                                filtered_event = event_filter.filter_event(yield_event)
+                                if filtered_event:
+                                    yield filtered_event
                     elif role == NodeNames.FINAL_ANSWER.value:
                         final_answer = result.get("final_answer", "")
                         answer_event = StreamEvent.answer(

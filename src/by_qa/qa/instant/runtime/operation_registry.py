@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class OperationType(str, Enum):
@@ -25,6 +25,21 @@ class SearchInput(BaseModel):
         serialization_alias="knCodeList",
         description="List of knowledge base codes to search; searches all configured KBs when omitted",
     )
+
+    @field_validator("kn_code_list", mode="before")
+    @classmethod
+    def coerce_kn_code_list(cls, v: object) -> object:
+        if isinstance(v, str):
+            import json
+
+            try:
+                parsed = json.loads(v)
+                if isinstance(parsed, list):
+                    return parsed
+            except (json.JSONDecodeError, ValueError):
+                pass
+            return [v]
+        return v
 
 
 class ListDirInput(BaseModel):

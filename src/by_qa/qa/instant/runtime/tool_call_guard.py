@@ -13,9 +13,12 @@ from by_qa.core.logger import error, warning
 
 
 def _validate_args(tool: Any, args: dict[str, Any]) -> ValidationError | None:
-    # tool_call_schema excludes injected fields (InjectedState, InjectedToolCallId),
-    # so we can validate directly without filtering.
-    schema = getattr(tool, "tool_call_schema", None)
+    # Prefer args_schema over tool_call_schema: LangChain rebuilds tool_call_schema
+    # as a flat BaseModel subclass that drops field_validators defined on the original
+    # schema, so coercion (e.g. JSON-string → list) would be silently skipped.
+    schema = getattr(tool, "args_schema", None) or getattr(
+        tool, "tool_call_schema", None
+    )
     if schema is None:
         return None
     try:

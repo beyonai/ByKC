@@ -60,3 +60,13 @@ def test_read_file_input_optional_lines():
 def test_search_input_optional_kn_code_list():
     obj = SearchInput.model_validate({"query": "q"})
     assert obj.kn_code_list is None
+
+
+def test_search_input_kn_code_list_json_string():
+    obj = SearchInput.model_validate({"query": "q", "knCodeList": '["kb1", "kb2"]'})
+    assert obj.kn_code_list == ["kb1", "kb2"]
+
+
+def test_search_input_kn_code_list_bare_string():
+    obj = SearchInput.model_validate({"query": "q", "knCodeList": "kb1"})
+    assert obj.kn_code_list == ["kb1"]

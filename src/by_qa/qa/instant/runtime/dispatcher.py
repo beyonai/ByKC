@@ -97,6 +97,14 @@ def _format_operation_error(
     }
 
 
+def _normalize_headers(headers: dict[str, Any] | None) -> dict[str, str] | None:
+    if not headers:
+        return None
+    return {
+        str(key): "" if value is None else str(value) for key, value in headers.items()
+    }
+
+
 class ServiceToolDispatcher:
     """Generates LangGraph tools from KnowledgeBaseConfig.operations at graph-build time."""
 
@@ -194,8 +202,11 @@ class ServiceToolDispatcher:
             path = kb.operations.get(OperationType.SEARCH)
             if not path:
                 continue
-            if kb.headers:
-                service_headers.setdefault(kb.service_name, {}).update(kb.headers)
+            normalized_headers = _normalize_headers(kb.headers)
+            if normalized_headers:
+                service_headers.setdefault(kb.service_name, {}).update(
+                    normalized_headers
+                )
             key = (kb.service_name, path)
             grouped.setdefault(key, [])
             if kb.kb_code not in grouped[key]:
@@ -311,7 +322,7 @@ class ServiceToolDispatcher:
                 exc=exc,
             )
 
-        headers = dict(kb.headers) if kb.headers else None
+        headers = _normalize_headers(kb.headers)
         kwargs: dict[str, Any] = {
             "service_name": kb.service_name,
             "path": path,

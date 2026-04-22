@@ -116,6 +116,36 @@ async def test_dispatch_search_filters_by_kn_code_list():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_search_normalizes_header_values_to_strings():
+    kb = KnowledgeBaseConfig(
+        kb_code="kb1",
+        kb_name="kb1",
+        service_name="svc-a",
+        headers={"X-Trace-Id": 123, "X-Optional": None},
+        operations={OperationType.SEARCH: "/api/v1/knowledgeItems/search"},
+    )
+    ctx = _make_context(kb)
+    dispatcher = ServiceToolDispatcher([kb])
+
+    captured_headers = None
+
+    async def fake_post(*, service_name=None, path=None, json=None, headers=None):  # pylint: disable=unused-argument
+        nonlocal captured_headers
+        captured_headers = headers
+        return {"resultCode": "0", "resultMsg": "success", "resultObject": {"data": []}}
+
+    with patch(
+        "by_qa.qa.instant.runtime.dispatcher.post_discovered_json",
+        side_effect=fake_post,
+    ):
+        await dispatcher._dispatch(
+            OperationType.SEARCH, {"query": "q", "knCodeList": None}, ctx
+        )
+
+    assert captured_headers == {"X-Trace-Id": "123", "X-Optional": ""}
+
+
+@pytest.mark.asyncio
 async def test_dispatch_list_dir_single_post():
     kb = _kb("kb1", "svc-a", {OperationType.LIST_DIR: "/api/v1/listDir"})
     ctx = _make_context(kb)
@@ -147,6 +177,36 @@ async def test_dispatch_list_dir_single_post():
             "data": [{"knCode": "kb1", "name": "/src", "type": "directory", "size": 0}]
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_dispatch_single_kb_normalizes_header_values_to_strings():
+    kb = KnowledgeBaseConfig(
+        kb_code="kb1",
+        kb_name="kb1",
+        service_name="svc-a",
+        headers={"X-Retry": 2, "X-Flag": True},
+        operations={OperationType.LIST_DIR: "/api/v1/listDir"},
+    )
+    ctx = _make_context(kb)
+    dispatcher = ServiceToolDispatcher([kb])
+
+    captured_headers = None
+
+    async def fake_post(*, service_name=None, path=None, json=None, headers=None):  # pylint: disable=unused-argument
+        nonlocal captured_headers
+        captured_headers = headers
+        return {"resultCode": "0", "resultMsg": "success", "resultObject": {"data": []}}
+
+    with patch(
+        "by_qa.qa.instant.runtime.dispatcher.post_discovered_json",
+        side_effect=fake_post,
+    ):
+        await dispatcher._dispatch(
+            OperationType.LIST_DIR, {"knCode": "kb1", "directoryPath": "/src"}, ctx
+        )
+
+    assert captured_headers == {"X-Retry": "2", "X-Flag": "True"}
 
 
 @pytest.mark.asyncio

@@ -64,12 +64,14 @@ async def test_valid_tool_passes_through_to_handler():
 
 
 @pytest.mark.asyncio
-async def test_validation_error_returns_invalid_tool_args():
+async def test_validation_error_from_handler_returns_tool_execution_error():
+    """ValidationError raised by handler (not caught by pre-check) maps to ToolExecutionError."""
     from pydantic import BaseModel
 
     middleware = ToolCallGuardMiddleware()
     fake_tool = MagicMock()
     fake_tool.name = "search_knowledge"
+    fake_tool.args_schema = None  # skip pre-validation
     request = _make_request("search_knowledge", tool_obj=fake_tool)
 
     class M(BaseModel):
@@ -89,8 +91,7 @@ async def test_validation_error_returns_invalid_tool_args():
     assert isinstance(result, ToolMessage)
     payload = _parse_error(result)
     assert payload["error"] is True
-    assert payload["error_type"] == "InvalidToolArgs"
-    assert "validation_errors" in payload["details"]
+    assert payload["error_type"] == "ToolExecutionError"
 
 
 @pytest.mark.asyncio

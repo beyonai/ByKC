@@ -7,9 +7,35 @@ from typing import Any, Callable
 
 from langchain.agents.middleware import AgentMiddleware, ToolCallRequest
 from langchain_core.messages import ToolMessage
+from langchain_core.tools.base import InjectedToolArg
 from pydantic import ValidationError
 
 from by_qa.core.logger import error, warning
+
+
+def _strip_injected_fields(schema: type) -> type:
+    """Return a schema variant that makes runtime-injected fields optional with defaults.
+
+    LangGraph injects fields like InjectedState and InjectedToolCallId at runtime;
+    they never appear in the LLM's tool call args.  We override them to ``Any = None``
+    so Pydantic won't report them as missing, while preserving all field_validators
+    defined on the original schema.
+    """
+    injected: set[str] = set()
+    for name, fi in schema.model_fields.items():
+        if any(
+            isinstance(m, InjectedToolArg)
+            or (isinstance(m, type) and issubclass(m, InjectedToolArg))
+            for m in fi.metadata
+        ):
+            injected.add(name)
+    if not injected:
+        return schema
+    ns: dict[str, Any] = {"__annotations__": {}}
+    for name in injected:
+        ns["__annotations__"][name] = Any
+        ns[name] = None
+    return type(schema.__name__, (schema,), ns)
 
 
 def _validate_args(tool: Any, args: dict[str, Any]) -> ValidationError | None:
@@ -21,6 +47,7 @@ def _validate_args(tool: Any, args: dict[str, Any]) -> ValidationError | None:
     )
     if schema is None:
         return None
+    schema = _strip_injected_fields(schema)
     try:
         schema.model_validate(args)
     except ValidationError as exc:

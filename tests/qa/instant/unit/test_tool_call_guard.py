@@ -71,7 +71,7 @@ async def test_validation_error_from_handler_returns_tool_execution_error():
     middleware = ToolCallGuardMiddleware()
     fake_tool = MagicMock()
     fake_tool.name = "search_knowledge"
-    fake_tool.args_schema = None  # skip pre-validation
+    fake_tool.tool_call_schema = None  # skip pre-validation
     request = _make_request("search_knowledge", tool_obj=fake_tool)
 
     class M(BaseModel):

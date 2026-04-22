@@ -8,6 +8,7 @@ from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResp
 from by_qa.config import get_settings
 from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
 from by_qa.qa.instant.runtime.dispatcher import DispatcherToolMiddleware
+from by_qa.qa.instant.runtime.tool_call_guard import ToolCallGuardMiddleware
 from by_qa.qa.instant.state import SingleHopState
 from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
 from by_qa.qa.services.llm_service import LLMService
@@ -65,6 +66,7 @@ async def build_single_hop_agent_graph(
     checkpointer = await create_checkpointer_async(settings)
     tools = list(extra_tools or [])
     middleware = [
+        ToolCallGuardMiddleware(),
         SingleHopMiddleware(settings),
         DispatcherToolMiddleware(
             index_id_fn=lambda step, i: f"r{i + 1}",

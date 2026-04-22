@@ -23,6 +23,7 @@ from by_qa.qa.instant.runtime.operation_registry import (
     OPERATION_REGISTRY,
     OperationType,
 )
+from by_qa.qa.instant.runtime.tool_call_guard import ToolCallGuardMiddleware
 from by_qa.qa.instant.state import MultiHopState
 from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
 from by_qa.qa.services.llm_service import LLMService
@@ -187,6 +188,7 @@ async def build_multi_hop_agent_graph(
     checkpointer = await create_checkpointer_async(settings)
     tools = [next_hop, finalize] + list(extra_tools or [])
     middleware = [
+        ToolCallGuardMiddleware(),
         MultiHopMiddleware(settings),
         DispatcherToolMiddleware(
             index_id_fn=lambda step, i: f"s{step}-{i + 1}",

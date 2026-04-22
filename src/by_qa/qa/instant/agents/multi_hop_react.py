@@ -4,7 +4,6 @@ import json
 from typing import Annotated, Any, List
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 from langchain.tools import InjectedToolCallId, tool
 from langchain_core.messages import (
     AIMessage,
@@ -135,23 +134,6 @@ def finalize(
     )
 
 
-class MultiHopMiddleware(AgentMiddleware):
-    """Disables parallel tool calls for the multi-hop agent."""
-
-    def __init__(self, settings):
-        self.settings = settings
-
-    async def abefore_model(self, state_unused, runtime_unused=None):
-        del state_unused
-        del runtime_unused
-        return None
-
-    async def awrap_model_call(self, request: ModelRequest, handler) -> ModelResponse:
-        model_settings = dict(request.model_settings)
-        model_settings["parallel_tool_calls"] = False
-        return await handler(request.override(model_settings=model_settings))
-
-
 DEFAULT_MULTI_HOP_SYSTEM_PROMPT = """你是一个智能的多跳问题求解助手。
 
 你的任务是通过多步推理来回答复杂问题。
@@ -183,15 +165,15 @@ async def build_multi_hop_agent_graph(
     llm_service: LLMService,
 ):
     """Build the configurable multi-hop agent graph."""
-    settings = get_settings()
     llm = await llm_service._get_streaming_model("retrieval")
-    checkpointer = await create_checkpointer_async(settings)
+    checkpointer = await create_checkpointer_async(get_settings())
     tools = [next_hop, finalize] + list(extra_tools or [])
     middleware = [
         ToolCallGuardMiddleware(),
-        MultiHopMiddleware(settings),
         DispatcherToolMiddleware(
-            index_id_fn=lambda step, i: f"s{step}-{i + 1}",
+            index_id_fn=lambda sub_query_idx, step, item_id: (
+                f"{sub_query_idx}-{step}-{item_id}"
+            ),
             follow_up_prompt="已经完成了一次检索，如果本次检索没有收集到足够信息，请继续调用 search_knowledge 来收集信息。否则立即调用 next_hop 进行上下文清理并进入下一个查询。如果所有检索都已完成，立即调用 finalize 来结束多跳检索并生成最终答案。",
         ),
     ] + list(extra_middleware or [])
@@ -208,7 +190,6 @@ async def build_multi_hop_agent_graph(
 
 __all__ = [
     "DEFAULT_MULTI_HOP_SYSTEM_PROMPT",
-    "MultiHopMiddleware",
     "build_multi_hop_agent_graph",
     "finalize",
     "next_hop",

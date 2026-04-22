@@ -3,7 +3,6 @@
 from typing import Any, List
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 
 from by_qa.config import get_settings
 from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
@@ -12,24 +11,6 @@ from by_qa.qa.instant.runtime.tool_call_guard import ToolCallGuardMiddleware
 from by_qa.qa.instant.state import SingleHopState
 from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
 from by_qa.qa.services.llm_service import LLMService
-
-
-class SingleHopMiddleware(AgentMiddleware):
-    """Disables parallel tool calls for the single-hop agent."""
-
-    def __init__(self, settings):
-        self.settings = settings
-
-    async def abefore_model(self, state_unused, runtime_unused=None):
-        del state_unused
-        del runtime_unused
-        return None
-
-    async def awrap_model_call(self, request: ModelRequest, handler) -> ModelResponse:
-        model_settings = dict(request.model_settings)
-        model_settings["parallel_tool_calls"] = False
-        return await handler(request.override(model_settings=model_settings))
-
 
 DEFAULT_SINGLE_HOP_SYSTEM_PROMPT = """你是一个智能的单跳检索问答助手。
 
@@ -58,15 +39,15 @@ async def build_single_hop_agent_graph(
     llm_service: LLMService,
 ):
     """Build the configurable single-hop agent graph."""
-    settings = get_settings()
     llm = await llm_service._get_streaming_model("retrieval")
-    checkpointer = await create_checkpointer_async(settings)
+    checkpointer = await create_checkpointer_async(get_settings())
     tools = list(extra_tools or [])
     middleware = [
         ToolCallGuardMiddleware(),
-        SingleHopMiddleware(settings),
         DispatcherToolMiddleware(
-            index_id_fn=lambda step, i: f"r{i + 1}",
+            index_id_fn=lambda sub_query_idx, step, item_id: (
+                f"{sub_query_idx}-{step}-{item_id}"
+            ),
             follow_up_prompt="如果当前证据仍不足以回答问题，请继续调用 search_knowledge 收集更多信息；如果已经足够回答，请直接基于已有证据输出最终答案，不要再调用工具。",
         ),
     ] + list(extra_middleware or [])
@@ -83,6 +64,5 @@ async def build_single_hop_agent_graph(
 
 __all__ = [
     "DEFAULT_SINGLE_HOP_SYSTEM_PROMPT",
-    "SingleHopMiddleware",
     "build_single_hop_agent_graph",
 ]

@@ -57,6 +57,7 @@ class SingleHopState(TypedDict):
     """State for single-hop subgraph."""
 
     sub_query: dict[str, Any]
+    sub_query_idx: int
     cited_indices: list[str]
     result_counter: int
     retrieval_results: Annotated[list[dict[str, Any]], merge_list_with_mode]
@@ -68,6 +69,7 @@ class MultiHopState(TypedDict):
     """State for multi-hop subgraph."""
 
     sub_query: dict[str, Any]
+    sub_query_idx: int
     messages: Annotated[Messages, add_messages]
     reasoning_plan: list[str]
     current_step: int

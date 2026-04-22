@@ -27,10 +27,11 @@ def dispatch_subgraph_workers(state: InstantSearchState):
     original_query = state.get("original_query", "")
 
     sends = []
-    for sq in sub_queries:
+    for sub_query_idx, sq in enumerate(sub_queries):
         query_type = sq.get("query_type", "single-hop")
         payload = {
             "sub_query": sq,
+            "sub_query_idx": sub_query_idx,
             "original_query": original_query,
             "sub_answers": [],
             "retrieval_results": [],

@@ -363,11 +363,15 @@ class DispatcherToolMiddleware(AgentMiddleware):
     """Post-processes dispatcher tool results: injects index_id, artifact, SystemMessage."""
 
     def __init__(
-        self, index_id_fn: Callable[[int, int], str], follow_up_prompt: str
+        self,
+        index_id_fn: Callable[[int, int, int], str],
+        follow_up_prompt: str,
     ) -> None:
         self._index_id_fn = index_id_fn
         self._follow_up_prompt = follow_up_prompt
         self._search_tool_name = OPERATION_REGISTRY[OperationType.SEARCH].tool_name
+        self._counter_lock = asyncio.Lock()
+        self._result_counters: dict[tuple[str, int, int], int] = {}
 
     async def awrap_tool_call(
         self, request: ToolCallRequest, handler: Callable
@@ -375,12 +379,31 @@ class DispatcherToolMiddleware(AgentMiddleware):
         result = await handler(request)
         if request.tool_call["name"] != self._search_tool_name:
             return result
-        return self._post_process_search(result, request)
+        return await self._post_process_search(result, request)
 
-    def _post_process_search(self, result: Any, request: ToolCallRequest) -> Command:
+    async def _reserve_item_ids(
+        self,
+        *,
+        thread_id: str,
+        sub_query_idx: int,
+        step: int,
+        count: int,
+    ) -> range:
+        counter_key = (thread_id, sub_query_idx, step)
+        async with self._counter_lock:
+            start = self._result_counters.get(counter_key, 0)
+            self._result_counters[counter_key] = start + count
+        return range(start + 1, start + count + 1)
+
+    async def _post_process_search(
+        self, result: Any, request: ToolCallRequest
+    ) -> Command:
         state = request.state
-        counter = state.get("result_counter", 0)
         step = state.get("current_step", 0)
+        sub_query_idx = int(state.get("sub_query_idx", 0))
+        thread_id = (
+            request.runtime.config.get("configurable", {}).get("thread_id") or "default"
+        )
         try:
             raw_results: list[dict[str, Any]] = json.loads(result.content)
         except Exception:
@@ -397,23 +420,30 @@ class DispatcherToolMiddleware(AgentMiddleware):
                 }
             )
 
+        item_ids = await self._reserve_item_ids(
+            thread_id=thread_id,
+            sub_query_idx=sub_query_idx,
+            step=step,
+            count=len(raw_results),
+        )
         indexed = [
-            {**item, "index_id": self._index_id_fn(step, counter + i)}
-            for i, item in enumerate(raw_results)
+            {**item, "index_id": self._index_id_fn(sub_query_idx, step, item_id)}
+            for item, item_id in zip(raw_results, item_ids, strict=False)
         ]
         llm_results = [
-            {"index_id": r["index_id"], "content": r["content"]} for r in indexed
+            {"index_id": item["index_id"], "content": item["content"]}
+            for item in indexed
         ]
 
         return Command(
             update={
                 "retrieval_results": indexed,
-                "result_counter": counter + len(indexed),
                 "messages": [
                     ToolMessage(
                         content=json.dumps(llm_results, ensure_ascii=False),
-                        artifact=raw_results,
+                        artifact=indexed,
                         name=request.tool_call["name"],
+                        id=getattr(result, "id", None),
                         tool_call_id=request.tool_call["id"],
                     ),
                     SystemMessage(content=self._follow_up_prompt),

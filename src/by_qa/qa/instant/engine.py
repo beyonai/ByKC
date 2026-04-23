@@ -40,7 +40,7 @@ USER_VISIBLE_ROLES: dict[str, list[str] | None] = {
     NodeNames.MULTI_HOP_WORKER.value: None,
     NodeNames.SUBANSWER_AGGREGATOR.value: None,
     NodeNames.FINAL_ANSWER.value: None,
-    OPERATION_REGISTRY[OperationType.SEARCH].tool_name: None,
+    OPERATION_REGISTRY[OperationType.KNOWLEDGE_SEARCH].tool_name: None,
     NodeNames.MULTI_HOP_AGENT.value: None,
     NodeNames.MULTI_HOP_SUMMARY.value: None,
     "model": [StreamEventType.TOKEN.value],
@@ -240,9 +240,11 @@ class InstantQAEngine:
                     elif (
                         role == "tools"
                         and event["data"]["input"]["tool_call"]["name"]
-                        == OPERATION_REGISTRY[OperationType.SEARCH].tool_name
+                        == OPERATION_REGISTRY[OperationType.KNOWLEDGE_SEARCH].tool_name
                     ):
-                        role = OPERATION_REGISTRY[OperationType.SEARCH].tool_name
+                        role = OPERATION_REGISTRY[
+                            OperationType.KNOWLEDGE_SEARCH
+                        ].tool_name
                         kwargs["content"] = event["data"]["input"]["tool_call"]["args"][
                             "query"
                         ]
@@ -258,7 +260,9 @@ class InstantQAEngine:
                         tool_name = event["data"]["input"]["tool_call"]["name"]
                         if (
                             tool_name
-                            == OPERATION_REGISTRY[OperationType.SEARCH].tool_name
+                            == OPERATION_REGISTRY[
+                                OperationType.KNOWLEDGE_SEARCH
+                            ].tool_name
                         ):
                             tool_message = _extract_tool_message(result)
                             if tool_message is not None:
@@ -268,7 +272,7 @@ class InstantQAEngine:
                                 yield_event = StreamEvent.search_result_chunks(
                                     chunks=retrieval_results,
                                     role=OPERATION_REGISTRY[
-                                        OperationType.SEARCH
+                                        OperationType.KNOWLEDGE_SEARCH
                                     ].tool_name,
                                     instance_id=instance_id,
                                     parent_ids=parent_ids,

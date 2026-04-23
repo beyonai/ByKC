@@ -10,10 +10,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class OperationType(str, Enum):
-    SEARCH = "search"
+    KNOWLEDGE_SEARCH = "knowledgeSearch"
     LIST_DIR = "listDir"
     GLOB = "glob"
     READ_FILE = "readFile"
+    # CREATE_DIR = "createDir"
+    # EDIT_DIR = "editDir"
+    # DELETE_DIR = "deleteDir"
+    # UPLOAD_FILE = "uploadFile"
+    # DELETE_FILE = "deleteFile"
+    # DOWNLOAD_FILE = "downloadFile"
+    # KNOWLEDGE_BUILD = "knowledgeBuild"
 
 
 class SearchInput(BaseModel):
@@ -118,8 +125,8 @@ class OperationSpec:
 
 
 OPERATION_REGISTRY: dict[OperationType, OperationSpec] = {
-    OperationType.SEARCH: OperationSpec(
-        operation_type=OperationType.SEARCH,
+    OperationType.KNOWLEDGE_SEARCH: OperationSpec(
+        operation_type=OperationType.KNOWLEDGE_SEARCH,
         tool_name="search_knowledge",
         description="Search knowledge bases for relevant content; supports parallel search across multiple KBs",
         input_schema=SearchInput,

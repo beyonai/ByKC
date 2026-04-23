@@ -14,7 +14,7 @@ def test_knowledge_base_config_requires_service_name():
                     "kb_name": "HR",
                     "service_name": "",
                     "operations": {
-                        OperationType.SEARCH: "/api/v1/knowledgeItems/search"
+                        OperationType.KNOWLEDGE_SEARCH: "/api/v1/knowledgeItems/search"
                     },
                 }
             ]
@@ -29,14 +29,16 @@ def test_knowledge_base_config_accepts_operations_dict():
                 kb_name="KB1",
                 service_name="svc-a",
                 operations={
-                    OperationType.SEARCH: "/api/v1/knowledgeItems/search",
+                    OperationType.KNOWLEDGE_SEARCH: "/api/v1/knowledgeItems/search",
                     OperationType.LIST_DIR: "/api/v1/listDir",
                 },
             )
         ]
     )
     kb = config.knowledge_bases[0]
-    assert kb.operations[OperationType.SEARCH] == "/api/v1/knowledgeItems/search"
+    assert (
+        kb.operations[OperationType.KNOWLEDGE_SEARCH] == "/api/v1/knowledgeItems/search"
+    )
     assert kb.operations[OperationType.LIST_DIR] == "/api/v1/listDir"
 
 
@@ -47,12 +49,14 @@ def test_knowledge_base_config_accepts_dict_input():
                 "kb_code": "kb1",
                 "kb_name": "KB1",
                 "service_name": "svc-a",
-                "operations": {"search": "/api/v1/knowledgeItems/search"},
+                "operations": {"knowledgeSearch": "/api/v1/knowledgeItems/search"},
             }
         ]
     )
     kb = config.knowledge_bases[0]
-    assert kb.operations[OperationType.SEARCH] == "/api/v1/knowledgeItems/search"
+    assert (
+        kb.operations[OperationType.KNOWLEDGE_SEARCH] == "/api/v1/knowledgeItems/search"
+    )
 
 
 def test_knowledge_base_config_empty_operations_is_valid():

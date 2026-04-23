@@ -55,12 +55,14 @@ def next_hop(
                 continue
             if (
                 isinstance(msg, ToolMessage)
-                and msg.name == OPERATION_REGISTRY[OperationType.SEARCH].tool_name
+                and msg.name
+                == OPERATION_REGISTRY[OperationType.KNOWLEDGE_SEARCH].tool_name
             ):
                 delete_messages.append(RemoveMessage(id=msg.id))
             elif isinstance(msg, AIMessage) and msg.tool_calls:
                 if any(
-                    tc.get("name") == OPERATION_REGISTRY[OperationType.SEARCH].tool_name
+                    tc.get("name")
+                    == OPERATION_REGISTRY[OperationType.KNOWLEDGE_SEARCH].tool_name
                     for tc in msg.tool_calls
                 ):
                     delete_messages.append(RemoveMessage(id=msg.id))

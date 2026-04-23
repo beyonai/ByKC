@@ -134,7 +134,7 @@ async def _run_async(args: argparse.Namespace) -> None:
                         "kb_description": "Packaged end-to-end example knowledge base.",
                         "service_name": os.getenv("SERVICE_NAME", "by-qa-manager"),
                         "operations": {
-                            OperationType.SEARCH: "/api/v1/knowledgeItems/search",
+                            OperationType.KNOWLEDGE_SEARCH: "/api/v1/knowledgeItems/search",
                         },
                     }
                 ],

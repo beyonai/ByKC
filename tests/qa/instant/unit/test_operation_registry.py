@@ -9,7 +9,7 @@ from by_qa.qa.instant.runtime.operation_registry import (
 
 
 def test_operation_type_values():
-    assert OperationType.SEARCH.value == "search"
+    assert OperationType.KNOWLEDGE_SEARCH.value == "knowledgeSearch"
     assert OperationType.LIST_DIR.value == "listDir"
     assert OperationType.GLOB.value == "glob"
     assert OperationType.READ_FILE.value == "readFile"
@@ -20,7 +20,10 @@ def test_registry_has_all_operation_types():
 
 
 def test_registry_tool_names():
-    assert OPERATION_REGISTRY[OperationType.SEARCH].tool_name == "search_knowledge"
+    assert (
+        OPERATION_REGISTRY[OperationType.KNOWLEDGE_SEARCH].tool_name
+        == "search_knowledge"
+    )
     assert OPERATION_REGISTRY[OperationType.LIST_DIR].tool_name == "list_directory"
     assert OPERATION_REGISTRY[OperationType.GLOB].tool_name == "glob_search"
     assert OPERATION_REGISTRY[OperationType.READ_FILE].tool_name == "read_file"

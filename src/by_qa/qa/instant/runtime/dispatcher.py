@@ -166,7 +166,7 @@ class ServiceToolDispatcher:
             operation_type,
             payload,
         )
-        if operation_type == OperationType.SEARCH:
+        if operation_type == OperationType.KNOWLEDGE_SEARCH:
             return await self._dispatch_search(payload, runtime_context)
         return await self._dispatch_single_kb(operation_type, payload, runtime_context)
 
@@ -199,7 +199,7 @@ class ServiceToolDispatcher:
         grouped: dict[tuple[str, str], list[str]] = {}
         service_headers: dict[str, dict[str, str]] = {}
         for kb in kbs:
-            path = kb.operations.get(OperationType.SEARCH)
+            path = kb.operations.get(OperationType.KNOWLEDGE_SEARCH)
             if not path:
                 continue
             normalized_headers = _normalize_headers(kb.headers)
@@ -369,7 +369,9 @@ class DispatcherToolMiddleware(AgentMiddleware):
     ) -> None:
         self._index_id_fn = index_id_fn
         self._follow_up_prompt = follow_up_prompt
-        self._search_tool_name = OPERATION_REGISTRY[OperationType.SEARCH].tool_name
+        self._search_tool_name = OPERATION_REGISTRY[
+            OperationType.KNOWLEDGE_SEARCH
+        ].tool_name
         self._counter_lock = asyncio.Lock()
         self._result_counters: dict[tuple[str, int, int], int] = {}
 

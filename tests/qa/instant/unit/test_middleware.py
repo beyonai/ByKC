@@ -51,7 +51,7 @@ async def test_dispatcher_middleware_passes_through_non_search_tools():
 
 @pytest.mark.asyncio
 async def test_dispatcher_middleware_injects_index_ids_for_search():
-    search_tool_name = OPERATION_REGISTRY[OperationType.SEARCH].tool_name
+    search_tool_name = OPERATION_REGISTRY[OperationType.KNOWLEDGE_SEARCH].tool_name
     raw = [{"content": "doc-a", "score": 0.9}, {"content": "doc-b", "score": 0.8}]
     request, fake_result = _make_tool_call_request(
         search_tool_name, {"sub_query_idx": 3, "current_step": 0}, raw
@@ -83,7 +83,7 @@ async def test_dispatcher_middleware_injects_index_ids_for_search():
 
 @pytest.mark.asyncio
 async def test_dispatcher_middleware_multi_hop_index_ids():
-    search_tool_name = OPERATION_REGISTRY[OperationType.SEARCH].tool_name
+    search_tool_name = OPERATION_REGISTRY[OperationType.KNOWLEDGE_SEARCH].tool_name
     raw = [{"content": "doc-a", "score": 0.9}]
     request, fake_result = _make_tool_call_request(
         search_tool_name, {"sub_query_idx": 1, "current_step": 1}, raw

@@ -735,6 +735,7 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
 | `markdown` | 原始文件转 Markdown | Markdown |
 | `chunking` | 文档切片 | Chunking |
 | `vectorizing` | 切片向量化 | Vectorizing |
+| `complete` | 已完成 | complete |
 
 失败响应示例：
 

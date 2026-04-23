@@ -31,7 +31,7 @@ def test_build_tools_returns_one_tool_per_supported_op():
         "kb1",
         "svc-a",
         {
-            OperationType.SEARCH: "/api/v1/knowledgeItems/search",
+            OperationType.KNOWLEDGE_SEARCH: "/api/v1/knowledgeItems/search",
             OperationType.LIST_DIR: "/api/v1/listDir",
         },
     )
@@ -39,7 +39,7 @@ def test_build_tools_returns_one_tool_per_supported_op():
     tools = dispatcher.build_tools()
     tool_names = {t.name for t in tools}
     assert tool_names == {
-        OPERATION_REGISTRY[OperationType.SEARCH].tool_name,
+        OPERATION_REGISTRY[OperationType.KNOWLEDGE_SEARCH].tool_name,
         OPERATION_REGISTRY[OperationType.LIST_DIR].tool_name,
     }
 
@@ -57,9 +57,21 @@ def test_build_tools_ignores_unknown_operation_types():
 
 @pytest.mark.asyncio
 async def test_dispatch_search_groups_by_service_and_posts():
-    kb_a1 = _kb("kb1", "svc-a", {OperationType.SEARCH: "/api/v1/knowledgeItems/search"})
-    kb_a2 = _kb("kb2", "svc-a", {OperationType.SEARCH: "/api/v1/knowledgeItems/search"})
-    kb_b = _kb("kb3", "svc-b", {OperationType.SEARCH: "/api/v1/knowledgeItems/search"})
+    kb_a1 = _kb(
+        "kb1",
+        "svc-a",
+        {OperationType.KNOWLEDGE_SEARCH: "/api/v1/knowledgeItems/search"},
+    )
+    kb_a2 = _kb(
+        "kb2",
+        "svc-a",
+        {OperationType.KNOWLEDGE_SEARCH: "/api/v1/knowledgeItems/search"},
+    )
+    kb_b = _kb(
+        "kb3",
+        "svc-b",
+        {OperationType.KNOWLEDGE_SEARCH: "/api/v1/knowledgeItems/search"},
+    )
     ctx = _make_context(kb_a1, kb_a2, kb_b)
     dispatcher = ServiceToolDispatcher([kb_a1, kb_a2, kb_b])
 
@@ -80,7 +92,7 @@ async def test_dispatch_search_groups_by_service_and_posts():
         side_effect=fake_post,
     ):
         results = await dispatcher._dispatch(
-            OperationType.SEARCH, {"query": "q", "knCodeList": None}, ctx
+            OperationType.KNOWLEDGE_SEARCH, {"query": "q", "knCodeList": None}, ctx
         )
 
     assert len(calls) == 2
@@ -93,8 +105,16 @@ async def test_dispatch_search_groups_by_service_and_posts():
 
 @pytest.mark.asyncio
 async def test_dispatch_search_filters_by_kn_code_list():
-    kb1 = _kb("kb1", "svc-a", {OperationType.SEARCH: "/api/v1/knowledgeItems/search"})
-    kb2 = _kb("kb2", "svc-a", {OperationType.SEARCH: "/api/v1/knowledgeItems/search"})
+    kb1 = _kb(
+        "kb1",
+        "svc-a",
+        {OperationType.KNOWLEDGE_SEARCH: "/api/v1/knowledgeItems/search"},
+    )
+    kb2 = _kb(
+        "kb2",
+        "svc-a",
+        {OperationType.KNOWLEDGE_SEARCH: "/api/v1/knowledgeItems/search"},
+    )
     ctx = _make_context(kb1, kb2)
     dispatcher = ServiceToolDispatcher([kb1, kb2])
 
@@ -109,7 +129,7 @@ async def test_dispatch_search_filters_by_kn_code_list():
         side_effect=fake_post,
     ):
         await dispatcher._dispatch(
-            OperationType.SEARCH, {"query": "q", "knCodeList": ["kb1"]}, ctx
+            OperationType.KNOWLEDGE_SEARCH, {"query": "q", "knCodeList": ["kb1"]}, ctx
         )
 
     assert calls == [["kb1"]]
@@ -122,7 +142,7 @@ async def test_dispatch_search_normalizes_header_values_to_strings():
         kb_name="kb1",
         service_name="svc-a",
         headers={"X-Trace-Id": 123, "X-Optional": None},
-        operations={OperationType.SEARCH: "/api/v1/knowledgeItems/search"},
+        operations={OperationType.KNOWLEDGE_SEARCH: "/api/v1/knowledgeItems/search"},
     )
     ctx = _make_context(kb)
     dispatcher = ServiceToolDispatcher([kb])
@@ -139,7 +159,7 @@ async def test_dispatch_search_normalizes_header_values_to_strings():
         side_effect=fake_post,
     ):
         await dispatcher._dispatch(
-            OperationType.SEARCH, {"query": "q", "knCodeList": None}, ctx
+            OperationType.KNOWLEDGE_SEARCH, {"query": "q", "knCodeList": None}, ctx
         )
 
     assert captured_headers == {"X-Trace-Id": "123", "X-Optional": ""}
@@ -278,7 +298,11 @@ async def test_dispatch_single_kb_returns_error_when_kn_code_not_found():
 
 @pytest.mark.asyncio
 async def test_dispatch_single_kb_returns_error_when_operation_not_supported():
-    kb = _kb("kb1", "svc-a", {OperationType.SEARCH: "/api/v1/knowledgeItems/search"})
+    kb = _kb(
+        "kb1",
+        "svc-a",
+        {OperationType.KNOWLEDGE_SEARCH: "/api/v1/knowledgeItems/search"},
+    )
     ctx = _make_context(kb)
     dispatcher = ServiceToolDispatcher([kb])
 
@@ -293,7 +317,11 @@ async def test_dispatch_single_kb_returns_error_when_operation_not_supported():
 
 @pytest.mark.asyncio
 async def test_dispatch_search_returns_error_for_unauthorized_kb_codes():
-    kb = _kb("kb1", "svc-a", {OperationType.SEARCH: "/api/v1/knowledgeItems/search"})
+    kb = _kb(
+        "kb1",
+        "svc-a",
+        {OperationType.KNOWLEDGE_SEARCH: "/api/v1/knowledgeItems/search"},
+    )
     ctx = _make_context(kb)
     dispatcher = ServiceToolDispatcher([kb])
 
@@ -305,7 +333,7 @@ async def test_dispatch_search_returns_error_for_unauthorized_kb_codes():
         side_effect=fake_post,
     ):
         results = await dispatcher._dispatch(
-            OperationType.SEARCH,
+            OperationType.KNOWLEDGE_SEARCH,
             {"query": "q", "knCodeList": ["kb1", "unauthorized-kb"]},
             ctx,
         )
@@ -318,7 +346,11 @@ async def test_dispatch_search_returns_error_for_unauthorized_kb_codes():
 
 @pytest.mark.asyncio
 async def test_dispatch_search_returns_error_entry_on_service_exception():
-    kb = _kb("kb1", "svc-a", {OperationType.SEARCH: "/api/v1/knowledgeItems/search"})
+    kb = _kb(
+        "kb1",
+        "svc-a",
+        {OperationType.KNOWLEDGE_SEARCH: "/api/v1/knowledgeItems/search"},
+    )
     ctx = _make_context(kb)
     dispatcher = ServiceToolDispatcher([kb])
 
@@ -330,7 +362,7 @@ async def test_dispatch_search_returns_error_entry_on_service_exception():
         side_effect=fake_post,
     ):
         results = await dispatcher._dispatch(
-            OperationType.SEARCH, {"query": "q", "knCodeList": None}, ctx
+            OperationType.KNOWLEDGE_SEARCH, {"query": "q", "knCodeList": None}, ctx
         )
 
     assert len(results) == 1
@@ -340,7 +372,11 @@ async def test_dispatch_search_returns_error_entry_on_service_exception():
 
 @pytest.mark.asyncio
 async def test_dispatch_search_returns_error_entry_on_api_error():
-    kb = _kb("kb1", "svc-a", {OperationType.SEARCH: "/api/v1/knowledgeItems/search"})
+    kb = _kb(
+        "kb1",
+        "svc-a",
+        {OperationType.KNOWLEDGE_SEARCH: "/api/v1/knowledgeItems/search"},
+    )
     ctx = _make_context(kb)
     dispatcher = ServiceToolDispatcher([kb])
 
@@ -356,7 +392,7 @@ async def test_dispatch_search_returns_error_entry_on_api_error():
         side_effect=fake_post,
     ):
         results = await dispatcher._dispatch(
-            OperationType.SEARCH, {"query": "q", "knCodeList": None}, ctx
+            OperationType.KNOWLEDGE_SEARCH, {"query": "q", "knCodeList": None}, ctx
         )
 
     assert len(results) == 1

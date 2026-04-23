@@ -33,7 +33,7 @@ def _make_request(*, state: dict, run_id: str, thread_id: str, tool_call_id: str
     class FakeRequest:
         tool_call = FakeToolCall(
             {
-                "name": OPERATION_REGISTRY[OperationType.SEARCH].tool_name,
+                "name": OPERATION_REGISTRY[OperationType.KNOWLEDGE_SEARCH].tool_name,
                 "id": tool_call_id,
             }
         )

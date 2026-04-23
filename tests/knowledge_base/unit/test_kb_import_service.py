@@ -789,10 +789,60 @@ class FakeKnowledgeBuildTaskRepository:
     def __init__(self):
         self.calls = []
         self.latest_task_by_fs_entry_id = {}
+        self.raise_on_create = False
 
     async def get_latest_by_fs_entry_id(self, cursor, *, fs_entry_id):
         self.calls.append(("get_latest_by_fs_entry_id", {"fs_entry_id": fs_entry_id}))
         return self.latest_task_by_fs_entry_id.get(fs_entry_id)
+
+    async def create_task(
+        self, cursor, *, knowledge_base_id, fs_entry_id, status, current_step
+    ):
+        if self.raise_on_create:
+            raise ValueError("running task already exists")
+        task = {
+            "kid": 9901,
+            "knowledge_base_id": knowledge_base_id,
+            "fs_entry_id": fs_entry_id,
+            "status": status,
+            "current_step": current_step,
+        }
+        self.calls.append(
+            (
+                "create_task",
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "fs_entry_id": fs_entry_id,
+                    "status": status,
+                    "current_step": current_step,
+                },
+            )
+        )
+        self.latest_task_by_fs_entry_id[fs_entry_id] = task
+        return task
+
+    async def update_task(
+        self,
+        cursor,
+        *,
+        task_id,
+        status=None,
+        current_step=None,
+        error_message=None,
+        finished=False,
+    ):
+        self.calls.append(
+            (
+                "update_task",
+                {
+                    "task_id": task_id,
+                    "status": status,
+                    "current_step": current_step,
+                    "error_message": error_message,
+                    "finished": finished,
+                },
+            )
+        )
 
 
 async def test_create_knowledge_base_commits_and_returns_business_fields():
@@ -2114,6 +2164,104 @@ async def test_file_to_markdown_index_file_not_uploaded():
         )
 
 
+async def test_file_to_markdown_index_maps_create_task_race_to_running_task_error():
+    """Task creation races should surface as the documented duplicate-task error."""
+    import pytest
+
+    kb_repo = FakeKnowledgeBaseRepository(
+        default_lookup_result={
+            "kid": 7,
+            "kb_code": "1",
+            "kb_name": "TestKB",
+            "status": "ACTIVE",
+        }
+    )
+    fs_repo = FakeKnowledgeFsEntryRepository()
+    fs_repo.file_entry_by_path = {
+        "制度/人事/请假制度.pdf": {
+            "kid": 71,
+            "entry_type": "FILE",
+            "name": "请假制度.pdf",
+            "file_bucket_name": "test-bucket",
+            "file_object_key": "kb/7/fs-entry/71/original.pdf",
+            "mime_type": "application/pdf",
+        }
+    }
+    build_task_repo = FakeKnowledgeBuildTaskRepository()
+    build_task_repo.raise_on_create = True
+    service = KnowledgeItemIngestionService(
+        connection_factory=lambda: _async_return(FakeConnection()),
+        knowledge_base_repository=kb_repo,
+        knowledge_fs_entry_repository=fs_repo,
+        knowledge_build_task_repository=build_task_repo,
+        knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        object_storage=FakeObjectStorage(),
+        embedding_dimension=3,
+    )
+    request = FileToMarkdownIndexRequest.model_validate(
+        {"knCode": "1", "filePath": "/制度/人事/请假制度.pdf"}
+    )
+
+    with pytest.raises(
+        KnowledgeBaseValidationError,
+        match="build task already exists for file: /制度/人事/请假制度.pdf",
+    ):
+        await service.create_file_to_markdown_index_task(request)
+
+
+async def test_file_to_markdown_index_rejects_running_task():
+    """fileToMarkdownIndex rejects duplicate requests when a task is already running."""
+    import pytest
+
+    kb_repo = FakeKnowledgeBaseRepository(
+        default_lookup_result={
+            "kid": 7,
+            "kb_code": "1",
+            "kb_name": "TestKB",
+            "status": "ACTIVE",
+        }
+    )
+    fs_repo = FakeKnowledgeFsEntryRepository()
+    fs_repo.file_entry_by_path = {
+        "制度/人事/请假制度.pdf": {
+            "kid": 71,
+            "entry_type": "FILE",
+            "name": "请假制度.pdf",
+            "file_bucket_name": "test-bucket",
+            "file_object_key": "kb/7/fs-entry/71/original.pdf",
+            "mime_type": "application/pdf",
+        }
+    }
+    build_task_repo = FakeKnowledgeBuildTaskRepository()
+    build_task_repo.latest_task_by_fs_entry_id[71] = {
+        "kid": 9001,
+        "status": "running",
+        "current_step": "chunking",
+    }
+    service = KnowledgeItemIngestionService(
+        connection_factory=lambda: _async_return(FakeConnection()),
+        knowledge_base_repository=kb_repo,
+        knowledge_fs_entry_repository=fs_repo,
+        knowledge_build_task_repository=build_task_repo,
+        knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        object_storage=FakeObjectStorage(),
+        embedding_dimension=3,
+    )
+    request = FileToMarkdownIndexRequest.model_validate(
+        {"knCode": "1", "filePath": "/制度/人事/请假制度.pdf"}
+    )
+
+    with pytest.raises(
+        KnowledgeBaseValidationError,
+        match="build task already exists for file: /制度/人事/请假制度.pdf",
+    ):
+        await service.file_to_markdown_index(
+            request, document_chunking_service=FakeDocumentChunkingService()
+        )
+
+
 async def test_file_to_markdown_index_success():
     """fileToMarkdownIndex completes full pipeline successfully."""
     kb_repo = FakeKnowledgeBaseRepository(
@@ -2137,6 +2285,7 @@ async def test_file_to_markdown_index_success():
     }
     chunk_repo = FakeKnowledgeItemChunkRepository()
     retrieval_repo = FakeRetrievalProjectionRepository()
+    build_task_repo = FakeKnowledgeBuildTaskRepository()
     obj_storage = FakeObjectStorage()
     obj_storage.object_payloads[("test-bucket", "kb/7/fs-entry/71/original.pdf")] = (
         b"fake-pdf-bytes"
@@ -2146,6 +2295,7 @@ async def test_file_to_markdown_index_success():
         connection_factory=lambda: _async_return(FakeConnection()),
         knowledge_base_repository=kb_repo,
         knowledge_fs_entry_repository=fs_repo,
+        knowledge_build_task_repository=build_task_repo,
         knowledge_item_chunk_repository=chunk_repo,
         retrieval_projection_repository=retrieval_repo,
         object_storage=obj_storage,
@@ -2178,3 +2328,107 @@ async def test_file_to_markdown_index_success():
     md_calls = [c for c in fs_repo.calls if c[0] == "update_markdown_metadata"]
     assert len(md_calls) == 1
     assert md_calls[0][1]["fs_entry_id"] == 71
+
+    assert build_task_repo.calls == [
+        ("get_latest_by_fs_entry_id", {"fs_entry_id": 71}),
+        (
+            "create_task",
+            {
+                "knowledge_base_id": 7,
+                "fs_entry_id": 71,
+                "status": "running",
+                "current_step": "markdown",
+            },
+        ),
+        (
+            "update_task",
+            {
+                "task_id": 9901,
+                "status": "running",
+                "current_step": "chunking",
+                "error_message": None,
+                "finished": False,
+            },
+        ),
+        (
+            "update_task",
+            {
+                "task_id": 9901,
+                "status": "running",
+                "current_step": "vectorizing",
+                "error_message": None,
+                "finished": False,
+            },
+        ),
+        (
+            "update_task",
+            {
+                "task_id": 9901,
+                "status": "complete",
+                "current_step": "vectorizing",
+                "error_message": None,
+                "finished": True,
+            },
+        ),
+    ]
+
+
+async def test_file_to_markdown_index_rebuilds_after_failed_task():
+    """fileToMarkdownIndex creates a new task when the previous task failed."""
+    kb_repo = FakeKnowledgeBaseRepository(
+        default_lookup_result={
+            "kid": 7,
+            "kb_code": "1",
+            "kb_name": "TestKB",
+            "status": "ACTIVE",
+        }
+    )
+    fs_repo = FakeKnowledgeFsEntryRepository()
+    fs_repo.file_entry_by_path = {
+        "制度/人事/请假制度.pdf": {
+            "kid": 71,
+            "entry_type": "FILE",
+            "name": "请假制度.pdf",
+            "file_bucket_name": "test-bucket",
+            "file_object_key": "kb/7/fs-entry/71/original.pdf",
+            "mime_type": "application/pdf",
+        }
+    }
+    build_task_repo = FakeKnowledgeBuildTaskRepository()
+    build_task_repo.latest_task_by_fs_entry_id[71] = {
+        "kid": 9001,
+        "status": "failed",
+        "current_step": "vectorizing",
+    }
+    obj_storage = FakeObjectStorage()
+    obj_storage.object_payloads[("test-bucket", "kb/7/fs-entry/71/original.pdf")] = (
+        b"fake-pdf-bytes"
+    )
+    service = KnowledgeItemIngestionService(
+        connection_factory=lambda: _async_return(FakeConnection()),
+        knowledge_base_repository=kb_repo,
+        knowledge_fs_entry_repository=fs_repo,
+        knowledge_build_task_repository=build_task_repo,
+        knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        object_storage=obj_storage,
+        embedding_dimension=3,
+    )
+
+    await service.file_to_markdown_index(
+        FileToMarkdownIndexRequest.model_validate(
+            {"knCode": "1", "filePath": "/制度/人事/请假制度.pdf"}
+        ),
+        document_chunking_service=FakeDocumentChunkingService(),
+    )
+
+    assert ("get_latest_by_fs_entry_id", {"fs_entry_id": 71}) in build_task_repo.calls
+    assert (
+        "create_task",
+        {
+            "knowledge_base_id": 7,
+            "fs_entry_id": 71,
+            "status": "running",
+            "current_step": "markdown",
+        },
+    ) in build_task_repo.calls

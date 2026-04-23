@@ -30,6 +30,8 @@ class FakeKBService:
         self.created_requests = []
         self.created_directory_requests = []
         self.import_calls = []
+        self.file_build_task_requests = []
+        self.file_build_task_runs = []
 
     async def create_knowledge_base(self, request):
         self.created_requests.append(request)
@@ -86,9 +88,14 @@ class FakeKBService:
             file_description=request.file_description,
         )
 
-    async def file_to_markdown_index(  # pylint: disable=unused-argument
-        self, request, *, document_chunking_service
+    async def create_file_to_markdown_index_task(self, request):
+        self.file_build_task_requests.append(request)
+        return 9901
+
+    async def execute_file_to_markdown_index_task(  # pylint: disable=unused-argument
+        self, request, *, document_chunking_service, build_task_id
     ):
+        self.file_build_task_runs.append((request, build_task_id))
         return None
 
     async def file_build_status(self, request):
@@ -1287,7 +1294,7 @@ def test_search_route_rejects_non_positive_top_k(monkeypatch):
 
 
 def test_file_to_markdown_index_success(monkeypatch):
-    """POST /api/v1/fileToMarkdownIndex returns success envelope."""
+    """POST /api/v1/fileToMarkdownIndex returns success and schedules background work."""
     service = FakeKBService()
     client = make_test_client(monkeypatch, service)
     response = client.post(
@@ -1298,13 +1305,16 @@ def test_file_to_markdown_index_success(monkeypatch):
     body = response.json()
     assert body["resultCode"] == "0"
     assert body["resultMsg"] == "success"
+    assert len(service.file_build_task_requests) == 1
+    assert len(service.file_build_task_runs) == 1
+    assert service.file_build_task_runs[0][1] == 9901
 
 
 def test_file_to_markdown_index_kb_not_found(monkeypatch):
     """POST /api/v1/fileToMarkdownIndex returns error when KB not found."""
 
     class FailingService(FakeKBService):
-        async def file_to_markdown_index(self, request, *, document_chunking_service):
+        async def create_file_to_markdown_index_task(self, request):
             raise KnowledgeBaseValidationError(
                 f"knowledge base not found: {request.kb_code}"
             )
@@ -1332,6 +1342,29 @@ def test_file_to_markdown_index_validation_error(monkeypatch):
     body = response.json()
     assert body["resultCode"] == "-1"
     assert body["resultMsg"] == "request validation failed"
+
+
+def test_file_to_markdown_index_running_task_returns_error(monkeypatch):
+    """POST /api/v1/fileToMarkdownIndex returns an error when a running task exists."""
+
+    class FailingService(FakeKBService):
+        async def create_file_to_markdown_index_task(self, request):
+            raise KnowledgeBaseValidationError(
+                f"build task already exists for file: {request.file_path}"
+            )
+
+    client = make_test_client(monkeypatch, FailingService())
+    response = client.post(
+        "/api/v1/fileToMarkdownIndex",
+        json={"knCode": "1", "filePath": "/制度/人事/请假制度.pdf"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["resultCode"] == "-1"
+    assert (
+        body["resultMsg"]
+        == "build task already exists for file: /制度/人事/请假制度.pdf"
+    )
 
 
 def test_file_build_status_success(monkeypatch):

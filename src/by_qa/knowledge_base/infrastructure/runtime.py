@@ -186,6 +186,7 @@ async def build_knowledge_item_ingestion_service(
         connection_factory=build_connection_factory(settings),
         knowledge_base_repository=KnowledgeBaseRepository(),
         knowledge_fs_entry_repository=KnowledgeFsEntryRepository(),
+        knowledge_build_task_repository=KnowledgeBuildTaskRepository(),
         knowledge_item_chunk_repository=KnowledgeItemChunkRepository(
             bootstrap.embedding_table_name
         ),

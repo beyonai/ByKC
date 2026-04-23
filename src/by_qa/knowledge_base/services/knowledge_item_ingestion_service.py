@@ -14,6 +14,14 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemUploadRequest,
     KnowledgeItemUploadResponse,
 )
+from by_qa.knowledge_base.build_status import (
+    BUILD_STATUS_COMPLETE,
+    BUILD_STATUS_FAILED,
+    BUILD_STATUS_RUNNING,
+    BUILD_STEP_CHUNKING,
+    BUILD_STEP_MARKDOWN,
+    BUILD_STEP_VECTORIZING,
+)
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
 
 
@@ -28,6 +36,7 @@ class KnowledgeItemIngestionService:
     retrieval_projection_repository: Any
     object_storage: Any
     embedding_dimension: int
+    knowledge_build_task_repository: Any | None = None
 
     async def upload_file(
         self, request: KnowledgeItemUploadRequest
@@ -124,11 +133,109 @@ class KnowledgeItemIngestionService:
     async def file_to_markdown_index(
         self, request: FileToMarkdownIndexRequest, *, document_chunking_service: Any
     ) -> None:
-        """Download uploaded file, parse to markdown, chunk, embed, and persist."""
+        """Synchronously create and execute one build task."""
+        build_task_id = await self.create_file_to_markdown_index_task(request)
+        await self.execute_file_to_markdown_index_task(
+            request,
+            document_chunking_service=document_chunking_service,
+            build_task_id=build_task_id,
+        )
+
+    async def create_file_to_markdown_index_task(
+        self, request: FileToMarkdownIndexRequest
+    ) -> int:
+        """Create a new build task or reject when one is already running."""
         logger.info(
-            "knowledge_item_ingestion_service.file_to_markdown_index started: kb_code=%s, file_path=%s",
+            "knowledge_item_ingestion_service.create_file_to_markdown_index_task started: kb_code=%s, file_path=%s",
             request.kb_code,
             request.file_path,
+        )
+        normalized_file_path = request.file_path.strip("/")
+        if not normalized_file_path:
+            raise KnowledgeBaseValidationError("file_path must not be empty")
+
+        connection = await self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            kb_row = await self.knowledge_base_repository.get_by_code(
+                cursor, request.kb_code
+            )
+            if not kb_row:
+                raise KnowledgeBaseValidationError(
+                    f"knowledge base not found: {request.kb_code}"
+                )
+            knowledge_base_id = self._row_id(kb_row)
+
+            file_row = await self.knowledge_fs_entry_repository.get_file_by_path(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                full_path=normalized_file_path,
+            )
+            if file_row is None:
+                raise KnowledgeBaseValidationError(
+                    f"file not found: {request.file_path}"
+                )
+            fs_entry_id = self._row_id(file_row)
+            file_object_key = file_row.get("file_object_key")
+            if not file_object_key:
+                raise KnowledgeBaseValidationError(
+                    f"file has not been uploaded yet: {request.file_path}"
+                )
+
+            latest_task = None
+            if self.knowledge_build_task_repository is not None:
+                latest_task = await self.knowledge_build_task_repository.get_latest_by_fs_entry_id(
+                    cursor,
+                    fs_entry_id=fs_entry_id,
+                )
+            if latest_task is not None and latest_task.get("status") == "running":
+                raise KnowledgeBaseValidationError(
+                    f"build task already exists for file: {request.file_path}"
+                )
+
+            if self.knowledge_build_task_repository is None:
+                await connection.commit()
+                return 0
+
+            try:
+                created_task = await self.knowledge_build_task_repository.create_task(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    fs_entry_id=fs_entry_id,
+                    status=BUILD_STATUS_RUNNING,
+                    current_step=BUILD_STEP_MARKDOWN,
+                )
+            except Exception as exc:
+                if self._looks_like_running_task_conflict(exc):
+                    raise KnowledgeBaseValidationError(
+                        f"build task already exists for file: {request.file_path}"
+                    ) from exc
+                raise
+            await connection.commit()
+            if created_task is None:
+                raise KnowledgeBaseValidationError(
+                    f"failed to create build task: {request.file_path}"
+                )
+            return self._row_id(created_task)
+        except Exception:
+            await connection.rollback()
+            raise
+        finally:
+            await connection.close()
+
+    async def execute_file_to_markdown_index_task(
+        self,
+        request: FileToMarkdownIndexRequest,
+        *,
+        document_chunking_service: Any,
+        build_task_id: int,
+    ) -> None:
+        """Download uploaded file, parse to markdown, chunk, embed, and persist."""
+        logger.info(
+            "knowledge_item_ingestion_service.execute_file_to_markdown_index_task started: kb_code=%s, file_path=%s, build_task_id=%s",
+            request.kb_code,
+            request.file_path,
+            build_task_id,
         )
         normalized_file_path = request.file_path.strip("/")
         if not normalized_file_path:
@@ -185,6 +292,12 @@ class KnowledgeItemIngestionService:
                 "file_to_markdown_index stage completed: stage=extract_text, md_length=%s",
                 len(markdown_content),
             )
+            await self._update_build_task(
+                cursor,
+                task_id=build_task_id,
+                status=BUILD_STATUS_RUNNING,
+                current_step=BUILD_STEP_CHUNKING,
+            )
 
             markdown_bytes = markdown_content.encode("utf-8")
             original_name = (
@@ -201,6 +314,12 @@ class KnowledgeItemIngestionService:
             logger.info(
                 "file_to_markdown_index stage completed: stage=chunk_and_embed, chunk_count=%s",
                 len(chunks),
+            )
+            await self._update_build_task(
+                cursor,
+                task_id=build_task_id,
+                status=BUILD_STATUS_RUNNING,
+                current_step=BUILD_STEP_VECTORIZING,
             )
 
             self._validate_chunk_embedding_dimensions(chunks)
@@ -250,6 +369,14 @@ class KnowledgeItemIngestionService:
                 full_path=normalized_file_path,
             )
 
+            await self._update_build_task(
+                cursor,
+                task_id=build_task_id,
+                status=BUILD_STATUS_COMPLETE,
+                current_step=BUILD_STEP_VECTORIZING,
+                finished=True,
+            )
+
             await connection.commit()
 
             await self.object_storage.promote_temp_object(
@@ -264,13 +391,23 @@ class KnowledgeItemIngestionService:
                 request.file_path,
                 len(chunks),
             )
-        except Exception:
+        except Exception as exc:
             await connection.rollback()
             if markdown_temp_object_key is not None:
                 await self.object_storage.delete_object_quietly(
                     markdown_temp_object_key,
                     bucket_name=self.object_storage.markdown_bucket_name,
                 )
+            if build_task_id is not None:
+                retry_cursor = connection.cursor()
+                await self._update_build_task(
+                    retry_cursor,
+                    task_id=build_task_id,
+                    status=BUILD_STATUS_FAILED,
+                    error_message=str(exc) or "internal error",
+                    finished=True,
+                )
+                await connection.commit()
             raise
         finally:
             await connection.close()
@@ -388,3 +525,35 @@ class KnowledgeItemIngestionService:
         if "kid" in row:
             return int(row["kid"])
         return int(row["id"])
+
+    def _looks_like_running_task_conflict(self, exc: Exception) -> bool:
+        message = str(exc).lower()
+        conflict_markers = (
+            "running task already exists",
+            "uq_knowledge_build_task_running_per_file",
+            "duplicate key",
+            "unique constraint",
+            "unique violation",
+        )
+        return any(marker in message for marker in conflict_markers)
+
+    async def _update_build_task(
+        self,
+        cursor: Any,
+        *,
+        task_id: int | None,
+        status: str | None = None,
+        current_step: str | None = None,
+        error_message: str | None = None,
+        finished: bool = False,
+    ) -> None:
+        if task_id is None or self.knowledge_build_task_repository is None:
+            return
+        await self.knowledge_build_task_repository.update_task(
+            cursor,
+            task_id=task_id,
+            status=status,
+            current_step=current_step,
+            error_message=error_message,
+            finished=finished,
+        )

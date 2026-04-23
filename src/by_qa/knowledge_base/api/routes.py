@@ -7,7 +7,7 @@ from pathlib import PurePosixPath
 from typing import Any, Optional
 from urllib.parse import quote
 
-from fastapi import Body, File, Form, Response, UploadFile
+from fastapi import BackgroundTasks, Body, File, Form, Response, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
@@ -117,6 +117,15 @@ def register_routes(
     get_document_chunking_service,
 ):
     """Register knowledge base API routes on the FastAPI app."""
+
+    async def _run_file_to_markdown_index_task(service, request, *, build_task_id: int):
+        """Resolve heavy dependencies inside the background task itself."""
+        chunking_service = await _resolve_maybe_async(get_document_chunking_service)
+        await service.execute_file_to_markdown_index_task(
+            request,
+            document_chunking_service=chunking_service,
+            build_task_id=build_task_id,
+        )
 
     @app.post("/api/v1/knowledgeBases/create")
     async def create_knowledge_base(body: dict[str, Any] = Body(...)):
@@ -527,7 +536,9 @@ def register_routes(
         return _documented_success_response(result_object={})
 
     @app.post("/api/v1/fileToMarkdownIndex")
-    async def file_to_markdown_index(body: dict[str, Any] = Body(...)):
+    async def file_to_markdown_index(
+        background_tasks: BackgroundTasks, body: dict[str, Any] = Body(...)
+    ):
         logger.info(
             "file_to_markdown_index request received: body_keys=%s",
             list(body.keys()),
@@ -542,9 +553,12 @@ def register_routes(
 
         try:
             service = await get_knowledge_item_ingestion_service()
-            chunking_service = await _resolve_maybe_async(get_document_chunking_service)
-            await service.file_to_markdown_index(
-                request, document_chunking_service=chunking_service
+            build_task_id = await service.create_file_to_markdown_index_task(request)
+            background_tasks.add_task(
+                _run_file_to_markdown_index_task,
+                service,
+                request,
+                build_task_id=build_task_id,
             )
         except KnowledgeBaseConfigurationError as exc:
             logger.warning("file_to_markdown_index configuration failed: error=%s", exc)

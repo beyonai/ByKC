@@ -18,6 +18,7 @@ from by_qa.knowledge_base.api.schemas import (
     DeleteDirectoryRequest,
     DeleteKnowledgeBaseRequest,
     DeleteKnowledgeItemRequest,
+    FileBuildStatusRequest,
     FileToMarkdownIndexRequest,
     KnowledgeItemDownloadRequest,
     KnowledgeItemGlobRequest,
@@ -566,6 +567,66 @@ def register_routes(
             request.file_path,
         )
         return _documented_success_response()
+
+    @app.post("/api/v1/fileBuildStatus")
+    async def file_build_status(body: dict[str, Any] = Body(...)):
+        try:
+            request = FileBuildStatusRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        logger.info(
+            "file_build_status request received: kb_code=%s, file_path=%s",
+            request.kb_code,
+            request.file_path,
+        )
+        try:
+            service = await get_knowledge_base_service()
+            result = await service.file_build_status(request)
+        except KnowledgeBaseConfigurationError as exc:
+            logger.warning(
+                "file_build_status configuration failed: file_path=%s, error=%s",
+                request.file_path,
+                exc,
+            )
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=503,
+            )
+        except KnowledgeBaseValidationError as exc:
+            logger.warning(
+                "file_build_status validation failed: file_path=%s, error=%s",
+                request.file_path,
+                exc,
+            )
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=422,
+            )
+        except Exception as exc:
+            logger.exception(
+                "file_build_status unexpected error: kb_code=%s, file_path=%s, error=%s",
+                request.kb_code,
+                request.file_path,
+                exc,
+            )
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error",
+                result_object={},
+                status_code=500,
+            )
+
+        logger.info(
+            "file_build_status response ready: code=200, file_path=%s, status=%s",
+            request.file_path,
+            result.get("status"),
+        )
+        return _documented_success_response(result_object=result)
 
     @app.post("/api/v1/knowledgeItems/search")
     @app.post("/api/v1/knowledge-items/search")

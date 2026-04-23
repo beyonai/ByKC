@@ -9,6 +9,9 @@ from by_qa.knowledge_base.infrastructure.object_storage import (
 from by_qa.knowledge_base.repositories.knowledge_base_repository import (
     KnowledgeBaseRepository,
 )
+from by_qa.knowledge_base.repositories.knowledge_build_task_repository import (
+    KnowledgeBuildTaskRepository,
+)
 from by_qa.knowledge_base.repositories.knowledge_fetch_cache_repository import (
     KnowledgeFetchCacheRepository,
 )
@@ -143,6 +146,7 @@ async def build_knowledge_base_service(
         connection_factory=build_connection_factory(settings),
         knowledge_base_repository=KnowledgeBaseRepository(),
         knowledge_fs_entry_repository=KnowledgeFsEntryRepository(),
+        knowledge_build_task_repository=KnowledgeBuildTaskRepository(),
         retrieval_projection_repository=RetrievalProjectionRepository(),
         knowledge_fetch_cache_repository=KnowledgeFetchCacheRepository(),
         object_storage=await build_object_storage(

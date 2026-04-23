@@ -202,6 +202,21 @@ class FileToMarkdownIndexRequest(BaseModel):
     )
 
 
+class FileBuildStatusRequest(BaseModel):
+    """Request body for querying one file's latest build status."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kb_code: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("knCode", "kb_code"),
+    )
+    file_path: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("filePath", "file_path"),
+    )
+
+
 class KnowledgeItemImportFileResponse(BaseModel):
     """Business response for the combined import endpoint."""
 

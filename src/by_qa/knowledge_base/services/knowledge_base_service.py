@@ -16,6 +16,7 @@ from by_qa.knowledge_base.api.schemas import (
     DeleteDirectoryResponse,
     DeleteKnowledgeBaseRequest,
     DeleteKnowledgeBaseResponse,
+    FileBuildStatusRequest,
     KnowledgeItemDownloadRequest,
     KnowledgeItemGlobRequest,
     KnowledgeItemListDirItem,
@@ -27,6 +28,7 @@ from by_qa.knowledge_base.api.schemas import (
     UpdateKnowledgeBaseRequest,
     UpdateKnowledgeBaseResponse,
 )
+from by_qa.knowledge_base.build_status import STATUS_DICT, STEP_DICT
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
 
 
@@ -37,6 +39,7 @@ class KnowledgeBaseService:
     connection_factory: Callable[[], Any]
     knowledge_base_repository: Any
     knowledge_fs_entry_repository: Any
+    knowledge_build_task_repository: Any | None = None
     retrieval_projection_repository: Any | None = None
     knowledge_fetch_cache_repository: Any | None = None
     object_storage: Any | None = None
@@ -440,6 +443,72 @@ class KnowledgeBaseService:
                 len(items),
             )
             return KnowledgeItemListDirResponse(items=items)
+        finally:
+            await connection.close()
+
+    async def file_build_status(
+        self, request: FileBuildStatusRequest
+    ) -> dict[str, Any]:
+        """Return the latest build task snapshot for one file."""
+        logger.info(
+            "knowledge_base_service.file_build_status started: kb_code=%s, file_path=%s",
+            request.kb_code,
+            request.file_path,
+        )
+        if self.knowledge_build_task_repository is None:
+            raise KnowledgeBaseValidationError(
+                "file build status runtime is not configured"
+            )
+
+        normalized_file_path = request.file_path.strip()
+        if not normalized_file_path.startswith("/"):
+            raise KnowledgeBaseValidationError("filePath must start with /")
+
+        connection = await self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            kb_row = await self.knowledge_base_repository.get_by_code(
+                cursor,
+                request.kb_code,
+            )
+            if not kb_row:
+                raise KnowledgeBaseValidationError(
+                    f"knowledge base not found: {request.kb_code}"
+                )
+            knowledge_base_id = self._row_id(kb_row)
+            file_row = await self.knowledge_fs_entry_repository.get_file_by_path(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                full_path=normalized_file_path.strip("/"),
+            )
+            if file_row is None:
+                raise KnowledgeBaseValidationError(
+                    f"file not found: {request.file_path}"
+                )
+            latest_task = (
+                await self.knowledge_build_task_repository.get_latest_by_fs_entry_id(
+                    cursor,
+                    fs_entry_id=self._row_id(file_row),
+                )
+            )
+            if latest_task is None:
+                raise KnowledgeBaseValidationError(
+                    f"build task not found: {request.file_path}"
+                )
+            result = {
+                "status": latest_task.get("status"),
+                "currentStep": latest_task.get("current_step"),
+                "statusDict": STATUS_DICT,
+                "stepDict": STEP_DICT,
+            }
+            logger.info(
+                "knowledge_base_service.file_build_status finished: kb_code=%s, file_path=%s, status=%s, current_step=%s",
+                request.kb_code,
+                request.file_path,
+                result["status"],
+                result["currentStep"],
+            )
+            return result
         finally:
             await connection.close()
 

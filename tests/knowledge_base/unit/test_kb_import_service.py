@@ -9,6 +9,7 @@ from by_qa.knowledge_base.api.schemas import (
     DeleteDirectoryRequest,
     DeleteKnowledgeBaseRequest,
     DeleteKnowledgeItemRequest,
+    FileBuildStatusRequest,
     FileToMarkdownIndexRequest,
     KnowledgeItemDownloadRequest,
     KnowledgeItemGlobRequest,
@@ -780,6 +781,18 @@ class FakeKnowledgeFetchCacheRepository:
                 },
             )
         )
+
+
+class FakeKnowledgeBuildTaskRepository:
+    """Repository double for file build task lookups."""
+
+    def __init__(self):
+        self.calls = []
+        self.latest_task_by_fs_entry_id = {}
+
+    async def get_latest_by_fs_entry_id(self, cursor, *, fs_entry_id):
+        self.calls.append(("get_latest_by_fs_entry_id", {"fs_entry_id": fs_entry_id}))
+        return self.latest_task_by_fs_entry_id.get(fs_entry_id)
 
 
 async def test_create_knowledge_base_commits_and_returns_business_fields():
@@ -1806,6 +1819,113 @@ async def test_list_dir_raises_when_knowledge_base_is_missing():
         raise AssertionError("expected KnowledgeBaseValidationError")
 
     assert knowledge_fs_entry_repository.calls == []
+
+
+async def test_file_build_status_returns_latest_task_for_file():
+    """Build-status should resolve the file and return its latest task snapshot."""
+    connection = FakeConnection()
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    build_task_repository = FakeKnowledgeBuildTaskRepository()
+    knowledge_fs_entry_repository.file_entry_by_path["制度/人事/请假制度.pdf"] = {
+        "kid": 71,
+        "knowledge_base_id": 7,
+        "parent_entry_id": 80,
+        "entry_type": "FILE",
+        "name": "请假制度.pdf",
+        "path_ltree": "d1_a.f2_doc",
+        "depth": 2,
+    }
+    build_task_repository.latest_task_by_fs_entry_id[71] = {
+        "kid": 9001,
+        "status": "running",
+        "current_step": "chunking",
+    }
+    service = KnowledgeBaseService(
+        connection_factory=lambda: _async_return(connection),
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={"kid": 7, "kb_name": "人力制度知识库"}
+        ),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        knowledge_build_task_repository=build_task_repository,
+    )
+
+    response = await service.file_build_status(
+        FileBuildStatusRequest(kb_code="hr-policy", file_path="/制度/人事/请假制度.pdf")
+    )
+
+    assert response == {
+        "status": "running",
+        "currentStep": "chunking",
+        "statusDict": [
+            {
+                "standCode": "complete",
+                "standDisplayValue": "已完成",
+                "standDisplayValueEn": "complete",
+            },
+            {
+                "standCode": "failed",
+                "standDisplayValue": "失败",
+                "standDisplayValueEn": "failed",
+            },
+            {
+                "standCode": "running",
+                "standDisplayValue": "构建中",
+                "standDisplayValueEn": "running",
+            },
+        ],
+        "stepDict": [
+            {
+                "standCode": "markdown",
+                "standDisplayValue": "原始文件转 Markdown",
+                "standDisplayValueEn": "markdown",
+            },
+            {
+                "standCode": "chunking",
+                "standDisplayValue": "文档切片",
+                "standDisplayValueEn": "chunking",
+            },
+            {
+                "standCode": "vectorizing",
+                "standDisplayValue": "切片向量化",
+                "standDisplayValueEn": "vectorizing",
+            },
+        ],
+    }
+    assert knowledge_fs_entry_repository.calls == [
+        (
+            "get_file_by_path",
+            {
+                "knowledge_base_id": 7,
+                "full_path": "制度/人事/请假制度.pdf",
+            },
+        )
+    ]
+    assert build_task_repository.calls == [
+        ("get_latest_by_fs_entry_id", {"fs_entry_id": 71})
+    ]
+
+
+async def test_file_build_status_rejects_missing_file():
+    """Build-status should fail when the requested file path does not exist."""
+    connection = FakeConnection()
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    service = KnowledgeBaseService(
+        connection_factory=lambda: _async_return(connection),
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={"kid": 7, "kb_name": "人力制度知识库"}
+        ),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        knowledge_build_task_repository=FakeKnowledgeBuildTaskRepository(),
+    )
+
+    try:
+        await service.file_build_status(
+            FileBuildStatusRequest(kb_code="hr-policy", file_path="/missing.pdf")
+        )
+    except KnowledgeBaseValidationError as exc:
+        assert str(exc) == "file not found: /missing.pdf"
+    else:
+        raise AssertionError("expected KnowledgeBaseValidationError")
 
 
 async def test_download_file_returns_original_bytes(tmp_path):

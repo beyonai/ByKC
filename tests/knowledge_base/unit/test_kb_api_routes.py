@@ -91,6 +91,46 @@ class FakeKBService:
     ):
         return None
 
+    async def file_build_status(self, request):
+        return {
+            "status": "running",
+            "currentStep": "chunking",
+            "statusDict": [
+                {
+                    "standCode": "complete",
+                    "standDisplayValue": "已完成",
+                    "standDisplayValueEn": "complete",
+                },
+                {
+                    "standCode": "failed",
+                    "standDisplayValue": "失败",
+                    "standDisplayValueEn": "failed",
+                },
+                {
+                    "standCode": "running",
+                    "standDisplayValue": "构建中",
+                    "standDisplayValueEn": "running",
+                },
+            ],
+            "stepDict": [
+                {
+                    "standCode": "markdown",
+                    "standDisplayValue": "原始文件转 Markdown",
+                    "standDisplayValueEn": "markdown",
+                },
+                {
+                    "standCode": "chunking",
+                    "standDisplayValue": "文档切片",
+                    "standDisplayValueEn": "chunking",
+                },
+                {
+                    "standCode": "vectorizing",
+                    "standDisplayValue": "切片向量化",
+                    "standDisplayValueEn": "vectorizing",
+                },
+            ],
+        }
+
     async def search_v2(self, request):
         return [
             SearchHit(
@@ -1288,6 +1328,77 @@ def test_file_to_markdown_index_validation_error(monkeypatch):
         "/api/v1/fileToMarkdownIndex",
         json={"knCode": "", "filePath": "/doc.pdf"},
     )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["resultCode"] == "-1"
+    assert body["resultMsg"] == "request validation failed"
+
+
+def test_file_build_status_success(monkeypatch):
+    """POST /api/v1/fileBuildStatus returns the latest build status envelope."""
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/fileBuildStatus",
+        json={"knCode": "1", "filePath": "/制度/人事/请假制度.pdf"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "resultCode": "0",
+        "resultMsg": "success",
+        "resultObject": {
+            "status": "running",
+            "currentStep": "chunking",
+            "statusDict": [
+                {
+                    "standCode": "complete",
+                    "standDisplayValue": "已完成",
+                    "standDisplayValueEn": "complete",
+                },
+                {
+                    "standCode": "failed",
+                    "standDisplayValue": "失败",
+                    "standDisplayValueEn": "failed",
+                },
+                {
+                    "standCode": "running",
+                    "standDisplayValue": "构建中",
+                    "standDisplayValueEn": "running",
+                },
+            ],
+            "stepDict": [
+                {
+                    "standCode": "markdown",
+                    "standDisplayValue": "原始文件转 Markdown",
+                    "standDisplayValueEn": "markdown",
+                },
+                {
+                    "standCode": "chunking",
+                    "standDisplayValue": "文档切片",
+                    "standDisplayValueEn": "chunking",
+                },
+                {
+                    "standCode": "vectorizing",
+                    "standDisplayValue": "切片向量化",
+                    "standDisplayValueEn": "vectorizing",
+                },
+            ],
+        },
+    }
+
+
+def test_file_build_status_validation_error(monkeypatch):
+    """POST /api/v1/fileBuildStatus returns request validation failures."""
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/fileBuildStatus",
+        json={"knCode": "", "filePath": "/制度/人事/请假制度.pdf"},
+    )
+
     assert response.status_code == 200
     body = response.json()
     assert body["resultCode"] == "-1"

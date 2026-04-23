@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 import by_qa.main as main_module
 from by_qa.config import Settings
 from by_qa.core.model_config import ModelConfig
+from by_qa.knowledge_base.api.schemas import FileToMarkdownIndexRequest
 from by_qa.knowledge_base.infrastructure.runtime import (
     build_knowledge_item_search_service,
 )
@@ -53,6 +54,20 @@ class FakeDocumentChunkingService:
                 char_end=len(file_bytes),
             )
         ]
+
+
+class FailingOnceDocumentChunkingService(FakeDocumentChunkingService):
+    """Fails on the first parse attempt and succeeds on the next build."""
+
+    def __init__(self, *, markdown_text: str, embedding: list[float] | None = None):
+        super().__init__(markdown_text=markdown_text, embedding=embedding)
+        self._should_fail = True
+
+    def extract_text_from_file(self, file_bytes: bytes, file_type: str) -> str:  # pylint: disable=unused-argument
+        if self._should_fail:
+            self._should_fail = False
+            raise ValueError("simulated extract failure")
+        return super().extract_text_from_file(file_bytes, file_type)
 
 
 class FakeEmbeddingQueryService:
@@ -247,6 +262,23 @@ def _upload_and_build_file(
     assert build_response.status_code == 200, build_response.text
 
 
+def _file_build_status(
+    client: TestClient,
+    *,
+    kb_code: str,
+    file_path: str,
+):
+    response = client.post(
+        "/api/v1/fileBuildStatus",
+        json={
+            "knCode": kb_code,
+            "filePath": file_path,
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response
+
+
 @pytest.mark.integration
 def test_create_directory_returns_success_then_duplicate_path_conflict(monkeypatch):
     """Directory admin can create a folder once and gets a conflict on duplicate path reuse."""
@@ -397,6 +429,159 @@ def test_upload_and_build_makes_markdown_readable(monkeypatch, tmp_path):
 
     assert markdown_read.status_code == 200
     assert "line2" in markdown_read.json()["resultObject"]["data"]
+
+
+@pytest.mark.integration
+def test_file_build_status_returns_complete_result_after_successful_build(
+    monkeypatch, tmp_path
+):
+    """Successful build should expose the latest complete step and dictionaries."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch,
+        FakeDocumentChunkingService(markdown_text="line1\nline2\nline3\n"),
+    )
+
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
+    file_path = "/Policies/manual.md"
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, kb_name)
+        _create_directory(client, kb_code=kb_code, directory_path="/Policies")
+        _upload_and_build_file(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            file_content=b"line1\nline2\nline3\n",
+        )
+
+        status_response = _file_build_status(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+        )
+
+    payload = status_response.json()
+    assert payload["resultCode"] == "0"
+    assert payload["resultMsg"] == "success"
+    assert payload["resultObject"]["status"] == "complete"
+    assert payload["resultObject"]["currentStep"] == "complete"
+    assert {
+        "standCode": "complete",
+        "standDisplayValue": "已完成",
+        "standDisplayValueEn": "complete",
+    } in payload["resultObject"]["statusDict"]
+    assert {
+        "standCode": "complete",
+        "standDisplayValue": "已完成",
+        "standDisplayValueEn": "complete",
+    } in payload["resultObject"]["stepDict"]
+
+
+@pytest.mark.integration
+def test_file_to_markdown_index_rejects_duplicate_request_while_running(
+    monkeypatch, tmp_path
+):
+    """A second build request should be rejected while the latest task is still running."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
+    file_path = "/Policies/manual.md"
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, kb_name)
+        _create_directory(client, kb_code=kb_code, directory_path="/Policies")
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            file_content=b"alpha\nbeta\n",
+        )
+
+        ingestion_service = asyncio.run(
+            main_module._get_or_build_knowledge_item_ingestion_service()
+        )
+        build_task_id = asyncio.run(
+            ingestion_service.create_file_to_markdown_index_task(
+                FileToMarkdownIndexRequest(kb_code=kb_code, file_path=file_path)
+            )
+        )
+
+        running_status = _file_build_status(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+        )
+        duplicate_response = client.post(
+            "/api/v1/fileToMarkdownIndex",
+            json={"knCode": kb_code, "filePath": file_path},
+        )
+        assert build_task_id > 0
+
+    running_payload = running_status.json()
+    assert running_payload["resultCode"] == "0"
+    assert running_payload["resultObject"]["status"] == "running"
+    assert running_payload["resultObject"]["currentStep"] == "markdown"
+
+    duplicate_payload = duplicate_response.json()
+    assert duplicate_payload["resultCode"] == "-1"
+    assert "build task already exists" in duplicate_payload["resultMsg"]
+
+
+@pytest.mark.integration
+def test_failed_build_status_can_be_retried_to_complete(monkeypatch, tmp_path):
+    """Failed builds should surface failed status first, then allow a successful retry."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch,
+        FailingOnceDocumentChunkingService(markdown_text="retry\nworks\n"),
+    )
+
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
+    file_path = "/Policies/manual.md"
+
+    with TestClient(main_module.app, raise_server_exceptions=False) as client:
+        kb_code = _create_kb(client, kb_name)
+        _create_directory(client, kb_code=kb_code, directory_path="/Policies")
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            file_content=b"retry\nworks\n",
+        )
+
+        first_build = client.post(
+            "/api/v1/fileToMarkdownIndex",
+            json={"knCode": kb_code, "filePath": file_path},
+        )
+        failed_status = _file_build_status(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+        )
+
+        second_build = client.post(
+            "/api/v1/fileToMarkdownIndex",
+            json={"knCode": kb_code, "filePath": file_path},
+        )
+        complete_status = _file_build_status(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+        )
+
+    assert first_build.status_code == 200
+    assert first_build.json()["resultCode"] == "0"
+    assert failed_status.json()["resultObject"]["status"] == "failed"
+    assert failed_status.json()["resultObject"]["currentStep"] == "markdown"
+
+    assert second_build.status_code == 200
+    assert second_build.json()["resultCode"] == "0"
+    assert complete_status.json()["resultObject"]["status"] == "complete"
+    assert complete_status.json()["resultObject"]["currentStep"] == "complete"
 
 
 @pytest.mark.integration

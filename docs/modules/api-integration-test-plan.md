@@ -46,7 +46,10 @@
 | 6 | 目录管理员 | 目录改名影响整棵子树 | `create parent -> create child -> knowledgeItems/import -> update child name -> listDir/glob/readFile old&new` | 新路径生效；旧路径失效；子文件随目录路径变化 | 已写 |
 | 7 | 目录管理员 | 删除非空目录 | `create dir -> knowledgeItems/import -> directories/delete -> listDir -> glob -> readFile -> knowledgeItems/search` | 整个子树从浏览、读取、检索里一起消失 | 已写 |
 | 8 | 目录管理员 | 目录同级重名冲突 | `create /A/B1 -> create /A/B2 -> update B2 to B1 -> listDir(/A)` | 返回 `KB_DIRECTORY_NAME_CONFLICT`；目录树保持不变 | 已写 |
-| 9 | 内容管理员 | 导入单文件并构建索引 | `knowledgeBases/create -> directories/create -> knowledgeItems/import -> fileToMarkdownIndex -> listDir -> readFile(markdown) -> downloadFile(original) -> knowledgeItems/search` | 导入后通过 `fileToMarkdownIndex` 构建，目录可见、markdown 可读、原文件可下载、内容可检索 | 已写 |
+| 9 | 内容管理员 | 导入单文件并构建索引 | `knowledgeBases/create -> directories/create -> knowledgeItems/import -> fileToMarkdownIndex -> listDir -> readFile(markdown) -> downloadFile(original) -> knowledgeItems/search` | 导入后通过 `fileToMarkdownIndex` 构建；接口成功受理后最终可读、可下载、可检索 | 已写 |
+| 9A | 内容管理员 | 查询异步构建状态 | `knowledgeItems/import -> fileToMarkdownIndex -> fileBuildStatus` | `fileToMarkdownIndex` 立即返回受理成功；`fileBuildStatus` 返回 `status/currentStep`，构建完成后为 `complete/complete`，并携带 `statusDict/stepDict` | 已写 |
+| 9B | 内容管理员 | 构建中重复提交同一文件 | `knowledgeItems/import -> fileToMarkdownIndex(first running) -> fileBuildStatus -> fileToMarkdownIndex(second)` | 首次请求创建 `running` 任务；状态查询返回 `running`；重复提交返回 `resultCode=-1` 和“已有构建任务”错误提示 | 已写 |
+| 9C | 内容管理员 | 构建失败后重新触发构建 | `knowledgeItems/import -> fileToMarkdownIndex(fail) -> fileBuildStatus -> fileToMarkdownIndex(retry) -> fileBuildStatus` | 失败后状态查询返回 `failed`；再次触发允许重建；重试成功后状态变为 `complete/complete` | 已写 |
 | 10 | 内容管理员 | ~~用真实知识构建结果分步写入单文件~~ | ~~`write-file -> write-index`~~ | ~~`write-file`/`write-index` 路由已移除，分步写入链路不再存在~~ | 已弃用 |
 | 11 | 内容管理员 | ~~比较原子导入与分步写入的最终行为~~ | ~~`write-file -> write-index` 对比 `knowledgeItems/import`~~ | ~~`write-file`/`write-index` 路由已移除，无需比较~~ | 已弃用 |
 | 12 | 内容管理员 | 路径绑定冲突 | `knowledgeItems/import A:/x.md -> knowledgeItems/import B:/x.md` | 第二次写入失败；原绑定不变 | 已写 |
@@ -98,6 +101,6 @@
 | P1 | 搜索过滤组合扩展 | 当前已覆盖基础多 `knCodeList`/source/type 组合，后续可继续补更复杂组合 |
 | P1 | 配置异常覆盖面扩展 | 当前已覆盖 `knowledgeBases/create`、`listDir`、`readFile`、`knowledgeItems/search`，后续可继续补更多接口 |
 | P1 | 清理弃用测试代码 | `test_api_integration.py`（knowledge_build）及场景 10/11/26 对应的测试代码需清理或移除 |
-| P2 | `fileToMarkdownIndex` 构建失败保护 | 当前已覆盖 import 失败，后续需补充 `fileToMarkdownIndex` 本身的解析失败、切片失败等场景 |
+| P2 | `fileToMarkdownIndex` 构建失败保护扩展 | 已覆盖失败状态落库与失败后重试，后续可继续补充切片失败、向量化失败等更细分场景 |
 | P2 | 生命周期冲突扩展 | 当前已覆盖路径绑定、软删除复用，后续可继续补更多版本化冲突 |
 | P2 | 响应信封格式验证 | 验证所有接口统一使用 `resultCode`/`resultMsg`/`resultObject` 信封格式 |

@@ -65,7 +65,8 @@
 | `POST` | `/api/v1/glob` | 按路径模式匹配 |
 | `POST` | `/api/v1/readFile` | 读取文件内容 |
 | `POST` | `/api/v1/downloadFile` | 下载原始文件 |
-| `POST` | `/api/v1/fileToMarkdownIndex` | 触发知识构建 |
+| `POST` | `/api/v1/fileToMarkdownIndex` | 异步触发知识构建 |
+| `POST` | `/api/v1/fileBuildStatus` | 查询文档构建状态 |
 | `POST` | `/api/v1/knowledgeItems/search` | 知识检索 |
 
 ## 知识库管理
@@ -595,7 +596,15 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
 
 ### `POST /api/v1/fileToMarkdownIndex`
 
-根据文件路径异步构建指定知识库下面的文件，自动完成原始文件转 Markdown、切片和切片向量化处理。
+异步触发指定知识库下文件的构建任务。接口会先检查当前文件是否已存在构建中的任务，再决定是否受理新的构建请求。
+
+后台处理规则：
+
+1. 如果对应文件已存在未完成的构建任务，则不再重复触发构建，直接返回失败响应，`resultCode` 为 `"-1"`，`resultMsg` 返回错误提示。
+2. 如果对应文件上一次构建失败，则重新触发构建。
+3. 如果对应文件不存在未完成的构建任务，则触发构建流程，自动完成原始文件转 Markdown、切片和切片向量化处理。
+
+构建进度和当前处理环节需要通过 `POST /api/v1/fileBuildStatus` 查询。
 
 请求体：`application/json`
 
@@ -622,6 +631,110 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
   "resultObject": {}
 }
 ```
+
+失败响应示例：
+
+```json
+{
+  "resultCode": "-1",
+  "resultMsg": "build task already exists for file: /制度/人事/请假制度.pdf",
+  "resultObject": {}
+}
+```
+
+### `POST /api/v1/fileBuildStatus`
+
+文档构建状态查询。复用 `FileController.fileListByUser` 对应的状态查询链路。
+
+请求体：`application/json`
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `knCode` | string | 是 | 知识库编码，对应 `agt_resource.resource_id` |
+| `filePath` | string | 是 | 文件全路径，最后一级为文件名 |
+
+请求示例：
+
+```json
+{
+  "knCode": "1",
+  "filePath": "/制度/人事/请假制度.pdf"
+}
+```
+
+成功响应示例：
+
+```json
+{
+  "resultCode": "0",
+  "resultMsg": "success",
+  "resultObject": {
+    "status": "processing",
+    "currentStep": "vectorizing",
+    "currentStepStatus": "running",
+    "statusDict": [
+      {
+        "standDisplayValue": "处理中",
+        "standCode": "processing",
+        "standDisplayValueEn": "Processing"
+      },
+      {
+        "standDisplayValue": "成功",
+        "standCode": "success",
+        "standDisplayValueEn": "Success"
+      },
+      {
+        "standDisplayValue": "失败",
+        "standCode": "failed",
+        "standDisplayValueEn": "Failed"
+      }
+    ],
+    "stepDict": [
+      {
+        "standDisplayValue": "原始文件转 Markdown",
+        "standCode": "markdown",
+        "standDisplayValueEn": "Markdown"
+      },
+      {
+        "standDisplayValue": "文档切片",
+        "standCode": "chunking",
+        "standDisplayValueEn": "Chunking"
+      },
+      {
+        "standDisplayValue": "切片向量化",
+        "standCode": "vectorizing",
+        "standDisplayValueEn": "Vectorizing"
+      }
+    ]
+  }
+}
+```
+
+字段说明：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `status` | string | 构建状态 |
+| `currentStep` | string | 当前环节 |
+| `currentStepStatus` | string | 当前环节状态 |
+| `statusDict` | array[object] | 状态字典 |
+| `stepDict` | array[object] | 环节字典 |
+
+`statusDict` 当前支持取值：
+
+| `standCode` | `standDisplayValue` | `standDisplayValueEn` |
+| --- | --- | --- |
+| `processing` | 处理中 | Processing |
+| `success` | 成功 | Success |
+| `failed` | 失败 | Failed |
+
+`stepDict` 当前支持取值：
+
+| `standCode` | `standDisplayValue` | `standDisplayValueEn` |
+| --- | --- | --- |
+| `markdown` | 原始文件转 Markdown | Markdown |
+| `chunking` | 文档切片 | Chunking |
+| `vectorizing` | 切片向量化 | Vectorizing |
 
 失败响应示例：
 

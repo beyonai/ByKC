@@ -135,6 +135,11 @@ class FakeKBService:
                     "standDisplayValue": "切片向量化",
                     "standDisplayValueEn": "vectorizing",
                 },
+                {
+                    "standCode": "complete",
+                    "standDisplayValue": "已完成",
+                    "standDisplayValueEn": "complete",
+                },
             ],
         }
 
@@ -1416,6 +1421,11 @@ def test_file_build_status_success(monkeypatch):
                     "standCode": "vectorizing",
                     "standDisplayValue": "切片向量化",
                     "standDisplayValueEn": "vectorizing",
+                },
+                {
+                    "standCode": "complete",
+                    "standDisplayValue": "已完成",
+                    "standDisplayValueEn": "complete",
                 },
             ],
         },

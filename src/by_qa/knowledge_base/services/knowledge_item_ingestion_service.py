@@ -1,5 +1,6 @@
 """Transactional service for document, chunk, and embedding ingestion."""
 
+import asyncio
 import hashlib
 import mimetypes
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from by_qa.knowledge_base.build_status import (
     BUILD_STATUS_FAILED,
     BUILD_STATUS_RUNNING,
     BUILD_STEP_CHUNKING,
+    BUILD_STEP_COMPLETE,
     BUILD_STEP_MARKDOWN,
     BUILD_STEP_VECTORIZING,
 )
@@ -285,8 +287,10 @@ class KnowledgeItemIngestionService:
                 file_type,
                 len(file_bytes),
             )
-            markdown_content = document_chunking_service.extract_text_from_file(
-                file_bytes, file_type
+            markdown_content = await asyncio.to_thread(
+                document_chunking_service.extract_text_from_file,
+                file_bytes,
+                file_type,
             )
             logger.info(
                 "file_to_markdown_index stage completed: stage=extract_text, md_length=%s",
@@ -308,8 +312,10 @@ class KnowledgeItemIngestionService:
                 "file_to_markdown_index stage started: stage=chunk_and_embed, filename=%s",
                 chunk_filename,
             )
-            chunks = document_chunking_service.chunk_and_embed(
-                markdown_bytes, filename=chunk_filename
+            chunks = await asyncio.to_thread(
+                document_chunking_service.chunk_and_embed,
+                markdown_bytes,
+                filename=chunk_filename,
             )
             logger.info(
                 "file_to_markdown_index stage completed: stage=chunk_and_embed, chunk_count=%s",
@@ -373,7 +379,7 @@ class KnowledgeItemIngestionService:
                 cursor,
                 task_id=build_task_id,
                 status=BUILD_STATUS_COMPLETE,
-                current_step=BUILD_STEP_VECTORIZING,
+                current_step=BUILD_STEP_COMPLETE,
                 finished=True,
             )
 

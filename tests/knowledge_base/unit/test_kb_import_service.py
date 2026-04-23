@@ -18,6 +18,9 @@ from by_qa.knowledge_base.api.schemas import (
     UpdateDirectoryRequest,
     UpdateKnowledgeBaseRequest,
 )
+from by_qa.knowledge_base.services import (
+    knowledge_item_ingestion_service as ingestion_service_module,
+)
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
 from by_qa.knowledge_base.services.knowledge_base_service import KnowledgeBaseService
 from by_qa.knowledge_base.services.knowledge_item_ingestion_service import (
@@ -1939,6 +1942,11 @@ async def test_file_build_status_returns_latest_task_for_file():
                 "standDisplayValue": "切片向量化",
                 "standDisplayValueEn": "vectorizing",
             },
+            {
+                "standCode": "complete",
+                "standDisplayValue": "已完成",
+                "standDisplayValueEn": "complete",
+            },
         ],
     }
     assert knowledge_fs_entry_repository.calls == [
@@ -2365,11 +2373,69 @@ async def test_file_to_markdown_index_success():
             {
                 "task_id": 9901,
                 "status": "complete",
-                "current_step": "vectorizing",
+                "current_step": "complete",
                 "error_message": None,
                 "finished": True,
             },
         ),
+    ]
+
+
+async def test_file_to_markdown_index_offloads_sync_work_to_threads(monkeypatch):
+    """Heavy sync extraction and chunking work should be offloaded via asyncio.to_thread."""
+    kb_repo = FakeKnowledgeBaseRepository(
+        default_lookup_result={
+            "kid": 7,
+            "kb_code": "1",
+            "kb_name": "TestKB",
+            "status": "ACTIVE",
+        }
+    )
+    fs_repo = FakeKnowledgeFsEntryRepository()
+    fs_repo.file_entry_by_path = {
+        "制度/人事/请假制度.pdf": {
+            "kid": 71,
+            "entry_type": "FILE",
+            "name": "请假制度.pdf",
+            "file_bucket_name": "test-bucket",
+            "file_object_key": "kb/7/fs-entry/71/original.pdf",
+            "mime_type": "application/pdf",
+        }
+    }
+    build_task_repo = FakeKnowledgeBuildTaskRepository()
+    obj_storage = FakeObjectStorage()
+    obj_storage.object_payloads[("test-bucket", "kb/7/fs-entry/71/original.pdf")] = (
+        b"fake-pdf-bytes"
+    )
+    chunking_service = FakeDocumentChunkingService()
+    service = KnowledgeItemIngestionService(
+        connection_factory=lambda: _async_return(FakeConnection()),
+        knowledge_base_repository=kb_repo,
+        knowledge_fs_entry_repository=fs_repo,
+        knowledge_build_task_repository=build_task_repo,
+        knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        object_storage=obj_storage,
+        embedding_dimension=3,
+    )
+    calls = []
+
+    async def fake_to_thread(func, /, *args, **kwargs):
+        calls.append((func.__name__, args, kwargs))
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(ingestion_service_module.asyncio, "to_thread", fake_to_thread)
+
+    await service.file_to_markdown_index(
+        FileToMarkdownIndexRequest.model_validate(
+            {"knCode": "1", "filePath": "/制度/人事/请假制度.pdf"}
+        ),
+        document_chunking_service=chunking_service,
+    )
+
+    assert [item[0] for item in calls] == [
+        "extract_text_from_file",
+        "chunk_and_embed",
     ]
 
 

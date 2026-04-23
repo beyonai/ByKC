@@ -3,7 +3,6 @@
 import asyncio
 import json
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 from langchain.tools import tool
@@ -138,14 +137,15 @@ async def test_single_hop_subgraph_handles_parallel_search_calls_without_state_c
     probe = _ParallelSearchProbe()
     llm_service = _FakeLLMService(_single_hop_model())
 
-    with patch(
-        "by_qa.qa.instant.graphs.single_hop.create_checkpointer_async",
-        return_value=None,
-    ):
-        graph = await build_single_hop_subgraph(
-            config={"tools": [probe.build_tool()]},
-            llm_service=llm_service,
-        )
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    graph = await build_single_hop_subgraph(
+        config={"tools": [probe.build_tool()]},
+        llm_service=llm_service,
+        checkpointer=InMemorySaver(),
+    )
+
+    checkpointer_config = {"configurable": {"thread_id": "test"}}
 
     result = await graph.ainvoke(
         {
@@ -156,7 +156,8 @@ async def test_single_hop_subgraph_handles_parallel_search_calls_without_state_c
             "messages": [HumanMessage(content="go")],
             "cited_indices": [],
             "result_counter": 0,
-        }
+        },
+        config=checkpointer_config,
     )
 
     assert probe.max_active >= 2
@@ -169,14 +170,15 @@ async def test_multi_hop_subgraph_handles_parallel_search_calls_without_state_co
     probe = _ParallelSearchProbe()
     llm_service = _FakeLLMService(_multi_hop_model())
 
-    with patch(
-        "by_qa.qa.instant.graphs.multi_hop.create_checkpointer_async",
-        return_value=None,
-    ):
-        graph = await build_multi_hop_subgraph(
-            config={"tools": [probe.build_tool()]},
-            llm_service=llm_service,
-        )
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    graph = await build_multi_hop_subgraph(
+        config={"tools": [probe.build_tool()]},
+        llm_service=llm_service,
+        checkpointer=InMemorySaver(),
+    )
+
+    checkpointer_config = {"configurable": {"thread_id": "test"}}
 
     result = await graph.ainvoke(
         {
@@ -197,6 +199,7 @@ async def test_multi_hop_subgraph_handles_parallel_search_calls_without_state_co
             "sub_answers": [],
             "result_counter": 0,
         },
+        config=checkpointer_config,
         context=InstantSearchRuntimeContext(
             retrieval=InstantSearchRetrievalConfig(),
             llm_service=llm_service,

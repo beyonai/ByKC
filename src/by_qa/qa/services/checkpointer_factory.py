@@ -206,6 +206,25 @@ async def create_checkpointer_async(
     )
 
 
+async def close_checkpointer_async(
+    checkpointer: BaseCheckpointSaver | None,
+) -> None:
+    """Close the database connection held by an async checkpointer, if any."""
+    if checkpointer is None:
+        return
+    conn = getattr(checkpointer, "conn", None)
+    if conn is None:
+        return
+    close = getattr(conn, "close", None)
+    if close is None:
+        return
+    import asyncio
+
+    result = close()
+    if asyncio.iscoroutine(result) or asyncio.isfuture(result):
+        await result
+
+
 def get_checkpointer_backend_name(checkpointer: BaseCheckpointSaver) -> str:
     """Get the backend name from a checkpointer instance."""
     if SqliteSaver is not None and isinstance(

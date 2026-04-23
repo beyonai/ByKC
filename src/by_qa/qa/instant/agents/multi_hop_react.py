@@ -163,10 +163,12 @@ async def build_multi_hop_agent_graph(
     extra_tools: List[Any] | None = None,
     extra_middleware: List[Any] | None = None,
     llm_service: LLMService,
+    checkpointer: Any | None = None,
 ):
     """Build the configurable multi-hop agent graph."""
     llm = await llm_service._get_streaming_model("retrieval")
-    checkpointer = await create_checkpointer_async(get_settings())
+    if checkpointer is None:
+        checkpointer = await create_checkpointer_async(get_settings())
     tools = [next_hop, finalize] + list(extra_tools or [])
     middleware = [
         ToolCallGuardMiddleware(),

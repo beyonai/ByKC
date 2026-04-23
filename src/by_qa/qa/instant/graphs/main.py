@@ -2,6 +2,7 @@
 
 from dataclasses import fields
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
@@ -53,6 +54,7 @@ def route_worker_output(state: InstantSearchState) -> str:
 
 async def build_instant_search_graph(
     config: InstantSearchAgentConfig | dict | None = None,
+    checkpointer: BaseCheckpointSaver | None = None,
 ):
     """Build the instant-search main graph."""
     settings = get_settings()
@@ -111,10 +113,10 @@ async def build_instant_search_graph(
     config_with_providers["tool_providers"] = merged_providers
 
     single_hop_worker = await build_single_hop_subgraph(
-        config=config_with_providers, llm_service=llm_service
+        config=config_with_providers, llm_service=llm_service, checkpointer=checkpointer
     )
     multi_hop_worker = await build_multi_hop_subgraph(
-        config=config_with_providers, llm_service=llm_service
+        config=config_with_providers, llm_service=llm_service, checkpointer=checkpointer
     )
     builder.add_node(NodeNames.SINGLE_HOP_WORKER.value, single_hop_worker)
     builder.add_node(NodeNames.MULTI_HOP_WORKER.value, multi_hop_worker)
@@ -149,7 +151,8 @@ async def build_instant_search_graph(
     builder.add_edge(NodeNames.SUBANSWER_AGGREGATOR.value, END)
     builder.add_edge(NodeNames.FINAL_ANSWER.value, END)
 
-    checkpointer = await create_checkpointer_async(settings)
+    if checkpointer is None:
+        checkpointer = await create_checkpointer_async(settings)
     return builder.compile(checkpointer=checkpointer)
 
 

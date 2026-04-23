@@ -118,12 +118,13 @@ async def single_hop_summary_node(state: SingleHopState) -> Dict[str, Any]:
     }
 
 
-async def build_single_hop_subgraph(config=None, llm_service=None):
+async def build_single_hop_subgraph(config=None, llm_service=None, checkpointer=None):
     """Build single-hop subgraph using dedicated agent assembly."""
     if llm_service is None:
         raise ValueError("llm_service is required to build the single-hop subgraph")
     settings = get_settings()
-    checkpointer = await create_checkpointer_async(settings)
+    if checkpointer is None:
+        checkpointer = await create_checkpointer_async(settings)
     config_data = config or {}
     prompt_overrides = getattr(config_data, "prompt_overrides", None)
     tool_providers = getattr(config_data, "tool_providers", None)
@@ -146,6 +147,7 @@ async def build_single_hop_subgraph(config=None, llm_service=None):
         extra_tools=[*tools, *provider_tools],
         extra_middleware=_normalize_to_list(agent_middleware.get("single_hop")),
         llm_service=llm_service,
+        checkpointer=checkpointer,
     )
 
     workflow = StateGraph(SingleHopState, context_schema=InstantSearchRuntimeContext)

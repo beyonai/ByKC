@@ -124,7 +124,7 @@ async def _run_async(args: argparse.Namespace) -> None:
         stream_tokens=not args.no_stream,
         verbose_events=args.verbose_events,
     )
-    engine = InstantQAEngine(
+    async with InstantQAEngine(
         config={
             "retrieval": {
                 "knowledge_bases": [
@@ -143,11 +143,11 @@ async def _run_async(args: argparse.Namespace) -> None:
                 "text_top_k": max(args.top_k, 20),
             }
         }
-    )
-    request = CoreInput(query=args.query)
-    async for event in engine.stream_search(request):
-        renderer.render(event)
-    renderer.finish()
+    ) as engine:
+        request = CoreInput(query=args.query)
+        async for event in engine.stream_search(request):
+            renderer.render(event)
+        renderer.finish()
 
 
 def main() -> None:

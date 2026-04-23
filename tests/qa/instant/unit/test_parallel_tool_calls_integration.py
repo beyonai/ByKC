@@ -138,15 +138,9 @@ async def test_single_hop_subgraph_handles_parallel_search_calls_without_state_c
     probe = _ParallelSearchProbe()
     llm_service = _FakeLLMService(_single_hop_model())
 
-    with (
-        patch(
-            "by_qa.qa.instant.graphs.single_hop.create_checkpointer_async",
-            return_value=None,
-        ),
-        patch(
-            "by_qa.qa.instant.agents.single_hop_react.create_checkpointer_async",
-            return_value=None,
-        ),
+    with patch(
+        "by_qa.qa.instant.graphs.single_hop.create_checkpointer_async",
+        return_value=None,
     ):
         graph = await build_single_hop_subgraph(
             config={"tools": [probe.build_tool()]},
@@ -175,15 +169,9 @@ async def test_multi_hop_subgraph_handles_parallel_search_calls_without_state_co
     probe = _ParallelSearchProbe()
     llm_service = _FakeLLMService(_multi_hop_model())
 
-    with (
-        patch(
-            "by_qa.qa.instant.graphs.multi_hop.create_checkpointer_async",
-            return_value=None,
-        ),
-        patch(
-            "by_qa.qa.instant.agents.multi_hop_react.create_checkpointer_async",
-            return_value=None,
-        ),
+    with patch(
+        "by_qa.qa.instant.graphs.multi_hop.create_checkpointer_async",
+        return_value=None,
     ):
         graph = await build_multi_hop_subgraph(
             config={"tools": [probe.build_tool()]},

@@ -26,6 +26,10 @@ from by_qa.qa.instant.runtime.operation_registry import (
     OperationType,
 )
 from by_qa.qa.instant.state import InstantSearchState
+from by_qa.qa.services.checkpointer_factory import (
+    close_checkpointer_async,
+    create_checkpointer_async,
+)
 
 USER_VISIBLE_ROLES: dict[str, list[str] | None] = {
     NodeNames.DECOMPOSER.value: None,
@@ -119,9 +123,19 @@ class InstantQAEngine:
         self._checkpointer: BaseCheckpointSaver | None = None
         self._runtime_context: InstantSearchRuntimeContext | None = None
 
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+        return False
+
     async def _get_graph(self):
         if self._graph is None:
-            self._graph = await build_instant_search_graph(config=self.config)
+            self._checkpointer = await create_checkpointer_async(self._settings)
+            self._graph = await build_instant_search_graph(
+                config=self.config, checkpointer=self._checkpointer
+            )
         return self._graph
 
     def _build_runtime_context(self) -> InstantSearchRuntimeContext:
@@ -141,6 +155,12 @@ class InstantQAEngine:
         if self._runtime_context is None:
             self._runtime_context = self._build_runtime_context()
         return self._runtime_context
+
+    async def close(self) -> None:
+        """Release the database connection held by the checkpointer."""
+        await close_checkpointer_async(self._checkpointer)
+        self._checkpointer = None
+        self._graph = None
 
     async def stream_search(
         self, input_data: CoreInput

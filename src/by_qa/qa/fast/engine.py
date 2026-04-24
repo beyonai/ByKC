@@ -90,6 +90,7 @@ class FastQAEngine:
         try:
             initial_state = FastQAState(
                 original_query=input_data.query,
+                sub_queries=[],
                 rewritten_query="",
                 retrieval_results=[],
                 final_answer="",

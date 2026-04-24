@@ -111,6 +111,7 @@ async def test_stream_search_passes_runtime_context_and_fast_thread_id():
     ):
         del event
 
+    assert captured["initial_state"]["sub_queries"] == []
     assert captured["initial_state"]["original_query"] == "Test"
     assert captured["config"]["configurable"]["thread_id"] == "fast_qa_s1"
     assert captured["config"]["run_id"] == "m1"

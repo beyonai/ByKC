@@ -101,7 +101,7 @@ async def test_answer_synthesizer_answers_from_retrieval_context():
 
     answer = await agent.answer(
         original_query="怎么报销发票",
-        rewritten_query="怎么报销发票",
+        sub_queries=[{"query_text": "怎么报销发票"}],
         retrieval_results=[
             {
                 "content": "发票报销需要提交审批。",

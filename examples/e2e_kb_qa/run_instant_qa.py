@@ -6,7 +6,13 @@ import argparse
 import asyncio
 import os
 
-from common import ExampleError, pretty_print, require_environment, runtime_dir
+from common import (
+    ExampleError,
+    load_example_kb_state,
+    pretty_print,
+    require_environment,
+    runtime_dir,
+)
 
 
 class EventRenderer:
@@ -112,7 +118,7 @@ async def _run_async(args: argparse.Namespace) -> None:
     from by_qa.qa.common import OperationType
 
     root = runtime_dir(args.runtime_dir)
-    # kb_code, kb_name = load_example_kb_state(root)
+    kb_code, kb_name = load_example_kb_state(root)
 
     require_environment(["LLM_API_KEY"])
     os.environ.setdefault("AGENT_DATA_PATH", str(root / "agent_data"))
@@ -122,8 +128,8 @@ async def _run_async(args: argparse.Namespace) -> None:
     retrieval_config = {
         "knowledge_bases": [
             {
-                "kb_code": "1",
-                "kb_name": "1",
+                "kb_code": kb_code,
+                "kb_name": kb_name,
                 "kb_description": "Packaged end-to-end example knowledge base.",
                 "service_name": os.getenv("SERVICE_NAME", "by-qa-manager"),
                 "operations": {

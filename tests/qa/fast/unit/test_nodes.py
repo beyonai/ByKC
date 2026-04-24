@@ -62,6 +62,7 @@ async def test_retrieve_node_calls_public_search_once(monkeypatch):
     result = await retrieve_node(
         {
             "original_query": "原问题",
+            "sub_queries": [],
             "rewritten_query": "完整问题",
             "messages": [],
             "retrieval_results": [],
@@ -233,3 +234,79 @@ async def test_rewrite_node_produces_single_sub_query_for_simple_question(monkey
         {"query_id": "sq_1", "query_text": "广州2024年的营收是多少"}
     ]
     assert result["rewritten_query"] == "广州2024年的营收是多少"
+
+
+@pytest.mark.asyncio
+async def test_retrieve_node_calls_search_for_each_sub_query(monkeypatch):
+    call_log = []
+
+    class FakeDispatcher:
+        def __init__(self, knowledge_bases):
+            self.knowledge_bases = knowledge_bases
+
+        async def search_knowledge(self, query, runtime_context):  # pylint: disable=unused-argument
+            call_log.append(query)
+            return [{"content": f"result for {query}", "chunk_id": query}]
+
+    monkeypatch.setattr(
+        "by_qa.qa.fast.nodes.retrieve.ServiceToolDispatcher", FakeDispatcher
+    )
+    runtime_context = QARuntimeContext(
+        retrieval=QARetrievalConfig(knowledge_bases=[]),
+        llm_service=FakeLLMService(),
+    )
+    result = await retrieve_node(
+        {
+            "original_query": "广州和北京的营收各是多少",
+            "sub_queries": [
+                {"query_id": "sq_1", "query_text": "广州的营收是多少"},
+                {"query_id": "sq_2", "query_text": "北京的营收是多少"},
+            ],
+            "rewritten_query": "广州的营收是多少",
+            "retrieval_results": [],
+            "final_answer": "",
+            "messages": [],
+            "rewrite_time": None,
+            "retrieval_time": None,
+            "answer_time": None,
+        },
+        runtime=SimpleNamespace(context=runtime_context),
+    )
+    assert set(call_log) == {"广州的营收是多少", "北京的营收是多少"}
+    assert len(result["retrieval_results"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_retrieve_node_deduplicates_by_chunk_id(monkeypatch):
+    class FakeDispatcher:
+        def __init__(self, knowledge_bases):
+            pass
+
+        async def search_knowledge(self, query, runtime_context):  # pylint: disable=unused-argument
+            return [{"content": "共同结果", "chunk_id": "dup_chunk"}]
+
+    monkeypatch.setattr(
+        "by_qa.qa.fast.nodes.retrieve.ServiceToolDispatcher", FakeDispatcher
+    )
+    runtime_context = QARuntimeContext(
+        retrieval=QARetrievalConfig(knowledge_bases=[]),
+        llm_service=FakeLLMService(),
+    )
+    result = await retrieve_node(
+        {
+            "original_query": "test",
+            "sub_queries": [
+                {"query_id": "sq_1", "query_text": "问题A"},
+                {"query_id": "sq_2", "query_text": "问题B"},
+            ],
+            "rewritten_query": "问题A",
+            "retrieval_results": [],
+            "final_answer": "",
+            "messages": [],
+            "rewrite_time": None,
+            "retrieval_time": None,
+            "answer_time": None,
+        },
+        runtime=SimpleNamespace(context=runtime_context),
+    )
+    assert len(result["retrieval_results"]) == 1

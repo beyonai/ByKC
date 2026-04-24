@@ -9,7 +9,6 @@ def test_can_import_qa_instant_modules():
     assert hasattr(instant_module, "InstantSearchState")
     assert hasattr(instant_module, "InstantQAState")
 
-    assert importlib.import_module("by_qa.qa.instant.config")
     assert importlib.import_module("by_qa.qa.instant.state")
 
     instant_types = importlib.import_module("by_qa.qa.instant.types")

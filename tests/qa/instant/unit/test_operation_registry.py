@@ -1,4 +1,4 @@
-from by_qa.qa.instant.runtime.operation_registry import (
+from by_qa.qa.common.operation_registry import (
     OPERATION_REGISTRY,
     GlobInput,
     ListDirInput,

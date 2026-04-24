@@ -1,13 +1,13 @@
 # tests/qa/instant/unit/test_config.py
 import pytest
 
-from by_qa.qa.instant.config import InstantQARetrievalConfig, KnowledgeBaseConfig
-from by_qa.qa.instant.runtime.operation_registry import OperationType
+from by_qa.qa.common.config import KnowledgeBaseConfig, QARetrievalConfig
+from by_qa.qa.common.operation_registry import OperationType
 
 
 def test_knowledge_base_config_requires_service_name():
     with pytest.raises(ValueError, match="service_name"):
-        InstantQARetrievalConfig(
+        QARetrievalConfig(
             knowledge_bases=[
                 {
                     "kb_code": "hr-policy",
@@ -22,7 +22,7 @@ def test_knowledge_base_config_requires_service_name():
 
 
 def test_knowledge_base_config_accepts_operations_dict():
-    config = InstantQARetrievalConfig(
+    config = QARetrievalConfig(
         knowledge_bases=[
             KnowledgeBaseConfig(
                 kb_code="kb1",
@@ -43,7 +43,7 @@ def test_knowledge_base_config_accepts_operations_dict():
 
 
 def test_knowledge_base_config_accepts_dict_input():
-    config = InstantQARetrievalConfig(
+    config = QARetrievalConfig(
         knowledge_bases=[
             {
                 "kb_code": "kb1",
@@ -60,7 +60,7 @@ def test_knowledge_base_config_accepts_dict_input():
 
 
 def test_knowledge_base_config_empty_operations_is_valid():
-    config = InstantQARetrievalConfig(
+    config = QARetrievalConfig(
         knowledge_bases=[
             KnowledgeBaseConfig(kb_code="kb1", kb_name="KB1", service_name="svc-a")
         ]

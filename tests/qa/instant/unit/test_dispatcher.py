@@ -5,19 +5,14 @@ from unittest.mock import patch
 
 import pytest
 
-from by_qa.qa.instant.config import InstantQARetrievalConfig, KnowledgeBaseConfig
-from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
-from by_qa.qa.instant.runtime.dispatcher import ServiceToolDispatcher
-from by_qa.qa.instant.runtime.operation_registry import (
-    OPERATION_REGISTRY,
-    OperationType,
-)
+from by_qa.qa.common.config import KnowledgeBaseConfig, QARetrievalConfig
+from by_qa.qa.common.context import QARuntimeContext
+from by_qa.qa.common.operation_registry import OPERATION_REGISTRY, OperationType
+from by_qa.qa.tools.knowledge_tools import ServiceToolDispatcher
 
 
-def _make_context(*kbs: KnowledgeBaseConfig) -> InstantSearchRuntimeContext:
-    return InstantSearchRuntimeContext(
-        retrieval=InstantQARetrievalConfig(knowledge_bases=list(kbs))
-    )
+def _make_context(*kbs: KnowledgeBaseConfig) -> QARuntimeContext:
+    return QARuntimeContext(retrieval=QARetrievalConfig(knowledge_bases=list(kbs)))
 
 
 def _kb(kb_code: str, service: str, ops: dict) -> KnowledgeBaseConfig:
@@ -88,7 +83,7 @@ async def test_dispatch_search_groups_by_service_and_posts():
         }
 
     with patch(
-        "by_qa.qa.instant.runtime.dispatcher.post_discovered_json",
+        "by_qa.qa.tools.knowledge_tools.post_discovered_json",
         side_effect=fake_post,
     ):
         results = await dispatcher._dispatch(
@@ -125,7 +120,7 @@ async def test_dispatch_search_filters_by_kn_code_list():
         return {"resultCode": "0", "resultMsg": "success", "resultObject": {"data": []}}
 
     with patch(
-        "by_qa.qa.instant.runtime.dispatcher.post_discovered_json",
+        "by_qa.qa.tools.knowledge_tools.post_discovered_json",
         side_effect=fake_post,
     ):
         await dispatcher._dispatch(
@@ -155,7 +150,7 @@ async def test_dispatch_search_normalizes_header_values_to_strings():
         return {"resultCode": "0", "resultMsg": "success", "resultObject": {"data": []}}
 
     with patch(
-        "by_qa.qa.instant.runtime.dispatcher.post_discovered_json",
+        "by_qa.qa.tools.knowledge_tools.post_discovered_json",
         side_effect=fake_post,
     ):
         await dispatcher._dispatch(
@@ -183,7 +178,7 @@ async def test_dispatch_list_dir_single_post():
         }
 
     with patch(
-        "by_qa.qa.instant.runtime.dispatcher.post_discovered_json",
+        "by_qa.qa.tools.knowledge_tools.post_discovered_json",
         side_effect=fake_post,
     ):
         results = await dispatcher._dispatch(
@@ -219,7 +214,7 @@ async def test_dispatch_single_kb_normalizes_header_values_to_strings():
         return {"resultCode": "0", "resultMsg": "success", "resultObject": {"data": []}}
 
     with patch(
-        "by_qa.qa.instant.runtime.dispatcher.post_discovered_json",
+        "by_qa.qa.tools.knowledge_tools.post_discovered_json",
         side_effect=fake_post,
     ):
         await dispatcher._dispatch(
@@ -245,7 +240,7 @@ async def test_dispatch_single_kb_returns_raw_response_on_api_error():
         return api_error_resp
 
     with patch(
-        "by_qa.qa.instant.runtime.dispatcher.post_discovered_json",
+        "by_qa.qa.tools.knowledge_tools.post_discovered_json",
         side_effect=fake_post,
     ):
         results = await dispatcher._dispatch(
@@ -265,7 +260,7 @@ async def test_dispatch_single_kb_returns_error_entry_on_service_exception():
         raise RuntimeError("service down")
 
     with patch(
-        "by_qa.qa.instant.runtime.dispatcher.post_discovered_json",
+        "by_qa.qa.tools.knowledge_tools.post_discovered_json",
         side_effect=fake_post,
     ):
         results = await dispatcher._dispatch(
@@ -329,7 +324,7 @@ async def test_dispatch_search_returns_error_for_unauthorized_kb_codes():
         return {"resultCode": "0", "resultMsg": "success", "resultObject": {"data": []}}
 
     with patch(
-        "by_qa.qa.instant.runtime.dispatcher.post_discovered_json",
+        "by_qa.qa.tools.knowledge_tools.post_discovered_json",
         side_effect=fake_post,
     ):
         results = await dispatcher._dispatch(
@@ -358,7 +353,7 @@ async def test_dispatch_search_returns_error_entry_on_service_exception():
         raise ConnectionError("timeout")
 
     with patch(
-        "by_qa.qa.instant.runtime.dispatcher.post_discovered_json",
+        "by_qa.qa.tools.knowledge_tools.post_discovered_json",
         side_effect=fake_post,
     ):
         results = await dispatcher._dispatch(
@@ -388,7 +383,7 @@ async def test_dispatch_search_returns_error_entry_on_api_error():
         }
 
     with patch(
-        "by_qa.qa.instant.runtime.dispatcher.post_discovered_json",
+        "by_qa.qa.tools.knowledge_tools.post_discovered_json",
         side_effect=fake_post,
     ):
         results = await dispatcher._dispatch(

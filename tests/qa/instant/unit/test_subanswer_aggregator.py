@@ -4,9 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from by_qa.qa.instant.config import InstantQARetrievalConfig
+from by_qa.qa.common.config import QARetrievalConfig
+from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.instant.nodes.subanswer_aggregator import subanswer_aggregator_node
-from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
 
 
 class FakeLLMService:
@@ -22,8 +22,8 @@ async def test_subanswer_aggregator_logs_generated_final_answer(monkeypatch):
         lambda message: info_calls.append(message),
     )
     runtime = SimpleNamespace(
-        context=InstantSearchRuntimeContext(
-            retrieval=InstantQARetrievalConfig(),
+        context=QARuntimeContext(
+            retrieval=QARetrievalConfig(),
             llm_service=FakeLLMService(),
         )
     )

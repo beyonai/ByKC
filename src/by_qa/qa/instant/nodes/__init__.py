@@ -1,6 +1,6 @@
 """Instant-search node implementations owned by the capability package."""
 
-from by_qa.qa.instant.nodes.context_manager import context_manager_node
+from by_qa.qa.common.context_manager import context_manager_node
 from by_qa.qa.instant.nodes.decomposer import decomposer_node
 from by_qa.qa.instant.nodes.final_answer import final_answer_from_messages_node
 from by_qa.qa.instant.nodes.node_enum import NodeNames

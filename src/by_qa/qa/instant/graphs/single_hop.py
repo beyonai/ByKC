@@ -7,9 +7,9 @@ from langgraph.graph import END, StateGraph
 
 from by_qa.config import get_settings
 from by_qa.core.logger import info
+from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.instant.agents.single_hop_react import build_single_hop_agent_graph
 from by_qa.qa.instant.nodes.node_enum import NodeNames
-from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
 from by_qa.qa.instant.state import SingleHopState, SubAnswer
 from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
 
@@ -150,7 +150,7 @@ async def build_single_hop_subgraph(config=None, llm_service=None, checkpointer=
         checkpointer=checkpointer,
     )
 
-    workflow = StateGraph(SingleHopState, context_schema=InstantSearchRuntimeContext)
+    workflow = StateGraph(SingleHopState, context_schema=QARuntimeContext)
     workflow.add_node(NodeNames.SINGLE_HOP_ENTRY.value, single_hop_entry_node)
     workflow.add_node(NodeNames.SINGLE_HOP_AGENT.value, agent_graph)
     workflow.add_node(NodeNames.SINGLE_HOP_SUMMARY.value, single_hop_summary_node)

@@ -1,5 +1,4 @@
-# src/by_qa/qa/instant/runtime/dispatcher.py
-"""ServiceToolDispatcher: generates LangGraph tools from KnowledgeBaseConfig.operations."""
+"""Knowledge-base tool builders and tool-call middleware."""
 
 from __future__ import annotations
 
@@ -19,9 +18,9 @@ from by_qa.core.exceptions import (
     OperationNotSupportedError,
 )
 from by_qa.core.logger import error, info
-from by_qa.qa.instant.config import KnowledgeBaseConfig
-from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
-from by_qa.qa.instant.runtime.operation_registry import (
+from by_qa.qa.common.config import KnowledgeBaseConfig
+from by_qa.qa.common.context import QARuntimeContext
+from by_qa.qa.common.operation_registry import (
     OPERATION_REGISTRY,
     OperationSpec,
     OperationType,
@@ -138,9 +137,7 @@ class ServiceToolDispatcher:
             {"model_config": ConfigDict(extra="allow", populate_by_name=True)},
         )
 
-        async def _fn(
-            runtime: ToolRuntime[InstantSearchRuntimeContext], **kwargs: Any
-        ) -> str:
+        async def _fn(runtime: ToolRuntime[QARuntimeContext], **kwargs: Any) -> str:
             # kwargs keys are snake_case (Pydantic field names after validation).
             # Re-serialize to camelCase so the API receives the expected field names.
             camel_payload = spec.input_schema.model_validate(kwargs).model_dump(
@@ -159,7 +156,7 @@ class ServiceToolDispatcher:
         self,
         operation_type: OperationType,
         payload: dict[str, Any],
-        runtime_context: InstantSearchRuntimeContext,
+        runtime_context: QARuntimeContext,
     ) -> Any:
         logger.info(
             "[dispatcher] dispatch: operation_type=%s payload=%s",
@@ -173,7 +170,7 @@ class ServiceToolDispatcher:
     async def _dispatch_search(
         self,
         payload: dict[str, Any],
-        runtime_context: InstantSearchRuntimeContext,
+        runtime_context: QARuntimeContext,
     ) -> list[dict[str, Any]]:
         kbs = runtime_context.retrieval.knowledge_bases
         authorized_codes = {kb.kb_code for kb in kbs}
@@ -280,7 +277,7 @@ class ServiceToolDispatcher:
         self,
         operation_type: OperationType,
         payload: dict[str, Any],
-        runtime_context: InstantSearchRuntimeContext,
+        runtime_context: QARuntimeContext,
     ) -> dict[str, Any]:
         kn_code = payload.get("kn_code") or payload.get("knCode", "")
         kb = next(

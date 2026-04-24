@@ -6,11 +6,8 @@ import json
 import pytest
 from langchain_core.messages import ToolMessage
 
-from by_qa.qa.instant.runtime.dispatcher import DispatcherToolMiddleware
-from by_qa.qa.instant.runtime.operation_registry import (
-    OPERATION_REGISTRY,
-    OperationType,
-)
+from by_qa.qa.common.operation_registry import OPERATION_REGISTRY, OperationType
+from by_qa.qa.tools.knowledge_tools import DispatcherToolMiddleware
 
 
 def _make_request(*, state: dict, run_id: str, thread_id: str, tool_call_id: str):

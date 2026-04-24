@@ -7,7 +7,7 @@ from langchain_core.messages import HumanMessage
 
 from by_qa.core.logger import info
 from by_qa.qa.agents.query_decomposer import DecompositionResult, QueryDecomposerAgent
-from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
+from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.instant.state import InstantSearchState
 
 try:
@@ -44,7 +44,7 @@ def _extract_user_queries(messages: List[Any], max_turns: int = 5) -> str:
 
 
 async def decomposer_node(
-    state: InstantSearchState, runtime: Runtime[InstantSearchRuntimeContext] = None
+    state: InstantSearchState, runtime: Runtime[QARuntimeContext] = None
 ) -> Dict[str, Any]:
     start_time = time.time()
     original_query = state["original_query"]

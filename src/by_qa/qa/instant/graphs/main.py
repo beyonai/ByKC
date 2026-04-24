@@ -7,19 +7,16 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
 from by_qa.config import get_settings
-from by_qa.qa.instant.config import (
-    InstantSearchAgentConfig,
-    InstantSearchRetrievalConfig,
-)
+from by_qa.qa.common.config import QAEngineConfig, QARetrievalConfig
+from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.instant.graphs.multi_hop import build_multi_hop_subgraph
 from by_qa.qa.instant.graphs.single_hop import build_single_hop_subgraph
 from by_qa.qa.instant.nodes import NodeNames, name2node
-from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
-from by_qa.qa.instant.runtime.dispatcher import ServiceToolDispatcher
 from by_qa.qa.instant.runtime.factories import wrap_node
 from by_qa.qa.instant.state import InstantSearchState
 from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
 from by_qa.qa.services.llm_service import LLMService
+from by_qa.qa.tools.knowledge_tools import ServiceToolDispatcher
 
 
 def dispatch_subgraph_workers(state: InstantSearchState):
@@ -53,7 +50,7 @@ def route_worker_output(state: InstantSearchState) -> str:
 
 
 async def build_instant_search_graph(
-    config: InstantSearchAgentConfig | dict | None = None,
+    config: QAEngineConfig | dict | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
 ):
     """Build the instant-search main graph."""
@@ -78,7 +75,7 @@ async def build_instant_search_graph(
     if isinstance(config_data, dict):
         retrieval_raw = config_data.get("retrieval", {})
         retrieval_cfg = (
-            InstantSearchRetrievalConfig(**retrieval_raw)
+            QARetrievalConfig(**retrieval_raw)
             if isinstance(retrieval_raw, dict)
             else retrieval_raw
         )
@@ -100,7 +97,7 @@ async def build_instant_search_graph(
     def _node(name: NodeNames):
         return wrap_node(name.value, name2node[name], node_callbacks.get(name.value))
 
-    builder = StateGraph(InstantSearchState, context_schema=InstantSearchRuntimeContext)
+    builder = StateGraph(InstantSearchState, context_schema=QARuntimeContext)
     builder.add_node(NodeNames.DECOMPOSER.value, _node(NodeNames.DECOMPOSER))
     builder.add_node(NodeNames.ROUTER.value, _node(NodeNames.ROUTER))
     builder.add_node(NodeNames.FINAL_ANSWER.value, _node(NodeNames.FINAL_ANSWER))

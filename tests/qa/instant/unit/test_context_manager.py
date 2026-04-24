@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from by_qa.core.model_config import ModelConfig
-from by_qa.qa.instant.nodes.context_manager import context_manager_node
+from by_qa.qa.common.context_manager import context_manager_node
 from by_qa.qa.services.llm_service import LLMService
 
 

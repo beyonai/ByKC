@@ -9,11 +9,11 @@ from langchain.tools import tool
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 
-from by_qa.qa.instant.config import InstantSearchRetrievalConfig
+from by_qa.qa.common.config import QARetrievalConfig
+from by_qa.qa.common.context import QARuntimeContext
+from by_qa.qa.common.operation_registry import SearchInput
 from by_qa.qa.instant.graphs.multi_hop import build_multi_hop_subgraph
 from by_qa.qa.instant.graphs.single_hop import build_single_hop_subgraph
-from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
-from by_qa.qa.instant.runtime.operation_registry import SearchInput
 
 
 class _ToolCapableFakeModel(FakeMessagesListChatModel):
@@ -200,8 +200,8 @@ async def test_multi_hop_subgraph_handles_parallel_search_calls_without_state_co
             "result_counter": 0,
         },
         config=checkpointer_config,
-        context=InstantSearchRuntimeContext(
-            retrieval=InstantSearchRetrievalConfig(),
+        context=QARuntimeContext(
+            retrieval=QARetrievalConfig(),
             llm_service=llm_service,
         ),
     )

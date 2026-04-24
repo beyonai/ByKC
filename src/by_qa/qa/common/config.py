@@ -1,11 +1,11 @@
-"""User-facing configuration for the instant QA capability."""
+"""Shared QA runtime configuration."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from by_qa.qa.instant.runtime.operation_registry import OperationType
+from by_qa.qa.common.operation_registry import OperationType
 from by_qa.qa.services.llm_service import LLMService
 
 
@@ -22,8 +22,8 @@ class KnowledgeBaseConfig:
 
 
 @dataclass
-class InstantQARetrievalConfig:
-    """Runtime retrieval configuration injected into the instant QA runtime."""
+class QARetrievalConfig:
+    """Runtime retrieval configuration shared by QA engines."""
 
     knowledge_bases: list[KnowledgeBaseConfig] = field(default_factory=list)
     source_codes: list[str] | None = None
@@ -59,8 +59,8 @@ class InstantQARetrievalConfig:
 
 
 @dataclass
-class InstantQAConfig:
-    """Code-level configuration for instantiating instant QA."""
+class QAEngineConfig:
+    """Code-level configuration shared by QA engines."""
 
     llm_service: LLMService | None = None
     tools: list[Any] = field(default_factory=list)
@@ -70,19 +70,11 @@ class InstantQAConfig:
     node_callbacks: dict[str, Any] = field(default_factory=dict)
     agent_callbacks: dict[str, Any] = field(default_factory=dict)
     agent_middleware: dict[str, list[Any]] = field(default_factory=dict)
-    retrieval: InstantQARetrievalConfig = field(
-        default_factory=InstantQARetrievalConfig
-    )
-
-
-InstantSearchAgentConfig = InstantQAConfig
-InstantSearchRetrievalConfig = InstantQARetrievalConfig
+    retrieval: QARetrievalConfig = field(default_factory=QARetrievalConfig)
 
 
 __all__ = [
-    "InstantQAConfig",
-    "InstantQARetrievalConfig",
-    "InstantSearchAgentConfig",
-    "InstantSearchRetrievalConfig",
     "KnowledgeBaseConfig",
+    "QAEngineConfig",
+    "QARetrievalConfig",
 ]

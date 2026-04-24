@@ -5,12 +5,12 @@ from typing import Any, List
 from langchain.agents import create_agent
 
 from by_qa.config import get_settings
-from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
-from by_qa.qa.instant.runtime.dispatcher import DispatcherToolMiddleware
+from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.instant.runtime.tool_call_guard import ToolCallGuardMiddleware
 from by_qa.qa.instant.state import SingleHopState
 from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
 from by_qa.qa.services.llm_service import LLMService
+from by_qa.qa.tools.knowledge_tools import DispatcherToolMiddleware
 
 DEFAULT_SINGLE_HOP_SYSTEM_PROMPT = """你是一个智能的单跳检索问答助手。
 
@@ -58,7 +58,7 @@ async def build_single_hop_agent_graph(
         tools=tools,
         middleware=middleware,
         state_schema=SingleHopState,
-        context_schema=InstantSearchRuntimeContext,
+        context_schema=QARuntimeContext,
         checkpointer=checkpointer,
         system_prompt=system_prompt or DEFAULT_SINGLE_HOP_SYSTEM_PROMPT,
     )

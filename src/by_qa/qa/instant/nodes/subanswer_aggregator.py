@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 from by_qa.core.logger import info
 from by_qa.qa.agents.subanswer_aggregator import SubAnswerAggregatorAgent
-from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
+from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.instant.state import InstantSearchState
 
 try:
@@ -15,7 +15,7 @@ except ImportError:
 
 
 async def subanswer_aggregator_node(
-    state: InstantSearchState, runtime: Runtime[InstantSearchRuntimeContext] = None
+    state: InstantSearchState, runtime: Runtime[QARuntimeContext] = None
 ) -> Dict[str, Any]:
     start_time = time.time()
     sub_answers = state.get("sub_answers", [])

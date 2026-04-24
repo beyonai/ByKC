@@ -13,18 +13,12 @@ from langgraph.types import Command
 
 from by_qa.config import get_settings
 from by_qa.core.logger import error, info, set_message_id, set_session_id
+from by_qa.qa.common.config import QAEngineConfig, QARetrievalConfig
+from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.exceptions import ValidationError
 from by_qa.qa.common.models import CoreInput, StreamEvent, StreamEventType
-from by_qa.qa.instant.config import (
-    InstantSearchAgentConfig,
-    InstantSearchRetrievalConfig,
-)
+from by_qa.qa.common.operation_registry import OPERATION_REGISTRY, OperationType
 from by_qa.qa.instant.graphs.main import NodeNames, build_instant_search_graph
-from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
-from by_qa.qa.instant.runtime.operation_registry import (
-    OPERATION_REGISTRY,
-    OperationType,
-)
 from by_qa.qa.instant.state import InstantSearchState
 from by_qa.qa.services.checkpointer_factory import (
     close_checkpointer_async,
@@ -121,7 +115,7 @@ class InstantQAEngine:
         self._settings = get_settings()
         self._graph = None
         self._checkpointer: BaseCheckpointSaver | None = None
-        self._runtime_context: InstantSearchRuntimeContext | None = None
+        self._runtime_context: QARuntimeContext | None = None
 
     async def __aenter__(self):
         return self
@@ -138,20 +132,18 @@ class InstantQAEngine:
             )
         return self._graph
 
-    def _build_runtime_context(self) -> InstantSearchRuntimeContext:
+    def _build_runtime_context(self) -> QARuntimeContext:
         retrieval_config = self.config.get("retrieval", {})
         if isinstance(retrieval_config, dict):
-            retrieval_config = InstantSearchRetrievalConfig(**retrieval_config)
-        if not isinstance(retrieval_config, InstantSearchRetrievalConfig):
-            retrieval_config = InstantSearchRetrievalConfig()
+            retrieval_config = QARetrievalConfig(**retrieval_config)
+        if not isinstance(retrieval_config, QARetrievalConfig):
+            retrieval_config = QARetrievalConfig()
         from by_qa.qa.services.llm_service import LLMService
 
         llm_service = self.config.get("llm_service") or LLMService()
-        return InstantSearchRuntimeContext(
-            retrieval=retrieval_config, llm_service=llm_service
-        )
+        return QARuntimeContext(retrieval=retrieval_config, llm_service=llm_service)
 
-    def _get_runtime_context(self) -> InstantSearchRuntimeContext:
+    def _get_runtime_context(self) -> QARuntimeContext:
         if self._runtime_context is None:
             self._runtime_context = self._build_runtime_context()
         return self._runtime_context
@@ -329,7 +321,7 @@ InstantSearchAgent = InstantQAEngine
 
 
 def create_instant_search_agent(
-    config: InstantSearchAgentConfig | dict[str, Any] | None = None,
+    config: QAEngineConfig | dict[str, Any] | None = None,
 ) -> InstantSearchAgent:
     """Create a feature-complete instant QA agent facade."""
     if config is None:

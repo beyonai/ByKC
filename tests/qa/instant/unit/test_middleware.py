@@ -6,11 +6,8 @@ from unittest.mock import AsyncMock
 import pytest
 from langchain_core.messages import SystemMessage, ToolMessage
 
-from by_qa.qa.instant.runtime.dispatcher import DispatcherToolMiddleware
-from by_qa.qa.instant.runtime.operation_registry import (
-    OPERATION_REGISTRY,
-    OperationType,
-)
+from by_qa.qa.common.operation_registry import OPERATION_REGISTRY, OperationType
+from by_qa.qa.tools.knowledge_tools import DispatcherToolMiddleware
 
 
 def _make_tool_call_request(tool_name: str, state: dict, result_content: list):

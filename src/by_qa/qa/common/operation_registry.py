@@ -1,4 +1,4 @@
-"""Operation type registry for the instant QA remote tool dispatcher."""
+"""Operation type registry for QA remote tool dispatchers."""
 
 from __future__ import annotations
 

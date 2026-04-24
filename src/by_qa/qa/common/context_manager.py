@@ -1,4 +1,4 @@
-"""Context manager node for instant-search graph."""
+"""Shared context management helpers for QA retrieval results."""
 
 from collections import defaultdict
 from typing import Dict, List, Tuple
@@ -7,8 +7,7 @@ from langchain_core.messages import SystemMessage
 
 from by_qa.config import get_settings
 from by_qa.core.logger import info
-from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
-from by_qa.qa.instant.state import InstantSearchState, MultiHopState, SingleHopState
+from by_qa.qa.common.context import QARuntimeContext
 
 try:
     from langgraph.runtime import Runtime
@@ -200,10 +199,10 @@ def build_context_for_llm(retrieval_results: List[Dict]) -> str:
 
 
 async def context_manager_node(
-    state: InstantSearchState | SingleHopState | MultiHopState,
-    runtime: Runtime[InstantSearchRuntimeContext] = None,
+    state: dict,
+    runtime: Runtime[QARuntimeContext] = None,
 ) -> dict:
-    """Context manager node for instant search."""
+    """Context manager node for QA retrieval results."""
     if (
         runtime is None
         or runtime.context is None

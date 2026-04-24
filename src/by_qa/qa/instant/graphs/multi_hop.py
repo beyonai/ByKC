@@ -12,9 +12,9 @@ except ImportError:
 
 from by_qa.config import get_settings
 from by_qa.core.logger import error, info
+from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.instant.agents.multi_hop_react import build_multi_hop_agent_graph
 from by_qa.qa.instant.nodes.node_enum import NodeNames
-from by_qa.qa.instant.runtime.context import InstantSearchRuntimeContext
 from by_qa.qa.instant.state import MultiHopState, SubAnswer
 from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
 from by_qa.qa.services.llm_service import LLMService
@@ -58,7 +58,7 @@ def _calculate_confidence(retrieval_results: List[Dict]) -> float:
 
 async def multi_hop_summary_node(
     state: MultiHopState,
-    runtime: Runtime[InstantSearchRuntimeContext] = None,
+    runtime: Runtime[QARuntimeContext] = None,
     llm: LLMService | None = None,
 ) -> Dict[str, Any]:
     sub_query = state.get("sub_query", {})
@@ -229,7 +229,7 @@ async def build_multi_hop_subgraph(config=None, llm_service=None, checkpointer=N
         checkpointer=checkpointer,
     )
 
-    workflow = StateGraph(MultiHopState, context_schema=InstantSearchRuntimeContext)
+    workflow = StateGraph(MultiHopState, context_schema=QARuntimeContext)
     workflow.add_node(NodeNames.MULTI_HOP_ENTRY.value, multi_hop_entry_node)
     workflow.add_node(NodeNames.MULTI_HOP_AGENT.value, agent_graph)
     workflow.add_node(NodeNames.MULTI_HOP_SUMMARY.value, multi_hop_summary_node)

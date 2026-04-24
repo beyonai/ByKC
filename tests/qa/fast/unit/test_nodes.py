@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from by_qa.qa.agents.answer_synthesizer import RetrievedContextAnswerSynthesizerAgent
 from by_qa.qa.agents.standalone_question_rewriter import StandaloneQuestionRewriterAgent
 from by_qa.qa.common.config import QARetrievalConfig
 from by_qa.qa.common.context import QARuntimeContext
@@ -310,3 +311,27 @@ async def test_retrieve_node_deduplicates_by_chunk_id(monkeypatch):
         runtime=SimpleNamespace(context=runtime_context),
     )
     assert len(result["retrieval_results"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_answer_synthesizer_uses_sub_queries_in_prompt():
+    captured_messages = []
+
+    class FakeLLM:
+        async def generate(self, messages, model_type, json_mode):  # pylint: disable=unused-argument
+            captured_messages.extend(messages)
+            return "综合回答"
+
+    agent = RetrievedContextAnswerSynthesizerAgent(llm_service=FakeLLM())
+    result = await agent.answer(
+        original_query="广州和北京的营收各是多少",
+        sub_queries=[
+            {"query_id": "sq_1", "query_text": "广州的营收是多少"},
+            {"query_id": "sq_2", "query_text": "北京的营收是多少"},
+        ],
+        retrieval_results=[{"content": "广州营收100亿"}],
+    )
+    assert result == "综合回答"
+    user_msg = next(m for m in captured_messages if m["role"] == "user")
+    assert "广州的营收是多少" in user_msg["content"]
+    assert "北京的营收是多少" in user_msg["content"]

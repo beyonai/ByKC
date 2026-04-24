@@ -32,22 +32,24 @@ class RetrievedContextAnswerSynthesizerAgent:
         self,
         *,
         original_query: str,
-        rewritten_query: str,
+        sub_queries: list[dict[str, Any]],
         retrieval_results: list[dict[str, Any]],
     ) -> str:
         """Generate an answer grounded in retrieval results."""
         context = build_context_for_llm(retrieval_results)
+        sub_queries_text = "\n".join(
+            f"{i + 1}. {sq['query_text']}" for i, sq in enumerate(sub_queries)
+        )
         messages = [
             {"role": "system", "content": self._system_prompt},
             {
                 "role": "user",
-                "content": f"""用户原始问题：{original_query}
-检索用完整问题：{rewritten_query}
-
-检索结果：
-{context}
-
-请基于以上检索结果回答用户原始问题。""",
+                "content": (
+                    f"用户原始问题：{original_query}\n"
+                    f"检索用子问题：\n{sub_queries_text}\n\n"
+                    f"检索结果：\n{context}\n\n"
+                    "请基于以上检索结果，针对每个子问题分别回答，最后汇总。"
+                ),
             },
         ]
         return await self._llm_service.generate(

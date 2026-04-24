@@ -109,7 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 async def _run_async(args: argparse.Namespace) -> None:
     """Create the engine and stream one answer."""
-    from by_qa.qa.instant.runtime.operation_registry import OperationType
+    from by_qa.qa.common import OperationType
 
     root = runtime_dir(args.runtime_dir)
     kb_code, kb_name = load_example_kb_state(root)

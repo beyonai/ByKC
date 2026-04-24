@@ -11,6 +11,7 @@ from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.fast.nodes.answer import answer_node
 from by_qa.qa.fast.nodes.retrieve import retrieve_node
 from by_qa.qa.fast.nodes.rewrite import rewrite_node
+from by_qa.qa.fast.state import FastQAState
 
 
 class FakeLLMService:
@@ -142,3 +143,18 @@ async def test_rewrite_and_split_falls_back_to_original_on_empty_response():
     agent = StandaloneQuestionRewriterAgent(llm_service=fake_llm)
     result = await agent.rewrite_and_split("原始问题", None)
     assert result == ["原始问题"]
+
+
+def test_fast_qa_state_has_sub_queries_field():
+    state: FastQAState = {
+        "original_query": "test",
+        "sub_queries": [{"query_id": "sq_1", "query_text": "test"}],
+        "rewritten_query": "test",
+        "retrieval_results": [],
+        "final_answer": "",
+        "messages": [],
+        "rewrite_time": None,
+        "retrieval_time": None,
+        "answer_time": None,
+    }
+    assert state["sub_queries"] == [{"query_id": "sq_1", "query_text": "test"}]

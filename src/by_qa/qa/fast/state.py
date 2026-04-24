@@ -9,6 +9,7 @@ class FastQAState(TypedDict):
     """State for the linear fast QA graph."""
 
     original_query: str
+    sub_queries: list[dict[str, Any]]
     rewritten_query: str
     retrieval_results: list[dict[str, Any]]
     final_answer: str

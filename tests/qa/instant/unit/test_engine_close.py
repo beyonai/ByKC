@@ -33,7 +33,7 @@ async def test_async_context_manager_closes_sqlite_connection(tmp_path):
 
     mock_graph.astream_events = mock_astream_events
 
-    with patch("by_qa.qa.instant.engine.get_settings", return_value=settings):
+    with patch("by_qa.qa.common.base_engine.get_settings", return_value=settings):
         async with InstantQAEngine() as engine:
             from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
 
@@ -52,7 +52,7 @@ async def test_explicit_close_releases_sqlite_connection(tmp_path):
     """Calling close() directly must also release the connection."""
     settings = _mock_settings(tmp_path)
 
-    with patch("by_qa.qa.instant.engine.get_settings", return_value=settings):
+    with patch("by_qa.qa.common.base_engine.get_settings", return_value=settings):
         engine = InstantQAEngine()
 
     from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
@@ -70,7 +70,7 @@ async def test_explicit_close_releases_sqlite_connection(tmp_path):
 async def test_close_is_safe_when_no_checkpointer():
     """close() on a fresh engine (no graph built) should not raise."""
     settings = type("Settings", (), {})()
-    with patch("by_qa.qa.instant.engine.get_settings", return_value=settings):
+    with patch("by_qa.qa.common.base_engine.get_settings", return_value=settings):
         engine = InstantQAEngine()
 
     await engine.close()
@@ -82,7 +82,7 @@ async def test_close_is_idempotent(tmp_path):
     """Calling close() twice should not raise."""
     settings = _mock_settings(tmp_path)
 
-    with patch("by_qa.qa.instant.engine.get_settings", return_value=settings):
+    with patch("by_qa.qa.common.base_engine.get_settings", return_value=settings):
         engine = InstantQAEngine()
 
     from by_qa.qa.services.checkpointer_factory import create_checkpointer_async

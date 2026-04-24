@@ -1,29 +1,21 @@
 """Instant QA engine - streaming retrieval and answer orchestration."""
 
-import json
 import traceback
-import uuid
 from dataclasses import asdict, fields, is_dataclass
 from typing import Any, AsyncGenerator
 
 from langchain_core.messages import HumanMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
-from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.types import Command
 
-from by_qa.config import get_settings
-from by_qa.core.logger import error, info, set_message_id, set_session_id
-from by_qa.qa.common.config import QAEngineConfig, QARetrievalConfig
-from by_qa.qa.common.context import QARuntimeContext
-from by_qa.qa.common.exceptions import ValidationError
+from by_qa.core.logger import error, info
+from by_qa.qa.common.base_engine import BaseQAEngine
+from by_qa.qa.common.config import QAEngineConfig
 from by_qa.qa.common.models import CoreInput, StreamEvent, StreamEventType
 from by_qa.qa.common.operation_registry import OPERATION_REGISTRY, OperationType
 from by_qa.qa.instant.graphs.main import NodeNames, build_instant_search_graph
 from by_qa.qa.instant.state import InstantSearchState
-from by_qa.qa.services.checkpointer_factory import (
-    close_checkpointer_async,
-    create_checkpointer_async,
-)
+from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
 
 USER_VISIBLE_ROLES: dict[str, list[str] | None] = {
     NodeNames.DECOMPOSER.value: None,
@@ -105,24 +97,11 @@ class EventFilter:
         return event
 
 
-class InstantQAEngine:
+class InstantQAEngine(BaseQAEngine):
     """Instant QA engine backed by capability-local agent graphs."""
 
     THREAD_ID_PREFIX = "instant_search"
-
-    def __init__(self, config: dict[str, Any] | None = None):
-        self.config = config or {}
-        self._settings = get_settings()
-        self._graph = None
-        self._checkpointer: BaseCheckpointSaver | None = None
-        self._runtime_context: QARuntimeContext | None = None
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.close()
-        return False
+    _recursion_limit = 50
 
     async def _get_graph(self):
         if self._graph is None:
@@ -132,44 +111,14 @@ class InstantQAEngine:
             )
         return self._graph
 
-    def _build_runtime_context(self) -> QARuntimeContext:
-        retrieval_config = self.config.get("retrieval", {})
-        if isinstance(retrieval_config, dict):
-            retrieval_config = QARetrievalConfig(**retrieval_config)
-        if not isinstance(retrieval_config, QARetrievalConfig):
-            retrieval_config = QARetrievalConfig()
-        from by_qa.qa.services.llm_service import LLMService
-
-        llm_service = self.config.get("llm_service") or LLMService()
-        return QARuntimeContext(retrieval=retrieval_config, llm_service=llm_service)
-
-    def _get_runtime_context(self) -> QARuntimeContext:
-        if self._runtime_context is None:
-            self._runtime_context = self._build_runtime_context()
-        return self._runtime_context
-
-    async def close(self) -> None:
-        """Release the database connection held by the checkpointer."""
-        await close_checkpointer_async(self._checkpointer)
-        self._checkpointer = None
-        self._graph = None
-
-    async def stream_search(
-        self, input_data: CoreInput
+    async def _do_stream_search(
+        self,
+        input_data: CoreInput,
+        session_id: str,
+        message_id: str,
+        config: RunnableConfig,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Execute instant QA and stream results incrementally."""
-        if not input_data.query or not input_data.query.strip():
-            raise ValidationError("Query cannot be empty")
-
-        session_id = input_data.session_id or str(uuid.uuid4())
-        message_id = input_data.message_id or str(uuid.uuid4())
-        set_session_id(session_id)
-        set_message_id(message_id)
-        info(
-            "[stream_search] Input - query: %s",
-            json.dumps(input_data.model_dump(), ensure_ascii=False),
-        )
-
         try:
             initial_state = InstantSearchState(
                 original_query=input_data.query,
@@ -186,15 +135,6 @@ class InstantQAEngine:
             )
 
             graph = await self._get_graph()
-            config = RunnableConfig(
-                callbacks=[],
-                metadata={"session_id": session_id, "message_id": message_id},
-                recursion_limit=50,
-                run_id=message_id,
-            )
-            config["configurable"] = {
-                "thread_id": f"{self.THREAD_ID_PREFIX}_{session_id}"
-            }
             event_filter = EventFilter(USER_VISIBLE_ROLES)
 
             async for event in graph.astream_events(

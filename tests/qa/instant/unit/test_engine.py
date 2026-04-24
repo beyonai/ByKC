@@ -25,7 +25,9 @@ def test_extract_search_result_chunks_only_reads_artifact():
 
 @pytest.mark.asyncio
 async def test_stream_search_emits_answer_event_for_final_answer_node():
-    with patch("by_qa.qa.instant.engine.get_settings", return_value=_mock_settings()):
+    with patch(
+        "by_qa.qa.common.base_engine.get_settings", return_value=_mock_settings()
+    ):
         engine = InstantQAEngine()
 
     mock_graph = MagicMock()
@@ -55,7 +57,9 @@ async def test_stream_search_emits_answer_event_for_final_answer_node():
 
 @pytest.mark.asyncio
 async def test_stream_search_passes_runtime_context_into_langgraph():
-    with patch("by_qa.qa.instant.engine.get_settings", return_value=_mock_settings()):
+    with patch(
+        "by_qa.qa.common.base_engine.get_settings", return_value=_mock_settings()
+    ):
         engine = InstantQAEngine(
             config={
                 "retrieval": {
@@ -111,7 +115,9 @@ async def test_stream_search_passes_runtime_context_into_langgraph():
 
 @pytest.mark.asyncio
 async def test_stream_search_sets_prefixed_thread_id_and_request_run_id():
-    with patch("by_qa.qa.instant.engine.get_settings", return_value=_mock_settings()):
+    with patch(
+        "by_qa.qa.common.base_engine.get_settings", return_value=_mock_settings()
+    ):
         engine = InstantQAEngine()
 
     mock_graph = MagicMock()

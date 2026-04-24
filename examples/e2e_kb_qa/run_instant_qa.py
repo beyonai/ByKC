@@ -1,4 +1,4 @@
-"""Run instant QA against the knowledge-base example imported by run_kb_flow."""
+"""Run instant QA or fast QA against the knowledge-base example imported by run_kb_flow."""
 
 from __future__ import annotations
 
@@ -6,13 +6,7 @@ import argparse
 import asyncio
 import os
 
-from common import (
-    ExampleError,
-    load_example_kb_state,
-    pretty_print,
-    require_environment,
-    runtime_dir,
-)
+from common import ExampleError, pretty_print, require_environment, runtime_dir
 
 
 class EventRenderer:
@@ -79,6 +73,12 @@ def build_parser() -> argparse.ArgumentParser:
         description="Ask one instant-QA question against the packaged knowledge-base example."
     )
     parser.add_argument(
+        "--mode",
+        choices=["instant", "fast"],
+        default="instant",
+        help="QA engine to use: 'instant' (multi-hop, default) or 'fast' (single-pass).",
+    )
+    parser.add_argument(
         "--runtime-dir",
         default=None,
         help="Directory used by the example scripts for saved state and checkpoints.",
@@ -112,42 +112,50 @@ async def _run_async(args: argparse.Namespace) -> None:
     from by_qa.qa.common import OperationType
 
     root = runtime_dir(args.runtime_dir)
-    kb_code, kb_name = load_example_kb_state(root)
+    # kb_code, kb_name = load_example_kb_state(root)
 
     require_environment(["LLM_API_KEY"])
     os.environ.setdefault("AGENT_DATA_PATH", str(root / "agent_data"))
 
     from by_qa.qa.common.models import CoreInput
-    from by_qa.qa.instant.engine import InstantQAEngine
+
+    retrieval_config = {
+        "knowledge_bases": [
+            {
+                "kb_code": "1",
+                "kb_name": "1",
+                "kb_description": "Packaged end-to-end example knowledge base.",
+                "service_name": os.getenv("SERVICE_NAME", "by-qa-manager"),
+                "operations": {
+                    OperationType.KNOWLEDGE_SEARCH: "/api/v1/knowledgeItems/search",
+                },
+            }
+        ],
+        "top_k": args.top_k,
+        "vector_top_k": max(args.top_k, 20),
+        "text_top_k": max(args.top_k, 20),
+    }
 
     renderer = EventRenderer(
         stream_tokens=not args.no_stream,
         verbose_events=args.verbose_events,
     )
-    async with InstantQAEngine(
-        config={
-            "retrieval": {
-                "knowledge_bases": [
-                    {
-                        "kb_code": kb_code,
-                        "kb_name": kb_name,
-                        "kb_description": "Packaged end-to-end example knowledge base.",
-                        "service_name": os.getenv("SERVICE_NAME", "by-qa-manager"),
-                        "operations": {
-                            OperationType.KNOWLEDGE_SEARCH: "/api/v1/knowledgeItems/search",
-                        },
-                    }
-                ],
-                "top_k": args.top_k,
-                "vector_top_k": max(args.top_k, 20),
-                "text_top_k": max(args.top_k, 20),
-            }
-        }
-    ) as engine:
-        request = CoreInput(query=args.query)
-        async for event in engine.stream_search(request):
-            renderer.render(event)
-        renderer.finish()
+    request = CoreInput(query=args.query)
+
+    if args.mode == "fast":
+        from by_qa.qa.fast.engine import FastQAEngine
+
+        async with FastQAEngine(config={"retrieval": retrieval_config}) as engine:
+            async for event in engine.stream_search(request):
+                renderer.render(event)
+    else:
+        from by_qa.qa.instant.engine import InstantQAEngine
+
+        async with InstantQAEngine(config={"retrieval": retrieval_config}) as engine:
+            async for event in engine.stream_search(request):
+                renderer.render(event)
+
+    renderer.finish()
 
 
 def main() -> None:

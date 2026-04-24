@@ -21,6 +21,7 @@ class BaseQAEngine(ABC):
     """Shared lifecycle, config, and run-preparation logic for QA engines."""
 
     THREAD_ID_PREFIX: str
+    _recursion_limit: int = 20
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         # THREAD_ID_PREFIX is a class-level annotation; verify a concrete value exists
@@ -92,21 +93,6 @@ class BaseQAEngine(ABC):
     async def _get_graph(self):
         """Build and return the compiled LangGraph."""
 
-    async def stream_search(
-        self, input_data: CoreInput
-    ) -> AsyncGenerator[StreamEvent, None]:
-        """Execute QA and stream user-visible events.
-
-        Validates input and sets up logging context before delegating to
-        ``_do_stream_search``, so subclasses never need to call ``_prepare_run``
-        manually.
-        """
-        session_id, message_id, config = self._prepare_run(input_data)
-        async for event in self._do_stream_search(
-            input_data, session_id, message_id, config
-        ):
-            yield event
-
     @abstractmethod
     async def _do_stream_search(
         self,
@@ -115,8 +101,23 @@ class BaseQAEngine(ABC):
         message_id: str,
         config: RunnableConfig,
     ) -> AsyncGenerator[StreamEvent, None]:
-        """Subclass-specific QA execution. Called by ``stream_search`` after
-        input validation and logging context are set up."""
+        """Subclass-specific streaming logic; called by stream_search."""
+
+    async def stream_search(
+        self, input_data: CoreInput
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Execute QA and stream user-visible events.
+
+        Calls _prepare_run then delegates to _do_stream_search so subclasses
+        can't forget to invoke _prepare_run.
+        """
+        session_id, message_id, config = self._prepare_run(
+            input_data, recursion_limit=self._recursion_limit
+        )
+        async for event in self._do_stream_search(
+            input_data, session_id, message_id, config
+        ):
+            yield event
 
 
 __all__ = ["BaseQAEngine"]

@@ -16,7 +16,9 @@ def _mock_settings():
 
 @pytest.mark.asyncio
 async def test_stream_search_emits_search_chunks_and_answer_events():
-    with patch("by_qa.qa.fast.engine.get_settings", return_value=_mock_settings()):
+    with patch(
+        "by_qa.qa.common.base_engine.get_settings", return_value=_mock_settings()
+    ):
         engine = FastQAEngine()
 
     mock_graph = MagicMock()
@@ -69,7 +71,9 @@ async def test_stream_search_emits_search_chunks_and_answer_events():
 
 @pytest.mark.asyncio
 async def test_stream_search_passes_runtime_context_and_fast_thread_id():
-    with patch("by_qa.qa.fast.engine.get_settings", return_value=_mock_settings()):
+    with patch(
+        "by_qa.qa.common.base_engine.get_settings", return_value=_mock_settings()
+    ):
         engine = FastQAEngine(
             config={
                 "retrieval": {

@@ -6,7 +6,6 @@ import importlib
 def test_can_import_fast_qa_modules():
     fast_module = importlib.import_module("by_qa.qa.fast")
     assert hasattr(fast_module, "FastQAEngine")
-    assert hasattr(fast_module, "create_fast_qa_engine")
 
     assert importlib.import_module("by_qa.qa.fast.config")
     assert importlib.import_module("by_qa.qa.fast.engine")

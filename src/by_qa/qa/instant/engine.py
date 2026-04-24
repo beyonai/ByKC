@@ -1,7 +1,6 @@
 """Instant QA engine - streaming retrieval and answer orchestration."""
 
 import traceback
-from dataclasses import asdict, fields, is_dataclass
 from typing import Any, AsyncGenerator
 
 from langchain_core.messages import HumanMessage, ToolMessage
@@ -10,7 +9,6 @@ from langgraph.types import Command
 
 from by_qa.core.logger import error, info
 from by_qa.qa.common.base_engine import BaseQAEngine
-from by_qa.qa.common.config import QAEngineConfig
 from by_qa.qa.common.models import CoreInput, StreamEvent, StreamEventType
 from by_qa.qa.common.operation_registry import OPERATION_REGISTRY, OperationType
 from by_qa.qa.instant.graphs.main import NodeNames, build_instant_search_graph
@@ -62,45 +60,14 @@ def _extract_tool_message(result: Any) -> ToolMessage | None:
     return None
 
 
-class EventFilter:
-    """Event filter that tracks visible instance ids and cleans parent ids."""
-
-    def __init__(self, visible_roles: dict[str, list[str] | None]):
-        self.visible_roles = visible_roles
-        self._instance_role_map: dict[str, str] = {}
-        self._visible_instance_ids: set[str] = set()
-
-    def _is_event_visible(self, event: StreamEvent) -> bool:
-        allowed_event_types = self.visible_roles.get(event.role)
-        if event.role not in self.visible_roles:
-            return False
-        if allowed_event_types is None:
-            return True
-        return event.type.value in allowed_event_types
-
-    def filter_event(self, event: StreamEvent) -> StreamEvent | None:
-        role = event.role
-        instance_id = event.instance_id
-        if instance_id:
-            self._instance_role_map[instance_id] = role or ""
-        if not self._is_event_visible(event):
-            return None
-        if instance_id:
-            self._visible_instance_ids.add(instance_id)
-        if event.parent_ids:
-            event.parent_ids = [
-                parent_id
-                for parent_id in event.parent_ids
-                if parent_id in self._visible_instance_ids
-            ]
-        return event
-
-
 class InstantQAEngine(BaseQAEngine):
     """Instant QA engine backed by capability-local agent graphs."""
 
     THREAD_ID_PREFIX = "instant_search"
     _recursion_limit = 50
+
+    def _get_visible_roles(self) -> dict[str, list[str] | None] | None:
+        return USER_VISIBLE_ROLES
 
     async def _build_graph(self):
         return await build_instant_search_graph(
@@ -130,8 +97,6 @@ class InstantQAEngine(BaseQAEngine):
                 retrieval_time=None,
                 aggregation_time=None,
             )
-
-            event_filter = EventFilter(USER_VISIBLE_ROLES)
 
             async for event in graph.astream_events(
                 initial_state,
@@ -197,7 +162,7 @@ class InstantQAEngine(BaseQAEngine):
                                 retrieval_results = _extract_search_result_chunks(
                                     tool_message
                                 )
-                                yield_event = StreamEvent.search_result_chunks(
+                                yield StreamEvent.search_result_chunks(
                                     chunks=retrieval_results,
                                     role=OPERATION_REGISTRY[
                                         OperationType.KNOWLEDGE_SEARCH
@@ -205,20 +170,14 @@ class InstantQAEngine(BaseQAEngine):
                                     instance_id=instance_id,
                                     parent_ids=parent_ids,
                                 )
-                                filtered_event = event_filter.filter_event(yield_event)
-                                if filtered_event:
-                                    yield filtered_event
                     elif role == NodeNames.FINAL_ANSWER.value:
                         final_answer = result.get("final_answer", "")
-                        answer_event = StreamEvent.answer(
+                        yield StreamEvent.answer(
                             content=final_answer,
                             role=role,
                             instance_id=instance_id,
                             parent_ids=parent_ids,
                         )
-                        filtered_answer_event = event_filter.filter_event(answer_event)
-                        if filtered_answer_event:
-                            yield filtered_answer_event
                     yield_event = StreamEvent.node_end(
                         role=role,
                         instance_id=instance_id,
@@ -237,9 +196,7 @@ class InstantQAEngine(BaseQAEngine):
                             else None,
                         )
                 if yield_event:
-                    filtered_event = event_filter.filter_event(yield_event)
-                    if filtered_event:
-                        yield filtered_event
+                    yield yield_event
             info("[stream_search] Completed successfully")
         except Exception as exc:
             error("[stream_search] Error occurred - error: %s", traceback.format_exc())
@@ -250,31 +207,3 @@ class InstantQAEngine(BaseQAEngine):
                 instance_id=instance_id,
                 parent_ids=parent_ids,
             )
-
-
-InstantSearchEngine = InstantQAEngine
-InstantSearchAgent = InstantQAEngine
-
-
-def create_instant_search_agent(
-    config: QAEngineConfig | dict[str, Any] | None = None,
-) -> InstantSearchAgent:
-    """Create a feature-complete instant QA agent facade."""
-    if config is None:
-        normalized_config: dict[str, Any] = {}
-    elif is_dataclass(config):
-        # Extract non-dataclass fields before asdict to avoid unsafe deepcopy
-        non_dc: dict[str, Any] = {}
-        for f in fields(config):
-            val = getattr(config, f.name)
-            if (
-                val is not None
-                and not is_dataclass(val)
-                and not isinstance(val, (dict, list, tuple, str, int, float, bool))
-            ):
-                non_dc[f.name] = val
-        normalized_config = asdict(config)
-        normalized_config.update(non_dc)
-    else:
-        normalized_config = dict(config)
-    return InstantSearchAgent(config=normalized_config)

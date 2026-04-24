@@ -11,6 +11,7 @@ from by_qa.config import get_settings
 from by_qa.core.logger import info, set_message_id, set_session_id
 from by_qa.qa.common.config import QARetrievalConfig
 from by_qa.qa.common.context import QARuntimeContext
+from by_qa.qa.common.event_filter import EventFilter
 from by_qa.qa.common.exceptions import ValidationError
 from by_qa.qa.common.models import CoreInput, StreamEvent
 from by_qa.qa.services.checkpointer_factory import (
@@ -115,6 +116,10 @@ class BaseQAEngine(ABC):
     ) -> AsyncGenerator[StreamEvent, None]:
         """Subclass-specific streaming logic."""
 
+    def _get_visible_roles(self) -> dict[str, list[str] | None] | None:
+        """Return role whitelist for event filtering, or None to skip filtering."""
+        return None
+
     async def stream_search(
         self, input_data: CoreInput
     ) -> AsyncGenerator[StreamEvent, None]:
@@ -123,10 +128,13 @@ class BaseQAEngine(ABC):
             input_data, recursion_limit=self._recursion_limit
         )
         graph = await self._get_graph()
+        event_filter = EventFilter(self._get_visible_roles())
         async for event in self._do_stream_search(
             input_data, session_id, message_id, config, graph
         ):
-            yield event
+            filtered = event_filter.filter_event(event)
+            if filtered is not None:
+                yield filtered
 
 
 __all__ = ["BaseQAEngine"]

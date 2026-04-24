@@ -1,7 +1,6 @@
 """Fast QA engine - linear rewrite, retrieval, and answer orchestration."""
 
 import traceback
-from dataclasses import asdict, fields, is_dataclass
 from typing import Any, AsyncGenerator
 
 from langchain_core.messages import HumanMessage
@@ -10,7 +9,6 @@ from langchain_core.runnables import RunnableConfig
 from by_qa.core.logger import error
 from by_qa.qa.common.base_engine import BaseQAEngine
 from by_qa.qa.common.models import CoreInput, StreamEvent
-from by_qa.qa.fast.config import FastQAConfig
 from by_qa.qa.fast.graph import build_fast_qa_graph
 from by_qa.qa.fast.state import FastQAState
 from by_qa.qa.fast.types import NodeNames
@@ -145,27 +143,4 @@ class FastQAEngine(BaseQAEngine):
         return role
 
 
-def create_fast_qa_engine(
-    config: FastQAConfig | dict[str, Any] | None = None,
-) -> FastQAEngine:
-    """Create a fast QA engine."""
-    if config is None:
-        normalized_config: dict[str, Any] | FastQAConfig = {}
-    elif is_dataclass(config):
-        non_dc: dict[str, Any] = {}
-        for f in fields(config):
-            val = getattr(config, f.name)
-            if (
-                val is not None
-                and not is_dataclass(val)
-                and not isinstance(val, (dict, list, tuple, str, int, float, bool))
-            ):
-                non_dc[f.name] = val
-        normalized_config = asdict(config)
-        normalized_config.update(non_dc)
-    else:
-        normalized_config = dict(config)
-    return FastQAEngine(config=normalized_config)
-
-
-__all__ = ["FastQAEngine", "create_fast_qa_engine"]
+__all__ = ["FastQAEngine"]

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from by_qa.qa.agents.standalone_question_rewriter import StandaloneQuestionRewriterAgent
 from by_qa.qa.common.config import QARetrievalConfig
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.fast.nodes.answer import answer_node
@@ -114,3 +115,30 @@ async def test_answer_node_uses_answer_synthesizer(monkeypatch):
     )
     assert result["final_answer"] == "最终答案"
     assert result["messages"][0].content == "最终答案"
+
+
+@pytest.mark.asyncio
+async def test_rewrite_and_split_returns_two_subqueries_for_parallel_question():
+    fake_llm = AsyncMock()
+    fake_llm.generate = AsyncMock(return_value="广州的营收是多少\n北京的营收是多少")
+    agent = StandaloneQuestionRewriterAgent(llm_service=fake_llm)
+    result = await agent.rewrite_and_split("广州和北京的营收各是多少", None)
+    assert result == ["广州的营收是多少", "北京的营收是多少"]
+
+
+@pytest.mark.asyncio
+async def test_rewrite_and_split_returns_single_item_for_simple_question():
+    fake_llm = AsyncMock()
+    fake_llm.generate = AsyncMock(return_value="广州2024年的营收是多少")
+    agent = StandaloneQuestionRewriterAgent(llm_service=fake_llm)
+    result = await agent.rewrite_and_split("广州2024年的营收是多少", None)
+    assert result == ["广州2024年的营收是多少"]
+
+
+@pytest.mark.asyncio
+async def test_rewrite_and_split_falls_back_to_original_on_empty_response():
+    fake_llm = AsyncMock()
+    fake_llm.generate = AsyncMock(return_value="   ")
+    agent = StandaloneQuestionRewriterAgent(llm_service=fake_llm)
+    result = await agent.rewrite_and_split("原始问题", None)
+    assert result == ["原始问题"]

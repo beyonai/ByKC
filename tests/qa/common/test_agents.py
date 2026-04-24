@@ -80,12 +80,12 @@ async def test_standalone_question_rewriter_uses_history_for_rewrite():
     llm_service.generate = AsyncMock(return_value="广州办事处的营收是多少")  # type: ignore[method-assign]
     agent = StandaloneQuestionRewriterAgent(llm_service=llm_service)
 
-    rewritten = await agent.rewrite(
+    rewritten = await agent.rewrite_and_split(
         query="广州呢",
         conversation_history="用户: 南京办事处的营收是多少",
     )
 
-    assert rewritten == "广州办事处的营收是多少"
+    assert rewritten == ["广州办事处的营收是多少"]
     llm_service.generate.assert_awaited_once()
     messages = llm_service.generate.await_args.kwargs["messages"]
     assert "当前用户输入：广州呢" in messages[-1]["content"]

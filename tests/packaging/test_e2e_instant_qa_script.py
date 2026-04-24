@@ -5,8 +5,23 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock
 
-from by_qa.qa.common.models import StreamEvent, StreamEventType
+# qa extras (langchain_core etc.) are not installed in the packaging test env;
+# mock them before by_qa.qa.common.__init__ is imported so BaseQAEngine loads cleanly.
+for _mod in [
+    "langchain_core",
+    "langchain_core.runnables",
+    "by_qa.qa.services",
+    "by_qa.qa.services.checkpointer_factory",
+    "by_qa.qa.services.llm_service",
+]:
+    sys.modules.setdefault(_mod, MagicMock())
+
+from by_qa.qa.common.models import (  # noqa: E402  # pylint: disable=wrong-import-position
+    StreamEvent,
+    StreamEventType,
+)
 
 SCRIPT_PATH = Path("examples/e2e_kb_qa/run_instant_qa.py")
 

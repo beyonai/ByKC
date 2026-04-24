@@ -22,19 +22,31 @@
 src/by_qa/qa/
 ├── __init__.py
 ├── common/
+│   ├── config.py
+│   ├── context.py
+│   ├── context_manager.py
 │   ├── exceptions.py
 │   ├── models.py
+│   ├── operation_registry.py
 │   └── reducers.py
 ├── agents/
+│   ├── answer_synthesizer.py
 │   ├── query_decomposer.py
-│   ├── result_aggregator.py
+│   ├── standalone_question_rewriter.py
 │   └── subanswer_aggregator.py
 ├── services/
 │   ├── checkpointer_factory.py
 │   └── llm_service.py
+├── tools/
+│   └── knowledge_tools.py
+├── fast/
+│   ├── engine.py
+│   ├── graph.py
+│   ├── nodes/
+│   ├── state.py
+│   └── types.py
 └── instant/
     ├── engine.py
-    ├── config.py
     ├── state.py
     ├── types.py
     ├── agents/
@@ -53,15 +65,23 @@ src/by_qa/qa/
 
 ### `qa.common`
 
-承载问答域共享的异常、输入输出模型和流式事件模型。
+承载问答域共享的配置、运行时上下文、检索上下文管理、异常、输入输出模型和流式事件模型。
 
 ### `qa.agents`
 
-承载即时问答仍然依赖的上层 LLM 助手，例如查询分解、子答案聚合和结果聚合。
+承载问答域可复用的上层 LLM 助手，例如查询分解、独立问题改写、检索上下文回答合成和子答案聚合。
 
 ### `qa.services`
 
 承载问答域运行所需的基础服务，包括 LLM 实例化和 LangGraph checkpointer 工厂。
+
+### `qa.tools`
+
+承载问答域工具构建与工具调用中间件，例如知识库工具集构建。
+
+### `qa.fast`
+
+承载快速问答能力，使用线性 LangGraph 完成问题改写、一次知识库检索和回答合成。
 
 ### `qa.instant`
 

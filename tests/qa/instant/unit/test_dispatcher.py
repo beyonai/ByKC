@@ -161,6 +161,51 @@ async def test_dispatch_search_normalizes_header_values_to_strings():
 
 
 @pytest.mark.asyncio
+async def test_search_knowledge_public_method_dispatches_single_search():
+    kb = _kb(
+        "kb1",
+        "svc-a",
+        {OperationType.KNOWLEDGE_SEARCH: "/api/v1/knowledgeItems/search"},
+    )
+    ctx = _make_context(kb)
+    dispatcher = ServiceToolDispatcher([kb])
+    calls = []
+
+    async def fake_post(*, service_name=None, path=None, json=None, headers=None):  # pylint: disable=unused-argument
+        calls.append(json)
+        return {
+            "resultCode": "0",
+            "resultMsg": "success",
+            "resultObject": {
+                "data": [
+                    {
+                        "chunkText": "公开方法命中",
+                        "score": 0.88,
+                        "filePath": "/doc.md",
+                    }
+                ]
+            },
+        }
+
+    with patch(
+        "by_qa.qa.tools.knowledge_tools.post_discovered_json",
+        side_effect=fake_post,
+    ):
+        results = await dispatcher.search_knowledge("完整问题", ctx)
+
+    assert calls == [
+        {
+            "query": "完整问题",
+            "knCodeList": ["kb1"],
+            "topK": ctx.retrieval.top_k,
+            "searchMode": "mixedRecall",
+        }
+    ]
+    assert results[0]["content"] == "公开方法命中"
+    assert results[0]["source"] == "/doc.md"
+
+
+@pytest.mark.asyncio
 async def test_dispatch_list_dir_single_post():
     kb = _kb("kb1", "svc-a", {OperationType.LIST_DIR: "/api/v1/listDir"})
     ctx = _make_context(kb)

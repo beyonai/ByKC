@@ -6,9 +6,9 @@ from by_qa.qa.services.llm_service import LLMService
 class SubAnswerAggregatorAgent:
     """Aggregate sub-query answers and generate final answer to user's original question.
 
-    This agent is different from ResultAggregatorAgent:
-    - ResultAggregatorAgent: aggregates retrieval results (raw content from KB/web)
-    - SubAnswerAggregatorAgent: aggregates sub-answers (processed answers from sub-queries)
+    This agent is different from RetrievedContextAnswerSynthesizerAgent:
+    - RetrievedContextAnswerSynthesizerAgent: aggregates raw retrieval results
+    - SubAnswerAggregatorAgent: aggregates processed sub-query answers
     """
 
     SYSTEM_PROMPT = """你是一个专业的回答整合专家。你的任务是基于多个子查询的答案，生成对用户原始问题的完整回答。

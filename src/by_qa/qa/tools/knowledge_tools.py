@@ -126,6 +126,18 @@ class ServiceToolDispatcher:
     def build_tools(self) -> list[Any]:
         return [self._make_tool(OPERATION_REGISTRY[op]) for op in self._supported_ops]
 
+    async def search_knowledge(
+        self,
+        query: str,
+        runtime_context: QARuntimeContext,
+        kn_code_list: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Search configured knowledge bases without constructing a LangChain tool."""
+        return await self._dispatch_search(
+            {"query": query, "knCodeList": kn_code_list},
+            runtime_context,
+        )
+
     def _make_tool(self, spec: OperationSpec) -> Any:
         dispatcher = self
 

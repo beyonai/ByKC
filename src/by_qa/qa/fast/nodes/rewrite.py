@@ -45,26 +45,36 @@ async def rewrite_node(
     state: FastQAState,
     runtime: Runtime[QARuntimeContext] = None,
 ) -> dict[str, Any]:
-    """Rewrite the current query into a standalone retrieval query."""
+    """Rewrite the current query and split parallel sub-questions."""
     start_time = time.time()
     original_query = state["original_query"]
     llm_service = runtime.context.llm_service if runtime and runtime.context else None
     if llm_service is None:
+        sub_queries = [{"query_id": "sq_1", "query_text": original_query}]
         return {
+            "sub_queries": sub_queries,
             "rewritten_query": original_query,
             "rewrite_time": time.time() - start_time,
         }
     history = extract_user_query_history(state.get("messages", []))
     try:
-        rewritten_query = await StandaloneQuestionRewriterAgent(
+        texts = await StandaloneQuestionRewriterAgent(
             llm_service=llm_service
-        ).rewrite(original_query, history)
+        ).rewrite_and_split(original_query, history)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         error("[fast.rewrite] failed: %s", exc)
-        rewritten_query = original_query
-    info("[fast.rewrite] query=%s rewritten=%s", original_query, rewritten_query)
+        texts = [original_query]
+    sub_queries = [
+        {"query_id": f"sq_{i + 1}", "query_text": t} for i, t in enumerate(texts)
+    ]
+    info(
+        "[fast.rewrite] query=%s sub_queries=%s",
+        original_query,
+        [sq["query_text"] for sq in sub_queries],
+    )
     return {
-        "rewritten_query": rewritten_query,
+        "sub_queries": sub_queries,
+        "rewritten_query": sub_queries[0]["query_text"],
         "rewrite_time": time.time() - start_time,
     }
 

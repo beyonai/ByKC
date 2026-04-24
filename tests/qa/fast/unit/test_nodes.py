@@ -23,6 +23,7 @@ async def test_rewrite_node_falls_back_to_original_query_without_llm_service():
     result = await rewrite_node(
         {
             "original_query": "广州呢",
+            "sub_queries": [],
             "messages": [],
             "rewritten_query": "",
             "retrieval_results": [],
@@ -34,6 +35,7 @@ async def test_rewrite_node_falls_back_to_original_query_without_llm_service():
         runtime=None,
     )
 
+    assert result["sub_queries"] == [{"query_id": "sq_1", "query_text": "广州呢"}]
     assert result["rewritten_query"] == "广州呢"
     assert result["rewrite_time"] is not None
 
@@ -158,3 +160,76 @@ def test_fast_qa_state_has_sub_queries_field():
         "answer_time": None,
     }
     assert state["sub_queries"] == [{"query_id": "sq_1", "query_text": "test"}]
+
+
+@pytest.mark.asyncio
+async def test_rewrite_node_produces_sub_queries_for_parallel_question(monkeypatch):
+    class FakeRewriter:
+        def __init__(self, llm_service):
+            pass
+
+        async def rewrite_and_split(self, query, history):  # pylint: disable=unused-argument
+            return ["广州的营收是多少", "北京的营收是多少"]
+
+    monkeypatch.setattr(
+        "by_qa.qa.fast.nodes.rewrite.StandaloneQuestionRewriterAgent", FakeRewriter
+    )
+    runtime_context = QARuntimeContext(
+        retrieval=QARetrievalConfig(knowledge_bases=[]),
+        llm_service=FakeLLMService(),
+    )
+    result = await rewrite_node(
+        {
+            "original_query": "广州和北京的营收各是多少",
+            "sub_queries": [],
+            "rewritten_query": "",
+            "retrieval_results": [],
+            "final_answer": "",
+            "messages": [],
+            "rewrite_time": None,
+            "retrieval_time": None,
+            "answer_time": None,
+        },
+        runtime=SimpleNamespace(context=runtime_context),
+    )
+    assert result["sub_queries"] == [
+        {"query_id": "sq_1", "query_text": "广州的营收是多少"},
+        {"query_id": "sq_2", "query_text": "北京的营收是多少"},
+    ]
+    assert result["rewritten_query"] == "广州的营收是多少"
+
+
+@pytest.mark.asyncio
+async def test_rewrite_node_produces_single_sub_query_for_simple_question(monkeypatch):
+    class FakeRewriter:
+        def __init__(self, llm_service):
+            pass
+
+        async def rewrite_and_split(self, query, history):  # pylint: disable=unused-argument
+            return ["广州2024年的营收是多少"]
+
+    monkeypatch.setattr(
+        "by_qa.qa.fast.nodes.rewrite.StandaloneQuestionRewriterAgent", FakeRewriter
+    )
+    runtime_context = QARuntimeContext(
+        retrieval=QARetrievalConfig(knowledge_bases=[]),
+        llm_service=FakeLLMService(),
+    )
+    result = await rewrite_node(
+        {
+            "original_query": "广州2024年的营收是多少",
+            "sub_queries": [],
+            "rewritten_query": "",
+            "retrieval_results": [],
+            "final_answer": "",
+            "messages": [],
+            "rewrite_time": None,
+            "retrieval_time": None,
+            "answer_time": None,
+        },
+        runtime=SimpleNamespace(context=runtime_context),
+    )
+    assert result["sub_queries"] == [
+        {"query_id": "sq_1", "query_text": "广州2024年的营收是多少"}
+    ]
+    assert result["rewritten_query"] == "广州2024年的营收是多少"

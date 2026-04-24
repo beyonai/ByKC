@@ -1,5 +1,6 @@
 """LangGraph assembly for the fast QA capability."""
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 
 from by_qa.qa.common.context import QARuntimeContext
@@ -8,7 +9,7 @@ from by_qa.qa.fast.state import FastQAState
 from by_qa.qa.fast.types import NodeNames
 
 
-async def build_fast_qa_graph():
+async def build_fast_qa_graph(checkpointer: BaseCheckpointSaver | None = None):
     """Build the linear fast QA graph."""
     builder = StateGraph(FastQAState, context_schema=QARuntimeContext)
     builder.add_node(NodeNames.REWRITE.value, name2node[NodeNames.REWRITE])
@@ -18,7 +19,7 @@ async def build_fast_qa_graph():
     builder.add_edge(NodeNames.REWRITE.value, NodeNames.RETRIEVE.value)
     builder.add_edge(NodeNames.RETRIEVE.value, NodeNames.ANSWER.value)
     builder.add_edge(NodeNames.ANSWER.value, END)
-    return builder.compile()
+    return builder.compile(checkpointer=checkpointer)
 
 
 __all__ = ["NodeNames", "build_fast_qa_graph"]

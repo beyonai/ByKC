@@ -19,6 +19,10 @@ from by_qa.qa.fast.config import FastQAConfig
 from by_qa.qa.fast.graph import build_fast_qa_graph
 from by_qa.qa.fast.state import FastQAState
 from by_qa.qa.fast.types import NodeNames
+from by_qa.qa.services.checkpointer_factory import (
+    close_checkpointer_async,
+    create_checkpointer_async,
+)
 from by_qa.qa.services.llm_service import LLMService
 
 
@@ -31,6 +35,7 @@ class FastQAEngine:
         self.config = config or {}
         self._settings = get_settings()
         self._graph = None
+        self._checkpointer = None
         self._runtime_context: QARuntimeContext | None = None
 
     async def __aenter__(self):
@@ -41,12 +46,15 @@ class FastQAEngine:
         return False
 
     async def close(self) -> None:
-        """Release graph resources."""
+        """Release graph and checkpointer resources."""
+        await close_checkpointer_async(self._checkpointer)
+        self._checkpointer = None
         self._graph = None
 
     async def _get_graph(self):
         if self._graph is None:
-            self._graph = await build_fast_qa_graph()
+            self._checkpointer = await create_checkpointer_async(self._settings)
+            self._graph = await build_fast_qa_graph(checkpointer=self._checkpointer)
         return self._graph
 
     def _get_config_value(self, key: str, default=None):
@@ -121,7 +129,11 @@ class FastQAEngine:
                 if event.get("name") == "LangGraph":
                     continue
                 event_type = event.get("event", "unknown")
-                role = event.get("name", "unknown")
+                role = (
+                    event.get("metadata", {}).get("langgraph_node", "unknown")
+                    if event.get("name") == "ChatOpenAI"
+                    else event.get("name", "unknown")
+                )
                 instance_id = event.get("run_id")
                 parent_ids = event.get("parent_ids", [])
 
@@ -135,6 +147,17 @@ class FastQAEngine:
                         instance_id=instance_id,
                         parent_ids=parent_ids,
                     )
+                    continue
+
+                if event_type == "on_chat_model_stream":
+                    chunk = event["data"]["chunk"]
+                    if chunk.content:
+                        yield StreamEvent.token(
+                            content=chunk.content,
+                            role=role,
+                            instance_id=instance_id,
+                            parent_ids=parent_ids,
+                        )
                     continue
 
                 if event_type != "on_chain_end":
@@ -160,10 +183,14 @@ class FastQAEngine:
                     NodeNames.RETRIEVE.value,
                     NodeNames.ANSWER.value,
                 }:
+                    node_end_kwargs: dict[str, Any] = {}
+                    if role == NodeNames.REWRITE.value:
+                        node_end_kwargs["subQueries"] = result.get("sub_queries", [])
                     yield StreamEvent.node_end(
                         role=self._visible_role(role),
                         instance_id=instance_id,
                         parent_ids=parent_ids,
+                        **node_end_kwargs,
                     )
 
             yield StreamEvent.done(session_id=session_id, role="fast_qa")

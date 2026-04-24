@@ -102,6 +102,7 @@ async def test_answer_node_uses_answer_synthesizer(monkeypatch):
     result = await answer_node(
         {
             "original_query": "原问题",
+            "sub_queries": [],
             "rewritten_query": "完整问题",
             "messages": [],
             "retrieval_results": [{"content": "hit"}],
@@ -115,7 +116,7 @@ async def test_answer_node_uses_answer_synthesizer(monkeypatch):
 
     synthesize.assert_awaited_once_with(
         original_query="原问题",
-        rewritten_query="完整问题",
+        sub_queries=[{"query_id": "sq_1", "query_text": "完整问题"}],
         retrieval_results=[{"content": "hit"}],
     )
     assert result["final_answer"] == "最终答案"
@@ -335,3 +336,50 @@ async def test_answer_synthesizer_uses_sub_queries_in_prompt():
     user_msg = next(m for m in captured_messages if m["role"] == "user")
     assert "广州的营收是多少" in user_msg["content"]
     assert "北京的营收是多少" in user_msg["content"]
+
+
+@pytest.mark.asyncio
+async def test_answer_node_passes_sub_queries_to_synthesizer(monkeypatch):
+    synthesize = AsyncMock(return_value="最终答案")
+
+    class FakeAnswerAgent:
+        def __init__(self, llm_service):
+            pass
+
+        async def answer(self, **kwargs):
+            return await synthesize(**kwargs)
+
+    monkeypatch.setattr(
+        "by_qa.qa.fast.nodes.answer.RetrievedContextAnswerSynthesizerAgent",
+        FakeAnswerAgent,
+    )
+    runtime_context = QARuntimeContext(
+        retrieval=QARetrievalConfig(),
+        llm_service=FakeLLMService(),
+    )
+    result = await answer_node(
+        {
+            "original_query": "广州和北京的营收各是多少",
+            "sub_queries": [
+                {"query_id": "sq_1", "query_text": "广州的营收是多少"},
+                {"query_id": "sq_2", "query_text": "北京的营收是多少"},
+            ],
+            "rewritten_query": "广州的营收是多少",
+            "retrieval_results": [{"content": "hit"}],
+            "final_answer": "",
+            "messages": [],
+            "rewrite_time": None,
+            "retrieval_time": None,
+            "answer_time": None,
+        },
+        runtime=SimpleNamespace(context=runtime_context),
+    )
+    synthesize.assert_awaited_once_with(
+        original_query="广州和北京的营收各是多少",
+        sub_queries=[
+            {"query_id": "sq_1", "query_text": "广州的营收是多少"},
+            {"query_id": "sq_2", "query_text": "北京的营收是多少"},
+        ],
+        retrieval_results=[{"content": "hit"}],
+    )
+    assert result["final_answer"] == "最终答案"

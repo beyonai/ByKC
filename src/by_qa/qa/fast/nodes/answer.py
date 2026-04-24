@@ -27,11 +27,17 @@ async def answer_node(
     ):
         raise RuntimeError("llm_service is required for answer_node")
     start_time = time.time()
+    sub_queries = state.get("sub_queries") or [
+        {
+            "query_id": "sq_1",
+            "query_text": state.get("rewritten_query") or state["original_query"],
+        }
+    ]
     answer = await RetrievedContextAnswerSynthesizerAgent(
         llm_service=runtime.context.llm_service
     ).answer(
         original_query=state["original_query"],
-        rewritten_query=state.get("rewritten_query") or state["original_query"],
+        sub_queries=sub_queries,
         retrieval_results=state.get("retrieval_results", []),
     )
     return {

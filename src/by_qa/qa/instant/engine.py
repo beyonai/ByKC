@@ -15,7 +15,6 @@ from by_qa.qa.common.models import CoreInput, StreamEvent, StreamEventType
 from by_qa.qa.common.operation_registry import OPERATION_REGISTRY, OperationType
 from by_qa.qa.instant.graphs.main import NodeNames, build_instant_search_graph
 from by_qa.qa.instant.state import InstantSearchState
-from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
 
 USER_VISIBLE_ROLES: dict[str, list[str] | None] = {
     NodeNames.DECOMPOSER.value: None,
@@ -103,13 +102,10 @@ class InstantQAEngine(BaseQAEngine):
     THREAD_ID_PREFIX = "instant_search"
     _recursion_limit = 50
 
-    async def _get_graph(self):
-        if self._graph is None:
-            self._checkpointer = await create_checkpointer_async(self._settings)
-            self._graph = await build_instant_search_graph(
-                config=self.config, checkpointer=self._checkpointer
-            )
-        return self._graph
+    async def _build_graph(self):
+        return await build_instant_search_graph(
+            config=self.config, checkpointer=self._checkpointer
+        )
 
     async def _do_stream_search(
         self,
@@ -117,6 +113,7 @@ class InstantQAEngine(BaseQAEngine):
         session_id: str,
         message_id: str,
         config: RunnableConfig,
+        graph: Any,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Execute instant QA and stream results incrementally."""
         try:
@@ -134,7 +131,6 @@ class InstantQAEngine(BaseQAEngine):
                 aggregation_time=None,
             )
 
-            graph = await self._get_graph()
             event_filter = EventFilter(USER_VISIBLE_ROLES)
 
             async for event in graph.astream_events(

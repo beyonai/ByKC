@@ -13,7 +13,10 @@ from by_qa.qa.common.config import QARetrievalConfig
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.exceptions import ValidationError
 from by_qa.qa.common.models import CoreInput, StreamEvent
-from by_qa.qa.services.checkpointer_factory import close_checkpointer_async
+from by_qa.qa.services.checkpointer_factory import (
+    close_checkpointer_async,
+    create_checkpointer_async,
+)
 from by_qa.qa.services.llm_service import LLMService
 
 
@@ -24,7 +27,6 @@ class BaseQAEngine(ABC):
     _recursion_limit: int = 20
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
-        # THREAD_ID_PREFIX is a class-level annotation; verify a concrete value exists
         if not isinstance(getattr(type(self), "THREAD_ID_PREFIX", None), str):
             raise TypeError(
                 f"{type(self).__name__} must define THREAD_ID_PREFIX as a str"
@@ -36,6 +38,7 @@ class BaseQAEngine(ABC):
         self._runtime_context: QARuntimeContext | None = None
 
     async def __aenter__(self):
+        self._checkpointer = await create_checkpointer_async(self._settings)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -89,9 +92,17 @@ class BaseQAEngine(ABC):
         config["configurable"] = {"thread_id": f"{self.THREAD_ID_PREFIX}_{session_id}"}
         return session_id, message_id, config
 
-    @abstractmethod
     async def _get_graph(self):
-        """Build and return the compiled LangGraph."""
+        """Lazy-init: create checkpointer if needed, then build graph."""
+        if self._graph is None:
+            if self._checkpointer is None:
+                self._checkpointer = await create_checkpointer_async(self._settings)
+            self._graph = await self._build_graph()
+        return self._graph
+
+    @abstractmethod
+    async def _build_graph(self) -> Any:
+        """Build and return the compiled LangGraph using self._checkpointer."""
 
     @abstractmethod
     async def _do_stream_search(
@@ -100,22 +111,20 @@ class BaseQAEngine(ABC):
         session_id: str,
         message_id: str,
         config: RunnableConfig,
+        graph: Any,
     ) -> AsyncGenerator[StreamEvent, None]:
-        """Subclass-specific streaming logic; called by stream_search."""
+        """Subclass-specific streaming logic."""
 
     async def stream_search(
         self, input_data: CoreInput
     ) -> AsyncGenerator[StreamEvent, None]:
-        """Execute QA and stream user-visible events.
-
-        Calls _prepare_run then delegates to _do_stream_search so subclasses
-        can't forget to invoke _prepare_run.
-        """
+        """Execute QA and stream user-visible events."""
         session_id, message_id, config = self._prepare_run(
             input_data, recursion_limit=self._recursion_limit
         )
+        graph = await self._get_graph()
         async for event in self._do_stream_search(
-            input_data, session_id, message_id, config
+            input_data, session_id, message_id, config, graph
         ):
             yield event
 

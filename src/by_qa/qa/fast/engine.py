@@ -14,7 +14,6 @@ from by_qa.qa.fast.config import FastQAConfig
 from by_qa.qa.fast.graph import build_fast_qa_graph
 from by_qa.qa.fast.state import FastQAState
 from by_qa.qa.fast.types import NodeNames
-from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
 
 
 class FastQAEngine(BaseQAEngine):
@@ -23,11 +22,8 @@ class FastQAEngine(BaseQAEngine):
     THREAD_ID_PREFIX = "fast_qa"
     _recursion_limit = 20
 
-    async def _get_graph(self):
-        if self._graph is None:
-            self._checkpointer = await create_checkpointer_async(self._settings)
-            self._graph = await build_fast_qa_graph(checkpointer=self._checkpointer)
-        return self._graph
+    async def _build_graph(self):
+        return await build_fast_qa_graph(checkpointer=self._checkpointer)
 
     async def _do_stream_search(
         self,
@@ -35,6 +31,7 @@ class FastQAEngine(BaseQAEngine):
         session_id: str,
         message_id: str,
         config: RunnableConfig,
+        graph: Any,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Fast QA streaming logic."""
         role = None
@@ -52,7 +49,6 @@ class FastQAEngine(BaseQAEngine):
                 retrieval_time=None,
                 answer_time=None,
             )
-            graph = await self._get_graph()
 
             async for event in graph.astream_events(
                 initial_state,

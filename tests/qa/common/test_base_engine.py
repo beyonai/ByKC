@@ -12,16 +12,21 @@ from by_qa.qa.common.models import CoreInput, StreamEvent
 class ConcreteEngine(BaseQAEngine):
     THREAD_ID_PREFIX = "test_engine"
 
-    async def _get_graph(self):
+    async def _build_graph(self):
         return AsyncMock()
 
-    async def _do_stream_search(self, input_data, session_id, message_id, config):
+    async def _do_stream_search(
+        self, input_data, session_id, message_id, config, graph
+    ):
         yield StreamEvent.done(session_id=session_id, role="test")
 
 
 def _make_engine(config=None):
     with patch("by_qa.qa.common.base_engine.get_settings", return_value=object()):
-        return ConcreteEngine(config=config)
+        engine = ConcreteEngine(config=config)
+    # patch create_checkpointer_async so tests don't need real settings
+    engine._checkpointer = AsyncMock()
+    return engine
 
 
 def test_prepare_run_raises_on_empty_query():

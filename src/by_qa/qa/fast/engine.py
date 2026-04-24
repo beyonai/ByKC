@@ -1,55 +1,27 @@
 """Fast QA engine - linear rewrite, retrieval, and answer orchestration."""
 
-import json
 import traceback
-import uuid
 from dataclasses import asdict, fields, is_dataclass
 from typing import Any, AsyncGenerator
 
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 
-from by_qa.config import get_settings
-from by_qa.core.logger import error, info, set_message_id, set_session_id
-from by_qa.qa.common.config import QARetrievalConfig
-from by_qa.qa.common.context import QARuntimeContext
-from by_qa.qa.common.exceptions import ValidationError
+from by_qa.core.logger import error
+from by_qa.qa.common.base_engine import BaseQAEngine
 from by_qa.qa.common.models import CoreInput, StreamEvent
 from by_qa.qa.fast.config import FastQAConfig
 from by_qa.qa.fast.graph import build_fast_qa_graph
 from by_qa.qa.fast.state import FastQAState
 from by_qa.qa.fast.types import NodeNames
-from by_qa.qa.services.checkpointer_factory import (
-    close_checkpointer_async,
-    create_checkpointer_async,
-)
-from by_qa.qa.services.llm_service import LLMService
+from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
 
 
-class FastQAEngine:
+class FastQAEngine(BaseQAEngine):
     """Fast QA engine backed by a linear LangGraph."""
 
     THREAD_ID_PREFIX = "fast_qa"
-
-    def __init__(self, config: FastQAConfig | dict[str, Any] | None = None):
-        self.config = config or {}
-        self._settings = get_settings()
-        self._graph = None
-        self._checkpointer = None
-        self._runtime_context: QARuntimeContext | None = None
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.close()
-        return False
-
-    async def close(self) -> None:
-        """Release graph and checkpointer resources."""
-        await close_checkpointer_async(self._checkpointer)
-        self._checkpointer = None
-        self._graph = None
+    _recursion_limit = 20
 
     async def _get_graph(self):
         if self._graph is None:
@@ -57,41 +29,14 @@ class FastQAEngine:
             self._graph = await build_fast_qa_graph(checkpointer=self._checkpointer)
         return self._graph
 
-    def _get_config_value(self, key: str, default=None):
-        if isinstance(self.config, dict):
-            return self.config.get(key, default)
-        return getattr(self.config, key, default)
-
-    def _build_runtime_context(self) -> QARuntimeContext:
-        retrieval_config = self._get_config_value("retrieval", {})
-        if isinstance(retrieval_config, dict):
-            retrieval_config = QARetrievalConfig(**retrieval_config)
-        if not isinstance(retrieval_config, QARetrievalConfig):
-            retrieval_config = QARetrievalConfig()
-        llm_service = self._get_config_value("llm_service") or LLMService()
-        return QARuntimeContext(retrieval=retrieval_config, llm_service=llm_service)
-
-    def _get_runtime_context(self) -> QARuntimeContext:
-        if self._runtime_context is None:
-            self._runtime_context = self._build_runtime_context()
-        return self._runtime_context
-
-    async def stream_search(
-        self, input_data: CoreInput
+    async def _do_stream_search(
+        self,
+        input_data: CoreInput,
+        session_id: str,
+        message_id: str,
+        config: RunnableConfig,
     ) -> AsyncGenerator[StreamEvent, None]:
-        """Execute fast QA and stream user-visible events."""
-        if not input_data.query or not input_data.query.strip():
-            raise ValidationError("Query cannot be empty")
-
-        session_id = input_data.session_id or str(uuid.uuid4())
-        message_id = input_data.message_id or str(uuid.uuid4())
-        set_session_id(session_id)
-        set_message_id(message_id)
-        info(
-            "[fast.stream_search] Input - query: %s",
-            json.dumps(input_data.model_dump(), ensure_ascii=False),
-        )
-
+        """Fast QA streaming logic."""
         role = None
         instance_id = None
         parent_ids = []
@@ -108,15 +53,6 @@ class FastQAEngine:
                 answer_time=None,
             )
             graph = await self._get_graph()
-            config = RunnableConfig(
-                callbacks=[],
-                metadata={"session_id": session_id, "message_id": message_id},
-                recursion_limit=20,
-                run_id=message_id,
-            )
-            config["configurable"] = {
-                "thread_id": f"{self.THREAD_ID_PREFIX}_{session_id}"
-            }
 
             async for event in graph.astream_events(
                 initial_state,

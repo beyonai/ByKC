@@ -88,3 +88,9 @@ def test_get_config_value_from_dict():
     engine = _make_engine(config={"key": "val"})
     assert engine._get_config_value("key") == "val"
     assert engine._get_config_value("missing", "default") == "default"
+
+
+def test_base_engine_exported_from_common():
+    from by_qa.qa import common as qa_common
+
+    assert hasattr(qa_common, "BaseQAEngine")

@@ -1,5 +1,6 @@
 """Single-hop subgraph builder for the instant-search capability."""
 
+from enum import Enum
 from typing import Any, Dict, List
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -9,8 +10,13 @@ from by_qa.core.logger import info
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.messages import agent_metadata
 from by_qa.qa.instant.agents.single_hop_react import build_single_hop_agent_graph
-from by_qa.qa.instant.nodes.node_enum import NodeNames
 from by_qa.qa.instant.state import SingleHopState, SubAnswer
+
+
+class SingleHopNodeNames(str, Enum):
+    ENTRY = "single_hop_entry"
+    AGENT = "single_hop_agent"
+    SUMMARY = "single_hop_summary"
 
 
 def _extract_final_answer(messages: List[Any]) -> str:
@@ -79,7 +85,7 @@ async def single_hop_entry_node(state: SingleHopState) -> Dict[str, Any]:
         "messages": [
             HumanMessage(
                 content=f"请回答这个单跳问题：{query_text}",
-                additional_kwargs=agent_metadata(NodeNames.SINGLE_HOP_ENTRY.value),
+                additional_kwargs=agent_metadata(SingleHopNodeNames.ENTRY.value),
             )
         ],
         "retrieval_results": {"mode": "RESET", "data": []},
@@ -152,17 +158,13 @@ async def build_single_hop_subgraph(config=None, llm_service=None, checkpointer=
     )
 
     workflow = StateGraph(SingleHopState, context_schema=QARuntimeContext)
-    workflow.add_node(NodeNames.SINGLE_HOP_ENTRY.value, single_hop_entry_node)
-    workflow.add_node(NodeNames.SINGLE_HOP_AGENT.value, agent_graph)
-    workflow.add_node(NodeNames.SINGLE_HOP_SUMMARY.value, single_hop_summary_node)
-    workflow.set_entry_point(NodeNames.SINGLE_HOP_ENTRY.value)
-    workflow.add_edge(
-        NodeNames.SINGLE_HOP_ENTRY.value, NodeNames.SINGLE_HOP_AGENT.value
-    )
-    workflow.add_edge(
-        NodeNames.SINGLE_HOP_AGENT.value, NodeNames.SINGLE_HOP_SUMMARY.value
-    )
-    workflow.add_edge(NodeNames.SINGLE_HOP_SUMMARY.value, END)
+    workflow.add_node(SingleHopNodeNames.ENTRY.value, single_hop_entry_node)
+    workflow.add_node(SingleHopNodeNames.AGENT.value, agent_graph)
+    workflow.add_node(SingleHopNodeNames.SUMMARY.value, single_hop_summary_node)
+    workflow.set_entry_point(SingleHopNodeNames.ENTRY.value)
+    workflow.add_edge(SingleHopNodeNames.ENTRY.value, SingleHopNodeNames.AGENT.value)
+    workflow.add_edge(SingleHopNodeNames.AGENT.value, SingleHopNodeNames.SUMMARY.value)
+    workflow.add_edge(SingleHopNodeNames.SUMMARY.value, END)
     return workflow.compile(checkpointer=checkpointer)
 
 

@@ -12,20 +12,22 @@ from by_qa.qa.common.base_engine import BaseQAEngine
 from by_qa.qa.common.models import CoreInput, StreamEvent, StreamEventType
 from by_qa.qa.common.operation_registry import OPERATION_REGISTRY, OperationType
 from by_qa.qa.instant.graphs.main import NodeNames, build_instant_search_graph
+from by_qa.qa.instant.graphs.multi_hop import MultiHopNodeNames
+from by_qa.qa.instant.graphs.single_hop import SingleHopNodeNames
 from by_qa.qa.instant.state import InstantSearchState
 
 USER_VISIBLE_ROLES: dict[str, list[str] | None] = {
     NodeNames.DECOMPOSER.value: None,
     NodeNames.CONTEXT_MANAGER.value: None,
     NodeNames.SINGLE_HOP_WORKER.value: None,
-    NodeNames.SINGLE_HOP_AGENT.value: None,
-    NodeNames.SINGLE_HOP_SUMMARY.value: None,
+    SingleHopNodeNames.AGENT.value: None,
+    SingleHopNodeNames.SUMMARY.value: None,
     NodeNames.MULTI_HOP_WORKER.value: None,
     NodeNames.SUBANSWER_AGGREGATOR.value: None,
     NodeNames.FINAL_ANSWER.value: None,
     OPERATION_REGISTRY[OperationType.KNOWLEDGE_SEARCH].tool_name: None,
-    NodeNames.MULTI_HOP_AGENT.value: None,
-    NodeNames.MULTI_HOP_SUMMARY.value: None,
+    MultiHopNodeNames.AGENT.value: None,
+    MultiHopNodeNames.SUMMARY.value: None,
     "model": [StreamEventType.TOKEN.value],
 }
 

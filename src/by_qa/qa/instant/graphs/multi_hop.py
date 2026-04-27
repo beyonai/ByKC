@@ -1,5 +1,6 @@
 """Multi-hop subgraph builder for the instant-search capability."""
 
+from enum import Enum
 from typing import Any, Dict
 
 from langchain_core.messages import HumanMessage
@@ -10,8 +11,14 @@ from by_qa.qa.agents.multi_hop_summarizer import build_multi_hop_summary_subgrap
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.messages import agent_metadata
 from by_qa.qa.instant.agents.multi_hop_react import build_multi_hop_agent_graph
-from by_qa.qa.instant.nodes.node_enum import NodeNames
 from by_qa.qa.instant.state import MultiHopState, SubAnswer
+
+
+class MultiHopNodeNames(str, Enum):
+    ENTRY = "multi_hop_entry"
+    AGENT = "multi_hop_agent"
+    EXIT = "multi_hop_exit"
+    SUMMARY = "multi_hop_summary"
 
 
 def _normalize_to_list(value):
@@ -35,7 +42,7 @@ async def multi_hop_entry_node(state: MultiHopState) -> Dict[str, Any]:
         "messages": [
             HumanMessage(
                 content=message_content,
-                additional_kwargs=agent_metadata(NodeNames.MULTI_HOP_ENTRY.value),
+                additional_kwargs=agent_metadata(MultiHopNodeNames.ENTRY.value),
             )
         ],
         "reasoning_plan": reasoning_plan,
@@ -104,15 +111,13 @@ async def build_multi_hop_subgraph(config=None, llm_service=None, checkpointer=N
     )
 
     workflow = StateGraph(MultiHopState, context_schema=QARuntimeContext)
-    workflow.add_node(NodeNames.MULTI_HOP_ENTRY.value, multi_hop_entry_node)
-    workflow.add_node(NodeNames.MULTI_HOP_AGENT.value, agent_graph)
-    workflow.add_node(NodeNames.MULTI_HOP_SUMMARY.value, summary_graph)
-    workflow.set_entry_point(NodeNames.MULTI_HOP_ENTRY.value)
-    workflow.add_edge(NodeNames.MULTI_HOP_ENTRY.value, NodeNames.MULTI_HOP_AGENT.value)
-    workflow.add_edge(
-        NodeNames.MULTI_HOP_AGENT.value, NodeNames.MULTI_HOP_SUMMARY.value
-    )
-    workflow.add_edge(NodeNames.MULTI_HOP_SUMMARY.value, END)
+    workflow.add_node(MultiHopNodeNames.ENTRY.value, multi_hop_entry_node)
+    workflow.add_node(MultiHopNodeNames.AGENT.value, agent_graph)
+    workflow.add_node(MultiHopNodeNames.SUMMARY.value, summary_graph)
+    workflow.set_entry_point(MultiHopNodeNames.ENTRY.value)
+    workflow.add_edge(MultiHopNodeNames.ENTRY.value, MultiHopNodeNames.AGENT.value)
+    workflow.add_edge(MultiHopNodeNames.AGENT.value, MultiHopNodeNames.SUMMARY.value)
+    workflow.add_edge(MultiHopNodeNames.SUMMARY.value, END)
     compiled = workflow.compile(checkpointer=checkpointer)
     info("[multi_hop] Compiled multi-hop subgraph with streaming support")
     return compiled

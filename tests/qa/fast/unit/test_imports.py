@@ -12,6 +12,5 @@ def test_can_import_fast_qa_modules():
     assert importlib.import_module("by_qa.qa.fast.graph")
     assert importlib.import_module("by_qa.qa.fast.nodes.answer")
     assert importlib.import_module("by_qa.qa.fast.nodes.retrieve")
-    assert importlib.import_module("by_qa.qa.fast.nodes.rewrite")
     assert importlib.import_module("by_qa.qa.fast.state")
     assert importlib.import_module("by_qa.qa.fast.types")

@@ -3,7 +3,7 @@
 import json
 import time
 from dataclasses import dataclass
-from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
+from typing import Annotated, Any, Dict, Literal, Optional, TypedDict
 
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage
@@ -13,6 +13,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
 from by_qa.config import get_settings
 from by_qa.core.logger import info
 from by_qa.qa.common.context import QARuntimeContext
+from by_qa.qa.common.messages import agent_metadata, extract_user_query_history
 from by_qa.qa.services.llm_service import LLMService
 
 
@@ -275,40 +276,12 @@ def _parse_decomposition_response(
         )
 
 
-def _extract_user_queries(messages: List[Any], max_turns: int = 5) -> str:
-    """Extract recent user queries from message history for conversation context."""
-    if not messages:
-        return ""
-    user_queries = []
-    first_user_found = False
-    for msg in reversed(messages):
-        if isinstance(msg, dict):
-            role = msg.get("role", "")
-            content = msg.get("content", "")
-        elif isinstance(msg, HumanMessage):
-            role = "user"
-            content = msg.content
-        else:
-            continue
-        if role == "user" and content:
-            if not first_user_found:
-                first_user_found = True
-                continue
-            if len(content) > 200:
-                content = content[:200] + "..."
-            user_queries.append(content)
-            if len(user_queries) >= max_turns:
-                break
-    user_queries.reverse()
-    return "\n".join(f"用户: {q}" for q in user_queries)
-
-
 async def decomposer_entry_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Entry node: build the HumanMessage for the decomposer agent."""
     max_sub_queries = get_settings().decomposer_max_sub_queries
     original_query = state["original_query"]
     messages = state.get("messages", [])
-    conversation_history = _extract_user_queries(messages, max_turns=5)
+    conversation_history = extract_user_query_history(messages, max_turns=5)
     if conversation_history:
         info(
             f"[decomposer] Using {len(conversation_history.split(chr(10)))} "
@@ -323,7 +296,9 @@ async def decomposer_entry_node(state: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "messages": [
             RemoveMessage(id=REMOVE_ALL_MESSAGES),
-            HumanMessage(content=user_content),
+            HumanMessage(
+                content=user_content, additional_kwargs=agent_metadata("decomposer")
+            ),
         ],
         "sub_queries": [],
         "decomposition_metadata": None,

@@ -20,5 +20,6 @@ def test_can_import_shared_qa_runtime_modules():
     assert importlib.import_module("by_qa.qa.common.config")
     assert importlib.import_module("by_qa.qa.common.context")
     assert importlib.import_module("by_qa.qa.common.context_manager")
+    assert importlib.import_module("by_qa.qa.common.messages")
     assert importlib.import_module("by_qa.qa.common.operation_registry")
     assert importlib.import_module("by_qa.qa.tools.knowledge_tools")

@@ -7,6 +7,7 @@ from langgraph.graph import END, StateGraph
 
 from by_qa.core.logger import info
 from by_qa.qa.common.context import QARuntimeContext
+from by_qa.qa.common.messages import agent_metadata
 from by_qa.qa.instant.agents.single_hop_react import build_single_hop_agent_graph
 from by_qa.qa.instant.nodes.node_enum import NodeNames
 from by_qa.qa.instant.state import SingleHopState, SubAnswer
@@ -75,7 +76,12 @@ async def single_hop_entry_node(state: SingleHopState) -> Dict[str, Any]:
     query_text = sub_query.get("query_text", "")
     info(f"[single_hop] Entry node for: {query_text[:50]}...")
     return {
-        "messages": [HumanMessage(content=f"请回答这个单跳问题：{query_text}")],
+        "messages": [
+            HumanMessage(
+                content=f"请回答这个单跳问题：{query_text}",
+                additional_kwargs=agent_metadata("single_hop"),
+            )
+        ],
         "retrieval_results": {"mode": "RESET", "data": []},
         "cited_indices": [],
         "result_counter": 0,

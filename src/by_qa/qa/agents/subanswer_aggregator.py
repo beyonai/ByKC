@@ -10,6 +10,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
 
 from by_qa.core.logger import info
 from by_qa.qa.common.context import QARuntimeContext
+from by_qa.qa.common.messages import agent_metadata
 from by_qa.qa.common.reducers import merge_list_with_mode
 from by_qa.qa.services.llm_service import LLMService
 
@@ -97,7 +98,10 @@ async def aggregator_entry_node(state: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "messages": [
             RemoveMessage(id=REMOVE_ALL_MESSAGES),
-            HumanMessage(content=user_content),
+            HumanMessage(
+                content=user_content,
+                additional_kwargs=agent_metadata("subanswer_aggregator"),
+            ),
         ],
         "aggregation_time": time.time(),
     }

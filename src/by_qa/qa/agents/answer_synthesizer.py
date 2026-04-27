@@ -10,6 +10,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
 
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.context_manager import build_context_for_llm
+from by_qa.qa.common.messages import agent_metadata
 from by_qa.qa.services.llm_service import LLMService
 
 DEFAULT_RETRIEVED_CONTEXT_ANSWER_PROMPT = """你是一个严谨的知识库问答助手。
@@ -58,7 +59,8 @@ async def answer_entry_node(state: AnswerSynthesizerAgentState) -> Dict[str, Any
                     f"检索用子问题：\n{sub_queries_text}\n\n"
                     f"检索结果：\n{context}\n\n"
                     "请基于以上检索结果，针对每个子问题分别回答，最后汇总。"
-                )
+                ),
+                additional_kwargs=agent_metadata("answer_synthesizer"),
             ),
         ],
         "answer_time": time.time(),

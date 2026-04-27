@@ -10,6 +10,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
 
 from by_qa.core.logger import info
 from by_qa.qa.common.context import QARuntimeContext
+from by_qa.qa.common.messages import agent_metadata, extract_user_query_history
 from by_qa.qa.services.llm_service import LLMService
 
 DEFAULT_STANDALONE_QUESTION_REWRITE_PROMPT = """你是一个问题改写助手。结合用户历史输入，完成以下两件事：
@@ -33,31 +34,6 @@ class RewriterAgentState(TypedDict):
     rewrite_time: Optional[float]
 
 
-def extract_user_query_history(messages: list[Any], max_turns: int = 5) -> str:
-    """Extract previous user inputs, excluding the current turn."""
-    user_queries: list[str] = []
-    first_user_found = False
-    for msg in reversed(messages or []):
-        if isinstance(msg, dict):
-            role = msg.get("role", "")
-            content = msg.get("content", "")
-        elif isinstance(msg, HumanMessage):
-            role = "user"
-            content = msg.content
-        else:
-            continue
-        if role != "user" or not content:
-            continue
-        if not first_user_found:
-            first_user_found = True
-            continue
-        user_queries.append(str(content))
-        if len(user_queries) >= max_turns:
-            break
-    user_queries.reverse()
-    return "\n".join(f"用户: {query}" for query in user_queries)
-
-
 async def rewriter_entry_node(state: RewriterAgentState) -> Dict[str, Any]:
     """Build HumanMessage from query and history, clear inherited messages."""
     original_query = state.get("original_query", "")
@@ -77,7 +53,9 @@ async def rewriter_entry_node(state: RewriterAgentState) -> Dict[str, Any]:
     return {
         "messages": [
             RemoveMessage(id=REMOVE_ALL_MESSAGES),
-            HumanMessage(content=user_content),
+            HumanMessage(
+                content=user_content, additional_kwargs=agent_metadata("rewriter")
+            ),
         ],
         "rewrite_time": time.time(),
         "sub_queries": [],
@@ -145,7 +123,6 @@ __all__ = [
     "DEFAULT_STANDALONE_QUESTION_REWRITE_PROMPT",
     "RewriterAgentState",
     "build_rewriter_subgraph",
-    "extract_user_query_history",
     "rewriter_entry_node",
     "rewriter_summary_node",
 ]

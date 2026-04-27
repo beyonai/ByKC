@@ -12,6 +12,7 @@ except ImportError:
 
 from by_qa.core.logger import error, info
 from by_qa.qa.common.context import QARuntimeContext
+from by_qa.qa.common.messages import agent_metadata
 from by_qa.qa.instant.agents.multi_hop_react import build_multi_hop_agent_graph
 from by_qa.qa.instant.nodes.node_enum import NodeNames
 from by_qa.qa.instant.state import MultiHopState, SubAnswer
@@ -163,7 +164,11 @@ async def multi_hop_entry_node(state: MultiHopState) -> Dict[str, Any]:
     message_content = f"请回答: {sub_query.get('query_text', '')}\n参考下面的查询步骤:\n{'\n'.join(reasoning_plan)}"
     info(f"[multi_hop] Entry node for: {sub_query.get('query_text', '')[:50]}...")
     return {
-        "messages": [HumanMessage(content=message_content)],
+        "messages": [
+            HumanMessage(
+                content=message_content, additional_kwargs=agent_metadata("multi_hop")
+            )
+        ],
         "reasoning_plan": reasoning_plan,
         "current_step": 0,
         "current_hop": 0,

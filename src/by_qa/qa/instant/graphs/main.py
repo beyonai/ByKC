@@ -8,6 +8,7 @@ from langgraph.types import Send
 
 from by_qa.config import get_settings
 from by_qa.qa.agents.query_decomposer import build_decomposer_subgraph
+from by_qa.qa.agents.subanswer_aggregator import build_aggregator_subgraph
 from by_qa.qa.common.config import QAEngineConfig, QARetrievalConfig
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.instant.graphs.multi_hop import build_multi_hop_subgraph
@@ -121,9 +122,10 @@ async def build_instant_search_graph(
     )
     builder.add_node(NodeNames.SINGLE_HOP_WORKER.value, single_hop_worker)
     builder.add_node(NodeNames.MULTI_HOP_WORKER.value, multi_hop_worker)
-    builder.add_node(
-        NodeNames.SUBANSWER_AGGREGATOR.value, _node(NodeNames.SUBANSWER_AGGREGATOR)
+    aggregator_subgraph = await build_aggregator_subgraph(
+        llm_service=llm_service, checkpointer=checkpointer
     )
+    builder.add_node(NodeNames.SUBANSWER_AGGREGATOR.value, aggregator_subgraph)
 
     builder.add_edge(START, NodeNames.DECOMPOSER.value)
     builder.add_edge(NodeNames.DECOMPOSER.value, NodeNames.ROUTER.value)

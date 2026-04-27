@@ -1,17 +1,19 @@
-"""Sub-answer aggregator for synthesizing sub-query answers into final answer."""
+"""Sub-answer aggregator agent using LangGraph create_agent."""
 
+import time
+from typing import Annotated, Any, Dict, Optional, TypedDict
+
+from langchain.agents import create_agent
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage
+from langgraph.graph import END, StateGraph
+from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
+
+from by_qa.core.logger import info
+from by_qa.qa.common.context import QARuntimeContext
+from by_qa.qa.common.reducers import merge_list_with_mode
 from by_qa.qa.services.llm_service import LLMService
 
-
-class SubAnswerAggregatorAgent:
-    """Aggregate sub-query answers and generate final answer to user's original question.
-
-    This agent is different from RetrievedContextAnswerSynthesizerAgent:
-    - RetrievedContextAnswerSynthesizerAgent: aggregates raw retrieval results
-    - SubAnswerAggregatorAgent: aggregates processed sub-query answers
-    """
-
-    SYSTEM_PROMPT = """你是一个专业的回答整合专家。你的任务是基于多个子查询的答案，生成对用户原始问题的完整回答。
+SYSTEM_PROMPT = """你是一个专业的回答整合专家。你的任务是基于多个子查询的答案，生成对用户原始问题的完整回答。
 
 ## 核心要求
 
@@ -37,58 +39,148 @@ class SubAnswerAggregatorAgent:
 3. 如果某些子查询未能找到答案，说明该部分信息缺失
 4. 回答应该直接回应用户的原始问题"""
 
-    def __init__(self, llm_service: LLMService):
-        self._llm_service = llm_service
 
-    def _build_sub_answers_context(self, sub_answers: list[dict]) -> str:
-        if not sub_answers:
-            return "未找到子查询答案。"
+def _build_sub_answers_context(sub_answers: list[dict]) -> str:
+    """Format sub-answers into a context string for the aggregator."""
+    if not sub_answers:
+        return "未找到子查询答案。"
 
-        parts: list[str] = []
-        for index, sub_answer in enumerate(sub_answers, 1):
-            query_text = sub_answer.get("sub_query_text", f"子查询 {index}")
-            query_type = sub_answer.get("query_type", "single-hop")
-            answer = sub_answer.get("answer", "")
-            reasoning_chain = sub_answer.get("reasoning_chain", [])
-            confidence = sub_answer.get("confidence", 0.0)
-            part = (
-                f"## 子查询 {index}: {query_text}\n"
-                f"类型: {query_type}\n"
-                f"置信度: {confidence:.2f}\n\n"
-                f"### 答案\n{answer}\n"
-            )
-            if reasoning_chain:
-                part += "\n### 推理过程\n"
-                for step in reasoning_chain:
-                    part += f"- {step}\n"
-            parts.append(part)
-        return "\n\n---\n\n".join(parts)
-
-    async def aggregate(
-        self,
-        original_query: str,
-        sub_answers: list[dict],
-    ) -> str:
-        sub_answers_context = self._build_sub_answers_context(sub_answers)
-
-        messages = [
-            {"role": "system", "content": self.SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": f"""用户原始问题：{original_query}
-
-子查询答案：
-{sub_answers_context}
-
-请基于以上子查询答案，生成对用户原始问题的完整回答。""",
-            },
-        ]
-
-        llm = self._llm_service
-        response = await llm.generate(
-            messages=messages,
-            model_type="generator",
-            json_mode=False,
+    parts: list[str] = []
+    for index, sub_answer in enumerate(sub_answers, 1):
+        query_text = sub_answer.get("sub_query_text", f"子查询 {index}")
+        query_type = sub_answer.get("query_type", "single-hop")
+        answer = sub_answer.get("answer", "")
+        reasoning_chain = sub_answer.get("reasoning_chain", [])
+        confidence = sub_answer.get("confidence", 0.0)
+        part = (
+            f"## 子查询 {index}: {query_text}\n"
+            f"类型: {query_type}\n"
+            f"置信度: {confidence:.2f}\n\n"
+            f"### 答案\n{answer}\n"
         )
+        if reasoning_chain:
+            part += "\n### 推理过程\n"
+            for step in reasoning_chain:
+                part += f"- {step}\n"
+        parts.append(part)
+    return "\n\n---\n\n".join(parts)
 
-        return response
+
+class AggregatorAgentState(TypedDict):
+    """State for the aggregator subgraph."""
+
+    messages: Annotated[list, add_messages]
+    original_query: str
+    sub_answers: Annotated[list, merge_list_with_mode]
+    final_answer: str
+    aggregation_time: Optional[float]
+
+
+async def aggregator_entry_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Entry node: build the HumanMessage for the aggregator agent."""
+    original_query = state["original_query"]
+    sub_answers = state.get("sub_answers", [])
+
+    if not sub_answers:
+        return {
+            "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES)],
+            "final_answer": "未能生成答案",
+            "aggregation_time": 0.0,
+        }
+
+    sub_answers_context = _build_sub_answers_context(sub_answers)
+    user_content = (
+        f"用户原始问题：{original_query}\n\n"
+        f"子查询答案：\n{sub_answers_context}\n\n"
+        "请基于以上子查询答案，生成对用户原始问题的完整回答。"
+    )
+    return {
+        "messages": [
+            RemoveMessage(id=REMOVE_ALL_MESSAGES),
+            HumanMessage(content=user_content),
+        ],
+        "aggregation_time": time.time(),
+    }
+
+
+async def aggregator_summary_node(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Summary node: extract the final answer from the agent response."""
+    if state.get("final_answer") == "未能生成答案":
+        return {}
+
+    messages = state.get("messages", [])
+    original_query = state.get("original_query", "")
+    start_time = state.get("aggregation_time", time.time())
+
+    final_answer = ""
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage) and getattr(msg, "content", ""):
+            final_answer = msg.content
+            break
+        if isinstance(msg, dict) and msg.get("type") == "ai" and msg.get("content"):
+            final_answer = msg["content"]
+            break
+
+    aggregation_time = time.time() - start_time
+    info(f"[subanswer_aggregator] Aggregation completed in {aggregation_time:.2f}s ")
+    info(
+        "[subanswer_aggregator] Aggregation generated final answer: "
+        f"query={original_query}, final_answer={final_answer}"
+    )
+    return {
+        "final_answer": final_answer,
+        "aggregation_time": aggregation_time,
+    }
+
+
+def _route_after_entry(state: Dict[str, Any]) -> str:
+    """Route after entry: skip agent if sub_answers was empty."""
+    if state.get("final_answer") == "未能生成答案":
+        return "aggregator_summary"
+    return "aggregator_agent"
+
+
+async def build_aggregator_subgraph(
+    *,
+    llm_service: LLMService,
+    system_prompt: str | None = None,
+    checkpointer=None,
+):
+    """Build the aggregator subgraph: entry → create_agent → summary."""
+    llm = await llm_service._get_streaming_model("generator")
+
+    agent_graph = create_agent(
+        model=llm,
+        tools=[],
+        state_schema=AggregatorAgentState,
+        context_schema=QARuntimeContext,
+        checkpointer=checkpointer,
+        system_prompt=system_prompt or SYSTEM_PROMPT,
+    )
+
+    workflow = StateGraph(AggregatorAgentState, context_schema=QARuntimeContext)
+    workflow.add_node("aggregator_entry", aggregator_entry_node)
+    workflow.add_node("aggregator_agent", agent_graph)
+    workflow.add_node("aggregator_summary", aggregator_summary_node)
+    workflow.set_entry_point("aggregator_entry")
+    workflow.add_conditional_edges(
+        "aggregator_entry",
+        _route_after_entry,
+        {
+            "aggregator_agent": "aggregator_agent",
+            "aggregator_summary": "aggregator_summary",
+        },
+    )
+    workflow.add_edge("aggregator_agent", "aggregator_summary")
+    workflow.add_edge("aggregator_summary", END)
+    return workflow.compile(checkpointer=checkpointer)
+
+
+__all__ = [
+    "AggregatorAgentState",
+    "SYSTEM_PROMPT",
+    "_build_sub_answers_context",
+    "aggregator_entry_node",
+    "aggregator_summary_node",
+    "build_aggregator_subgraph",
+]

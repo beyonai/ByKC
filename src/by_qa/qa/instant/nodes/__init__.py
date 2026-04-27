@@ -4,11 +4,9 @@ from by_qa.qa.common.context_manager import context_manager_node
 from by_qa.qa.instant.nodes.final_answer import final_answer_from_messages_node
 from by_qa.qa.instant.nodes.node_enum import NodeNames
 from by_qa.qa.instant.nodes.router import router_conditional_edge, router_node
-from by_qa.qa.instant.nodes.subanswer_aggregator import subanswer_aggregator_node
 
 name2node = {
     NodeNames.ROUTER: router_node,
-    NodeNames.SUBANSWER_AGGREGATOR: subanswer_aggregator_node,
     NodeNames.CONTEXT_MANAGER: context_manager_node,
     NodeNames.FINAL_ANSWER: final_answer_from_messages_node,
 }
@@ -20,5 +18,4 @@ __all__ = [
     "name2node",
     "router_conditional_edge",
     "router_node",
-    "subanswer_aggregator_node",
 ]

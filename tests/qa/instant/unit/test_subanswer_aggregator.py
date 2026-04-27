@@ -1,60 +1,60 @@
-"""Tests for the instant QA sub-answer aggregator node."""
-
-from types import SimpleNamespace
+"""Tests for the sub-answer aggregator agent."""
 
 import pytest
 
-from by_qa.qa.common.config import QARetrievalConfig
-from by_qa.qa.common.context import QARuntimeContext
-from by_qa.qa.instant.nodes.subanswer_aggregator import subanswer_aggregator_node
+from by_qa.qa.agents.subanswer_aggregator import (
+    _build_sub_answers_context,
+    aggregator_entry_node,
+)
 
 
-class FakeLLMService:
-    async def generate(self, *_args, **_kwargs):
-        return "完整聚合答案"
+def test_build_sub_answers_context_formats_correctly():
+    context = _build_sub_answers_context(
+        [
+            {
+                "sub_query_text": "子问题 1",
+                "query_type": "single-hop",
+                "answer": "子答案 1",
+                "confidence": 0.9,
+            }
+        ]
+    )
+    assert "子问题 1" in context
+    assert "子答案 1" in context
+    assert "0.90" in context
+
+
+def test_build_sub_answers_context_empty():
+    assert _build_sub_answers_context([]) == "未找到子查询答案。"
 
 
 @pytest.mark.asyncio
-async def test_subanswer_aggregator_logs_generated_final_answer(monkeypatch):
-    info_calls: list[str] = []
-    monkeypatch.setattr(
-        "by_qa.qa.instant.nodes.subanswer_aggregator.info",
-        lambda message: info_calls.append(message),
-    )
-    runtime = SimpleNamespace(
-        context=QARuntimeContext(
-            retrieval=QARetrievalConfig(),
-            llm_service=FakeLLMService(),
-        )
-    )
-
-    result = await subanswer_aggregator_node(
+async def test_aggregator_entry_node_builds_human_message():
+    result = await aggregator_entry_node(
         {
             "original_query": "复合问题",
             "sub_answers": [
-                {
-                    "sub_query_text": "子问题 1",
-                    "query_type": "single-hop",
-                    "answer": "子答案 1",
-                    "confidence": 0.9,
-                },
-                {
-                    "sub_query_text": "子问题 2",
-                    "query_type": "multi-hop",
-                    "answer": "子答案 2",
-                    "confidence": 0.8,
-                },
+                {"sub_query_text": "子问题 1", "answer": "子答案 1", "confidence": 0.9},
             ],
-        },
-        runtime=runtime,
+            "messages": [],
+            "final_answer": "",
+            "aggregation_time": None,
+        }
     )
+    assert len(result["messages"]) == 2  # RemoveMessage + HumanMessage
+    assert "复合问题" in result["messages"][1].content
+    assert "子问题 1" in result["messages"][1].content
 
-    assert result["final_answer"] == "完整聚合答案"
-    assert any(
-        message
-        == (
-            "[subanswer_aggregator] Aggregation generated final answer: "
-            "query=复合问题, final_answer=完整聚合答案"
-        )
-        for message in info_calls
+
+@pytest.mark.asyncio
+async def test_aggregator_entry_node_handles_empty_sub_answers():
+    result = await aggregator_entry_node(
+        {
+            "original_query": "复合问题",
+            "sub_answers": [],
+            "messages": [],
+            "final_answer": "",
+            "aggregation_time": None,
+        }
     )
+    assert result["final_answer"] == "未能生成答案"

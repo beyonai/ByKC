@@ -22,9 +22,9 @@ def _mock_settings():
 
 
 def test_query_decomposer_keeps_rich_prompt_examples():
-    assert "唯一拆分标准" in SYSTEM_PROMPT_WITH_HISTORY
-    assert "多轮对话补全" in SYSTEM_PROMPT_WITH_HISTORY
-    assert "single-hop 与 multi-hop 并列" in SYSTEM_PROMPT_WITH_HISTORY
+    assert "The Only Splitting Criterion" in SYSTEM_PROMPT_WITH_HISTORY
+    assert "Multi-turn Conversation Completion" in SYSTEM_PROMPT_WITH_HISTORY
+    assert "single-hop and multi-hop parallel" in SYSTEM_PROMPT_WITH_HISTORY
 
 
 def test_parse_decomposition_response_returns_sub_queries():
@@ -93,7 +93,7 @@ async def test_rewriter_entry_node_uses_history():
         }
     )
     human_msg = result["messages"][1]
-    assert "当前用户输入：广州呢" in human_msg.content
+    assert "Current user input: 广州呢" in human_msg.content
     assert "南京办事处的营收是多少" in human_msg.content
 
 

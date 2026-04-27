@@ -6,6 +6,7 @@ from by_qa.qa.agents.subanswer_aggregator import (
     _build_sub_answers_context,
     aggregator_entry_node,
 )
+from by_qa.qa.common.fallback_messages import FallbackMessage
 
 
 def test_build_sub_answers_context_formats_correctly():
@@ -25,7 +26,7 @@ def test_build_sub_answers_context_formats_correctly():
 
 
 def test_build_sub_answers_context_empty():
-    assert _build_sub_answers_context([]) == "未找到子查询答案。"
+    assert _build_sub_answers_context([]) == FallbackMessage.NO_SUB_QUERY_ANSWERS
 
 
 @pytest.mark.asyncio
@@ -57,4 +58,4 @@ async def test_aggregator_entry_node_handles_empty_sub_answers():
             "aggregation_time": None,
         }
     )
-    assert result["final_answer"] == "未能生成答案"
+    assert result["final_answer"] == FallbackMessage.FAILED_TO_GENERATE_ANSWER

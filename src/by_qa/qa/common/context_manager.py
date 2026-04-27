@@ -8,6 +8,7 @@ from langchain_core.messages import SystemMessage
 from by_qa.config import get_settings
 from by_qa.core.logger import info
 from by_qa.qa.common.context import QARuntimeContext
+from by_qa.qa.common.fallback_messages import FallbackMessage
 
 try:
     from langgraph.runtime import Runtime
@@ -152,7 +153,7 @@ def truncate_retrieval_results_round_robin(
 def build_context_for_llm(retrieval_results: List[Dict]) -> str:
     """Build context string for LLM."""
     if not retrieval_results:
-        return "未找到相关检索结果。"
+        return FallbackMessage.NO_RETRIEVAL_RESULTS
     results_by_query: Dict[str, Dict[str, List[Dict]]] = defaultdict(
         lambda: defaultdict(list)
     )
@@ -166,22 +167,22 @@ def build_context_for_llm(retrieval_results: List[Dict]) -> str:
         for src_results in sources.values():
             all_results.extend(src_results)
         sub_query_text = (
-            all_results[0].get("sub_query_text", f"子查询 {qid}")
+            all_results[0].get("sub_query_text", f"Sub-query {qid}")
             if all_results
-            else f"子查询 {qid}"
+            else f"Sub-query {qid}"
         )
-        context_parts.append(f"## 子查询: {sub_query_text}\n")
+        context_parts.append(f"## Sub-query: {sub_query_text}\n")
         if "knowledge_base" in sources:
             kb_results = sources["knowledge_base"]
-            context_parts.append("[知识库]")
+            context_parts.append("[Knowledge Base]")
             for i, result in enumerate(kb_results, 1):
                 content = result.get("content", "")
-                truncated_marker = " (已截断)" if result.get("truncated") else ""
+                truncated_marker = " (truncated)" if result.get("truncated") else ""
                 context_parts.append(f"{i}. {content}{truncated_marker}")
             context_parts.append("")
         if "web" in sources:
             web_results = sources["web"]
-            context_parts.append("[联网检索]")
+            context_parts.append("[Web Search]")
             for i, result in enumerate(web_results, 1):
                 source = result.get("source", "")
                 if "(" in source and source.endswith(")"):
@@ -191,7 +192,7 @@ def build_context_for_llm(retrieval_results: List[Dict]) -> str:
                     title = source
                     url = ""
                 content = result.get("content", "")
-                truncated_marker = " (已截断)" if result.get("truncated") else ""
+                truncated_marker = " (truncated)" if result.get("truncated") else ""
                 context_parts.append(f"{i}. {title}({url})")
                 context_parts.append(f"{content}{truncated_marker}")
             context_parts.append("")
@@ -232,7 +233,7 @@ async def context_manager_node(
         "retrieval_results": {"mode": "RESET", "data": truncated_results},
         "messages": [
             SystemMessage(
-                content=f"上下文已优化：{len(truncated_results)} 条结果，{total_tokens} tokens"
+                content=f"Context optimized: {len(truncated_results)} results, {total_tokens} tokens"
             ),
         ],
     }

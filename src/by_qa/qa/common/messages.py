@@ -38,7 +38,7 @@ def extract_user_query_history(messages: list[Any], max_turns: int = 5) -> str:
         if len(user_queries) >= max_turns:
             break
     user_queries.reverse()
-    return "\n".join(f"用户: {q}" for q in user_queries)
+    return "\n".join(f"User: {q}" for q in user_queries)
 
 
 __all__ = ["agent_metadata", "extract_user_query_history", "is_user_message"]

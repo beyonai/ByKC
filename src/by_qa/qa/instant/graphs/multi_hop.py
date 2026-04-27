@@ -36,7 +36,7 @@ async def multi_hop_entry_node(state: MultiHopState) -> Dict[str, Any]:
     reasoning_plan = sub_query.get("reasoning_chain", [])
     if not reasoning_plan:
         reasoning_plan = [sub_query.get("query_text", "")]
-    message_content = f"请回答: {sub_query.get('query_text', '')}\n参考下面的查询步骤:\n{'\n'.join(reasoning_plan)}"
+    message_content = f"Answer: {sub_query.get('query_text', '')}\nReference query steps:\n{'\n'.join(reasoning_plan)}"
     info(f"[multi_hop] Entry node for: {sub_query.get('query_text', '')[:50]}...")
     return {
         "messages": [

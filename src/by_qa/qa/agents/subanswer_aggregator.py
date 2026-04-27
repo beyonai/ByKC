@@ -11,57 +11,62 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
 
 from by_qa.core.logger import info
 from by_qa.qa.common.context import QARuntimeContext
+from by_qa.qa.common.fallback_messages import FallbackMessage
 from by_qa.qa.common.messages import agent_metadata
+from by_qa.qa.common.prompt_fragments import DEFAULT_LANGUAGE_INSTRUCTION
 from by_qa.qa.common.reducers import merge_list_with_mode
 from by_qa.qa.services.llm_service import LLMService
 
-SYSTEM_PROMPT = """你是一个专业的回答整合专家。你的任务是基于多个子查询的答案，生成对用户原始问题的完整回答。
+SYSTEM_PROMPT = (
+    """You are a professional answer aggregation expert. Your task is to generate a complete answer to the user's original question based on multiple sub-query answers.
 
-## 核心要求
+## Core Requirements
 
-1. **综合回答**：整合所有子查询的答案，生成对原始问题的完整回答
-2. **逻辑连贯**：确保回答逻辑清晰，各部分之间过渡自然
-3. **Markdown格式**：直接输出Markdown格式的回复，不要输出JSON
-4. **不添加引用**：不需要标注引用来源，专注于回答内容本身
+1. **Comprehensive answer**: Integrate all sub-query answers to generate a complete response to the original question
+2. **Logical coherence**: Ensure the answer is logically clear with natural transitions between sections
+3. **Markdown format**: Output directly in Markdown format, do not output JSON
+4. **No citations**: Do not annotate citation sources, focus on the answer content itself
 
-## 回答结构
+## Answer Structure
 
-请根据子查询的数量和类型，灵活组织回答结构：
+Organize the answer structure flexibly based on the number and type of sub-queries:
 
-- **单个子查询**：直接呈现该子查询的答案
-- **多个子查询**：
-  - 如果子查询是并列关系（如"A和B的营收"），分别呈现后再给出综合结论
-  - 如果子查询有依赖关系，按逻辑顺序呈现
-  - 对于multi-hop子查询，简要说明推理过程
+- **Single sub-query**: Present the sub-query answer directly
+- **Multiple sub-queries**:
+  - If sub-queries are parallel (e.g., "revenue of A and B"), present each separately then give a comprehensive conclusion
+  - If sub-queries have dependencies, present in logical order
+  - For multi-hop sub-queries, briefly explain the reasoning process
 
-## 注意事项
+## Notes
 
-1. 保持客观，不要添加子查询答案中没有的信息
-2. 如果子查询答案之间有冲突，请指出并给出最可能的结论
-3. 如果某些子查询未能找到答案，说明该部分信息缺失
-4. 回答应该直接回应用户的原始问题"""
+1. Stay objective, do not add information not present in sub-query answers
+2. If sub-query answers conflict, point it out and provide the most likely conclusion
+3. If some sub-queries failed to find answers, indicate that information is missing
+4. The answer should directly address the user's original question"""
+    + DEFAULT_LANGUAGE_INSTRUCTION
+)
 
 
 def _build_sub_answers_context(sub_answers: list[dict]) -> str:
     """Format sub-answers into a context string for the aggregator."""
     if not sub_answers:
-        return "未找到子查询答案。"
+        return FallbackMessage.NO_SUB_QUERY_ANSWERS
 
     parts: list[str] = []
     for index, sub_answer in enumerate(sub_answers, 1):
-        query_text = sub_answer.get("sub_query_text", f"子查询 {index}")
+        query_text = sub_answer.get("sub_query_text", f"Sub-query {index}")
         query_type = sub_answer.get("query_type", "single-hop")
         answer = sub_answer.get("answer", "")
         reasoning_chain = sub_answer.get("reasoning_chain", [])
         confidence = sub_answer.get("confidence", 0.0)
         part = (
-            f"## 子查询 {index}: {query_text}\n"
-            f"类型: {query_type}\n"
-            f"置信度: {confidence:.2f}\n\n"
-            f"### 答案\n{answer}\n"
+            f"## Sub-query {index}: {query_text}\n"
+            f"Type: {query_type}\n"
+            f"Confidence: {confidence:.2f}\n\n"
+            f"### Answer\n{answer}\n"
         )
         if reasoning_chain:
-            part += "\n### 推理过程\n"
+            part += "\n### Reasoning Process\n"
             for step in reasoning_chain:
                 part += f"- {step}\n"
         parts.append(part)
@@ -92,15 +97,15 @@ async def aggregator_entry_node(state: Dict[str, Any]) -> Dict[str, Any]:
     if not sub_answers:
         return {
             "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES)],
-            "final_answer": "未能生成答案",
+            "final_answer": FallbackMessage.FAILED_TO_GENERATE_ANSWER,
             "aggregation_time": 0.0,
         }
 
     sub_answers_context = _build_sub_answers_context(sub_answers)
     user_content = (
-        f"用户原始问题：{original_query}\n\n"
-        f"子查询答案：\n{sub_answers_context}\n\n"
-        "请基于以上子查询答案，生成对用户原始问题的完整回答。"
+        f"User original question: {original_query}\n\n"
+        f"Sub-query answers:\n{sub_answers_context}\n\n"
+        "Based on the above sub-query answers, generate a complete answer to the user's original question."
     )
     return {
         "messages": [
@@ -116,7 +121,7 @@ async def aggregator_entry_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
 async def aggregator_summary_node(state: Dict[str, Any]) -> Dict[str, Any]:
     """Summary node: extract the final answer from the agent response."""
-    if state.get("final_answer") == "未能生成答案":
+    if state.get("final_answer") == FallbackMessage.FAILED_TO_GENERATE_ANSWER:
         return {}
 
     messages = state.get("messages", [])
@@ -146,7 +151,7 @@ async def aggregator_summary_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
 def _route_after_entry(state: Dict[str, Any]) -> str:
     """Route after entry: skip agent if sub_answers was empty."""
-    if state.get("final_answer") == "未能生成答案":
+    if state.get("final_answer") == FallbackMessage.FAILED_TO_GENERATE_ANSWER:
         return AggregatorNodeNames.SUMMARY.value
     return AggregatorNodeNames.AGENT.value
 

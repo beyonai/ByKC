@@ -12,18 +12,22 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.context_manager import build_context_for_llm
 from by_qa.qa.common.messages import agent_metadata
+from by_qa.qa.common.prompt_fragments import DEFAULT_LANGUAGE_INSTRUCTION
 from by_qa.qa.services.llm_service import LLMService
 
-DEFAULT_RETRIEVED_CONTEXT_ANSWER_PROMPT = """你是一个严谨的知识库问答助手。
+DEFAULT_RETRIEVED_CONTEXT_ANSWER_PROMPT = (
+    """You are a rigorous knowledge base QA assistant.
 
-你的任务是基于给定检索结果回答用户问题。
+Your task is to answer user questions based on the given retrieval results.
 
-要求：
-- 直接回答问题，保持简洁清晰
-- 只能使用检索结果中的信息，不要编造
-- 如果检索结果不足以回答，请明确说明缺少相关信息
-- 如有必要，可以简要列出依据
-- 直接输出 Markdown 文本，不要输出 JSON"""
+Requirements:
+- Answer the question directly, keep it concise and clear
+- Only use information from the retrieval results, do not fabricate
+- If the retrieval results are insufficient to answer, clearly state that relevant information is missing
+- If necessary, briefly list the supporting evidence
+- Output directly in Markdown text, do not output JSON"""
+    + DEFAULT_LANGUAGE_INSTRUCTION
+)
 
 
 class AnswerNodeNames(str, Enum):
@@ -62,10 +66,10 @@ async def answer_entry_node(state: AnswerSynthesizerAgentState) -> Dict[str, Any
             RemoveMessage(id=REMOVE_ALL_MESSAGES),
             HumanMessage(
                 content=(
-                    f"用户原始问题：{original_query}\n"
-                    f"检索用子问题：\n{sub_queries_text}\n\n"
-                    f"检索结果：\n{context}\n\n"
-                    "请基于以上检索结果，针对每个子问题分别回答，最后汇总。"
+                    f"User original question: {original_query}\n"
+                    f"Retrieval sub-questions:\n{sub_queries_text}\n\n"
+                    f"Retrieval results:\n{context}\n\n"
+                    "Based on the above retrieval results, answer each sub-question separately, then summarize."
                 ),
                 additional_kwargs=agent_metadata(AnswerNodeNames.ENTRY.value),
             ),

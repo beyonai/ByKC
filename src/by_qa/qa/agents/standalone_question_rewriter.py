@@ -12,19 +12,23 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
 from by_qa.core.logger import info
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.messages import agent_metadata, extract_user_query_history
+from by_qa.qa.common.prompt_fragments import DEFAULT_LANGUAGE_INSTRUCTION
 from by_qa.qa.services.llm_service import LLMService
 
-DEFAULT_STANDALONE_QUESTION_REWRITE_PROMPT = """你是一个问题改写助手。结合用户历史输入，完成以下两件事：
-1. 补全当前输入中省略的主语、对象、时间等上下文
-2. 如果补全后的问题包含并列的独立子问题，将其拆分为多个完整问题
+DEFAULT_STANDALONE_QUESTION_REWRITE_PROMPT = (
+    """You are a question rewriting assistant. Based on user history, complete the following two tasks:
+1. Fill in omitted subjects, objects, time references, and other context in the current input
+2. If the completed question contains parallel independent sub-questions, split them into multiple complete questions
 
-要求：
-- 只识别并列结构（去掉连接词后能拆出两个以上语义完整且互相独立的问题）
-- 不拆分链式修饰结构（A的B的C是单一问题）
-- 不分析推理深度
-- 不回答问题
-- 每行输出一个完整问题，不输出编号或解释
-- 如果当前输入已完整且无并列结构，原样输出一行"""
+Requirements:
+- Only identify parallel structures (removing conjunctions yields two or more semantically complete and mutually independent questions)
+- Do not split chained modifier structures (A's B's C is a single question)
+- Do not analyze reasoning depth
+- Do not answer the question
+- Output one complete question per line, no numbering or explanations
+- If the current input is already complete with no parallel structure, output it as-is on one line"""
+    + DEFAULT_LANGUAGE_INSTRUCTION
+)
 
 
 class RewriterNodeNames(str, Enum):
@@ -48,15 +52,13 @@ async def rewriter_entry_node(state: RewriterAgentState) -> Dict[str, Any]:
     history = extract_user_query_history(messages)
     if history:
         user_content = (
-            "用户历史输入：\n"
+            "User history:\n"
             f"{history}\n\n"
-            f"当前用户输入：{original_query}\n\n"
-            "请输出改写后的问题，每行一个。"
+            f"Current user input: {original_query}\n\n"
+            "Output the rewritten questions, one per line."
         )
     else:
-        user_content = (
-            f"当前用户输入：{original_query}\n\n请输出改写后的问题，每行一个。"
-        )
+        user_content = f"Current user input: {original_query}\n\nOutput the rewritten questions, one per line."
     return {
         "messages": [
             RemoveMessage(id=REMOVE_ALL_MESSAGES),

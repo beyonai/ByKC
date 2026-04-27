@@ -17,6 +17,7 @@ from langgraph.types import Command
 
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.operation_registry import OPERATION_REGISTRY, OperationType
+from by_qa.qa.common.prompt_fragments import DEFAULT_LANGUAGE_INSTRUCTION
 from by_qa.qa.instant.runtime.tool_call_guard import ToolCallGuardMiddleware
 from by_qa.qa.instant.state import MultiHopState
 from by_qa.qa.services.llm_service import LLMService
@@ -32,7 +33,7 @@ def next_hop(
     state: Annotated[MultiHopState, InjectedState],
     tool_call_id: Annotated[str, InjectedToolCallId],
 ) -> Command:
-    """完成当前步骤并进入下一跳查询。"""
+    """Complete the current step and proceed to the next hop query."""
     messages = state.get("messages", [])
     current_step = state.get("current_step", 0)
     new_step = current_step + 1
@@ -80,7 +81,7 @@ def next_hop(
                 ToolMessage(
                     content=json.dumps(
                         {
-                            "message": f"第{current_step + 1}跳完成，检索结果为：{current_answer}。检索上下文已清理。",
+                            "message": f"Hop {current_step + 1} completed, retrieval result: {current_answer}. Retrieval context has been cleaned up.",
                             "next_query": next_query,
                         },
                         ensure_ascii=False,
@@ -102,7 +103,7 @@ def finalize(
     state: Annotated[MultiHopState, InjectedState],
     tool_call_id: Annotated[str, InjectedToolCallId],
 ) -> Command:
-    """完成多跳检索并跳转到总结节点。"""
+    """Complete multi-hop retrieval and jump to the summary node."""
     current_step = state.get("current_step", 0)
     new_result = {
         "step": current_step + 1,
@@ -118,7 +119,7 @@ def finalize(
                 ToolMessage(
                     content=json.dumps(
                         {
-                            "message": f"第{current_step + 1}跳完成，多跳检索结束，准备生成最终答案。",
+                            "message": f"Hop {current_step + 1} completed, multi-hop retrieval finished, preparing to generate final answer.",
                             "current_answer": current_answer,
                         },
                         ensure_ascii=False,
@@ -131,27 +132,30 @@ def finalize(
     )
 
 
-DEFAULT_MULTI_HOP_SYSTEM_PROMPT = """你是一个智能的多跳问题求解助手。
+DEFAULT_MULTI_HOP_SYSTEM_PROMPT = (
+    """You are an intelligent multi-hop problem-solving assistant.
 
-你的任务是通过多步推理来回答复杂问题。
+Your task is to answer complex questions through multi-step reasoning.
 
-【工作流程】
-1. 分析当前需要回答的问题
-2. 调用 search_knowledge 获取信息（可以多次调用直到收集到足够信息）
-3. 当确定需要进入下一个推理步骤时，调用 next_hop（会推进步骤计数器）
-4. 重复步骤2-3直到能够给出最终答案
-5. 调用 finalize 给出完整答案并结束流程
+[Workflow]
+1. Analyze the current question that needs to be answered
+2. Call search_knowledge to obtain information (can be called multiple times until sufficient information is collected)
+3. When you are sure you need to proceed to the next reasoning step, call next_hop (this advances the step counter)
+4. Repeat steps 2-3 until you can provide a final answer
+5. Call finalize to give the complete answer and end the process
 
-【工具说明】
-- search_knowledge: 检索信息，返回的结果包含 index_id（如 s0-1, s1-2）可用于引用
-- next_hop: 完成当前步骤并进入下一跳。调用后新检索的结果会标记为下一跳
-- finalize: 结束整个流程，给出最终答案
+[Tool Description]
+- search_knowledge: Retrieve information, results contain index_id (e.g., s0-1, s1-2) that can be used for citation
+- next_hop: Complete the current step and proceed to the next hop. After calling, newly retrieved results will be marked as the next hop
+- finalize: End the entire process and give the final answer
 
-【重要规则】
-- next_hop 会推进步骤计数器，只有当你确定要进入下一个推理步骤时才调用
-- 在同一跳内可以多次调用 search_knowledge 来收集信息
-- 调用 next_hop 或 finalize 时，在 source_indices 中列出引用的文档ID
-- 始终保持推理的连贯性和逻辑性"""
+[Important Rules]
+- next_hop advances the step counter, only call it when you are sure you want to proceed to the next reasoning step
+- Within the same hop, you can call search_knowledge multiple times to collect information
+- When calling next_hop or finalize, list the referenced document IDs in source_indices
+- Always maintain coherence and logic in your reasoning"""
+    + DEFAULT_LANGUAGE_INSTRUCTION
+)
 
 
 async def build_multi_hop_agent_graph(
@@ -171,7 +175,7 @@ async def build_multi_hop_agent_graph(
             index_id_fn=lambda sub_query_idx, step, item_id: (
                 f"{sub_query_idx}-{step}-{item_id}"
             ),
-            follow_up_prompt="已经完成了一次检索，如果本次检索没有收集到足够信息，请继续调用 search_knowledge 来收集信息。否则立即调用 next_hop 进行上下文清理并进入下一个查询。如果所有检索都已完成，立即调用 finalize 来结束多跳检索并生成最终答案。",
+            follow_up_prompt="A retrieval has been completed. If this retrieval did not collect sufficient information, continue calling search_knowledge to collect more. Otherwise, immediately call next_hop to clean up context and proceed to the next query. If all retrievals are complete, immediately call finalize to end the multi-hop retrieval and generate the final answer.",
         ),
     ] + list(extra_middleware or [])
     return create_agent(

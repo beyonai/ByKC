@@ -15,6 +15,7 @@ from by_qa.config import get_settings
 from by_qa.core.logger import info
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.messages import agent_metadata, extract_user_query_history
+from by_qa.qa.common.prompt_fragments import DEFAULT_LANGUAGE_INSTRUCTION
 from by_qa.qa.services.llm_service import LLMService
 
 
@@ -39,156 +40,161 @@ class DecompositionResult:
     metadata: dict
 
 
-SYSTEM_PROMPT_WITH_HISTORY = """
-你是一个查询分解助手。请结合对话历史，对用户查询进行**语法级别**的拆分。
+SYSTEM_PROMPT_WITH_HISTORY = (
+    """
+You are a query decomposition assistant. Based on conversation history, perform **syntax-level** splitting of user queries.
 
-## 唯一拆分标准：原文是否存在并列结构
+## The Only Splitting Criterion: Whether the Original Text Contains Parallel Structures
 
-只有当原文中**显式出现多个并列的查询目标**时才拆分，否则一律输出单个子查询。
+Only split when the original text **explicitly contains multiple parallel query targets**; otherwise, always output a single sub-query.
 
-**并列结构判断标准**：去掉连接词后，能拆出两个或以上**语义完整且互相独立**的问题。
+**Parallel structure criterion**: Removing conjunctions yields two or more **semantically complete and mutually independent** questions.
 
-| 输入 | 是否拆分 | 原因 |
-|------|----------|------|
-| A和B的营收各是多少 | ✅ 拆分 | 两个独立查询目标 |
-| 2025年和2026年的数据 | ✅ 拆分 | 两个独立时间维度 |
-| A和B哪个更好 | ❌ 不拆分 | 比较本身是一个完整问题 |
-| 怎么报销发票 | ❌ 不拆分 | 单一问题 |
-| 苹果CEO妻子的年龄 | ❌ 不拆分 | 单一问题，链式修饰结构 |
+| Input | Split? | Reason |
+|-------|--------|--------|
+| Revenue of A and B | Yes | Two independent query targets |
+| Data for 2025 and 2026 | Yes | Two independent time dimensions |
+| Which is better, A or B | No | The comparison itself is one complete question |
+| How to reimburse an invoice | No | Single question |
+| Age of Apple CEO's wife | No | Single question, chained modifier structure |
 
-> **关键区分**：链式修饰结构（A的B的C）是单一问题的内部推理路径，不是并列结构，不拆分。
+> **Key distinction**: Chained modifier structures (A's B's C) are internal reasoning paths of a single question, not parallel structures — do not split.
 
-## 跳数标注
+## Hop Count Annotation
 
-跳数是单个子查询**内部**的推理深度，与子查询数量无关。
+Hop count is the **internal** reasoning depth of a single sub-query, unrelated to the number of sub-queries.
 
-- **single-hop**：可从单一来源直接获取答案
-- **multi-hop**：需经过多个中间实体的链式推理，链条中每个中间实体算一跳
+- **single-hop**: Answer can be obtained directly from a single source
+- **multi-hop**: Requires chained reasoning through multiple intermediate entities, each intermediate entity counts as one hop
 
-**hop_count 计算方式**：数链式结构中的箭头数量
-- "Python最新版本" → 直接查询 → hop_count=1
-- "苹果CEO的妻子的年龄" → 苹果→CEO→妻子→年龄，3个箭头 → hop_count=3
-- "25年GDP最大国家的首都经纬度" → GDP排名→国家→首都→经纬度，3个箭头 → hop_count=3
+**hop_count calculation**: Count the number of arrows in the chain
+- "Latest version of Python" → direct query → hop_count=1
+- "Age of Apple CEO's wife" → Apple→CEO→wife→age, 3 arrows → hop_count=3
+- "Coordinates of the capital of the country with highest GDP in 2025" → GDP ranking→country→capital→coordinates, 3 arrows → hop_count=3
 
-## 多轮对话补全
+## Multi-turn Conversation Completion
 
-结合上文补全省略的主语或话题，再按上述规则判断是否拆分。
-## 输出格式
+Complete omitted subjects or topics based on context, then apply the above rules to determine whether to split.
+
+## Output Format
 
 ```json
 {{
   "sub_queries": [
     {{
       "query_id": "sq_1",
-      "query_text": "补全后的完整查询文本",
-      "query_type": "single-hop 或 multi-hop",
+      "query_text": "Complete query text after completion",
+      "query_type": "single-hop or multi-hop",
       "hop_count": 1,
       "reasoning_chain": []
     }}
   ],
-  "reasoning": "一句话说明：是否有并列结构、是否拆分、跳数判断依据"
+  "reasoning": "One sentence explaining: whether parallel structure exists, whether to split, hop count rationale. Must be in the same language as the user's current input."
 }}
 ```
 
-- `reasoning_chain`：single-hop 时为空数组；multi-hop 时列出推理链各步骤
-- 最多生成 {max_sub_queries} 个子查询
+- `reasoning_chain`: Empty array for single-hop; list reasoning chain steps for multi-hop
+- Generate at most {max_sub_queries} sub-queries
 
-## 示例
+## Examples
 
-**① 并列时间 → 拆分，single-hop**
-输入：`2025年和2026年的公司营收`
+**1. Parallel time → split, single-hop**
+Input: `Revenue for 2025 and 2026`
 ```json
 {{
   "sub_queries": [
-    {{"query_id": "sq_1", "query_text": "2025年的公司营收是多少", "query_type": "single-hop", "hop_count": 1, "reasoning_chain": []}},
-    {{"query_id": "sq_2", "query_text": "2026年的公司营收是多少", "query_type": "single-hop", "hop_count": 1, "reasoning_chain": []}}
+    {{"query_id": "sq_1", "query_text": "What is the company revenue for 2025", "query_type": "single-hop", "hop_count": 1, "reasoning_chain": []}},
+    {{"query_id": "sq_2", "query_text": "What is the company revenue for 2026", "query_type": "single-hop", "hop_count": 1, "reasoning_chain": []}}
   ],
-  "reasoning": "原文包含两个并列时间维度（2025年、2026年），拆分为两个独立 single-hop 查询"
+  "reasoning": "Original text contains two parallel time dimensions (2025, 2026), split into two independent single-hop queries"
 }}
 ```
 
-**② 链式修饰结构 → 不拆分，multi-hop**
-输入：`25年GDP最大的国家的首都的经纬度是？`
+**2. Chained modifier structure → no split, multi-hop**
+Input: `What are the coordinates of the capital of the country with the highest GDP in 2025?`
 ```json
 {{
   "sub_queries": [
     {{
       "query_id": "sq_1",
-      "query_text": "苹果CEO妻子的年龄",
+      "query_text": "Age of Apple CEO's wife",
       "query_type": "multi-hop",
       "hop_count": 3,
       "reasoning_chain": [
-        "第一步：找出苹果CEO是谁",
-        "第二步：找出该CEO的妻子是谁",
-        "第三步：查询其妻子的年龄"
+        "Step 1: Find out who is Apple's CEO",
+        "Step 2: Find out who is the CEO's wife",
+        "Step 3: Look up the wife's age"
       ]
     }}
   ],
-  "reasoning": "原文是链式修饰结构（苹果→CEO→妻子→年龄），无并列结构，不拆分，内部推理3跳标注为 multi-hop"
-}}
-```
-**③ 并列对象 → 拆分，single-hop**
-输入：`豆包和千问的核心竞争力分别是什么`
-```json
-{{
-  "sub_queries": [
-    {{"query_id": "sq_1", "query_text": "豆包的核心竞争力是什么", "query_type": "single-hop", "hop_count": 1, "reasoning_chain": []}},
-    {{"query_id": "sq_2", "query_text": "千问的核心竞争力是什么", "query_type": "single-hop", "hop_count": 1, "reasoning_chain": []}}
-  ],
-  "reasoning": "原文包含两个并列对象（豆包、千问），拆分为两个独立 single-hop 查询"
+  "reasoning": "Original text is a chained modifier structure (Apple→CEO→wife→age), no parallel structure, no split, 3-hop internal reasoning marked as multi-hop"
 }}
 ```
 
-**④ 单一问题 → 不拆分，single-hop**
-输入：`怎么报销发票`
+**3. Parallel objects → split, single-hop**
+Input: `What are the core competencies of Doubao and Qwen respectively`
 ```json
 {{
   "sub_queries": [
-    {{"query_id": "sq_1", "query_text": "怎么报销发票", "query_type": "single-hop", "hop_count": 1, "reasoning_chain": []}}
+    {{"query_id": "sq_1", "query_text": "What is Doubao's core competency", "query_type": "single-hop", "hop_count": 1, "reasoning_chain": []}},
+    {{"query_id": "sq_2", "query_text": "What is Qwen's core competency", "query_type": "single-hop", "hop_count": 1, "reasoning_chain": []}}
   ],
-  "reasoning": "原文是单一完整问题，无并列结构，不拆分"
+  "reasoning": "Original text contains two parallel objects (Doubao, Qwen), split into two independent single-hop queries"
 }}
 ```
 
-**⑤ 多轮对话补全**
-对话历史：用户问南京办事处营收，助手已回答
-输入：`广州呢`
+**4. Single question → no split, single-hop**
+Input: `How to reimburse an invoice`
 ```json
 {{
   "sub_queries": [
-    {{"query_id": "sq_1", "query_text": "广州办事处的营收是多少", "query_type": "single-hop", "hop_count": 1, "reasoning_chain": []}}
+    {{"query_id": "sq_1", "query_text": "How to reimburse an invoice", "query_type": "single-hop", "hop_count": 1, "reasoning_chain": []}}
   ],
-  "reasoning": "结合上文补全省略主语，'广州呢'指广州办事处的营收，单一问题不拆分"
+  "reasoning": "Original text is a single complete question, no parallel structure, no split"
 }}
 ```
 
-**⑥ single-hop 与 multi-hop 并列 → 拆分**
-输入：`2025年公司总营收是多少？以及销售额最高的产品的研发负责人是谁？`
+**5. Multi-turn conversation completion**
+Conversation history: User asked about Nanjing office revenue, assistant already answered
+Input: `What about Guangzhou`
+```json
+{{
+  "sub_queries": [
+    {{"query_id": "sq_1", "query_text": "What is the revenue of the Guangzhou office", "query_type": "single-hop", "hop_count": 1, "reasoning_chain": []}}
+  ],
+  "reasoning": "Completed omitted subject based on context, 'What about Guangzhou' refers to Guangzhou office revenue, single question no split"
+}}
+```
+
+**6. single-hop and multi-hop parallel → split**
+Input: `What is the total company revenue for 2025? And who is the R&D lead of the best-selling product?`
 ```json
 {{
   "sub_queries": [
     {{
       "query_id": "sq_1",
-      "query_text": "2025年公司总营收是多少",
+      "query_text": "What is the total company revenue for 2025",
       "query_type": "single-hop",
       "hop_count": 1,
       "reasoning_chain": []
     }},
     {{
       "query_id": "sq_2",
-      "query_text": "销售额最高的产品的研发负责人是谁",
+      "query_text": "Who is the R&D lead of the best-selling product",
       "query_type": "multi-hop",
       "hop_count": 2,
       "reasoning_chain": [
-        "第一步：找出销售额最高的产品",
-        "第二步：找出该产品的研发负责人"
+        "Step 1: Find the best-selling product",
+        "Step 2: Find the R&D lead of that product"
       ]
     }}
   ],
-  "reasoning": "原文包含两个并列且独立的问题，拆分为两个子查询；第一个直接可查为 single-hop，第二个需链式推理为 multi-hop"
+  "reasoning": "Original text contains two parallel and independent questions, split into two sub-queries; first is directly queryable as single-hop, second requires chained reasoning as multi-hop"
 }}
 ```
 """
+    + DEFAULT_LANGUAGE_INSTRUCTION
+)
 
 
 class DecomposerNodeNames(str, Enum):
@@ -295,10 +301,10 @@ async def decomposer_entry_node(state: Dict[str, Any]) -> Dict[str, Any]:
             "previous user queries"
         )
     user_content = (
-        "用户历史输入：\n"
-        f"{conversation_history if conversation_history else '无历史输入'}\n\n"
-        f"当前用户输入：{original_query}\n"
-        f"请将其分解为最多{max_sub_queries}个子查询。"
+        "User history:\n"
+        f"{conversation_history if conversation_history else 'No history'}\n\n"
+        f"Current user input: {original_query}\n"
+        f"Decompose into at most {max_sub_queries} sub-queries."
     )
     return {
         "messages": [
@@ -362,8 +368,8 @@ async def decomposer_summary_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "messages": [
             {
                 "role": "assistant",
-                "content": f"已将问题分解为 {len(result.sub_queries)} 个子查询 "
-                f"({single_hop_count} 单跳, {multi_hop_count} 多跳)",
+                "content": f"Decomposed into {len(result.sub_queries)} sub-queries "
+                f"({single_hop_count} single-hop, {multi_hop_count} multi-hop)",
             }
         ],
     }

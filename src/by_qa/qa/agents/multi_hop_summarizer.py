@@ -10,25 +10,30 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
 
 from by_qa.core.logger import info
 from by_qa.qa.common.context import QARuntimeContext
+from by_qa.qa.common.fallback_messages import FallbackMessage
 from by_qa.qa.common.messages import agent_metadata
+from by_qa.qa.common.prompt_fragments import DEFAULT_LANGUAGE_INSTRUCTION
 from by_qa.qa.common.reducers import merge_list_with_mode
 from by_qa.qa.instant.state import SubAnswer
 from by_qa.qa.services.llm_service import LLMService
 
-DEFAULT_MULTI_HOP_SUMMARY_PROMPT = """你是一个专业的信息整合专家。你的任务是整合多跳检索的结果，生成最终的综合答案。
+DEFAULT_MULTI_HOP_SUMMARY_PROMPT = (
+    """You are a professional information synthesis expert. Your task is to integrate multi-hop retrieval results and generate a final comprehensive answer.
 
-请按以下结构组织回答：
+Please organize your answer in the following structure:
 
-### 答案总结
-[基于所有步骤检索结果的综合回答]
+### Answer Summary
+[Comprehensive answer based on all step retrieval results]
 
-### 推理过程
-[简述多步推理的过程]
+### Reasoning Process
+[Brief description of the multi-step reasoning process]
 
-请确保答案：
-1. 涵盖所有关键信息点
-2. 逻辑清晰，条理分明
-3. 引用相关来源"""
+Please ensure the answer:
+1. Covers all key information points
+2. Is logically clear and well-organized
+3. References relevant sources"""
+    + DEFAULT_LANGUAGE_INSTRUCTION
+)
 
 
 class MultiHopSummaryNodeNames(str, Enum):
@@ -96,19 +101,23 @@ def _build_intermediate_context(
                 source = retrieval.get("source", "unknown")
                 source_contents.append(f"[({source_type}) {source}\n{content}")
         if answer or source_contents:
-            step_context = f"步骤 {i}:\n"
-            step_context += f"子查询: {query}\n"
+            step_context = f"Step {i}:\n"
+            step_context += f"Sub-query: {query}\n"
             if source_contents:
                 step_context += (
-                    "引用来源:\n"
+                    "Referenced sources:\n"
                     + "\n".join(f"  - {s}" for s in source_contents)
                     + "\n"
                 )
             if answer:
-                step_context += f"答案: {answer}\n"
+                step_context += f"Answer: {answer}\n"
             context_parts.append(step_context)
 
-    return "\n".join(context_parts) if context_parts else "未找到中间步骤信息。"
+    return (
+        "\n".join(context_parts)
+        if context_parts
+        else FallbackMessage.NO_INTERMEDIATE_STEPS
+    )
 
 
 async def mh_summary_entry_node(
@@ -130,10 +139,10 @@ async def mh_summary_entry_node(
             RemoveMessage(id=REMOVE_ALL_MESSAGES),
             HumanMessage(
                 content=(
-                    f"原始问题：{sub_query.get('query_text', '')}\n\n"
-                    "多跳检索步骤详情（包含各步骤查询、答案及引用来源内容）：\n"
+                    f"Original question: {sub_query.get('query_text', '')}\n\n"
+                    "Multi-hop retrieval step details (including queries, answers, and referenced source content for each step):\n"
                     f"{intermediate_context}\n\n"
-                    "请整合以上信息，生成最终的综合答案。"
+                    "Please integrate the above information and generate a final comprehensive answer."
                 ),
                 additional_kwargs=agent_metadata(MultiHopSummaryNodeNames.ENTRY.value),
             ),

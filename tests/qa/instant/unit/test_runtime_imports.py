@@ -4,7 +4,6 @@ import importlib
 
 
 def test_can_import_runtime_modules():
-    assert importlib.import_module("by_qa.qa.instant.agents.decomposer")
     assert importlib.import_module("by_qa.qa.instant.agents.multi_hop_react")
     assert importlib.import_module("by_qa.qa.instant.agents.single_hop_react")
     assert importlib.import_module("by_qa.qa.instant.graphs.main")

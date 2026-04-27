@@ -13,42 +13,22 @@ from by_qa.qa.services.llm_service import LLMService
 
 
 async def build_fast_qa_graph(
+    *,
+    llm_service: LLMService,
     checkpointer: BaseCheckpointSaver | None = None,
-    llm_service: LLMService | None = None,
 ):
     """Build the linear fast QA graph."""
     builder = StateGraph(FastQAState, context_schema=QARuntimeContext)
 
-    if llm_service is not None:
-        rewriter_subgraph = await build_rewriter_subgraph(
-            llm_service=llm_service, checkpointer=checkpointer
-        )
-        builder.add_node(NodeNames.REWRITE.value, rewriter_subgraph)
-    else:
-
-        async def _passthrough_rewrite(state):
-            original_query = state["original_query"]
-            return {
-                "sub_queries": [{"query_id": "sq_1", "query_text": original_query}],
-                "rewritten_query": original_query,
-                "rewrite_time": 0.0,
-            }
-
-        builder.add_node(NodeNames.REWRITE.value, _passthrough_rewrite)
-
+    rewriter_subgraph = await build_rewriter_subgraph(
+        llm_service=llm_service, checkpointer=checkpointer
+    )
+    builder.add_node(NodeNames.REWRITE.value, rewriter_subgraph)
     builder.add_node(NodeNames.RETRIEVE.value, name2node[NodeNames.RETRIEVE])
-
-    if llm_service is not None:
-        answer_subgraph = await build_answer_synthesizer_subgraph(
-            llm_service=llm_service, checkpointer=checkpointer
-        )
-        builder.add_node(NodeNames.ANSWER.value, answer_subgraph)
-    else:
-
-        async def _passthrough_answer(state):  # pylint: disable=unused-argument
-            return {"final_answer": "", "answer_time": 0.0}
-
-        builder.add_node(NodeNames.ANSWER.value, _passthrough_answer)
+    answer_subgraph = await build_answer_synthesizer_subgraph(
+        llm_service=llm_service, checkpointer=checkpointer
+    )
+    builder.add_node(NodeNames.ANSWER.value, answer_subgraph)
 
     builder.add_edge(START, NodeNames.REWRITE.value)
     builder.add_edge(NodeNames.REWRITE.value, NodeNames.RETRIEVE.value)

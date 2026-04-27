@@ -10,13 +10,11 @@ try:
 except ImportError:
     Runtime = None  # type: ignore[assignment,misc]
 
-from by_qa.config import get_settings
 from by_qa.core.logger import error, info
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.instant.agents.multi_hop_react import build_multi_hop_agent_graph
 from by_qa.qa.instant.nodes.node_enum import NodeNames
 from by_qa.qa.instant.state import MultiHopState, SubAnswer
-from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
 from by_qa.qa.services.llm_service import LLMService
 
 
@@ -201,9 +199,6 @@ async def build_multi_hop_subgraph(config=None, llm_service=None, checkpointer=N
     """Build multi-hop subgraph using dedicated agent assembly."""
     if llm_service is None:
         raise ValueError("llm_service is required to build the multi-hop subgraph")
-    settings = get_settings()
-    if checkpointer is None:
-        checkpointer = await create_checkpointer_async(settings)
     config_data = config or {}
     prompt_overrides = getattr(config_data, "prompt_overrides", None)
     tool_providers = getattr(config_data, "tool_providers", None)

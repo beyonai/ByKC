@@ -5,13 +5,11 @@ from typing import Any, Dict, List
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, StateGraph
 
-from by_qa.config import get_settings
 from by_qa.core.logger import info
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.instant.agents.single_hop_react import build_single_hop_agent_graph
 from by_qa.qa.instant.nodes.node_enum import NodeNames
 from by_qa.qa.instant.state import SingleHopState, SubAnswer
-from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
 
 
 def _extract_final_answer(messages: List[Any]) -> str:
@@ -122,9 +120,6 @@ async def build_single_hop_subgraph(config=None, llm_service=None, checkpointer=
     """Build single-hop subgraph using dedicated agent assembly."""
     if llm_service is None:
         raise ValueError("llm_service is required to build the single-hop subgraph")
-    settings = get_settings()
-    if checkpointer is None:
-        checkpointer = await create_checkpointer_async(settings)
     config_data = config or {}
     prompt_overrides = getattr(config_data, "prompt_overrides", None)
     tool_providers = getattr(config_data, "tool_providers", None)

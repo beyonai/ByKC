@@ -31,18 +31,18 @@ class _ToolCapableFakeModel(FakeMessagesListChatModel):
 class _FakeLLMService:
     """Minimal llm service adapter for graph builders."""
 
-    def __init__(self, retrieval_model: _ToolCapableFakeModel) -> None:
+    def __init__(
+        self,
+        retrieval_model: _ToolCapableFakeModel,
+        generator_model: _ToolCapableFakeModel | None = None,
+    ) -> None:
         self._retrieval_model = retrieval_model
+        self._generator_model = generator_model
 
     async def _get_streaming_model(self, model_type: str) -> _ToolCapableFakeModel:
-        del model_type
+        if model_type == "generator" and self._generator_model is not None:
+            return self._generator_model
         return self._retrieval_model
-
-    async def generate(
-        self, messages: list[Any], model_type: str, json_mode: bool
-    ) -> str:
-        del messages, model_type, json_mode
-        return "summary"
 
 
 class _ParallelSearchProbe:
@@ -168,7 +168,8 @@ async def test_single_hop_subgraph_handles_parallel_search_calls_without_state_c
 @pytest.mark.asyncio
 async def test_multi_hop_subgraph_handles_parallel_search_calls_without_state_conflict():
     probe = _ParallelSearchProbe()
-    llm_service = _FakeLLMService(_multi_hop_model())
+    summary_model = _ToolCapableFakeModel(responses=[AIMessage(content="summary")])
+    llm_service = _FakeLLMService(_multi_hop_model(), generator_model=summary_model)
 
     from langgraph.checkpoint.memory import InMemorySaver
 

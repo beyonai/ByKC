@@ -1,22 +1,17 @@
 """Multi-hop subgraph builder for the instant-search capability."""
 
-from typing import Any, Dict, List
+from typing import Any, Dict
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 from langgraph.graph import END, StateGraph
 
-try:
-    from langgraph.runtime import Runtime
-except ImportError:
-    Runtime = None  # type: ignore[assignment,misc]
-
 from by_qa.core.logger import error, info
+from by_qa.qa.agents.multi_hop_summarizer import build_multi_hop_summary_subgraph
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.messages import agent_metadata
 from by_qa.qa.instant.agents.multi_hop_react import build_multi_hop_agent_graph
 from by_qa.qa.instant.nodes.node_enum import NodeNames
 from by_qa.qa.instant.state import MultiHopState, SubAnswer
-from by_qa.qa.services.llm_service import LLMService
 
 
 def _normalize_to_list(value):
@@ -27,134 +22,6 @@ def _normalize_to_list(value):
     if isinstance(value, tuple):
         return list(value)
     return [value]
-
-
-def _extract_sources(retrieval_results: List[Dict]) -> List[Dict]:
-    sources = []
-    seen = set()
-    for result in retrieval_results:
-        key = result.get("source", "") + result.get("content", "")[:50]
-        if key not in seen:
-            seen.add(key)
-            sources.append(
-                {
-                    "content": result.get("content", ""),
-                    "source": result.get("source", ""),
-                    "source_type": result.get("source_type", ""),
-                    "score": result.get("score", 0.0),
-                    "step": result.get("step"),
-                }
-            )
-    return sources
-
-
-def _calculate_confidence(retrieval_results: List[Dict]) -> float:
-    if not retrieval_results:
-        return 0.0
-    scores = [r.get("score", 0.0) for r in retrieval_results[:3]]
-    return sum(scores) / len(scores) if scores else 0.0
-
-
-async def multi_hop_summary_node(
-    state: MultiHopState,
-    runtime: Runtime[QARuntimeContext] = None,
-    llm: LLMService | None = None,
-) -> Dict[str, Any]:
-    sub_query = state.get("sub_query", {})
-    intermediate_results = state.get("intermediate_results", [])
-    all_retrieval_results = state.get("all_retrieval_results", [])
-    if state.get("sub_answers"):
-        info("[multi_hop] Summary node: sub_answers already exist, skipping")
-        return {}
-
-    info("[multi_hop] Summary node generating final answer")
-    retrieval_by_index = {}
-    for result in all_retrieval_results:
-        index_id = result.get("index_id")
-        if index_id:
-            retrieval_by_index[index_id] = result
-
-    context_parts = []
-    for i, result in enumerate(intermediate_results, 1):
-        answer = result.get("answer", "")
-        query = result.get("query", "")
-        source_indices = result.get("source_indices", [])
-        source_contents = []
-        for idx in source_indices:
-            retrieval = retrieval_by_index.get(idx)
-            if retrieval:
-                content = retrieval.get("content", "")
-                source_type = retrieval.get("source_type", "unknown")
-                source = retrieval.get("source", "unknown")
-                source_contents.append(f"[({source_type}) {source}\n{content}")
-        if answer or source_contents:
-            step_context = f"步骤 {i}:\n"
-            step_context += f"子查询: {query}\n"
-            if source_contents:
-                step_context += (
-                    "引用来源:\n"
-                    + "\n".join(f"  - {s}" for s in source_contents)
-                    + "\n"
-                )
-            if answer:
-                step_context += f"答案: {answer}\n"
-            context_parts.append(step_context)
-
-    intermediate_context = (
-        "\n".join(context_parts) if context_parts else "未找到中间步骤信息。"
-    )
-    if llm is None and runtime and runtime.context:
-        llm = runtime.context.llm_service
-    if llm is None:
-        raise RuntimeError(
-            "llm_service is required in runtime context for multi_hop_summary_node"
-        )
-    messages = [
-        SystemMessage(
-            content="""你是一个专业的信息整合专家。你的任务是整合多跳检索的结果，生成最终的综合答案。
-
-请按以下结构组织回答：
-
-### 答案总结
-[基于所有步骤检索结果的综合回答]
-
-### 推理过程
-[简述多步推理的过程]
-
-请确保答案：
-1. 涵盖所有关键信息点
-2. 逻辑清晰，条理分明
-3. 引用相关来源"""
-        ),
-        HumanMessage(
-            content=f"""原始问题：{sub_query.get("query_text", "")}
-
-多跳检索步骤详情（包含各步骤查询、答案及引用来源内容）：
-{intermediate_context}
-
-请整合以上信息，生成最终的综合答案。""",
-            additional_kwargs=agent_metadata(NodeNames.MULTI_HOP_SUMMARY.value),
-        ),
-    ]
-    final_answer = await llm.generate(
-        messages=messages, model_type="generator", json_mode=False
-    )
-    sub_answer = SubAnswer(
-        sub_query_id=sub_query.get("query_id", "unknown"),
-        sub_query_text=sub_query.get("query_text", ""),
-        query_type="multi-hop",
-        answer=final_answer,
-        reasoning_chain=[r.get("answer", "") for r in intermediate_results],
-        intermediate_answers=intermediate_results,
-        sources=_extract_sources(all_retrieval_results),
-        confidence=_calculate_confidence(all_retrieval_results),
-        retrieval_results=all_retrieval_results,
-    )
-    info(
-        "[multi_hop] Summary node generated final answer: "
-        f"query={sub_query.get('query_text', '')}, final_answer={final_answer}"
-    )
-    return {"sub_answers": [sub_answer], "messages": [AIMessage(content=final_answer)]}
 
 
 async def multi_hop_entry_node(state: MultiHopState) -> Dict[str, Any]:
@@ -230,11 +97,16 @@ async def build_multi_hop_subgraph(config=None, llm_service=None, checkpointer=N
         llm_service=llm_service,
         checkpointer=checkpointer,
     )
+    summary_graph = await build_multi_hop_summary_subgraph(
+        llm_service=llm_service,
+        system_prompt=prompt_overrides.get("multi_hop_summary"),
+        checkpointer=checkpointer,
+    )
 
     workflow = StateGraph(MultiHopState, context_schema=QARuntimeContext)
     workflow.add_node(NodeNames.MULTI_HOP_ENTRY.value, multi_hop_entry_node)
     workflow.add_node(NodeNames.MULTI_HOP_AGENT.value, agent_graph)
-    workflow.add_node(NodeNames.MULTI_HOP_SUMMARY.value, multi_hop_summary_node)
+    workflow.add_node(NodeNames.MULTI_HOP_SUMMARY.value, summary_graph)
     workflow.set_entry_point(NodeNames.MULTI_HOP_ENTRY.value)
     workflow.add_edge(NodeNames.MULTI_HOP_ENTRY.value, NodeNames.MULTI_HOP_AGENT.value)
     workflow.add_edge(
@@ -250,5 +122,4 @@ __all__ = [
     "build_multi_hop_subgraph",
     "multi_hop_entry_node",
     "multi_hop_error_node",
-    "multi_hop_summary_node",
 ]

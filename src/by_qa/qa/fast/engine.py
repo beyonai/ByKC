@@ -21,7 +21,10 @@ class FastQAEngine(BaseQAEngine):
     _recursion_limit = 20
 
     async def _build_graph(self):
-        return await build_fast_qa_graph(checkpointer=self._checkpointer)
+        return await build_fast_qa_graph(
+            checkpointer=self._checkpointer,
+            llm_service=self._get_runtime_context().llm_service,
+        )
 
     async def _do_stream_search(
         self,

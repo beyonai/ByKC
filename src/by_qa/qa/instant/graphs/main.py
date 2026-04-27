@@ -7,6 +7,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
 from by_qa.config import get_settings
+from by_qa.qa.agents.query_decomposer import build_decomposer_subgraph
 from by_qa.qa.common.config import QAEngineConfig, QARetrievalConfig
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.instant.graphs.multi_hop import build_multi_hop_subgraph
@@ -98,7 +99,10 @@ async def build_instant_search_graph(
         return wrap_node(name.value, name2node[name], node_callbacks.get(name.value))
 
     builder = StateGraph(InstantSearchState, context_schema=QARuntimeContext)
-    builder.add_node(NodeNames.DECOMPOSER.value, _node(NodeNames.DECOMPOSER))
+    decomposer_subgraph = await build_decomposer_subgraph(
+        llm_service=llm_service, checkpointer=checkpointer
+    )
+    builder.add_node(NodeNames.DECOMPOSER.value, decomposer_subgraph)
     builder.add_node(NodeNames.ROUTER.value, _node(NodeNames.ROUTER))
     builder.add_node(NodeNames.FINAL_ANSWER.value, _node(NodeNames.FINAL_ANSWER))
 

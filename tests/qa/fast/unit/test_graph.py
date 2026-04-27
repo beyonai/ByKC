@@ -15,8 +15,10 @@ async def test_fast_graph_contains_linear_rewrite_retrieve_answer_nodes():
     assert "rewriter_summary" in drawable.nodes
     assert NodeNames.RETRIEVE.value in drawable.nodes
     assert NodeNames.ANSWER.value in drawable.nodes
+    assert "answer_summary" in drawable.nodes
 
     edges = {(edge.source, edge.target) for edge in drawable.edges}
     assert (NodeNames.REWRITE.value, "rewriter_summary") in edges
     assert ("rewriter_summary", NodeNames.RETRIEVE.value) in edges
     assert (NodeNames.RETRIEVE.value, NodeNames.ANSWER.value) in edges
+    assert (NodeNames.ANSWER.value, "answer_summary") in edges

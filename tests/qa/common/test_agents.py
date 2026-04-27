@@ -1,28 +1,18 @@
 """Tests for shared QA agents."""
 
 import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 from langchain_core.messages import HumanMessage
 
-from by_qa.core.model_config import ModelConfig
-from by_qa.qa.agents.answer_synthesizer import RetrievedContextAnswerSynthesizerAgent
+from by_qa.qa.agents.answer_synthesizer import answer_entry_node
 from by_qa.qa.agents.query_decomposer import (
     SYSTEM_PROMPT_WITH_HISTORY,
     _parse_decomposition_response,
     decomposer_entry_node,
 )
 from by_qa.qa.agents.standalone_question_rewriter import rewriter_entry_node
-from by_qa.qa.services.llm_service import LLMService
-
-
-def _mock_llm_service():
-    async def get_config(self, model_type: str) -> ModelConfig:  # pylint: disable=unused-argument
-        return ModelConfig("m", 0.0, "http://x", "k")
-
-    provider = type("P", (), {"get_config": get_config})()
-    return LLMService(provider=provider)
 
 
 def _mock_settings():
@@ -108,27 +98,24 @@ async def test_rewriter_entry_node_uses_history():
 
 
 @pytest.mark.asyncio
-async def test_answer_synthesizer_answers_from_retrieval_context():
-    llm_service = _mock_llm_service()
-    llm_service.generate = AsyncMock(return_value="根据制度，发票需要提交审批。")  # type: ignore[method-assign]
-    agent = RetrievedContextAnswerSynthesizerAgent(llm_service=llm_service)
-
-    answer = await agent.answer(
-        original_query="怎么报销发票",
-        sub_queries=[{"query_text": "怎么报销发票"}],
-        retrieval_results=[
-            {
-                "content": "发票报销需要提交审批。",
-                "source": "/policy.md",
-                "source_type": "knowledge_base",
-                "score": 0.9,
-            }
-        ],
+async def test_answer_entry_node_builds_context_from_retrieval_results():
+    result = await answer_entry_node(
+        {
+            "original_query": "怎么报销发票",
+            "sub_queries": [{"query_id": "sq_1", "query_text": "怎么报销发票"}],
+            "retrieval_results": [
+                {
+                    "content": "发票报销需要提交审批。",
+                    "source": "/policy.md",
+                    "source_type": "knowledge_base",
+                    "score": 0.9,
+                },
+            ],
+            "messages": [],
+            "final_answer": "",
+            "answer_time": None,
+        }
     )
-
-    assert answer == "根据制度，发票需要提交审批。"
-    llm_service.generate.assert_awaited_once()
-    messages = llm_service.generate.await_args.kwargs["messages"]
-    assert "怎么报销发票" in messages[-1]["content"]
-    assert "发票报销需要提交审批" in messages[-1]["content"]
-    assert llm_service.generate.await_args.kwargs["model_type"] == "generator"
+    human_msg = result["messages"][1]
+    assert "怎么报销发票" in human_msg.content
+    assert "发票报销需要提交审批" in human_msg.content

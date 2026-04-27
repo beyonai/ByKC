@@ -15,12 +15,10 @@ from langchain_core.messages import (
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
 
-from by_qa.config import get_settings
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.operation_registry import OPERATION_REGISTRY, OperationType
 from by_qa.qa.instant.runtime.tool_call_guard import ToolCallGuardMiddleware
 from by_qa.qa.instant.state import MultiHopState
-from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
 from by_qa.qa.services.llm_service import LLMService
 from by_qa.qa.tools.knowledge_tools import DispatcherToolMiddleware
 
@@ -166,8 +164,6 @@ async def build_multi_hop_agent_graph(
 ):
     """Build the configurable multi-hop agent graph."""
     llm = await llm_service._get_streaming_model("retrieval")
-    if checkpointer is None:
-        checkpointer = await create_checkpointer_async(get_settings())
     tools = [next_hop, finalize] + list(extra_tools or [])
     middleware = [
         ToolCallGuardMiddleware(),

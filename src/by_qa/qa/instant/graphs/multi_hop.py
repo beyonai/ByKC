@@ -132,7 +132,8 @@ async def multi_hop_summary_node(
 多跳检索步骤详情（包含各步骤查询、答案及引用来源内容）：
 {intermediate_context}
 
-请整合以上信息，生成最终的综合答案。"""
+请整合以上信息，生成最终的综合答案。""",
+            additional_kwargs=agent_metadata(NodeNames.MULTI_HOP_SUMMARY.value),
         ),
     ]
     final_answer = await llm.generate(
@@ -166,7 +167,8 @@ async def multi_hop_entry_node(state: MultiHopState) -> Dict[str, Any]:
     return {
         "messages": [
             HumanMessage(
-                content=message_content, additional_kwargs=agent_metadata("multi_hop")
+                content=message_content,
+                additional_kwargs=agent_metadata(NodeNames.MULTI_HOP_ENTRY.value),
             )
         ],
         "reasoning_plan": reasoning_plan,

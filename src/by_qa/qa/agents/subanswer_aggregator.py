@@ -1,6 +1,7 @@
 """Sub-answer aggregator agent using LangGraph create_agent."""
 
 import time
+from enum import Enum
 from typing import Annotated, Any, Dict, Optional, TypedDict
 
 from langchain.agents import create_agent
@@ -67,6 +68,12 @@ def _build_sub_answers_context(sub_answers: list[dict]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+class AggregatorNodeNames(str, Enum):
+    ENTRY = "aggregator_entry"
+    AGENT = "aggregator_agent"
+    SUMMARY = "aggregator_summary"
+
+
 class AggregatorAgentState(TypedDict):
     """State for the aggregator subgraph."""
 
@@ -100,7 +107,7 @@ async def aggregator_entry_node(state: Dict[str, Any]) -> Dict[str, Any]:
             RemoveMessage(id=REMOVE_ALL_MESSAGES),
             HumanMessage(
                 content=user_content,
-                additional_kwargs=agent_metadata("subanswer_aggregator"),
+                additional_kwargs=agent_metadata(AggregatorNodeNames.ENTRY.value),
             ),
         ],
         "aggregation_time": time.time(),
@@ -140,8 +147,8 @@ async def aggregator_summary_node(state: Dict[str, Any]) -> Dict[str, Any]:
 def _route_after_entry(state: Dict[str, Any]) -> str:
     """Route after entry: skip agent if sub_answers was empty."""
     if state.get("final_answer") == "未能生成答案":
-        return "aggregator_summary"
-    return "aggregator_agent"
+        return AggregatorNodeNames.SUMMARY.value
+    return AggregatorNodeNames.AGENT.value
 
 
 async def build_aggregator_subgraph(
@@ -163,20 +170,22 @@ async def build_aggregator_subgraph(
     )
 
     workflow = StateGraph(AggregatorAgentState, context_schema=QARuntimeContext)
-    workflow.add_node("aggregator_entry", aggregator_entry_node)
-    workflow.add_node("aggregator_agent", agent_graph)
-    workflow.add_node("aggregator_summary", aggregator_summary_node)
-    workflow.set_entry_point("aggregator_entry")
+    workflow.add_node(AggregatorNodeNames.ENTRY.value, aggregator_entry_node)
+    workflow.add_node(AggregatorNodeNames.AGENT.value, agent_graph)
+    workflow.add_node(AggregatorNodeNames.SUMMARY.value, aggregator_summary_node)
+    workflow.set_entry_point(AggregatorNodeNames.ENTRY.value)
     workflow.add_conditional_edges(
-        "aggregator_entry",
+        AggregatorNodeNames.ENTRY.value,
         _route_after_entry,
         {
-            "aggregator_agent": "aggregator_agent",
-            "aggregator_summary": "aggregator_summary",
+            AggregatorNodeNames.AGENT.value: AggregatorNodeNames.AGENT.value,
+            AggregatorNodeNames.SUMMARY.value: AggregatorNodeNames.SUMMARY.value,
         },
     )
-    workflow.add_edge("aggregator_agent", "aggregator_summary")
-    workflow.add_edge("aggregator_summary", END)
+    workflow.add_edge(
+        AggregatorNodeNames.AGENT.value, AggregatorNodeNames.SUMMARY.value
+    )
+    workflow.add_edge(AggregatorNodeNames.SUMMARY.value, END)
     return workflow.compile(checkpointer=checkpointer)
 
 

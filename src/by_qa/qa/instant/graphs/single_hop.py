@@ -79,7 +79,7 @@ async def single_hop_entry_node(state: SingleHopState) -> Dict[str, Any]:
         "messages": [
             HumanMessage(
                 content=f"请回答这个单跳问题：{query_text}",
-                additional_kwargs=agent_metadata("single_hop"),
+                additional_kwargs=agent_metadata(NodeNames.SINGLE_HOP_ENTRY.value),
             )
         ],
         "retrieval_results": {"mode": "RESET", "data": []},

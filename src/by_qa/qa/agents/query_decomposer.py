@@ -3,6 +3,7 @@
 import json
 import time
 from dataclasses import dataclass
+from enum import Enum
 from typing import Annotated, Any, Dict, Literal, Optional, TypedDict
 
 from langchain.agents import create_agent
@@ -190,6 +191,12 @@ SYSTEM_PROMPT_WITH_HISTORY = """
 """
 
 
+class DecomposerNodeNames(str, Enum):
+    ENTRY = "decomposer_entry"
+    AGENT = "decomposer_agent"
+    SUMMARY = "decomposer_summary"
+
+
 class DecomposerAgentState(TypedDict):
     """State for the decomposer subgraph."""
 
@@ -297,7 +304,8 @@ async def decomposer_entry_node(state: Dict[str, Any]) -> Dict[str, Any]:
         "messages": [
             RemoveMessage(id=REMOVE_ALL_MESSAGES),
             HumanMessage(
-                content=user_content, additional_kwargs=agent_metadata("decomposer")
+                content=user_content,
+                additional_kwargs=agent_metadata(DecomposerNodeNames.ENTRY.value),
             ),
         ],
         "sub_queries": [],
@@ -390,13 +398,15 @@ async def build_decomposer_subgraph(
         return result
 
     workflow = StateGraph(DecomposerAgentState, context_schema=QARuntimeContext)
-    workflow.add_node("decomposer_entry", _entry)
-    workflow.add_node("decomposer_agent", agent_graph)
-    workflow.add_node("decomposer_summary", decomposer_summary_node)
-    workflow.set_entry_point("decomposer_entry")
-    workflow.add_edge("decomposer_entry", "decomposer_agent")
-    workflow.add_edge("decomposer_agent", "decomposer_summary")
-    workflow.add_edge("decomposer_summary", END)
+    workflow.add_node(DecomposerNodeNames.ENTRY.value, _entry)
+    workflow.add_node(DecomposerNodeNames.AGENT.value, agent_graph)
+    workflow.add_node(DecomposerNodeNames.SUMMARY.value, decomposer_summary_node)
+    workflow.set_entry_point(DecomposerNodeNames.ENTRY.value)
+    workflow.add_edge(DecomposerNodeNames.ENTRY.value, DecomposerNodeNames.AGENT.value)
+    workflow.add_edge(
+        DecomposerNodeNames.AGENT.value, DecomposerNodeNames.SUMMARY.value
+    )
+    workflow.add_edge(DecomposerNodeNames.SUMMARY.value, END)
     return workflow.compile(checkpointer=checkpointer)
 
 

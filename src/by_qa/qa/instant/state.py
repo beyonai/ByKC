@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal, Optional, TypedDict
 from langgraph.graph.message import Messages, add_messages
 
 from by_qa.qa.common.reducers import merge_list_with_mode
+from by_qa.qa.common.state import RetrievalResult, SubAnswer
 
 
 class SubQuery(TypedDict):
@@ -17,34 +18,6 @@ class SubQuery(TypedDict):
     hop_count: int
     dependencies: list[str]
     reasoning_chain: Optional[list[str]]
-
-
-class RetrievalResult(TypedDict):
-    """Retrieval result structure for instant QA."""
-
-    content: str
-    source: str
-    source_type: Literal["knowledge_base", "web"]
-    score: float
-    token_count: int
-    sub_query_id: str
-    sub_query_text: str
-    truncated: Optional[bool]
-    hop_number: Optional[int]
-
-
-class SubAnswer(TypedDict):
-    """Sub-answer structure for instant QA."""
-
-    sub_query_id: str
-    sub_query_text: str
-    query_type: Literal["single-hop", "multi-hop"]
-    answer: str
-    reasoning_chain: list[str]
-    intermediate_answers: list[dict[str, Any]]
-    sources: list[dict[str, Any]]
-    confidence: float
-    retrieval_results: list[RetrievalResult]
 
 
 def overwrite_value(left, right):

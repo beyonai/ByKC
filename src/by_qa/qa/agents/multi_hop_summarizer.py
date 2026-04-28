@@ -15,7 +15,7 @@ from by_qa.qa.common.fallback_messages import FallbackMessage
 from by_qa.qa.common.messages import agent_metadata
 from by_qa.qa.common.prompt_fragments import DEFAULT_LANGUAGE_INSTRUCTION
 from by_qa.qa.common.reducers import merge_list_with_mode
-from by_qa.qa.instant.state import SubAnswer
+from by_qa.qa.common.state import SubAnswer
 from by_qa.qa.services.llm_service import LLMService
 
 DEFAULT_MULTI_HOP_SUMMARY_PROMPT = (

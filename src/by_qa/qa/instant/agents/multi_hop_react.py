@@ -15,6 +15,7 @@ from langchain_core.messages import (
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
 
+from by_qa.qa.common.config import AgentOverride
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.operation_registry import OPERATION_REGISTRY, OperationType
 from by_qa.qa.common.prompt_fragments import DEFAULT_LANGUAGE_INSTRUCTION
@@ -160,15 +161,14 @@ Your task is to answer complex questions through multi-step reasoning.
 
 async def build_multi_hop_agent_graph(
     *,
-    system_prompt: str | None = None,
-    extra_tools: List[Any] | None = None,
-    extra_middleware: List[Any] | None = None,
+    override: AgentOverride | None = None,
     llm_service: LLMService,
     checkpointer: Any | None = None,
 ):
     """Build the configurable multi-hop agent graph."""
+    override = override or AgentOverride()
     llm = await llm_service._get_streaming_model("retrieval")
-    tools = [next_hop, finalize] + list(extra_tools or [])
+    tools = [next_hop, finalize] + list(override.tools)
     middleware = [
         ToolCallGuardMiddleware(),
         DispatcherToolMiddleware(
@@ -177,7 +177,7 @@ async def build_multi_hop_agent_graph(
             ),
             follow_up_prompt="A retrieval has been completed. If this retrieval did not collect sufficient information, continue calling search_knowledge to collect more. Otherwise, immediately call next_hop to clean up context and proceed to the next query. If all retrievals are complete, immediately call finalize to end the multi-hop retrieval and generate the final answer.",
         ),
-    ] + list(extra_middleware or [])
+    ] + list(override.middleware)
     return create_agent(
         model=llm,
         tools=tools,
@@ -185,7 +185,7 @@ async def build_multi_hop_agent_graph(
         state_schema=MultiHopState,
         context_schema=QARuntimeContext,
         checkpointer=checkpointer,
-        system_prompt=system_prompt or DEFAULT_MULTI_HOP_SYSTEM_PROMPT,
+        system_prompt=override.prompt or DEFAULT_MULTI_HOP_SYSTEM_PROMPT,
     )
 
 

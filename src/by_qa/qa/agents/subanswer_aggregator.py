@@ -10,6 +10,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
 
 from by_qa.core.logger import info
+from by_qa.qa.common.config import AgentOverride
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.fallback_messages import FallbackMessage
 from by_qa.qa.common.messages import agent_metadata
@@ -159,10 +160,11 @@ def _route_after_entry(state: Dict[str, Any]) -> str:
 async def build_aggregator_subgraph(
     *,
     llm_service: LLMService,
-    system_prompt: str | None = None,
+    override: AgentOverride | None = None,
     checkpointer=None,
 ):
     """Build the aggregator subgraph: entry → create_agent → summary."""
+    override = override or AgentOverride()
     llm = await llm_service._get_streaming_model("generator")
 
     agent_graph = create_agent(
@@ -171,7 +173,7 @@ async def build_aggregator_subgraph(
         state_schema=AggregatorAgentState,
         context_schema=QARuntimeContext,
         checkpointer=checkpointer,
-        system_prompt=system_prompt or SYSTEM_PROMPT,
+        system_prompt=override.prompt or SYSTEM_PROMPT,
     )
 
     workflow = StateGraph(AggregatorAgentState, context_schema=QARuntimeContext)

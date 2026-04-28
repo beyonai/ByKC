@@ -9,7 +9,7 @@ from langchain.tools import tool
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 
-from by_qa.qa.common.config import QARetrievalConfig
+from by_qa.qa.common.config import AgentOverride, QARetrievalConfig
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.operation_registry import SearchInput
 from by_qa.qa.instant.graphs.multi_hop import build_multi_hop_subgraph
@@ -140,7 +140,7 @@ async def test_single_hop_subgraph_handles_parallel_search_calls_without_state_c
     from langgraph.checkpoint.memory import InMemorySaver
 
     graph = await build_single_hop_subgraph(
-        config={"tools": [probe.build_tool()]},
+        agent_override=AgentOverride(tools=[probe.build_tool()]),
         llm_service=llm_service,
         checkpointer=InMemorySaver(),
     )
@@ -174,7 +174,7 @@ async def test_multi_hop_subgraph_handles_parallel_search_calls_without_state_co
     from langgraph.checkpoint.memory import InMemorySaver
 
     graph = await build_multi_hop_subgraph(
-        config={"tools": [probe.build_tool()]},
+        agent_override=AgentOverride(tools=[probe.build_tool()]),
         llm_service=llm_service,
         checkpointer=InMemorySaver(),
     )

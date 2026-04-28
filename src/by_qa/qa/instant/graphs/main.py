@@ -1,7 +1,5 @@
 """Main graph builder for the instant-search capability."""
 
-from dataclasses import fields
-
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
@@ -9,12 +7,12 @@ from langgraph.types import Send
 from by_qa.config import get_settings
 from by_qa.qa.agents.query_decomposer import build_decomposer_subgraph
 from by_qa.qa.agents.subanswer_aggregator import build_aggregator_subgraph
-from by_qa.qa.common.config import QAEngineConfig, QARetrievalConfig
+from by_qa.qa.common.config import AgentOverride, QAEngineConfig, QARetrievalConfig
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.instant.graphs.multi_hop import build_multi_hop_subgraph
 from by_qa.qa.instant.graphs.single_hop import build_single_hop_subgraph
 from by_qa.qa.instant.nodes import NodeNames, name2node
-from by_qa.qa.instant.runtime.factories import wrap_node
+from by_qa.qa.instant.nodes.node_enum import AgentNames
 from by_qa.qa.instant.state import InstantSearchState
 from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
 from by_qa.qa.services.llm_service import LLMService
@@ -58,10 +56,6 @@ async def build_instant_search_graph(
     """Build the instant-search main graph."""
     settings = get_settings()
     config_data = config or {}
-    node_callbacks = getattr(config_data, "node_callbacks", None)
-    if node_callbacks is None and isinstance(config_data, dict):
-        node_callbacks = config_data.get("node_callbacks", {})
-    node_callbacks = node_callbacks or {}
 
     llm_service = getattr(config_data, "llm_service", None)
     if isinstance(config_data, dict):
@@ -69,10 +63,9 @@ async def build_instant_search_graph(
     if llm_service is None:
         llm_service = LLMService()
 
-    tool_providers = getattr(config_data, "tool_providers", None)
+    agents: dict[str, AgentOverride] = getattr(config_data, "agents", None) or {}
     if isinstance(config_data, dict):
-        tool_providers = tool_providers or config_data.get("tool_providers", {})
-    tool_providers = tool_providers or {}
+        agents = agents or config_data.get("agents", {})
 
     if isinstance(config_data, dict):
         retrieval_raw = config_data.get("retrieval", {})
@@ -88,42 +81,51 @@ async def build_instant_search_graph(
     dispatcher = ServiceToolDispatcher(kbs)
     dispatcher_tools = dispatcher.build_tools()
 
-    merged_providers = dict(tool_providers)
-    for hop in ("single_hop", "multi_hop"):
-        existing = merged_providers.get(hop)
-        if existing:
-            merged_providers[hop] = lambda e=existing, dt=dispatcher_tools: e() + dt
-        else:
-            merged_providers[hop] = lambda dt=dispatcher_tools: dt
+    def _agent_override(key: str) -> AgentOverride:
+        override = agents.get(key)
+        if override is None:
+            return AgentOverride()
+        if isinstance(override, dict):
+            return AgentOverride(**override)
+        return override
 
-    def _node(name: NodeNames):
-        return wrap_node(name.value, name2node[name], node_callbacks.get(name.value))
+    decomposer_override = _agent_override(AgentNames.DECOMPOSER)
+    aggregator_override = _agent_override(AgentNames.AGGREGATOR)
 
     builder = StateGraph(InstantSearchState, context_schema=QARuntimeContext)
     decomposer_subgraph = await build_decomposer_subgraph(
-        llm_service=llm_service, checkpointer=checkpointer
+        llm_service=llm_service,
+        override=decomposer_override,
+        checkpointer=checkpointer,
     )
     builder.add_node(NodeNames.DECOMPOSER.value, decomposer_subgraph)
-    builder.add_node(NodeNames.ROUTER.value, _node(NodeNames.ROUTER))
-    builder.add_node(NodeNames.FINAL_ANSWER.value, _node(NodeNames.FINAL_ANSWER))
+    builder.add_node(NodeNames.ROUTER.value, name2node[NodeNames.ROUTER])
+    builder.add_node(NodeNames.FINAL_ANSWER.value, name2node[NodeNames.FINAL_ANSWER])
 
-    config_with_providers = (
-        dict(config_data)
-        if isinstance(config_data, dict)
-        else {f.name: getattr(config_data, f.name) for f in fields(config_data)}
-    )
-    config_with_providers["tool_providers"] = merged_providers
-
+    single_hop_override = _agent_override(AgentNames.SINGLE_HOP)
+    single_hop_override.tools = [*single_hop_override.tools, *dispatcher_tools]
     single_hop_worker = await build_single_hop_subgraph(
-        config=config_with_providers, llm_service=llm_service, checkpointer=checkpointer
+        agent_override=single_hop_override,
+        llm_service=llm_service,
+        checkpointer=checkpointer,
     )
+
+    multi_hop_override = _agent_override(AgentNames.MULTI_HOP)
+    multi_hop_override.tools = [*multi_hop_override.tools, *dispatcher_tools]
+    multi_hop_summary_override = _agent_override(AgentNames.MULTI_HOP_SUMMARY)
     multi_hop_worker = await build_multi_hop_subgraph(
-        config=config_with_providers, llm_service=llm_service, checkpointer=checkpointer
+        agent_override=multi_hop_override,
+        summary_override=multi_hop_summary_override,
+        llm_service=llm_service,
+        checkpointer=checkpointer,
     )
+
     builder.add_node(NodeNames.SINGLE_HOP_WORKER.value, single_hop_worker)
     builder.add_node(NodeNames.MULTI_HOP_WORKER.value, multi_hop_worker)
     aggregator_subgraph = await build_aggregator_subgraph(
-        llm_service=llm_service, checkpointer=checkpointer
+        llm_service=llm_service,
+        override=aggregator_override,
+        checkpointer=checkpointer,
     )
     builder.add_node(NodeNames.SUBANSWER_AGGREGATOR.value, aggregator_subgraph)
 

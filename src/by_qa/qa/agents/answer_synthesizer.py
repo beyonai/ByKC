@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
 
+from by_qa.qa.common.config import AgentOverride
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.context_manager import build_context_for_llm
 from by_qa.qa.common.messages import agent_metadata
@@ -97,10 +98,11 @@ async def answer_summary_node(state: AnswerSynthesizerAgentState) -> Dict[str, A
 async def build_answer_synthesizer_subgraph(
     *,
     llm_service: LLMService,
-    system_prompt: str | None = None,
+    override: AgentOverride | None = None,
     checkpointer=None,
 ):
     """Build the answer synthesizer subgraph: entry -> create_agent -> summary."""
+    override = override or AgentOverride()
     llm = await llm_service._get_streaming_model("generator")
     agent_graph = create_agent(
         model=llm,
@@ -108,7 +110,7 @@ async def build_answer_synthesizer_subgraph(
         state_schema=AnswerSynthesizerAgentState,
         context_schema=QARuntimeContext,
         checkpointer=checkpointer,
-        system_prompt=system_prompt or DEFAULT_RETRIEVED_CONTEXT_ANSWER_PROMPT,
+        system_prompt=override.prompt or DEFAULT_RETRIEVED_CONTEXT_ANSWER_PROMPT,
     )
     workflow = StateGraph(AnswerSynthesizerAgentState, context_schema=QARuntimeContext)
     workflow.add_node(AnswerNodeNames.ENTRY.value, answer_entry_node)

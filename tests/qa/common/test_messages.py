@@ -57,7 +57,7 @@ class TestExtractUserQueryHistory:
             HumanMessage(content="first"),
             HumanMessage(content="current"),
         ]
-        assert extract_user_query_history(msgs) == "用户: first"
+        assert extract_user_query_history(msgs) == "User: first"
 
     def test_single_message_returns_empty(self):
         msgs = [HumanMessage(content="only one")]

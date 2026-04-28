@@ -9,6 +9,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
 
 from by_qa.core.logger import info
+from by_qa.qa.common.config import AgentOverride
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.fallback_messages import FallbackMessage
 from by_qa.qa.common.messages import agent_metadata
@@ -193,9 +194,10 @@ def _route_after_entry(state: Dict[str, Any]) -> str:
 async def build_multi_hop_summary_subgraph(
     *,
     llm_service: LLMService,
-    system_prompt: str | None = None,
+    override: AgentOverride | None = None,
     checkpointer=None,
 ):
+    override = override or AgentOverride()
     llm = await llm_service._get_streaming_model("generator")
     agent_graph = create_agent(
         model=llm,
@@ -203,7 +205,7 @@ async def build_multi_hop_summary_subgraph(
         state_schema=MultiHopSummaryAgentState,
         context_schema=QARuntimeContext,
         checkpointer=checkpointer,
-        system_prompt=system_prompt or DEFAULT_MULTI_HOP_SUMMARY_PROMPT,
+        system_prompt=override.prompt or DEFAULT_MULTI_HOP_SUMMARY_PROMPT,
     )
     workflow = StateGraph(MultiHopSummaryAgentState, context_schema=QARuntimeContext)
     workflow.add_node(MultiHopSummaryNodeNames.ENTRY.value, mh_summary_entry_node)

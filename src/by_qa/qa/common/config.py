@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
+
+from langchain.agents.middleware import AgentMiddleware
 
 from by_qa.qa.common.operation_registry import OperationType
 from by_qa.qa.services.llm_service import LLMService
@@ -59,21 +61,25 @@ class QARetrievalConfig:
 
 
 @dataclass
+class AgentOverride:
+    """Per-agent configuration override."""
+
+    prompt: str | None = None
+    middleware: list[AgentMiddleware] = field(default_factory=list)
+    tools: list[Any] = field(default_factory=list)
+
+
+@dataclass
 class QAEngineConfig:
     """Code-level configuration shared by QA engines."""
 
     llm_service: LLMService | None = None
-    tools: list[Any] = field(default_factory=list)
-    tool_providers: dict[str, Callable[..., list[Any]]] = field(default_factory=dict)
-    prompt_overrides: dict[str, str] = field(default_factory=dict)
-    prompt_builders: dict[str, Callable[..., str]] = field(default_factory=dict)
-    node_callbacks: dict[str, Any] = field(default_factory=dict)
-    agent_callbacks: dict[str, Any] = field(default_factory=dict)
-    agent_middleware: dict[str, list[Any]] = field(default_factory=dict)
+    agents: dict[str, AgentOverride] = field(default_factory=dict)
     retrieval: QARetrievalConfig = field(default_factory=QARetrievalConfig)
 
 
 __all__ = [
+    "AgentOverride",
     "KnowledgeBaseConfig",
     "QAEngineConfig",
     "QARetrievalConfig",

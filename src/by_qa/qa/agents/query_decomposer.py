@@ -13,6 +13,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
 
 from by_qa.config import get_settings
 from by_qa.core.logger import info
+from by_qa.qa.common.config import AgentOverride
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.messages import agent_metadata, extract_user_query_history
 from by_qa.qa.common.prompt_fragments import DEFAULT_LANGUAGE_INSTRUCTION
@@ -378,12 +379,13 @@ async def decomposer_summary_node(state: Dict[str, Any]) -> Dict[str, Any]:
 async def build_decomposer_subgraph(
     *,
     llm_service: LLMService,
-    system_prompt: str | None = None,
+    override: AgentOverride | None = None,
     checkpointer=None,
 ):
     """Build the decomposer subgraph: entry → create_agent → summary."""
+    override = override or AgentOverride()
     max_sub_queries = get_settings().decomposer_max_sub_queries
-    prompt = (system_prompt or SYSTEM_PROMPT_WITH_HISTORY).replace(
+    prompt = (override.prompt or SYSTEM_PROMPT_WITH_HISTORY).replace(
         "{max_sub_queries}", str(max_sub_queries)
     )
     llm = await llm_service._get_streaming_model("classifier")

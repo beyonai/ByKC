@@ -1,9 +1,10 @@
 """Single-hop agent assembly for the instant-search capability."""
 
-from typing import Any, List
+from typing import Any
 
 from langchain.agents import create_agent
 
+from by_qa.qa.common.config import AgentOverride
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.prompt_fragments import DEFAULT_LANGUAGE_INSTRUCTION
 from by_qa.qa.instant.runtime.tool_call_guard import ToolCallGuardMiddleware
@@ -35,15 +36,14 @@ Your task is to answer a single-hop question. "Single-hop" means no multi-step d
 
 async def build_single_hop_agent_graph(
     *,
-    system_prompt: str | None = None,
-    extra_tools: List[Any] | None = None,
-    extra_middleware: List[Any] | None = None,
+    override: AgentOverride | None = None,
     llm_service: LLMService,
     checkpointer: Any | None = None,
 ):
     """Build the configurable single-hop agent graph."""
+    override = override or AgentOverride()
     llm = await llm_service._get_streaming_model("retrieval")
-    tools = list(extra_tools or [])
+    tools = list(override.tools)
     middleware = [
         ToolCallGuardMiddleware(),
         DispatcherToolMiddleware(
@@ -52,7 +52,7 @@ async def build_single_hop_agent_graph(
             ),
             follow_up_prompt="If the current evidence is still insufficient to answer the question, continue calling search_knowledge to collect more information; if it is already sufficient, output the final answer directly based on existing evidence, do not call tools again.",
         ),
-    ] + list(extra_middleware or [])
+    ] + list(override.middleware)
     return create_agent(
         model=llm,
         tools=tools,
@@ -60,7 +60,7 @@ async def build_single_hop_agent_graph(
         state_schema=SingleHopState,
         context_schema=QARuntimeContext,
         checkpointer=checkpointer,
-        system_prompt=system_prompt or DEFAULT_SINGLE_HOP_SYSTEM_PROMPT,
+        system_prompt=override.prompt or DEFAULT_SINGLE_HOP_SYSTEM_PROMPT,
     )
 
 

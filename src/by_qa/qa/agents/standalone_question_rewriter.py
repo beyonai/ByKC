@@ -10,6 +10,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
 
 from by_qa.core.logger import info
+from by_qa.qa.common.config import AgentOverride
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.messages import agent_metadata, extract_user_query_history
 from by_qa.qa.common.prompt_fragments import DEFAULT_LANGUAGE_INSTRUCTION
@@ -106,9 +107,10 @@ async def rewriter_summary_node(state: RewriterAgentState) -> Dict[str, Any]:
 async def build_rewriter_subgraph(
     *,
     llm_service: LLMService,
-    system_prompt: str | None = None,
+    override: AgentOverride | None = None,
     checkpointer=None,
 ):
+    override = override or AgentOverride()
     llm = await llm_service._get_streaming_model("classifier")
     agent_graph = create_agent(
         model=llm,
@@ -116,7 +118,7 @@ async def build_rewriter_subgraph(
         state_schema=RewriterAgentState,
         context_schema=QARuntimeContext,
         checkpointer=checkpointer,
-        system_prompt=system_prompt or DEFAULT_STANDALONE_QUESTION_REWRITE_PROMPT,
+        system_prompt=override.prompt or DEFAULT_STANDALONE_QUESTION_REWRITE_PROMPT,
     )
     workflow = StateGraph(RewriterAgentState, context_schema=QARuntimeContext)
     workflow.add_node(RewriterNodeNames.ENTRY.value, rewriter_entry_node)

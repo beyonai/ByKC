@@ -32,16 +32,6 @@ def _extract_final_answer(messages: List[Any]) -> str:
     return ""
 
 
-def _normalize_to_list(value):
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    if isinstance(value, tuple):
-        return list(value)
-    return [value]
-
-
 def _extract_sources(
     retrieval_results: List[Dict], cited_indices: List[str]
 ) -> List[Dict]:
@@ -128,31 +118,17 @@ async def single_hop_summary_node(state: SingleHopState) -> Dict[str, Any]:
     }
 
 
-async def build_single_hop_subgraph(config=None, llm_service=None, checkpointer=None):
+async def build_single_hop_subgraph(
+    *,
+    agent_override=None,
+    llm_service=None,
+    checkpointer=None,
+):
     """Build single-hop subgraph using dedicated agent assembly."""
     if llm_service is None:
         raise ValueError("llm_service is required to build the single-hop subgraph")
-    config_data = config or {}
-    prompt_overrides = getattr(config_data, "prompt_overrides", None)
-    tool_providers = getattr(config_data, "tool_providers", None)
-    agent_middleware = getattr(config_data, "agent_middleware", None)
-    tools = getattr(config_data, "tools", None)
-    if isinstance(config_data, dict):
-        prompt_overrides = prompt_overrides or config_data.get("prompt_overrides", {})
-        tool_providers = tool_providers or config_data.get("tool_providers", {})
-        agent_middleware = agent_middleware or config_data.get("agent_middleware", {})
-        tools = tools or config_data.get("tools", [])
-    prompt_overrides = prompt_overrides or {}
-    tool_providers = tool_providers or {}
-    agent_middleware = agent_middleware or {}
-    tools = _normalize_to_list(tools)
-    provider_tools = _normalize_to_list(
-        tool_providers["single_hop"]() if "single_hop" in tool_providers else []
-    )
     agent_graph = await build_single_hop_agent_graph(
-        system_prompt=prompt_overrides.get("single_hop"),
-        extra_tools=[*tools, *provider_tools],
-        extra_middleware=_normalize_to_list(agent_middleware.get("single_hop")),
+        override=agent_override,
         llm_service=llm_service,
         checkpointer=checkpointer,
     )

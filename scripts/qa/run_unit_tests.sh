@@ -8,6 +8,6 @@ uv run python -m pytest \
   tests/qa/common/test_llm_service.py \
   tests/qa/common/test_models.py \
   tests/qa/common/test_shared_runtime_imports.py \
-  tests/qa/fast/unit \
-  tests/qa/instant/unit \
+  tests/qa/engines/fast/unit \
+  tests/qa/engines/instant/unit \
   -q

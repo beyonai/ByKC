@@ -7,8 +7,8 @@ import pytest
 
 from by_qa.qa.common.config import QARetrievalConfig
 from by_qa.qa.common.context import QARuntimeContext
-from by_qa.qa.fast.nodes.retrieve import retrieve_node
-from by_qa.qa.fast.state import FastQAState
+from by_qa.qa.engines.fast.nodes.retrieve import retrieve_node
+from by_qa.qa.engines.fast.state import FastQAState
 
 
 class FakeLLMService:
@@ -27,7 +27,7 @@ async def test_retrieve_node_calls_public_search_once(monkeypatch):
             return await search(query, runtime_context)
 
     monkeypatch.setattr(
-        "by_qa.qa.fast.nodes.retrieve.ServiceToolDispatcher", FakeDispatcher
+        "by_qa.qa.engines.fast.nodes.retrieve.ServiceToolDispatcher", FakeDispatcher
     )
     runtime_context = QARuntimeContext(
         retrieval=QARetrievalConfig(knowledge_bases=[]),
@@ -81,7 +81,7 @@ async def test_retrieve_node_calls_search_for_each_sub_query(monkeypatch):
             return [{"content": f"result for {query}", "chunk_id": query}]
 
     monkeypatch.setattr(
-        "by_qa.qa.fast.nodes.retrieve.ServiceToolDispatcher", FakeDispatcher
+        "by_qa.qa.engines.fast.nodes.retrieve.ServiceToolDispatcher", FakeDispatcher
     )
     runtime_context = QARuntimeContext(
         retrieval=QARetrievalConfig(knowledge_bases=[]),
@@ -118,7 +118,7 @@ async def test_retrieve_node_deduplicates_by_chunk_id(monkeypatch):
             return [{"content": "共同结果", "chunk_id": "dup_chunk"}]
 
     monkeypatch.setattr(
-        "by_qa.qa.fast.nodes.retrieve.ServiceToolDispatcher", FakeDispatcher
+        "by_qa.qa.engines.fast.nodes.retrieve.ServiceToolDispatcher", FakeDispatcher
     )
     runtime_context = QARuntimeContext(
         retrieval=QARetrievalConfig(knowledge_bases=[]),

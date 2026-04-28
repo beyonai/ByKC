@@ -7,9 +7,9 @@ from by_qa.qa.agents.answer_synthesizer import build_answer_synthesizer_subgraph
 from by_qa.qa.agents.standalone_question_rewriter import build_rewriter_subgraph
 from by_qa.qa.common.config import AgentOverride
 from by_qa.qa.common.context import QARuntimeContext
-from by_qa.qa.fast.nodes import name2node
-from by_qa.qa.fast.state import FastQAState
-from by_qa.qa.fast.types import AgentNames, NodeNames
+from by_qa.qa.engines.fast.nodes import name2node
+from by_qa.qa.engines.fast.state import FastQAState
+from by_qa.qa.engines.fast.types import AgentNames, NodeNames
 from by_qa.qa.services.llm_service import LLMService
 
 

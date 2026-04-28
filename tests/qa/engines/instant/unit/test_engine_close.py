@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from by_qa.qa.instant.engine import InstantQAEngine
+from by_qa.qa.engines.instant.engine import InstantQAEngine
 
 
 def _mock_settings(tmp_path):

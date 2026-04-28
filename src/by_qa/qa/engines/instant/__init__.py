@@ -1,6 +1,6 @@
 """Instant QA module."""
 
-from by_qa.qa.instant.state import (
+from by_qa.qa.engines.instant.state import (
     InstantQAState,
     InstantSearchState,
     MultiHopState,

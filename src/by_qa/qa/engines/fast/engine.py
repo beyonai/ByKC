@@ -9,9 +9,9 @@ from langchain_core.runnables import RunnableConfig
 from by_qa.core.logger import error
 from by_qa.qa.common.base_engine import BaseQAEngine
 from by_qa.qa.common.models import CoreInput, StreamEvent
-from by_qa.qa.fast.graph import build_fast_qa_graph
-from by_qa.qa.fast.state import FastQAState
-from by_qa.qa.fast.types import NodeNames
+from by_qa.qa.engines.fast.graph import build_fast_qa_graph
+from by_qa.qa.engines.fast.state import FastQAState
+from by_qa.qa.engines.fast.types import NodeNames
 
 
 class FastQAEngine(BaseQAEngine):

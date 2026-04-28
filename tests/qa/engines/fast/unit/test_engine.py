@@ -7,7 +7,7 @@ import pytest
 from by_qa.qa.common.config import KnowledgeBaseConfig
 from by_qa.qa.common.models import CoreInput, StreamEventType
 from by_qa.qa.common.operation_registry import OperationType
-from by_qa.qa.fast.engine import FastQAEngine
+from by_qa.qa.engines.fast.engine import FastQAEngine
 
 
 def _mock_settings():

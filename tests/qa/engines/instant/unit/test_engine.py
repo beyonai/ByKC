@@ -7,7 +7,10 @@ import pytest
 from by_qa.qa.common.config import KnowledgeBaseConfig
 from by_qa.qa.common.models import CoreInput, StreamEventType
 from by_qa.qa.common.operation_registry import OperationType
-from by_qa.qa.instant.engine import InstantQAEngine, _extract_search_result_chunks
+from by_qa.qa.engines.instant.engine import (
+    InstantQAEngine,
+    _extract_search_result_chunks,
+)
 
 
 def _mock_settings():

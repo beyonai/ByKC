@@ -13,9 +13,9 @@ from by_qa.qa.agents.single_hop_react import SingleHopNodeNames
 from by_qa.qa.common.base_engine import BaseQAEngine
 from by_qa.qa.common.models import CoreInput, StreamEvent, StreamEventType
 from by_qa.qa.common.operation_registry import OPERATION_REGISTRY, OperationType
-from by_qa.qa.instant.graph import build_instant_search_graph
-from by_qa.qa.instant.state import InstantSearchState
-from by_qa.qa.instant.types import NodeNames
+from by_qa.qa.engines.instant.graph import build_instant_search_graph
+from by_qa.qa.engines.instant.state import InstantSearchState
+from by_qa.qa.engines.instant.types import NodeNames
 
 USER_VISIBLE_ROLES: dict[str, list[str] | None] = {
     NodeNames.DECOMPOSER.value: None,

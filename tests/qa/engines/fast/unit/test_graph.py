@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from by_qa.qa.fast.graph import build_fast_qa_graph
-from by_qa.qa.fast.types import NodeNames
+from by_qa.qa.engines.fast.graph import build_fast_qa_graph
+from by_qa.qa.engines.fast.types import NodeNames
 
 
 def _mock_llm_service():

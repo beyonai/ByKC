@@ -3,7 +3,7 @@
 from typing import Dict, Literal
 
 from by_qa.core.logger import info
-from by_qa.qa.instant.state import InstantSearchState
+from by_qa.qa.engines.instant.state import InstantSearchState
 
 
 async def router_node(state: InstantSearchState) -> Dict:

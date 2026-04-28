@@ -6,7 +6,7 @@ from typing import Any
 
 from by_qa.core.logger import info
 from by_qa.qa.common.context import QARuntimeContext
-from by_qa.qa.fast.state import FastQAState
+from by_qa.qa.engines.fast.state import FastQAState
 from by_qa.qa.tools.knowledge_tools import ServiceToolDispatcher
 
 try:

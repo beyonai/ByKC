@@ -12,8 +12,8 @@ from by_qa.qa.agents.subanswer_aggregator import build_aggregator_subgraph
 from by_qa.qa.common.config import AgentOverride, QAEngineConfig, QARetrievalConfig
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.instant.nodes import NodeNames, name2node
-from by_qa.qa.instant.nodes.node_enum import AgentNames
 from by_qa.qa.instant.state import InstantSearchState
+from by_qa.qa.instant.types import AgentNames
 from by_qa.qa.services.checkpointer_factory import create_checkpointer_async
 from by_qa.qa.services.llm_service import LLMService
 from by_qa.qa.tools.knowledge_tools import ServiceToolDispatcher

@@ -11,7 +11,7 @@ from langchain_core.language_models.fake_chat_models import FakeMessagesListChat
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydantic import BaseModel, field_validator
 
-from by_qa.qa.instant.runtime.tool_call_guard import ToolCallGuardMiddleware
+from by_qa.qa.common.middleware.tool_call_guard import ToolCallGuardMiddleware
 
 
 class _ToolCapableFakeModel(FakeMessagesListChatModel):

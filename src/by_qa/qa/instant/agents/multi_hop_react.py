@@ -17,9 +17,9 @@ from langgraph.types import Command
 
 from by_qa.qa.common.config import AgentOverride
 from by_qa.qa.common.context import QARuntimeContext
+from by_qa.qa.common.middleware.tool_call_guard import ToolCallGuardMiddleware
 from by_qa.qa.common.operation_registry import OPERATION_REGISTRY, OperationType
 from by_qa.qa.common.prompt_fragments import DEFAULT_LANGUAGE_INSTRUCTION
-from by_qa.qa.instant.runtime.tool_call_guard import ToolCallGuardMiddleware
 from by_qa.qa.instant.state import MultiHopState
 from by_qa.qa.services.llm_service import LLMService
 from by_qa.qa.tools.knowledge_tools import DispatcherToolMiddleware

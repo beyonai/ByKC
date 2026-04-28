@@ -9,7 +9,7 @@ import pytest
 from langchain_core.messages import ToolMessage
 from pydantic import ValidationError
 
-from by_qa.qa.instant.runtime.tool_call_guard import ToolCallGuardMiddleware
+from by_qa.qa.common.middleware.tool_call_guard import ToolCallGuardMiddleware
 
 
 def _make_request(tool_name: str, tool_obj=None, state: dict | None = None):

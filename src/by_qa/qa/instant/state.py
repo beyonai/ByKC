@@ -5,6 +5,7 @@ from typing import Annotated, Any, Literal, Optional, TypedDict
 
 from langgraph.graph.message import Messages, add_messages
 
+from by_qa.qa.agents.single_hop_react import SingleHopState
 from by_qa.qa.common.reducers import merge_list_with_mode
 from by_qa.qa.common.state import RetrievalResult, SubAnswer
 
@@ -24,18 +25,6 @@ def overwrite_value(left, right):
     """Reducer that always takes the right value for input parameters."""
     del left
     return right
-
-
-class SingleHopState(TypedDict):
-    """State for single-hop subgraph."""
-
-    sub_query: dict[str, Any]
-    sub_query_idx: int
-    cited_indices: list[str]
-    result_counter: int
-    retrieval_results: Annotated[list[dict[str, Any]], merge_list_with_mode]
-    sub_answers: Annotated[list[SubAnswer], merge_list_with_mode]
-    messages: Annotated[list, add_messages]
 
 
 class MultiHopState(TypedDict):

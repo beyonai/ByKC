@@ -4,9 +4,9 @@ from enum import Enum
 
 from by_qa.qa.agents.multi_hop_summarizer import MultiHopSummaryNodeNames
 from by_qa.qa.agents.query_decomposer import DecomposerNodeNames
+from by_qa.qa.agents.single_hop_react import SingleHopNodeNames
 from by_qa.qa.agents.subanswer_aggregator import AggregatorNodeNames
 from by_qa.qa.instant.graphs.multi_hop import MultiHopNodeNames
-from by_qa.qa.instant.graphs.single_hop import SingleHopNodeNames
 
 
 class NodeNames(Enum):

@@ -72,14 +72,16 @@ src/by_qa/
 │   ├── api/
 │   └── services/      # DocumentChunkingService
 └── qa/
-    ├── common/        # Shared models, LLMService, CheckpointerFactory
-    ├── agents/        # QueryDecomposer, SingleHopReact, MultiHopReact, aggregators
+    ├── common/        # Shared models, state types, middleware, LLMService, CheckpointerFactory
+    ├── agents/        # Self-contained agent subgraphs (SingleHopReact, MultiHopReact, aggregators)
     ├── services/      # LLM calls with retry/fallback
-    └── instant/       # Main QA orchestration
-        ├── graphs/    # LangGraph state machines (single-hop, multi-hop, main)
-        ├── nodes/     # Graph nodes: Decomposer, Router, Retriever, ContextManager, FinalAnswer
-        ├── runtime/   # Factories, context management, retrieval logic
-        └── engine.py  # Main orchestration engine
+    └── engines/
+        ├── fast/      # Fast QA engine (single-pass retrieval)
+        │   ├── engine.py, graph.py, state.py, types.py
+        │   └── nodes/
+        └── instant/   # Instant QA engine (multi-hop orchestration)
+            ├── engine.py, graph.py, state.py, types.py
+            └── nodes/
 ```
 
 **Key design patterns:**

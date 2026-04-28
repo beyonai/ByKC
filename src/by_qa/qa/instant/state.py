@@ -1,10 +1,10 @@
 """Instant-QA-specific state definitions."""
 
-import operator
 from typing import Annotated, Any, Literal, Optional, TypedDict
 
-from langgraph.graph.message import Messages, add_messages
+from langgraph.graph.message import add_messages
 
+from by_qa.qa.agents.multi_hop_react import MultiHopState
 from by_qa.qa.agents.single_hop_react import SingleHopState
 from by_qa.qa.common.reducers import merge_list_with_mode
 from by_qa.qa.common.state import RetrievalResult, SubAnswer
@@ -25,23 +25,6 @@ def overwrite_value(left, right):
     """Reducer that always takes the right value for input parameters."""
     del left
     return right
-
-
-class MultiHopState(TypedDict):
-    """State for multi-hop subgraph."""
-
-    sub_query: dict[str, Any]
-    sub_query_idx: int
-    messages: Annotated[Messages, add_messages]
-    reasoning_plan: list[str]
-    current_step: int
-    intermediate_results: Annotated[list[dict[str, Any]], operator.add]
-    current_hop: int
-    intermediate_answers: list[dict[str, Any]]
-    reasoning_chain: list[str]
-    all_retrieval_results: Annotated[list[dict[str, Any]], merge_list_with_mode]
-    sub_answers: Annotated[list[SubAnswer], merge_list_with_mode]
-    result_counter: int
 
 
 class InstantQAState(TypedDict):

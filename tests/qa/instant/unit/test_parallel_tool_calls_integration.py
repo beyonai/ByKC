@@ -9,11 +9,11 @@ from langchain.tools import tool
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 
+from by_qa.qa.agents.multi_hop_react import build_multi_hop_subgraph
 from by_qa.qa.agents.single_hop_react import build_single_hop_subgraph
 from by_qa.qa.common.config import AgentOverride, QARetrievalConfig
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.operation_registry import SearchInput
-from by_qa.qa.instant.graphs.multi_hop import build_multi_hop_subgraph
 
 
 class _ToolCapableFakeModel(FakeMessagesListChatModel):

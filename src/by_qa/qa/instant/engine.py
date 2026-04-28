@@ -8,12 +8,12 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
 from by_qa.core.logger import error, info
+from by_qa.qa.agents.multi_hop_react import MultiHopNodeNames
 from by_qa.qa.agents.single_hop_react import SingleHopNodeNames
 from by_qa.qa.common.base_engine import BaseQAEngine
 from by_qa.qa.common.models import CoreInput, StreamEvent, StreamEventType
 from by_qa.qa.common.operation_registry import OPERATION_REGISTRY, OperationType
 from by_qa.qa.instant.graphs.main import NodeNames, build_instant_search_graph
-from by_qa.qa.instant.graphs.multi_hop import MultiHopNodeNames
 from by_qa.qa.instant.state import InstantSearchState
 
 USER_VISIBLE_ROLES: dict[str, list[str] | None] = {

@@ -5,12 +5,12 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 
 from by_qa.config import get_settings
+from by_qa.qa.agents.multi_hop_react import build_multi_hop_subgraph
 from by_qa.qa.agents.query_decomposer import build_decomposer_subgraph
 from by_qa.qa.agents.single_hop_react import build_single_hop_subgraph
 from by_qa.qa.agents.subanswer_aggregator import build_aggregator_subgraph
 from by_qa.qa.common.config import AgentOverride, QAEngineConfig, QARetrievalConfig
 from by_qa.qa.common.context import QARuntimeContext
-from by_qa.qa.instant.graphs.multi_hop import build_multi_hop_subgraph
 from by_qa.qa.instant.nodes import NodeNames, name2node
 from by_qa.qa.instant.nodes.node_enum import AgentNames
 from by_qa.qa.instant.state import InstantSearchState

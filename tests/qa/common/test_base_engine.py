@@ -21,10 +21,32 @@ class ConcreteEngine(BaseQAEngine):
         yield StreamEvent.done(session_id=session_id, role="test")
 
 
+class FilteredErrorEngine(BaseQAEngine):
+    THREAD_ID_PREFIX = "filtered_error_engine"
+
+    async def _build_graph(self):
+        return AsyncMock()
+
+    def _get_visible_roles(self):
+        return {"visible_role": None}
+
+    async def _do_stream_search(
+        self, input_data, session_id, message_id, config, graph
+    ):
+        yield StreamEvent.error(error="boom", role="hidden_role")
+
+
 def _make_engine(config=None):
     with patch("by_qa.qa.common.base_engine.get_settings", return_value=object()):
         engine = ConcreteEngine(config=config)
     # patch create_checkpointer_async so tests don't need real settings
+    engine._checkpointer = AsyncMock()
+    return engine
+
+
+def _make_filtered_error_engine():
+    with patch("by_qa.qa.common.base_engine.get_settings", return_value=object()):
+        engine = FilteredErrorEngine()
     engine._checkpointer = AsyncMock()
     return engine
 
@@ -72,6 +94,18 @@ async def test_stream_search_raises_on_empty_query():
     with pytest.raises(ValidationError):
         async for _ in engine.stream_search(CoreInput(query="  ")):
             pass
+
+
+@pytest.mark.asyncio
+async def test_stream_search_passes_error_events_through_visible_role_filter():
+    engine = _make_filtered_error_engine()
+
+    events = [e async for e in engine.stream_search(CoreInput(query="hello"))]
+
+    assert len(events) == 1
+    assert events[0].type.value == "error"
+    assert events[0].data["error"] == "boom"
+    assert events[0].role == "hidden_role"
 
 
 @pytest.mark.asyncio

@@ -13,7 +13,7 @@ from by_qa.qa.common.config import QARetrievalConfig
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.event_filter import EventFilter
 from by_qa.qa.common.exceptions import ValidationError
-from by_qa.qa.common.models import CoreInput, StreamEvent
+from by_qa.qa.common.models import CoreInput, StreamEvent, StreamEventType
 from by_qa.qa.services.checkpointer_factory import (
     close_checkpointer_async,
     create_checkpointer_async,
@@ -132,6 +132,9 @@ class BaseQAEngine(ABC):
         async for event in self._do_stream_search(
             input_data, session_id, message_id, config, graph
         ):
+            if event.type == StreamEventType.ERROR:
+                yield event
+                continue
             filtered = event_filter.filter_event(event)
             if filtered is not None:
                 yield filtered

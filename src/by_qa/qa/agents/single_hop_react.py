@@ -205,7 +205,8 @@ async def build_single_hop_agent_graph(
             ),
             follow_up_prompt="If the current evidence is still insufficient to answer the question, continue calling search_knowledge to collect more information; if it is already sufficient, output the final answer directly based on existing evidence, do not call tools again.",
         ),
-    ] + list(override.middleware)
+        *override.middleware,
+    ]
     return create_agent(
         model=llm,
         tools=tools,

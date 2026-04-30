@@ -115,6 +115,7 @@ async def build_rewriter_subgraph(
     agent_graph = create_agent(
         model=llm,
         tools=[],
+        middleware=list(override.middleware),
         state_schema=RewriterAgentState,
         context_schema=QARuntimeContext,
         checkpointer=checkpointer,

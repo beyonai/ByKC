@@ -394,6 +394,7 @@ async def build_decomposer_subgraph(
     agent_graph = create_agent(
         model=llm,
         tools=[],
+        middleware=list(override.middleware),
         state_schema=DecomposerAgentState,
         context_schema=QARuntimeContext,
         checkpointer=checkpointer,

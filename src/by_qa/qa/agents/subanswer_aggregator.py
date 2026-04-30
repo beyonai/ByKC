@@ -170,6 +170,7 @@ async def build_aggregator_subgraph(
     agent_graph = create_agent(
         model=llm,
         tools=[],
+        middleware=list(override.middleware),
         state_schema=AggregatorAgentState,
         context_schema=QARuntimeContext,
         checkpointer=checkpointer,

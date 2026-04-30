@@ -68,6 +68,10 @@ class AgentOverride:
     middleware: list[AgentMiddleware] = field(default_factory=list)
     tools: list[Any] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        self.middleware = list(self.middleware or [])
+        self.tools = list(self.tools or [])
+
 
 @dataclass
 class QAEngineConfig:

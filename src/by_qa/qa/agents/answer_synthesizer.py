@@ -107,6 +107,7 @@ async def build_answer_synthesizer_subgraph(
     agent_graph = create_agent(
         model=llm,
         tools=[],
+        middleware=list(override.middleware),
         state_schema=AnswerSynthesizerAgentState,
         context_schema=QARuntimeContext,
         checkpointer=checkpointer,

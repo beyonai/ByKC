@@ -202,6 +202,7 @@ async def build_multi_hop_summary_subgraph(
     agent_graph = create_agent(
         model=llm,
         tools=[],
+        middleware=list(override.middleware),
         state_schema=MultiHopSummaryAgentState,
         context_schema=QARuntimeContext,
         checkpointer=checkpointer,

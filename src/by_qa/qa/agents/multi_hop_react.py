@@ -282,7 +282,8 @@ async def build_multi_hop_agent_graph(
             ),
             follow_up_prompt="A retrieval has been completed. If this retrieval did not collect sufficient information, continue calling search_knowledge to collect more. Otherwise, immediately call next_hop to clean up context and proceed to the next query. If all retrievals are complete, immediately call finalize to end the multi-hop retrieval and generate the final answer.",
         ),
-    ] + list(override.middleware)
+        *override.middleware,
+    ]
     return create_agent(
         model=llm,
         tools=tools,

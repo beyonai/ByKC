@@ -10,7 +10,9 @@ import httpx
 from langchain.agents.middleware import AgentMiddleware, ToolCallRequest
 from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import HumanMessage, ToolMessage
+from langgraph.runtime import Runtime
 from langgraph.types import Command
+from langgraph.typing import ContextT, StateT
 from pydantic import ConfigDict
 
 from by_qa.core import logger, post_discovered_json
@@ -441,6 +443,30 @@ class DispatcherToolMiddleware(AgentMiddleware):
         self._counter_lock = asyncio.Lock()
         self._result_counters: dict[tuple[str, int, int], int] = {}
 
+    async def abefore_model(
+        self,
+        state: StateT,
+        runtime: Runtime[ContextT],  # pylint: disable=unused-argument
+    ) -> dict[str, Any] | None:
+        """Inject follow-up prompt if the last tool call was a knowledge search."""
+        messages = state.get("messages", [])
+        if not messages:
+            return None
+        last_msg = messages[-1]
+        if (
+            isinstance(last_msg, ToolMessage)
+            and last_msg.name == self._search_tool_name
+        ):
+            return {
+                "messages": [
+                    HumanMessage(
+                        content=self._follow_up_prompt,
+                        additional_kwargs=agent_metadata("dispatcher"),
+                    )
+                ]
+            }
+        return None
+
     async def awrap_tool_call(
         self, request: ToolCallRequest, handler: Callable
     ) -> ToolMessage | Command:
@@ -518,10 +544,6 @@ class DispatcherToolMiddleware(AgentMiddleware):
                         name=request.tool_call["name"],
                         id=getattr(result, "id", None),
                         tool_call_id=request.tool_call["id"],
-                    ),
-                    HumanMessage(
-                        content=self._follow_up_prompt,
-                        additional_kwargs=agent_metadata("dispatcher"),
                     ),
                 ],
             }

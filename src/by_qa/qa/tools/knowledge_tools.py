@@ -297,8 +297,9 @@ class ServiceToolDispatcher:
         for (sn, p, bu, h, body), resp in zip(requests, responses):
             if isinstance(resp, Exception):
                 error(
-                    "[dispatcher] search failed: service=%s path=%s error=%s",
+                    "[dispatcher] search failed: service=%s base_url=%s path=%s error=%s",
                     sn,
+                    bu,
                     p,
                     resp,
                 )
@@ -307,8 +308,9 @@ class ServiceToolDispatcher:
             if resp.get("resultCode") != "0":
                 result_msg = resp.get("resultMsg", "unknown error")
                 error(
-                    "[dispatcher] search API error: service=%s path=%s resultMsg=%s",
+                    "[dispatcher] search API error: service=%s base_url=%s path=%s resultMsg=%s",
                     sn,
+                    bu,
                     p,
                     result_msg,
                 )
@@ -403,9 +405,10 @@ class ServiceToolDispatcher:
                 resp = await post_discovered_json(**kwargs)
         except Exception as exc:  # pragma: no cover - exercised by unit tests
             error(
-                "[dispatcher] %s failed: service=%s path=%s error=%s",
+                "[dispatcher] %s failed: service=%s base_url=%s path=%s error=%s",
                 operation_type.value,
                 kb.service_name,
+                kb.base_url,
                 path,
                 exc,
             )
@@ -418,9 +421,10 @@ class ServiceToolDispatcher:
         if resp.get("resultCode") != "0":
             result_msg = resp.get("resultMsg", "unknown error")
             error(
-                "[dispatcher] %s API error: service=%s path=%s resultMsg=%s",
+                "[dispatcher] %s API error: service=%s base_url=%s path=%s resultMsg=%s",
                 operation_type.value,
                 kb.service_name,
+                kb.base_url,
                 path,
                 result_msg,
             )

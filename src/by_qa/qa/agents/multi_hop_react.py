@@ -202,7 +202,8 @@ Your task is to answer complex questions through multi-step reasoning.
 - next_hop advances the step counter, only call it when you are sure you want to proceed to the next reasoning step
 - Within the same hop, you can call search_knowledge multiple times to collect information
 - When calling next_hop or finalize, list the referenced document IDs in source_indices
-- Always maintain coherence and logic in your reasoning"""
+- Always maintain coherence and logic in your reasoning
+- Use tools in parallel and retrieve content with different keywords."""
     + DEFAULT_LANGUAGE_INSTRUCTION
 )
 

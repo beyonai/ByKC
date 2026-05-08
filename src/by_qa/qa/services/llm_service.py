@@ -25,6 +25,7 @@ class LLMService:
             base_url=config.base_url,
             api_key=config.api_key,
             streaming=streaming,
+            extra_body={"reasoning_split": True},
         )
 
     async def _get_streaming_model(self, model_type: str = "generator") -> ChatOpenAI:

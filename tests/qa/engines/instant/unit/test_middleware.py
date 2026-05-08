@@ -4,7 +4,7 @@ import json
 from unittest.mock import AsyncMock
 
 import pytest
-from langchain_core.messages import SystemMessage, ToolMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 
 from by_qa.qa.common.operation_registry import OPERATION_REGISTRY, OperationType
 from by_qa.qa.tools.knowledge_tools import DispatcherToolMiddleware
@@ -74,7 +74,7 @@ async def test_dispatcher_middleware_injects_index_ids_for_search():
     assert llm_content[0] == {"index_id": "3-0-1", "content": "doc-a"}
 
     sys_msg = messages[1]
-    assert isinstance(sys_msg, SystemMessage)
+    assert isinstance(sys_msg, HumanMessage)
     assert sys_msg.content == "继续检索"
 
 

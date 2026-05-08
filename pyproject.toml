@@ -58,6 +58,7 @@ qa = [
     "psycopg[binary]>=3.2.0",
     "aiosqlite>=0.20.0",
     "by-framework>=0.1.10",
+    "json_repair==0.52.2",
 ]
 all = [
     "fastapi>=0.115.0",
@@ -78,6 +79,7 @@ all = [
     "langgraph-checkpoint-sqlite>=2.0.0",
     "aiosqlite>=0.20.0",
     "by-framework>=0.1.10",
+    "json_repair==0.52.2",
 ]
 dev = [
     "pre-commit>=4.0.0",

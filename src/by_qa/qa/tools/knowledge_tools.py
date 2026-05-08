@@ -9,7 +9,7 @@ from typing import Any, Callable
 import httpx
 from langchain.agents.middleware import AgentMiddleware, ToolCallRequest
 from langchain.tools import ToolRuntime, tool
-from langchain_core.messages import SystemMessage, ToolMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.types import Command
 from pydantic import ConfigDict
 
@@ -21,6 +21,7 @@ from by_qa.core.exceptions import (
 from by_qa.core.logger import error, info
 from by_qa.qa.common.config import KnowledgeBaseConfig
 from by_qa.qa.common.context import QARuntimeContext
+from by_qa.qa.common.messages import agent_metadata
 from by_qa.qa.common.operation_registry import (
     OPERATION_REGISTRY,
     OperationSpec,
@@ -425,7 +426,7 @@ class ServiceToolDispatcher:
 
 
 class DispatcherToolMiddleware(AgentMiddleware):
-    """Post-processes dispatcher tool results: injects index_id, artifact, SystemMessage."""
+    """Post-processes dispatcher tool results: injects index_id, artifact, follow-up prompt."""
 
     def __init__(
         self,
@@ -518,7 +519,10 @@ class DispatcherToolMiddleware(AgentMiddleware):
                         id=getattr(result, "id", None),
                         tool_call_id=request.tool_call["id"],
                     ),
-                    SystemMessage(content=self._follow_up_prompt),
+                    HumanMessage(
+                        content=self._follow_up_prompt,
+                        additional_kwargs=agent_metadata("dispatcher"),
+                    ),
                 ],
             }
         )

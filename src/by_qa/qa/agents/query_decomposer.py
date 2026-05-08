@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Annotated, Any, Dict, Literal, Optional, TypedDict
 
+import json_repair
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage
 from langgraph.graph import END, StateGraph
@@ -240,7 +241,9 @@ def _parse_decomposition_response(
 ) -> DecompositionResult:
     """Parse the LLM JSON response into a DecompositionResult."""
     try:
-        result = json.loads(response)
+        result = json_repair.loads(response)
+        if not isinstance(result, dict):
+            raise ValueError("response is not a JSON object")
         sub_queries_data = result.get("sub_queries", [])
         reasoning = result.get("reasoning", "")
         normalized_queries: list[SubQuery] = []
@@ -272,7 +275,7 @@ def _parse_decomposition_response(
             reasoning=reasoning,
             metadata=_generate_metadata(normalized_queries),
         )
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, ValueError):
         fallback_queries = [
             SubQuery(
                 query_id="1",

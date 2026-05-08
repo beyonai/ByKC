@@ -7,13 +7,7 @@ from typing import Annotated, Any, Dict, List, TypedDict
 
 from langchain.agents import create_agent
 from langchain.tools import InjectedToolCallId, tool
-from langchain_core.messages import (
-    AIMessage,
-    HumanMessage,
-    RemoveMessage,
-    SystemMessage,
-    ToolMessage,
-)
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import Messages, add_messages
 from langgraph.prebuilt import InjectedState
@@ -23,7 +17,7 @@ from by_qa.core.logger import error, info
 from by_qa.qa.agents.multi_hop_summarizer import build_multi_hop_summary_subgraph
 from by_qa.qa.common.config import AgentOverride
 from by_qa.qa.common.context import QARuntimeContext
-from by_qa.qa.common.messages import agent_metadata
+from by_qa.qa.common.messages import agent_metadata, is_user_message
 from by_qa.qa.common.middleware.tool_call_guard import ToolCallGuardMiddleware
 from by_qa.qa.common.operation_registry import OPERATION_REGISTRY, OperationType
 from by_qa.qa.common.prompt_fragments import DEFAULT_LANGUAGE_INSTRUCTION
@@ -88,7 +82,9 @@ def next_hop(
     delete_messages = []
     last_human_idx = -1
     for i in range(len(messages) - 1, -1, -1):
-        if isinstance(messages[i], HumanMessage):
+        if is_user_message(
+            messages[i], include_sources=[MultiHopNodeNames.ENTRY.value]
+        ):
             last_human_idx = i
             break
 
@@ -109,7 +105,9 @@ def next_hop(
                     for tc in msg.tool_calls
                 ):
                     delete_messages.append(RemoveMessage(id=msg.id))
-            elif isinstance(msg, SystemMessage):
+            elif isinstance(msg, HumanMessage) and not is_user_message(
+                msg, include_sources=[MultiHopNodeNames.ENTRY.value]
+            ):
                 delete_messages.append(RemoveMessage(id=msg.id))
 
     new_result = {

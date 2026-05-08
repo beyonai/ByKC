@@ -20,6 +20,7 @@ class KnowledgeBaseConfig:
     service_name: str
     kb_description: str | None = None
     headers: dict[str, str] | None = None
+    base_url: str | None = None
     operations: dict[OperationType, str] = field(default_factory=dict)
 
 
@@ -53,9 +54,10 @@ class QARetrievalConfig:
                 "knowledge_bases entries must be dict or KnowledgeBaseConfig"
             )
         for kb in normalized:
-            if not kb.service_name:
+            if not kb.service_name and not kb.base_url:
                 raise ValueError(
                     "knowledge_bases entries must define a non-empty service_name"
+                    " or base_url"
                 )
         self.knowledge_bases = normalized
 

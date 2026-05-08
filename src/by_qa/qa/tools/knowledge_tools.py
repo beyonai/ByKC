@@ -6,6 +6,7 @@ import asyncio
 import json
 from typing import Any, Callable
 
+import httpx
 from langchain.agents.middleware import AgentMiddleware, ToolCallRequest
 from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import SystemMessage, ToolMessage
@@ -102,6 +103,24 @@ def _normalize_headers(headers: dict[str, Any] | None) -> dict[str, str] | None:
     return {
         str(key): "" if value is None else str(value) for key, value in headers.items()
     }
+
+
+async def _post_direct_json(
+    *,
+    base_url: str,
+    path: str,
+    json_body: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """POST JSON directly to base_url + path, bypassing service discovery."""
+    url = base_url.rstrip("/") + "/" + path.lstrip("/")
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(url, json=json_body, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+    if not isinstance(data, dict):
+        raise ValueError("response body must be a JSON object")
+    return data
 
 
 class ServiceToolDispatcher:
@@ -205,7 +224,7 @@ class ServiceToolDispatcher:
                 )
             kbs = [kb for kb in kbs if kb.kb_code in kn_code_list]
 
-        grouped: dict[tuple[str, str], list[str]] = {}
+        grouped: dict[tuple[str, str, str | None], list[str]] = {}
         service_headers: dict[str, dict[str, str]] = {}
         for kb in kbs:
             path = kb.operations.get(OperationType.KNOWLEDGE_SEARCH)
@@ -216,7 +235,7 @@ class ServiceToolDispatcher:
                 service_headers.setdefault(kb.service_name, {}).update(
                     normalized_headers
                 )
-            key = (kb.service_name, path)
+            key = (kb.service_name, path, kb.base_url)
             grouped.setdefault(key, [])
             if kb.kb_code not in grouped[key]:
                 grouped[key].append(kb.kb_code)
@@ -229,6 +248,7 @@ class ServiceToolDispatcher:
             (
                 service_name,
                 path,
+                base_url,
                 service_headers.get(service_name),
                 {
                     "query": payload["query"],
@@ -237,25 +257,41 @@ class ServiceToolDispatcher:
                     "searchMode": "mixedRecall",
                 },
             )
-            for (service_name, path), kb_codes in grouped.items()
+            for (service_name, path, base_url), kb_codes in grouped.items()
         ]
 
+        for sn, p, bu, h, body in requests:
+            if bu:
+                info(
+                    "[dispatcher] search: direct mode url=%s%s",
+                    bu.rstrip("/"),
+                    "/" + p.lstrip("/"),
+                )
+            else:
+                info("[dispatcher] search: discovery mode service=%s path=%s", sn, p)
         info("[dispatcher] search: dispatching %s requests", len(requests))
         responses = await asyncio.gather(
             *[
-                post_discovered_json(
+                _post_direct_json(
+                    base_url=bu,
+                    path=p,
+                    json_body=body,
+                    headers=h,
+                )
+                if bu
+                else post_discovered_json(
                     service_name=sn,
                     path=p,
                     json=body,
                     **({} if not h else {"headers": h}),
                 )
-                for sn, p, h, body in requests
+                for sn, p, bu, h, body in requests
             ],
             return_exceptions=True,
         )
 
         results: list[dict[str, Any]] = []
-        for (sn, p, h, body), resp in zip(requests, responses):
+        for (sn, p, bu, h, body), resp in zip(requests, responses):
             if isinstance(resp, Exception):
                 error(
                     "[dispatcher] search failed: service=%s path=%s error=%s",
@@ -332,16 +368,36 @@ class ServiceToolDispatcher:
             )
 
         headers = _normalize_headers(kb.headers)
-        kwargs: dict[str, Any] = {
-            "service_name": kb.service_name,
-            "path": path,
-            "json": payload,
-        }
-        if headers:
-            kwargs["headers"] = headers
 
         try:
-            resp = await post_discovered_json(**kwargs)
+            if kb.base_url:
+                info(
+                    "[dispatcher] %s: direct mode url=%s%s",
+                    operation_type.value,
+                    kb.base_url.rstrip("/"),
+                    "/" + path.lstrip("/"),
+                )
+                resp = await _post_direct_json(
+                    base_url=kb.base_url,
+                    path=path,
+                    json_body=payload,
+                    headers=headers,
+                )
+            else:
+                info(
+                    "[dispatcher] %s: discovery mode service=%s path=%s",
+                    operation_type.value,
+                    kb.service_name,
+                    path,
+                )
+                kwargs: dict[str, Any] = {
+                    "service_name": kb.service_name,
+                    "path": path,
+                    "json": payload,
+                }
+                if headers:
+                    kwargs["headers"] = headers
+                resp = await post_discovered_json(**kwargs)
         except Exception as exc:  # pragma: no cover - exercised by unit tests
             error(
                 "[dispatcher] %s failed: service=%s path=%s error=%s",

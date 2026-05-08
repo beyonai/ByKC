@@ -831,3 +831,182 @@ def test_chunk_and_embed_preserves_heading_breadcrumb_after_code_block(
         assert chunk.chunk_text.startswith("# Title"), (
             f"Breadcrumb corrupted after code block: {chunk.chunk_text!r}"
         )
+
+
+def test_split_table_block_splits_large_table_by_rows(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Large Markdown tables should be split row-by-row, not by character cuts."""
+    service = _make_service()
+    service.chunk_size = 200
+    service.chunk_overlap = 0
+    monkeypatch.setattr(
+        service,
+        "_batch_embed",
+        lambda texts: [[0.1, 0.2, 0.3] for _ in texts],
+    )
+
+    header = "| Name | Height | Year |"
+    sep = "|------|--------|------|"
+    rows = [f"| Building_{i} | {100 + i}m | {2000 + i} |" for i in range(30)]
+    markdown = "# Buildings\n\n" + "\n".join([header, sep] + rows) + "\n"
+
+    chunks = service.chunk_and_embed(markdown.encode("utf-8"), filename="table.md")
+
+    assert len(chunks) > 1
+    for chunk in chunks:
+        body = (
+            chunk.chunk_text.split("\n\n", 1)[-1]
+            if "\n\n" in chunk.chunk_text
+            else chunk.chunk_text
+        )
+        lines = body.strip().split("\n")
+        assert lines[0] == header, f"Chunk missing table header: {lines[0]}"
+        assert lines[1] == sep, f"Chunk missing separator: {lines[1]}"
+
+
+def test_split_table_block_preserves_heading_context(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Each table chunk should carry the section heading breadcrumb."""
+    service = _make_service()
+    service.chunk_size = 200
+    service.chunk_overlap = 0
+    monkeypatch.setattr(
+        service,
+        "_batch_embed",
+        lambda texts: [[0.1, 0.2, 0.3] for _ in texts],
+    )
+
+    header = "| City | Population |"
+    sep = "|------|------------|"
+    rows = [f"| City_{i} | {1000000 + i * 1000} |" for i in range(30)]
+    markdown = (
+        "# Demographics\n\n## Cities\n\n" + "\n".join([header, sep] + rows) + "\n"
+    )
+
+    chunks = service.chunk_and_embed(markdown.encode("utf-8"), filename="demo.md")
+
+    assert len(chunks) > 1
+    for chunk in chunks:
+        assert chunk.chunk_text.startswith("# Demographics\n## Cities\n"), (
+            f"Missing heading breadcrumb: {chunk.chunk_text[:60]!r}"
+        )
+
+
+def test_split_table_block_respects_chunk_size_limit(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """No table chunk body should exceed the hard body size limit."""
+    service = _make_service()
+    service.chunk_size = 512
+    service.chunk_overlap = 64
+    monkeypatch.setattr(
+        service,
+        "_batch_embed",
+        lambda texts: [[0.1, 0.2, 0.3] for _ in texts],
+    )
+
+    header = "| Name | Value | Description | Category | Status |"
+    sep = "|------|-------|-------------|----------|--------|"
+    rows = [
+        f"| Item_{i} | {i * 100} | A long description for item number {i} | Cat_{i % 5} | Active |"
+        for i in range(80)
+    ]
+    markdown = "## Data\n\n" + "\n".join([header, sep] + rows) + "\n"
+
+    chunks = service.chunk_and_embed(markdown.encode("utf-8"), filename="big.md")
+
+    hard_body_size = max(int(512 * 1.6), 512 + max(64, 128))
+    for i, chunk in enumerate(chunks):
+        body = (
+            chunk.chunk_text.split("\n\n", 1)[-1]
+            if "\n\n" in chunk.chunk_text
+            else chunk.chunk_text
+        )
+        assert len(body) <= hard_body_size, (
+            f"Chunk {i} body exceeds limit: {len(body)} > {hard_body_size}"
+        )
+
+
+def test_split_table_block_returns_none_for_non_table():
+    """Non-table blocks should not be handled by table splitter."""
+    from by_qa.knowledge_build.services.document_chunking_service import _TextBlock
+
+    service = _make_service()
+    text = "This is a regular paragraph with no table markers at all.\n" * 20
+    block = _TextBlock(
+        text=text,
+        start_char=0,
+        end_char=len(text),
+        start_line=0,
+        end_line=19,
+        kind="paragraph",
+    )
+
+    result = service._split_table_block(block, 200)
+    assert result is None
+
+
+def test_split_inline_table_splits_single_line_table(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Single-line inline tables (header+sep+data on one line) should be split by logical rows."""
+
+    service = _make_service()
+    service.chunk_size = 200
+    service.chunk_overlap = 0
+    monkeypatch.setattr(
+        service,
+        "_batch_embed",
+        lambda texts: [[0.1, 0.2, 0.3] for _ in texts],
+    )
+
+    # Build an inline table: | H1 | H2 | H3 | | --- | --- | --- | | d1 | d2 | d3 | ...
+    headers = "| Name | Score | Grade |"
+    sep = " --- | --- | --- |"
+    data_cells = "".join(
+        f" Player_{i} | {i * 10} | {'ABCDE'[i % 5]} |" for i in range(40)
+    )
+    inline_line = headers + " |" + sep + " |" + data_cells
+
+    markdown = "# Results\n\n" + inline_line + "\n"
+
+    chunks = service.chunk_and_embed(markdown.encode("utf-8"), filename="inline.md")
+
+    assert len(chunks) > 1
+    for chunk in chunks:
+        assert chunk.chunk_text.startswith("# Results\n"), (
+            f"Missing heading context: {chunk.chunk_text[:40]!r}"
+        )
+
+
+def test_split_inline_table_preserves_header_in_each_chunk():
+    """Each chunk from an inline table split should start with the reconstructed header."""
+    from by_qa.knowledge_build.services.document_chunking_service import _TextBlock
+
+    service = _make_service()
+    max_body = 400
+
+    headers = "| City | Pop | Area |"
+    sep = " --- | --- | --- |"
+    data_cells = "".join(f" City_{i} | {1000 + i} | {50 + i} |" for i in range(30))
+    inline_line = headers + " |" + sep + " |" + data_cells
+
+    block = _TextBlock(
+        text=inline_line,
+        start_char=0,
+        end_char=len(inline_line),
+        start_line=0,
+        end_line=0,
+        kind="paragraph",
+    )
+
+    parts = service._split_table_block(block, max_body)
+    assert parts is not None
+    assert len(parts) > 1
+    for i, part in enumerate(parts):
+        lines = part.text.split("\n")
+        assert "City" in lines[0], f"Chunk {i} missing header: {lines[0]}"
+        assert "---" in lines[1], f"Chunk {i} missing separator: {lines[1]}"
+        assert len(part.text) <= max_body, f"Chunk {i} exceeds limit: {len(part.text)}"

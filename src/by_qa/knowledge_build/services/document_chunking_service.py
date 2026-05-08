@@ -639,6 +639,10 @@ class DocumentChunkingService:
         if len(block.text) <= max_body_size:
             return [block]
 
+        table_parts = self._split_table_block(block, max_body_size)
+        if table_parts is not None:
+            return table_parts
+
         sentence_parts = self._split_block_on_sentences(block, text)
         parts: list[_TextBlock] = []
         current_group: list[_TextBlock] = []
@@ -654,6 +658,170 @@ class DocumentChunkingService:
         if current_group:
             parts.append(self._merge_blocks(current_group, text))
         return parts
+
+    def _split_table_block(
+        self, block: _TextBlock, max_body_size: int
+    ) -> list[_TextBlock] | None:
+        """Split a Markdown table by rows, repeating header in each chunk.
+
+        Handles both multi-line tables and single-line inline tables where
+        header, separator, and data rows are concatenated with ' | ' on one line.
+        """
+        lines = block.text.split("\n")
+
+        inline_result = self._try_split_inline_table(block, lines, max_body_size)
+        if inline_result is not None:
+            return inline_result
+
+        if len(lines) < 3 or not lines[0].lstrip().startswith("|"):
+            return None
+
+        header_lines: list[str] = [lines[0]]
+        data_start = 1
+        if len(lines) > 1 and re.match(r"^\s*\|[\s:|-]+\|\s*$", lines[1]):
+            header_lines.append(lines[1])
+            data_start = 2
+
+        header_text = "\n".join(header_lines)
+        if len(header_text) >= max_body_size:
+            return None
+
+        parts: list[_TextBlock] = []
+        current_lines: list[str] = list(header_lines)
+        current_size = len(header_text)
+
+        for i in range(data_start, len(lines)):
+            line = lines[i]
+            added_size = len(line) + 1
+            if current_size + added_size > max_body_size and len(current_lines) > len(
+                header_lines
+            ):
+                part_text = "\n".join(current_lines)
+                parts.append(
+                    _TextBlock(
+                        text=part_text,
+                        start_char=block.start_char,
+                        end_char=block.start_char + len(part_text),
+                        start_line=block.start_line,
+                        end_line=block.start_line + len(current_lines) - 1,
+                        kind="paragraph",
+                    )
+                )
+                current_lines = list(header_lines)
+                current_size = len(header_text)
+            current_lines.append(line)
+            current_size += added_size
+
+        if len(current_lines) > len(header_lines):
+            part_text = "\n".join(current_lines)
+            parts.append(
+                _TextBlock(
+                    text=part_text,
+                    start_char=block.start_char,
+                    end_char=block.start_char + len(part_text),
+                    start_line=block.start_line,
+                    end_line=block.start_line + len(current_lines) - 1,
+                    kind="paragraph",
+                )
+            )
+
+        return parts if parts else None
+
+    def _try_split_inline_table(
+        self, block: _TextBlock, lines: list[str], max_body_size: int
+    ) -> list[_TextBlock] | None:
+        """Split single-line inline tables (header+sep+rows all on one line).
+
+        Detects lines where an entire table (header, separator, data) is
+        concatenated into a single line with pipe delimiters.
+        """
+        for line in lines:
+            if len(line) <= max_body_size:
+                continue
+            if not line.lstrip().startswith("|"):
+                continue
+            sep_match = re.search(r"\|\s*---\s*\|", line)
+            if not sep_match:
+                continue
+
+            cells = [c for c in line.split("|")]
+            sep_indices = [
+                i for i, c in enumerate(cells) if re.match(r"^\s*-{3,}\s*$", c)
+            ]
+            if len(sep_indices) < 2:
+                continue
+
+            col_count = len(sep_indices)
+            first_sep_idx = sep_indices[0]
+            header_cells = cells[1:first_sep_idx]
+            after_sep_cells = cells[first_sep_idx + col_count :]
+
+            header_row = "| " + " | ".join(c.strip() for c in header_cells) + " |"
+            sep_row = "| " + " | ".join(["---"] * col_count) + " |"
+            header_text = header_row + "\n" + sep_row
+
+            if len(header_text) >= max_body_size:
+                continue
+
+            data_rows: list[str] = []
+            for i in range(0, len(after_sep_cells) - col_count + 1, col_count):
+                row_cells = after_sep_cells[i : i + col_count]
+                data_rows.append("| " + " | ".join(c.strip() for c in row_cells) + " |")
+
+            if not data_rows:
+                continue
+
+            parts: list[_TextBlock] = []
+            current_chunk = header_text
+            for data_row in data_rows:
+                added = len(data_row) + 1
+                if (
+                    len(current_chunk) + added > max_body_size
+                    and current_chunk != header_text
+                ):
+                    parts.append(
+                        _TextBlock(
+                            text=current_chunk,
+                            start_char=block.start_char,
+                            end_char=block.start_char + len(current_chunk),
+                            start_line=block.start_line,
+                            end_line=block.start_line,
+                            kind="paragraph",
+                        )
+                    )
+                    current_chunk = header_text
+                current_chunk += "\n" + data_row
+
+            if current_chunk != header_text:
+                parts.append(
+                    _TextBlock(
+                        text=current_chunk,
+                        start_char=block.start_char,
+                        end_char=block.start_char + len(current_chunk),
+                        start_line=block.start_line,
+                        end_line=block.start_line,
+                        kind="paragraph",
+                    )
+                )
+
+            if parts:
+                other_lines = [ln for ln in lines if ln is not line]
+                if other_lines:
+                    other_text = "\n".join(other_lines)
+                    if len(other_text.strip()) > 0:
+                        parts.insert(
+                            0,
+                            _TextBlock(
+                                text=other_text,
+                                start_char=block.start_char,
+                                end_char=block.start_char + len(other_text),
+                                start_line=block.start_line,
+                                end_line=block.start_line + len(other_lines) - 1,
+                                kind="paragraph",
+                            ),
+                        )
+                return parts
+        return None
 
     def _split_block_on_sentences(
         self, block: _TextBlock, text: str

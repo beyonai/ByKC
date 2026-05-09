@@ -244,6 +244,30 @@ bash scripts/qa/run_unit_tests.sh
 uv run pre-commit run --all-files
 ```
 
+## 评估
+
+`eval/` 提供标准化的 QA 准确率评估流程，按数据集组织，当前支持 FRAMES benchmark。
+
+```bash
+# 安装 eval 依赖
+uv sync --extra eval --extra qa
+
+# 1. 下载数据集（维基百科页面）
+uv run python -m eval.cli download frames
+
+# 2. 入库到知识库
+uv run python -m eval.cli ingest frames --kb-base-url http://127.0.0.1:8000
+
+# 3. 运行评估
+uv run python -m eval.cli run frames --mode instant --sample 10
+
+# 报告输出到 eval/reports/
+```
+
+三步流程分离执行，`kb_code` 由 ingest 步骤自动记录到 `.ingest_state.json`，评估时自动读取，无需手动指定。
+
+添加新数据集：在 `eval/datasets/<name>/` 下实现 `DatasetSpec` 协议（`download`、`ingest`、`load_queries`），并在注册表中注册即可。
+
 ## CI 与发布
 
 当前仓库已配置：
@@ -257,6 +281,13 @@ uv run pre-commit run --all-files
 ## 仓库结构
 
 ```text
+eval/
+├── cli.py
+├── runner.py
+├── judge.py
+├── models.py
+└── datasets/
+    └── frames/
 src/by_qa/
 ├── core/
 ├── knowledge_base/

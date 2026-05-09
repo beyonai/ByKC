@@ -16,3 +16,10 @@ def get_dataset(name: str) -> DatasetSpec:
             f"Unknown dataset '{name}'. Available: {available or '(none)'}"
         )
     return DATASET_REGISTRY[name]
+
+
+from eval.datasets.frames import (  # noqa: E402, pylint: disable=wrong-import-position
+    FRAMES_SPEC,
+)
+
+register_dataset(FRAMES_SPEC)

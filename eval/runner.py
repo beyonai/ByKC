@@ -1,4 +1,4 @@
-"""Core eval loop: load queries -> run engine -> judge -> report."""
+"""Eval pipeline: inference (run queries -> JSONL) and judge (JSONL -> report)."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from by_qa.qa.common.models import CoreInput, StreamEventType
 from by_qa.qa.common.operation_registry import OperationType
 from by_qa.qa.services.llm_service import LLMService
 from eval.judge import judge
-from eval.models import EvalReport, JudgeVerdict, QueryResult
+from eval.models import EvalReport, InferenceResult, JudgeVerdict, QueryResult
 
 if TYPE_CHECKING:
     from eval.datasets.base import DatasetSpec
@@ -138,47 +138,88 @@ async def _run_single_query(
     )
 
 
-async def run_eval(
+async def run_inference(
     spec: DatasetSpec,
     mode: str,
     language: str | None = None,
     show_tokens: bool = False,
     sample: int | None = None,
-    judge_model: str | None = None,
     query_ids: list[str] | None = None,
-    output_dir: Path | None = None,
-) -> EvalReport:
-    """Run full evaluation on a dataset.
+    retry_failed: bool = False,
+    results_path: Path | None = None,
+) -> Path:
+    """Run queries through the QA engine and save results as JSONL.
+
+    Supports checkpoint/resume: skips queries already present in the output file.
+    Use --retry-failed to re-run queries with errors or empty answers.
 
     Args:
-        spec: Dataset spec providing queries and KB config.
+        spec: Dataset spec.
         mode: "instant" or "fast".
         language: Optional output language.
         show_tokens: Print token stream.
         sample: Run only N queries.
-        judge_model: Override judge model type.
         query_ids: Run only specific query IDs.
-        output_dir: Report output directory.
+        retry_failed: Re-run queries with errors/empty answers from JSONL.
+        results_path: Path to the JSONL output file (default: datasets/{name}/inference_results.jsonl).
 
     Returns:
-        EvalReport with full results.
+        Path to the results JSONL file.
     """
-    # Load queries
-    if sample is not None:
-        queries = spec.load_queries_sample(sample)
-    else:
-        queries = spec.load_queries()
+    if results_path is None:
+        results_path = spec.data_dir / "inference_results.jsonl"
 
-    if query_ids:
+    # Load queries
+    all_queries = spec.load_queries()
+    all_by_id = {q.query_id: q for q in all_queries}
+
+    # Load existing results for checkpoint/resume
+    existing: dict[str, InferenceResult] = {}
+    if results_path.exists():
+        with open(results_path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                r = InferenceResult.from_dict(json.loads(line))
+                existing[r.query_id] = r
+        print(f"Found {len(existing)} existing results in {results_path}")
+
+    if retry_failed:
+        # Re-run queries that had errors or empty answers
+        failed_ids = [qid for qid, r in existing.items() if r.error or not r.answer]
+        if not failed_ids:
+            print("No failed queries to retry")
+            return results_path
+        queries = [all_by_id[qid] for qid in failed_ids if qid in all_by_id]
+        print(f"Retrying {len(queries)} failed queries")
+    elif query_ids:
+        # Run specific query IDs
         id_set = set(query_ids)
-        queries = [q for q in queries if q.query_id in id_set]
+        queries = [all_by_id[qid] for qid in id_set if qid in all_by_id]
         if not queries:
             raise ValueError("No queries matched the given --query-ids filter")
+    elif sample is not None:
+        queries = spec.load_queries_sample(sample)
+    else:
+        # Full run: skip already completed (successful, non-empty answers)
+        pending = [
+            q
+            for q in all_queries
+            if q.query_id not in existing
+            or existing[q.query_id].error
+            or not existing[q.query_id].answer
+        ]
+        if not pending:
+            print(f"All {len(all_queries)} queries already complete in {results_path}")
+            return results_path
+        skipped = len(all_queries) - len(pending)
+        if skipped:
+            print(f"Skipping {skipped} already completed queries")
+        queries = pending
 
     total = len(queries)
     print(f"Running {total} queries from dataset '{spec.name}' (mode={mode})")
-    if sample and sample < len(spec.load_queries()):
-        print(f"  (sampled {sample} of {len(spec.load_queries())} total)")
 
     # Build engine config
     kb_config = _build_knowledge_bases(spec)
@@ -197,58 +238,129 @@ async def run_eval(
 
         engine_cls = InstantQAEngine
 
-    # Run queries (sequential)
-    results: list[QueryResult] = []
-    for i, query in enumerate(queries):
-        print(f"\n[{i + 1}/{total}] {query.question[:80]}...", flush=True)
-        result = await _run_single_query(engine_cls, engine_config, query, show_tokens)
-        results.append(result)
-        if result.error:
-            print(f"  ERROR: {result.error[:100]}")
-        elif not result.answer:
-            print("  WARNING: empty answer")
+    # Run queries (sequential), append to JSONL
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    completed = 0
+    errors = 0
 
-    # Judge
-    print(f"\nJudging {len(results)} results...")
-    llm_service = LLMService()
-    judge_model_type = judge_model or "generator"
-
-    verdicts: list[JudgeVerdict] = []
-    unscored = 0
-    for i, result in enumerate(results):
-        if result.error or not result.answer:
-            verdicts.append(
-                JudgeVerdict(
-                    query_id=result.query.query_id,
-                    score=0,
-                    reasoning=f"Error: {result.error}"
-                    if result.error
-                    else "Empty answer",
-                    judge_model="system",
-                )
+    with open(results_path, "a", encoding="utf-8") as out_f:
+        for i, query in enumerate(queries):
+            print(f"\n[{i + 1}/{total}] {query.question[:80]}...", flush=True)
+            result = await _run_single_query(
+                engine_cls, engine_config, query, show_tokens
             )
-            continue
+            inf_result = InferenceResult.from_query_result(result)
 
-        verdict = await judge(
-            llm_service,
-            result.query.question,
-            result.query.ground_truth,
-            result.answer,
-            model_type=judge_model_type,
-        )
-        verdict.query_id = result.query.query_id
-        verdicts.append(verdict)
-        if verdict.score == -1:
-            unscored += 1
+            # Append to JSONL immediately (checkpoint after each query)
+            out_f.write(json.dumps(inf_result.to_dict(), ensure_ascii=False) + "\n")
+            out_f.flush()
 
-        # Progress indicator
-        score_label = "?" if verdict.score == -1 else str(verdict.score)
-        print(
-            f"  [{i + 1}/{len(results)}] qid={result.query.query_id} score={score_label}"
+            if result.error:
+                print(f"  ERROR: {result.error[:100]}")
+                errors += 1
+            elif not result.answer:
+                print("  WARNING: empty answer")
+                errors += 1
+            else:
+                completed += 1
+
+    print(f"\nInference complete: {completed} succeeded, {errors} errors")
+    print(f"Results saved to: {results_path}")
+    return results_path
+
+
+async def run_judge(
+    spec: DatasetSpec,
+    mode: str,
+    judge_model: str | None = None,
+    results_path: Path | None = None,
+    output_dir: Path | None = None,
+) -> EvalReport:
+    """Read inference results JSONL, judge each answer, and produce an EvalReport.
+
+    Skips entries that already have a score (supports resume for judging).
+
+    Args:
+        spec: Dataset spec.
+        mode: "instant" or "fast" (used in report metadata).
+        judge_model: Override judge model type.
+        results_path: Path to inference results JSONL.
+        output_dir: Report output directory.
+
+    Returns:
+        EvalReport with full results.
+    """
+    if results_path is None:
+        results_path = spec.data_dir / "inference_results.jsonl"
+
+    if not results_path.exists():
+        raise FileNotFoundError(
+            f"Inference results not found at {results_path}. "
+            f"Run 'python -m eval.cli run {spec.name}' first."
         )
+
+    # Load all results from JSONL
+    results: list[InferenceResult] = []
+    with open(results_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            results.append(InferenceResult.from_dict(json.loads(line)))
+
+    print(f"Loaded {len(results)} inference results from {results_path}")
+
+    # Find entries that need judging (no score yet, and have a valid answer)
+    pending = [r for r in results if r.score is None and r.answer and not r.error]
+    already_judged = len(results) - len(pending)
+
+    if not pending:
+        print(f"All {len(results)} entries already judged")
+    else:
+        if already_judged:
+            print(f"Skipping {already_judged} already judged entries")
+        print(f"Judging {len(pending)} entries...")
+
+        llm_service = LLMService()
+        judge_model_type = judge_model or "generator"
+
+        for i, r in enumerate(pending):
+            verdict = await judge(
+                llm_service,
+                r.question,
+                r.ground_truth,
+                r.answer,
+                model_type=judge_model_type,
+            )
+            verdict.query_id = r.query_id
+            r.score = verdict.score
+            r.reasoning = verdict.reasoning
+            r.judge_model = verdict.judge_model
+
+            score_label = "?" if verdict.score == -1 else str(verdict.score)
+            print(f"  [{i + 1}/{len(pending)}] qid={r.query_id} score={score_label}")
+
+        # Write back updated JSONL with scores
+        results_path.write_text(
+            "\n".join(json.dumps(r.to_dict(), ensure_ascii=False) for r in results)
+            + "\n",
+            encoding="utf-8",
+        )
+        print(f"Updated scores written to {results_path}")
 
     # Build report
+    verdicts = [
+        JudgeVerdict(
+            query_id=r.query_id,
+            score=r.score if r.score is not None else -1,
+            reasoning=r.reasoning or "",
+            judge_model=r.judge_model or "unknown",
+        )
+        for r in results
+    ]
+
     correct = sum(1 for v in verdicts if v.score == 1)
+    unscored = sum(1 for v in verdicts if v.score == -1)
     error_count = sum(1 for r in results if r.error)
     total_tokens = sum(r.tokens_used for r in results)
     total_latency = sum(r.latency_ms for r in results)
@@ -269,8 +381,8 @@ async def run_eval(
         error_count=error_count,
     )
 
-    # Save to file
-    out_dir = output_dir or Path("eval/reports")
+    # Save report JSON
+    out_dir = output_dir or spec.data_dir / "reports"
     out_dir.mkdir(parents=True, exist_ok=True)
     report_path = out_dir / f"{spec.name}_{mode}_{timestamp}.json"
     report_path.write_text(
@@ -285,9 +397,8 @@ async def run_eval(
     print("=" * 60)
     print(f"Accuracy:   {correct}/{len(results)} ({report.accuracy:.1%})")
     print(f"Tokens:     {total_tokens:,}")
-    print(
-        f"Latency:    {total_latency / 1000:.1f}s total, {total_latency / len(results) / 1000:.2f}s avg"
-    )
+    avg_latency = total_latency / len(results) / 1000 if results else 0
+    print(f"Latency:    {total_latency / 1000:.1f}s total, {avg_latency:.2f}s avg")
     if unscored:
         print(f"Unscored:   {unscored}")
     if error_count:

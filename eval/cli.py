@@ -4,6 +4,7 @@ Usage:
   uv run python -m eval.cli download frames
   uv run python -m eval.cli ingest frames --kb-base-url http://127.0.0.1:8000
   uv run python -m eval.cli run frames --mode instant
+  uv run python -m eval.cli judge frames --mode instant
 """
 
 from __future__ import annotations
@@ -51,9 +52,12 @@ def _build_parser() -> argparse.ArgumentParser:
     ing_parser.add_argument(
         "--sync-status", action="store_true", help="Sync build status for stale files"
     )
+    ing_parser.add_argument(
+        "--build-timeout", type=int, default=None, help="Build timeout in seconds"
+    )
 
-    # --- run ---
-    run_parser = subparsers.add_parser("run", help="Run evaluation")
+    # --- run (inference only) ---
+    run_parser = subparsers.add_parser("run", help="Run QA inference (saves to JSONL)")
     run_parser.add_argument("dataset", help="Dataset name (e.g., frames)")
     run_parser.add_argument(
         "--mode", choices=["instant", "fast"], default="instant", help="QA engine mode"
@@ -68,10 +72,27 @@ def _build_parser() -> argparse.ArgumentParser:
         "--sample", type=int, default=None, help="Run only N queries"
     )
     run_parser.add_argument(
-        "--judge-model", default=None, help="Override judge model type"
+        "--query-ids", default=None, help="Comma-separated query IDs to run"
     )
     run_parser.add_argument(
-        "--query-ids", default=None, help="Comma-separated query IDs to run"
+        "--retry-failed",
+        action="store_true",
+        help="Re-run queries with errors/empty answers",
+    )
+
+    # --- judge ---
+    judge_parser = subparsers.add_parser(
+        "judge", help="Judge inference results and report"
+    )
+    judge_parser.add_argument("dataset", help="Dataset name (e.g., frames)")
+    judge_parser.add_argument(
+        "--mode",
+        choices=["instant", "fast"],
+        default="instant",
+        help="QA engine mode (for report metadata)",
+    )
+    judge_parser.add_argument(
+        "--judge-model", default=None, help="Override judge model type"
     )
 
     return parser
@@ -91,17 +112,21 @@ def _cmd_ingest(args: argparse.Namespace) -> None:
     from eval.datasets import get_dataset
 
     spec = get_dataset(args.dataset)
-    spec.ingest(
-        base_url=args.kb_base_url,
-        concurrency=args.concurrency,
-        retry_failed=args.retry_failed,
-        sync_status=args.sync_status,
-    )
+    ingest_kwargs = {
+        "base_url": args.kb_base_url,
+        "concurrency": args.concurrency,
+        "retry_failed": args.retry_failed,
+        "sync_status": args.sync_status,
+    }
+    if args.build_timeout is not None:
+        ingest_kwargs["build_timeout"] = args.build_timeout
+
+    spec.ingest(**ingest_kwargs)
 
 
 def _cmd_run(args: argparse.Namespace) -> None:
     from eval.datasets import get_dataset
-    from eval.runner import run_eval
+    from eval.runner import run_inference
 
     spec = get_dataset(args.dataset)
     query_ids = None
@@ -109,14 +134,28 @@ def _cmd_run(args: argparse.Namespace) -> None:
         query_ids = [qid.strip() for qid in args.query_ids.split(",") if qid.strip()]
 
     asyncio.run(
-        run_eval(
+        run_inference(
             spec=spec,
             mode=args.mode,
             language=args.language,
             show_tokens=args.show_tokens,
             sample=args.sample,
-            judge_model=args.judge_model,
             query_ids=query_ids,
+            retry_failed=args.retry_failed,
+        )
+    )
+
+
+def _cmd_judge(args: argparse.Namespace) -> None:
+    from eval.datasets import get_dataset
+    from eval.runner import run_judge
+
+    spec = get_dataset(args.dataset)
+    asyncio.run(
+        run_judge(
+            spec=spec,
+            mode=args.mode,
+            judge_model=args.judge_model,
         )
     )
 
@@ -131,6 +170,8 @@ def main() -> None:
         _cmd_ingest(args)
     elif args.command == "run":
         _cmd_run(args)
+    elif args.command == "judge":
+        _cmd_judge(args)
 
 
 if __name__ == "__main__":

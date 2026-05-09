@@ -24,13 +24,13 @@ import requests
 from tqdm import tqdm
 
 _HERE = Path(__file__).parent
-REPO_ROOT = _HERE.parent.parent.parent.parent
+REPO_ROOT = _HERE.parent.parent.parent
 
-INGEST_STATE_FILE = _HERE / ".ingest_state.json"
+INGEST_STATE_FILE = REPO_ROOT / "datasets/FRAMES/.ingest_state.json"
 WIKI_PAGES_DIR = REPO_ROOT / "datasets" / "FRAMES" / "frames_wiki_pages" / "wiki_pages"
 
 POLL_INTERVAL = 5
-POLL_TIMEOUT = 300
+POLL_TIMEOUT = 600
 UPLOAD_DIR = "/wiki_pages"
 
 _progress_lock = threading.Lock()
@@ -150,21 +150,47 @@ def trigger_build(base_url: str, kn_code: str, filename: str) -> bool:
     return False
 
 
-def poll_build_status(base_url: str, kn_code: str, filename: str) -> str:
-    """Poll build status until completion or timeout. Returns 'success' or 'failed'."""
+def trigger_and_poll(
+    base_url: str,
+    kn_code: str,
+    filename: str,
+    state: dict,
+    build_timeout: int = POLL_TIMEOUT,
+) -> str:
+    """Trigger build and poll until completion or timeout.
+
+    Trigger and poll run in the same task so concurrency control is
+    uniform — each file holds one slot in the thread pool for its
+    entire build lifecycle.
+
+    Timeout is logged and treated as 'failed'.
+    """
+    # Trigger
+    if not trigger_build(base_url, kn_code, filename):
+        update_file_status(state, filename, "build_trigger_failed")
+        return "build_trigger_failed"
+
+    # Poll
     target_path = f"{UPLOAD_DIR}/{filename}"
-    deadline = time.time() + POLL_TIMEOUT
+    deadline = time.time() + build_timeout
 
     while time.time() < deadline:
-        result = api_post(
-            base_url,
-            "/api/v1/fileBuildStatus",
-            json={
-                "knCode": kn_code,
-                "filePath": target_path,
-            },
-        )
+        try:
+            result = api_post(
+                base_url,
+                "/api/v1/fileBuildStatus",
+                json={
+                    "knCode": kn_code,
+                    "filePath": target_path,
+                },
+            )
+        except Exception as exc:
+            print(f"  Poll error [{filename}]: {exc}, retrying...")
+            time.sleep(POLL_INTERVAL)
+            continue
+
         if result["resultCode"] != "0":
+            update_file_status(state, filename, "failed")
             return "failed"
 
         obj = result["resultObject"]
@@ -172,13 +198,16 @@ def poll_build_status(base_url: str, kn_code: str, filename: str) -> str:
         current_step = obj.get("currentStep", "")
 
         if status == "success" or current_step == "complete":
+            update_file_status(state, filename, "success")
             return "success"
         if status == "failed":
+            update_file_status(state, filename, "failed")
             return "failed"
 
         time.sleep(POLL_INTERVAL)
 
-    print(f"  Build timeout [{filename}]")
+    print(f"  Build timeout [{filename}] after {build_timeout}s")
+    update_file_status(state, filename, "failed")
     return "failed"
 
 
@@ -195,37 +224,31 @@ def delete_file(base_url: str, kn_code: str, filename: str):
     )
 
 
-def upload_and_trigger(
+def upload_only(
     base_url: str, kn_code: str, file_path: Path, state: dict, is_retry: bool = False
 ) -> str:
-    """Phase 1: upload + trigger build. Returns the resulting status string."""
+    """Phase 1: upload file only (no build trigger). Returns status string."""
     filename = file_path.name
 
     with _progress_lock:
         entry = state["files"].get(filename, {})
 
-    if not is_retry and entry.get("status") in ("success", "building"):
+    if not is_retry and entry.get("status") in ("success", "building", "uploaded"):
         return entry["status"]
 
     if is_retry:
         delete_file(base_url, kn_code, filename)
         entry = {}
 
-    if entry.get("status") not in ("uploaded", "building"):
-        if not upload_file(base_url, kn_code, file_path):
-            update_file_status(state, filename, "upload_failed")
-            return "upload_failed"
-        update_file_status(state, filename, "uploaded")
-
-    if not trigger_build(base_url, kn_code, filename):
-        update_file_status(state, filename, "build_trigger_failed")
-        return "build_trigger_failed"
-    update_file_status(state, filename, "building")
-    return "building"
+    if not upload_file(base_url, kn_code, file_path):
+        update_file_status(state, filename, "upload_failed")
+        return "upload_failed"
+    update_file_status(state, filename, "uploaded")
+    return "uploaded"
 
 
 def poll_single(base_url: str, kn_code: str, filename: str, state: dict) -> str:
-    """Phase 2: poll build status for a single file. Returns 'success' or 'failed'."""
+    """Query build status once and poll if still building. Used by --sync-status."""
     target_path = f"{UPLOAD_DIR}/{filename}"
     result = api_post(
         base_url,
@@ -246,9 +269,36 @@ def poll_single(base_url: str, kn_code: str, filename: str, state: dict) -> str:
             update_file_status(state, filename, "failed")
             return "failed"
 
-    final_status = poll_build_status(base_url, kn_code, filename)
-    update_file_status(state, filename, final_status)
-    return final_status
+    # Still building — poll with timeout
+    deadline = time.time() + POLL_TIMEOUT
+    while time.time() < deadline:
+        result = api_post(
+            base_url,
+            "/api/v1/fileBuildStatus",
+            json={
+                "knCode": kn_code,
+                "filePath": target_path,
+            },
+        )
+        if result["resultCode"] != "0":
+            update_file_status(state, filename, "failed")
+            return "failed"
+
+        obj = result["resultObject"]
+        status = obj.get("status", "")
+        current_step = obj.get("currentStep", "")
+        if status == "success" or current_step == "complete":
+            update_file_status(state, filename, "success")
+            return "success"
+        if status == "failed":
+            update_file_status(state, filename, "failed")
+            return "failed"
+
+        time.sleep(POLL_INTERVAL)
+
+    print(f"  Build timeout [{filename}] during sync")
+    update_file_status(state, filename, "failed")
+    return "failed"
 
 
 def main(
@@ -258,6 +308,7 @@ def main(
     retry_failed: bool = False,
     retry_file: str | None = None,
     sync_status: bool = False,
+    build_timeout: int = POLL_TIMEOUT,
 ) -> None:
     state = load_state()
     kn_code = ensure_knowledge_base(base_url, kn_name, state)
@@ -323,59 +374,71 @@ def main(
         f"Files to process: {len(files_to_process)}/{len(all_files)}, concurrency: {concurrency}"
     )
 
-    # --- Phase 1: concurrent upload + trigger build ---
-    building_files: list[str] = []
+    # --- Phase 1: parallel upload only ---
     upload_failed = 0
+    uploaded_files: list[Path] = []
 
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         futures = {
-            executor.submit(
-                upload_and_trigger, base_url, kn_code, fp, state, is_retry
-            ): fp
+            executor.submit(upload_only, base_url, kn_code, fp, state, is_retry): fp
             for fp in files_to_process
         }
-        with tqdm(total=len(futures), desc="Upload+trigger") as pbar:
+        with tqdm(total=len(futures), desc="Upload") as pbar:
             for future in as_completed(futures):
                 status = future.result()
-                if status in ("building", "success"):
-                    if status == "building":
-                        building_files.append(futures[future].name)
-                else:
+                if status == "uploaded":
+                    uploaded_files.append(futures[future])
+                elif status == "upload_failed":
                     upload_failed += 1
+                # "success" or "building" means already done, skip
                 pbar.update(1)
 
-    already_success = sum(
+    already_done = sum(
         1
         for f in files_to_process
         if state["files"].get(f.name, {}).get("status") == "success"
     )
     print(
-        f"Upload complete: building {len(building_files)}, already succeeded {already_success}, failed {upload_failed}"
+        f"Upload complete: {len(uploaded_files)} uploaded, "
+        f"{already_done} already done, {upload_failed} failed"
     )
 
-    if not building_files:
-        print("No builds to wait for")
+    if not uploaded_files:
+        print("No new files to build")
         return
 
-    # --- Phase 2: concurrent poll build status ---
+    # --- Phase 2: parallel trigger + poll (each file holds one slot) ---
     build_success = 0
     build_failed = 0
 
+    print(
+        f"Building {len(uploaded_files)} files "
+        f"(concurrency={concurrency}, timeout={build_timeout}s)..."
+    )
+
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         futures = {
-            executor.submit(poll_single, base_url, kn_code, fn, state): fn
-            for fn in building_files
+            executor.submit(
+                trigger_and_poll, base_url, kn_code, fp.name, state, build_timeout
+            ): fp.name
+            for fp in uploaded_files
         }
         with tqdm(total=len(futures), desc="Build progress") as pbar:
             for future in as_completed(futures):
-                status = future.result()
+                filename = futures[future]
+                try:
+                    status = future.result()
+                except Exception as exc:
+                    print(f"  Build exception [{filename}]: {exc}")
+                    update_file_status(state, filename, "failed")
+                    status = "failed"
                 if status == "success":
                     build_success += 1
                 else:
                     build_failed += 1
                 pbar.update(1)
 
-    total_success = already_success + build_success
+    total_success = already_done + build_success
     total_failed = upload_failed + build_failed
     print(
         f"\nDone: {total_success} succeeded, {total_failed} failed, {len(all_files)} total"

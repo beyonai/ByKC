@@ -34,6 +34,11 @@ class DatasetSpec(ABC):
     @abstractmethod
     def ingest_state_path(self) -> Path: ...
 
+    @property
+    def data_dir(self) -> Path:
+        """Dataset root directory for output files (inference results, reports)."""
+        return Path(f"datasets/{self.name.upper()}")
+
     @abstractmethod
     def load_queries(self) -> list[EvalQuery]: ...
 

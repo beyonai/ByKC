@@ -5,8 +5,6 @@ from pathlib import Path
 from eval.datasets.base import DatasetSpec, KbConfig
 from eval.datasets.frames.loader import load_frames_queries, load_frames_queries_sample
 
-_HERE = Path(__file__).parent
-
 
 class _FramesSpec(DatasetSpec):
     @property
@@ -18,8 +16,12 @@ class _FramesSpec(DatasetSpec):
         return KbConfig()
 
     @property
+    def data_dir(self) -> Path:
+        return Path("datasets/FRAMES")
+
+    @property
     def ingest_state_path(self) -> Path:
-        return _HERE / ".ingest_state.json"
+        return self.data_dir / ".ingest_state.json"
 
     def load_queries(self):
         return load_frames_queries()

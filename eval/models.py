@@ -22,6 +22,63 @@ class QueryResult:
 
 
 @dataclass
+class InferenceResult:
+    """Self-contained inference result for JSONL serialization."""
+
+    query_id: str
+    question: str
+    ground_truth: str
+    answer: str
+    tokens_used: int
+    latency_ms: float
+    error: str | None = None
+    score: int | None = None
+    reasoning: str | None = None
+    judge_model: str | None = None
+
+    @classmethod
+    def from_query_result(cls, result: QueryResult) -> "InferenceResult":
+        return cls(
+            query_id=result.query.query_id,
+            question=result.query.question,
+            ground_truth=result.query.ground_truth,
+            answer=result.answer,
+            tokens_used=result.tokens_used,
+            latency_ms=result.latency_ms,
+            error=result.error,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "query_id": self.query_id,
+            "question": self.question,
+            "ground_truth": self.ground_truth,
+            "answer": self.answer,
+            "tokens_used": self.tokens_used,
+            "latency_ms": self.latency_ms,
+            "error": self.error,
+            "score": self.score,
+            "reasoning": self.reasoning,
+            "judge_model": self.judge_model,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "InferenceResult":
+        return cls(
+            query_id=d["query_id"],
+            question=d["question"],
+            ground_truth=d["ground_truth"],
+            answer=d.get("answer", ""),
+            tokens_used=d.get("tokens_used", 0),
+            latency_ms=d.get("latency_ms", 0),
+            error=d.get("error"),
+            score=d.get("score"),
+            reasoning=d.get("reasoning"),
+            judge_model=d.get("judge_model"),
+        )
+
+
+@dataclass
 class JudgeVerdict:
     query_id: str
     score: int  # 0 or 1

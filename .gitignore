@@ -10,3 +10,6 @@ data/minio/
 .env
 .worktrees/
 *.log
+eval/reports/
+eval/datasets/**/.ingest_state.json
+eval/datasets/**/.download_failed.json

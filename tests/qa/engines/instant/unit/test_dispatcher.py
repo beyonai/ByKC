@@ -439,3 +439,167 @@ async def test_dispatch_search_returns_error_entry_on_api_error():
     assert results[0]["is_error"] is True
     assert results[0]["error_type"] == "ApiError"
     assert "topK must be greater than 0" in results[0]["error"]
+
+
+# --- Direct mode (base_url) tests ---
+
+
+def _kb_direct(kb_code: str, base_url: str, ops: dict) -> KnowledgeBaseConfig:
+    return KnowledgeBaseConfig(
+        kb_code=kb_code,
+        kb_name=kb_code,
+        service_name="",
+        base_url=base_url,
+        operations=ops,
+    )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_search_direct_mode_posts_to_base_url():
+    kb = _kb_direct(
+        "kb1",
+        "http://10.0.1.5:8080",
+        {OperationType.KNOWLEDGE_SEARCH: "/api/v1/knowledgeItems/search"},
+    )
+    ctx = _make_context(kb)
+    dispatcher = ServiceToolDispatcher([kb])
+
+    calls = []
+
+    async def fake_direct(*, base_url, path, json_body=None, headers=None):  # pylint: disable=unused-argument
+        calls.append({"base_url": base_url, "path": path, "json_body": json_body})
+        return {
+            "resultCode": "0",
+            "resultMsg": "success",
+            "resultObject": {
+                "data": [
+                    {"chunkText": "direct hit", "score": 0.95, "filePath": "/a.md"}
+                ]
+            },
+        }
+
+    with patch(
+        "by_qa.qa.tools.knowledge_tools._post_direct_json",
+        side_effect=fake_direct,
+    ):
+        results = await dispatcher._dispatch(
+            OperationType.KNOWLEDGE_SEARCH, {"query": "q", "knCodeList": None}, ctx
+        )
+
+    assert len(calls) == 1
+    assert calls[0]["base_url"] == "http://10.0.1.5:8080"
+    assert calls[0]["path"] == "/api/v1/knowledgeItems/search"
+    assert results[0]["content"] == "direct hit"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_search_mixed_direct_and_discovery():
+    kb_direct = _kb_direct(
+        "kb1",
+        "http://direct:9000",
+        {OperationType.KNOWLEDGE_SEARCH: "/api/v1/search"},
+    )
+    kb_discovery = _kb(
+        "kb2",
+        "svc-b",
+        {OperationType.KNOWLEDGE_SEARCH: "/api/v1/search"},
+    )
+    ctx = _make_context(kb_direct, kb_discovery)
+    dispatcher = ServiceToolDispatcher([kb_direct, kb_discovery])
+
+    direct_calls = []
+    discovery_calls = []
+
+    async def fake_direct(*, base_url, path, json_body=None, headers=None):  # pylint: disable=unused-argument
+        direct_calls.append(base_url)
+        return {
+            "resultCode": "0",
+            "resultMsg": "success",
+            "resultObject": {
+                "data": [{"chunkText": "d1", "score": 0.9, "filePath": "/x"}]
+            },
+        }
+
+    async def fake_post(*, service_name=None, path=None, json=None, headers=None):  # pylint: disable=unused-argument
+        discovery_calls.append(service_name)
+        return {
+            "resultCode": "0",
+            "resultMsg": "success",
+            "resultObject": {
+                "data": [{"chunkText": "d2", "score": 0.8, "filePath": "/y"}]
+            },
+        }
+
+    with (
+        patch(
+            "by_qa.qa.tools.knowledge_tools._post_direct_json", side_effect=fake_direct
+        ),
+        patch(
+            "by_qa.qa.tools.knowledge_tools.post_discovered_json", side_effect=fake_post
+        ),
+    ):
+        results = await dispatcher._dispatch(
+            OperationType.KNOWLEDGE_SEARCH, {"query": "q", "knCodeList": None}, ctx
+        )
+
+    assert direct_calls == ["http://direct:9000"]
+    assert discovery_calls == ["svc-b"]
+    assert len(results) == 2
+
+
+@pytest.mark.asyncio
+async def test_dispatch_single_kb_direct_mode():
+    kb = _kb_direct(
+        "kb1",
+        "http://localhost:7000",
+        {OperationType.LIST_DIR: "/api/v1/listDir"},
+    )
+    ctx = _make_context(kb)
+    dispatcher = ServiceToolDispatcher([kb])
+
+    calls = []
+
+    async def fake_direct(*, base_url, path, json_body=None, headers=None):  # pylint: disable=unused-argument
+        calls.append({"base_url": base_url, "path": path})
+        return {
+            "resultCode": "0",
+            "resultMsg": "success",
+            "resultObject": {"data": [{"name": "/src", "type": "directory"}]},
+        }
+
+    with patch(
+        "by_qa.qa.tools.knowledge_tools._post_direct_json",
+        side_effect=fake_direct,
+    ):
+        results = await dispatcher._dispatch(
+            OperationType.LIST_DIR, {"knCode": "kb1", "directoryPath": "/src"}, ctx
+        )
+
+    assert calls[0]["base_url"] == "http://localhost:7000"
+    assert calls[0]["path"] == "/api/v1/listDir"
+    assert results["resultCode"] == "0"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_single_kb_direct_mode_exception():
+    kb = _kb_direct(
+        "kb1",
+        "http://localhost:7000",
+        {OperationType.LIST_DIR: "/api/v1/listDir"},
+    )
+    ctx = _make_context(kb)
+    dispatcher = ServiceToolDispatcher([kb])
+
+    async def fake_direct(*, base_url, path, json_body=None, headers=None):  # pylint: disable=unused-argument
+        raise ConnectionError("connection refused")
+
+    with patch(
+        "by_qa.qa.tools.knowledge_tools._post_direct_json",
+        side_effect=fake_direct,
+    ):
+        results = await dispatcher._dispatch(
+            OperationType.LIST_DIR, {"knCode": "kb1", "directoryPath": "/src"}, ctx
+        )
+
+    assert results["is_error"] is True
+    assert "connection refused" in results["error"]

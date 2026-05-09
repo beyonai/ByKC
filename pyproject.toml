@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "by-qa"
-version = "0.1.7"
+version = "0.1.8"
 description = "Open-source knowledge-base ingestion and retrieval service."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -58,6 +58,7 @@ qa = [
     "psycopg[binary]>=3.2.0",
     "aiosqlite>=0.20.0",
     "by-framework>=0.1.10",
+    "json_repair==0.52.2",
 ]
 all = [
     "fastapi>=0.115.0",
@@ -78,6 +79,7 @@ all = [
     "langgraph-checkpoint-sqlite>=2.0.0",
     "aiosqlite>=0.20.0",
     "by-framework>=0.1.10",
+    "json_repair==0.52.2",
 ]
 dev = [
     "pre-commit>=4.0.0",
@@ -92,6 +94,9 @@ dev = [
 testpaths = ["tests"]
 asyncio_mode = "auto"
 pythonpath = ["src"]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["data*/", "datasets/", "build_data/", "scripts/", "tests/", "docs/", "examples/"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/by_qa"]

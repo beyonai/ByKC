@@ -7,13 +7,7 @@ from typing import Annotated, Any, Dict, List, TypedDict
 
 from langchain.agents import create_agent
 from langchain.tools import InjectedToolCallId, tool
-from langchain_core.messages import (
-    AIMessage,
-    HumanMessage,
-    RemoveMessage,
-    SystemMessage,
-    ToolMessage,
-)
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import Messages, add_messages
 from langgraph.prebuilt import InjectedState
@@ -23,7 +17,7 @@ from by_qa.core.logger import error, info
 from by_qa.qa.agents.multi_hop_summarizer import build_multi_hop_summary_subgraph
 from by_qa.qa.common.config import AgentOverride
 from by_qa.qa.common.context import QARuntimeContext
-from by_qa.qa.common.messages import agent_metadata
+from by_qa.qa.common.messages import agent_metadata, is_user_message
 from by_qa.qa.common.middleware.tool_call_guard import ToolCallGuardMiddleware
 from by_qa.qa.common.operation_registry import OPERATION_REGISTRY, OperationType
 from by_qa.qa.common.prompt_fragments import DEFAULT_LANGUAGE_INSTRUCTION
@@ -49,7 +43,7 @@ class MultiHopState(TypedDict):
     current_hop: int
     intermediate_answers: list[dict[str, Any]]
     reasoning_chain: list[str]
-    all_retrieval_results: Annotated[list[dict[str, Any]], merge_list_with_mode]
+    retrieval_results: Annotated[list[dict[str, Any]], merge_list_with_mode]
     sub_answers: Annotated[list[SubAnswer], merge_list_with_mode]
     result_counter: int
 
@@ -81,6 +75,14 @@ def next_hop(
     tool_call_id: Annotated[str, InjectedToolCallId],
 ) -> Command:
     """Complete the current step and proceed to the next hop query."""
+    current_step = state.get("current_step", 0)
+    info(
+        f"[multi_hop] next_hop called | current_step={current_step} | "
+        f"current_query={current_query} | "
+        f"current_answer={current_answer} | "
+        f"next_query={next_query} | "
+        f"source_indices={source_indices}"
+    )
     messages = state.get("messages", [])
     current_step = state.get("current_step", 0)
     new_step = current_step + 1
@@ -88,7 +90,9 @@ def next_hop(
     delete_messages = []
     last_human_idx = -1
     for i in range(len(messages) - 1, -1, -1):
-        if isinstance(messages[i], HumanMessage):
+        if is_user_message(
+            messages[i], include_sources=[MultiHopNodeNames.ENTRY.value]
+        ):
             last_human_idx = i
             break
 
@@ -109,7 +113,9 @@ def next_hop(
                     for tc in msg.tool_calls
                 ):
                     delete_messages.append(RemoveMessage(id=msg.id))
-            elif isinstance(msg, SystemMessage):
+            elif isinstance(msg, HumanMessage) and not is_user_message(
+                msg, include_sources=[MultiHopNodeNames.ENTRY.value]
+            ):
                 delete_messages.append(RemoveMessage(id=msg.id))
 
     new_result = {
@@ -152,6 +158,12 @@ def finalize(
 ) -> Command:
     """Complete multi-hop retrieval and jump to the summary node."""
     current_step = state.get("current_step", 0)
+    info(
+        f"[multi_hop] finalize called | current_step={current_step} | "
+        f"current_query={current_query} | "
+        f"current_answer={current_answer} | "
+        f"source_indices={source_indices}"
+    )
     new_result = {
         "step": current_step + 1,
         "answer": current_answer,
@@ -194,6 +206,22 @@ Your core principle: **Reason step by step, verify step by step, and every concl
 
 ---
 
+# Output Contract (Read First)
+
+Every hop you run **MUST terminate by calling exactly one of `next_hop` or `finalize`**. There is no third option. Writing the conclusion as assistant text and stopping is not a valid termination — it silently discards the hop.
+
+Why this matters:
+- `next_hop` and `finalize` are the **only channel** through which the current hop's evidence and conclusion are persisted to the downstream summary stage.
+- Evidence identifiers you do not pass via `source_indices` are **not forwarded**. The summary agent cannot see them, even if you cited them in your reasoning text.
+- Retrieval results that are not sealed by one of these calls are treated as scratch work and dropped.
+
+Therefore:
+- If you have a conclusion and more sub-questions remain → call `next_hop`.
+- If you have a conclusion and the reasoning chain is complete → call `finalize`.
+- If evidence is insufficient → keep retrieving, or call `finalize` to end honestly with partial results. **Do not** end the turn without a tool call.
+
+---
+
 # Multi-Hop Reasoning Methodology
 
 ## Step 1: Question Decomposition
@@ -217,9 +245,16 @@ The workflow for each hop:
 
 **3. Form the conclusion for the current step**: Based on the collected evidence, provide the answer to the current sub-question.
 
-**4. Advance or terminate**:
-- If there are subsequent sub-questions to solve → call `next_hop` to proceed to the next hop
-- If all sub-questions have been resolved and you can provide the final answer → call `finalize` to end the process
+**4. Terminate the hop with a tool call** — every hop MUST end by calling exactly one of:
+
+| Situation | Required call |
+|---|---|
+| Current sub-question answered with evidence, more sub-questions remain | `next_hop` |
+| Current sub-question answered with evidence, reasoning chain complete | `finalize` |
+| Evidence still insufficient after exhausting retrieval strategies | `finalize` (honest partial result) |
+| Evidence insufficient but retrieval angles remain | Keep retrieving, do not terminate yet |
+
+Ending the turn with plain text instead of `next_hop` / `finalize` causes the hop's evidence to be **lost** — it will not reach the summary stage.
 
 ---
 
@@ -229,37 +264,43 @@ The workflow for each hop:
 
 Call this when you have completed reasoning for the current sub-question and need to proceed to the next reasoning step.
 
+**What this call does** (why it is mandatory, not optional):
+- **Persists** `current_query`, `current_answer`, and the evidence referenced by `source_indices` to the summary stage. This is the only way that information survives beyond the current hop.
+- **Resets** retrieval context so the next hop starts clean on a new topic, preventing prior retrievals from polluting the next query.
+
 You need to provide the following information:
 - `current_query`: The sub-question this hop was actually answering
 - `current_answer`: The answer to the current sub-question based on evidence
 - `next_query`: The sub-question the next hop needs to answer
-- `source_indices`: List of evidence identifiers referenced in the current step
+- `source_indices`: List of evidence identifiers referenced in the current step (anything omitted here will **not** reach the summary stage)
 
-**Conditions for calling**:
+**Call this when**:
 - The current sub-question has a conclusion supported by sufficient evidence
 - There are indeed unresolved subsequent sub-questions
 - The next hop's sub-question has been clearly identified
 
-**Prohibited from calling when**:
-- Retrieved evidence for the current sub-question is insufficient, and no evidence-supported conclusion has been formed
-- `current_answer` contains assumptions, guesses, or content without evidence support
+**Handling insufficient evidence** — do NOT simply skip the tool call:
+- First, exhaust retrieval strategies (different keywords, angles, or more specific/broader phrasings)
+- If retrieval still fails, call `finalize` to end the process honestly with partial results
+- Never fabricate a `current_answer` just to be able to call `next_hop`
+- Never end the turn silently — that discards everything you have gathered so far
 
-If evidence for the current hop is insufficient, you must first exhaust retrieval strategies (change keywords, change angles, split queries). If you still cannot obtain effective evidence, call `finalize` directly to terminate the process, rather than assuming an answer and continuing. **It is absolutely forbidden to use unverified assumptions as reasoning premises for the next hop.**
-
-**Note**: Calling this advances the step counter and cannot be undone. Only call after confirming the current step's conclusion is reliable.
+**It is absolutely forbidden to use unverified assumptions as reasoning premises for the next hop.** But the remedy is to call `finalize`, not to stop without calling any tool.
 
 ## finalize — End the Multi-Hop Process
 
-Call this when all reasoning steps are complete and you can provide the final answer.
+Call this when all reasoning steps are complete and you can provide the final answer, **or** when evidence is irrecoverably insufficient and you need to end honestly.
+
+**What this call does**: Persists the final hop's `current_query`, `current_answer`, and evidence referenced by `source_indices` to the summary stage, and closes the reasoning process. Without this call, the summary stage receives nothing from the final hop.
 
 You need to provide the following information:
 - `current_query`: The sub-question the last hop was actually answering
 - `current_answer`: The conclusion of the last hop
 - `source_indices`: List of evidence identifiers referenced in the last step
 
-**Conditions for calling**:
-- All sub-questions have been resolved
-- The reasoning chain is complete, and the conclusions from each step can be chained to derive the final answer
+**Call this when**:
+- All sub-questions have been resolved and the reasoning chain is complete, OR
+- Retrieval is blocked and continuing would require fabricating assumptions — end honestly and let the summary stage report the partial result
 
 ---
 
@@ -348,7 +389,7 @@ async def multi_hop_entry_node(state: MultiHopState) -> Dict[str, Any]:
         "intermediate_results": [],
         "intermediate_answers": [],
         "reasoning_chain": [],
-        "all_retrieval_results": {"mode": "RESET", "data": []},
+        "retrieval_results": {"mode": "RESET", "data": []},
         "result_counter": 0,
     }
 

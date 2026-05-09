@@ -114,7 +114,7 @@ class MultiHopSummaryAgentState(TypedDict):
     messages: Annotated[list, add_messages]
     sub_query: dict
     intermediate_results: list
-    all_retrieval_results: Annotated[list, merge_list_with_mode]
+    retrieval_results: Annotated[list, merge_list_with_mode]
     sub_answers: Annotated[list, merge_list_with_mode]
 
 
@@ -145,10 +145,10 @@ def _calculate_confidence(retrieval_results: List[Dict]) -> float:
 
 
 def _build_intermediate_context(
-    intermediate_results: List[Dict], all_retrieval_results: List[Dict]
+    intermediate_results: List[Dict], retrieval_results: List[Dict]
 ) -> str:
     retrieval_by_index = {}
-    for result in all_retrieval_results:
+    for result in retrieval_results:
         index_id = result.get("index_id")
         if index_id:
             retrieval_by_index[index_id] = result
@@ -195,9 +195,9 @@ async def mh_summary_entry_node(
         return {"sub_answers": state["sub_answers"]}
 
     intermediate_results = state.get("intermediate_results", [])
-    all_retrieval_results = state.get("all_retrieval_results", [])
+    retrieval_results = state.get("retrieval_results", [])
     intermediate_context = _build_intermediate_context(
-        intermediate_results, all_retrieval_results
+        intermediate_results, retrieval_results
     )
     info("[multi_hop] Summary entry: building context for LLM")
     return {
@@ -224,7 +224,7 @@ async def mh_summary_summary_node(
 
     sub_query = state.get("sub_query", {})
     intermediate_results = state.get("intermediate_results", [])
-    all_retrieval_results = state.get("all_retrieval_results", [])
+    retrieval_results = state.get("retrieval_results", [])
 
     final_answer = ""
     for msg in reversed(state.get("messages", [])):
@@ -239,9 +239,9 @@ async def mh_summary_summary_node(
         answer=final_answer,
         reasoning_chain=[r.get("answer", "") for r in intermediate_results],
         intermediate_answers=intermediate_results,
-        sources=_extract_sources(all_retrieval_results),
-        confidence=_calculate_confidence(all_retrieval_results),
-        retrieval_results=all_retrieval_results,
+        sources=_extract_sources(retrieval_results),
+        confidence=_calculate_confidence(retrieval_results),
+        retrieval_results=retrieval_results,
     )
     info(
         "[multi_hop] Summary node generated final answer: "

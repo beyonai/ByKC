@@ -31,7 +31,7 @@ WIKI_PAGES_DIR = REPO_ROOT / "datasets" / "FRAMES" / "frames_wiki_pages" / "wiki
 
 POLL_INTERVAL = 5
 POLL_TIMEOUT = 300
-UPLOAD_DIR = "/wiki_pages_v2"
+UPLOAD_DIR = "/wiki_pages"
 
 _progress_lock = threading.Lock()
 

@@ -35,7 +35,6 @@ _HERE = Path(__file__).parent
 REPO_ROOT = _HERE.parent.parent.parent.parent
 
 OUTPUT_DIR = REPO_ROOT / "datasets/FRAMES/frames_wiki_pages/wiki_pages"
-QUERIES_PATH = REPO_ROOT / "datasets/FRAMES/frames_wiki_pages/frames_queries.jsonl"
 FAILED_FILE = _HERE / ".download_failed.json"
 
 REQUEST_DELAY = 1.0
@@ -234,14 +233,19 @@ def main(concurrency: int = 4, retry_failed: bool = False) -> None:
     output_dir = OUTPUT_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Collect all required URLs
-    print("Scanning query set...")
+    # Collect all required URLs from HuggingFace dataset
+    print("Loading FRAMES dataset from HuggingFace...")
+    from datasets import load_dataset
+
+    dataset = load_dataset("google/frames-benchmark", split="test")
     needed: dict[str, str] = {}
-    with open(QUERIES_PATH, encoding="utf-8") as f:
-        for line in f:
-            rec = json.loads(line)
-            for url in rec.get("source_wiki_links", []):
-                for single_url in split_urls(url):
+    for rec in dataset:
+        # Collect URLs from individual wikipedia_link_* columns
+        for i in range(1, 12):
+            key = f"wikipedia_link_{i}" if i <= 10 else "wikipedia_link_11+"
+            raw = rec.get(key, "")
+            if raw:
+                for single_url in split_urls(str(raw)):
                     needed[single_url] = url_to_filename(single_url)
 
     if retry_failed:

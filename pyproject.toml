@@ -91,6 +91,7 @@ dev = [
 ]
 eval = [
     "beautifulsoup4>=4.12.0",
+    "datasets>=3.2.0",
     "markdownify>=0.14.0",
     "requests>=2.32.0",
     "tqdm>=4.67.0",

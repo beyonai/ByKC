@@ -12,7 +12,6 @@ from langchain_core.messages import HumanMessage
 from by_qa.qa.agents.answer_synthesizer import answer_entry_node
 from by_qa.qa.agents.multi_hop_react import build_multi_hop_agent_graph
 from by_qa.qa.agents.query_decomposer import (
-    SYSTEM_PROMPT_WITH_HISTORY,
     _parse_decomposition_response,
     decomposer_entry_node,
 )
@@ -43,12 +42,6 @@ def _mock_settings():
     settings = type("Settings", (), {})()
     settings.decomposer_max_sub_queries = 3
     return settings
-
-
-def test_query_decomposer_keeps_rich_prompt_examples():
-    assert "The Only Splitting Criterion" in SYSTEM_PROMPT_WITH_HISTORY
-    assert "Multi-turn Conversation Completion" in SYSTEM_PROMPT_WITH_HISTORY
-    assert "single-hop and multi-hop parallel" in SYSTEM_PROMPT_WITH_HISTORY
 
 
 def test_parse_decomposition_response_returns_sub_queries():

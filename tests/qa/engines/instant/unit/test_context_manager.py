@@ -35,7 +35,7 @@ async def test_context_manager_node_raises_without_runtime():
 async def test_context_manager_node_raises_when_max_model_len_is_none():
     state = {"retrieval_results": []}
     runtime = _make_runtime(max_model_len=None)
-    with pytest.raises(RuntimeError, match="GENERATOR_MAX_MODEL_LEN is required"):
+    with pytest.raises(RuntimeError, match="LLM_STANDARD_MAX_MODEL_LEN is required"):
         await context_manager_node(state, runtime=runtime)
 
 

@@ -6,7 +6,11 @@ from typing import Any
 
 import httpx
 
-from by_qa.core.model_config import EnvModelConfigProvider, ModelConfigProvider
+from by_qa.core.model_config import (
+    EnvModelConfigProvider,
+    LLMModelProfile,
+    ModelConfigProvider,
+)
 from by_qa.knowledge_base.services.errors import KnowledgeBaseConfigurationError
 
 
@@ -24,7 +28,7 @@ class EmbeddingQueryService:
 
     async def embed_query(self, query: str) -> list[float]:
         """Embed a search query using an OpenAI-compatible embedding API."""
-        config = await self._provider.get_config("embedding")
+        config = await self._provider.get_config(LLMModelProfile.EMBEDDING)
         base_url = config.base_url.rstrip("/")
         if not base_url:
             raise KnowledgeBaseConfigurationError(

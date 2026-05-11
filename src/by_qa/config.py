@@ -1,13 +1,15 @@
 """Configuration for the open-source knowledge-base service."""
 
 import ipaddress
+import json
 import socket
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated, Any
 from urllib.parse import quote, urlencode
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 ENV_FILE = PROJECT_ROOT / ".env"
@@ -109,38 +111,28 @@ class Settings(BaseSettings):
 
     llm_base_url: str = Field(default="https://api.openai.com/v1", alias="LLM_BASE_URL")
     llm_api_key: str = Field(default="", alias="LLM_API_KEY")
-    classifier_model: str = Field(default="gpt-4o-mini", alias="CLASSIFIER_MODEL")
-    classifier_temp: float = Field(default=0.0, alias="CLASSIFIER_TEMP")
-    retrieval_model: str = Field(default="gpt-4o", alias="RETRIEVAL_MODEL")
-    retrieval_temp: float = Field(default=0.0, alias="RETRIEVAL_TEMP")
-    generator_model: str = Field(default="gpt-4o", alias="GENERATOR_MODEL")
-    generator_temp: float = Field(default=0.7, alias="GENERATOR_TEMP")
-    quality_model: str = Field(default="gpt-4o", alias="QUALITY_MODEL")
-    quality_temp: float = Field(default=0.0, alias="QUALITY_TEMP")
-    decomposer_model: str = Field(default="gpt-4o-mini", alias="DECOMPOSER_MODEL")
-    decomposer_temp: float = Field(default=0.0, alias="DECOMPOSER_TEMP")
+    llm_standard_model: str = Field(default="gpt-4o", alias="LLM_STANDARD_MODEL")
+    llm_standard_temp: float = Field(default=0.7, alias="LLM_STANDARD_TEMP")
+    llm_standard_extra_body: Annotated[dict[str, Any], NoDecode] = Field(
+        default_factory=dict,
+        alias="LLM_STANDARD_EXTRA_BODY",
+    )
+    llm_lightweight_model: str = Field(
+        default="gpt-4o-mini", alias="LLM_LIGHTWEIGHT_MODEL"
+    )
+    llm_lightweight_temp: float = Field(default=0.0, alias="LLM_LIGHTWEIGHT_TEMP")
+    llm_lightweight_extra_body: Annotated[dict[str, Any], NoDecode] = Field(
+        default_factory=dict,
+        alias="LLM_LIGHTWEIGHT_EXTRA_BODY",
+    )
     decomposer_max_sub_queries: int = Field(
         default=5, alias="DECOMPOSER_MAX_SUB_QUERIES"
     )
-    aggregator_model: str = Field(default="gpt-4o", alias="AGGREGATOR_MODEL")
-    aggregator_temp: float = Field(default=0.7, alias="AGGREGATOR_TEMP")
-    classifier_max_model_len: int | None = Field(
-        default=None, alias="CLASSIFIER_MAX_MODEL_LEN"
+    llm_standard_max_model_len: int | None = Field(
+        default=None, alias="LLM_STANDARD_MAX_MODEL_LEN"
     )
-    retrieval_max_model_len: int | None = Field(
-        default=None, alias="RETRIEVAL_MAX_MODEL_LEN"
-    )
-    generator_max_model_len: int | None = Field(
-        default=None, alias="GENERATOR_MAX_MODEL_LEN"
-    )
-    quality_max_model_len: int | None = Field(
-        default=None, alias="QUALITY_MAX_MODEL_LEN"
-    )
-    decomposer_max_model_len: int | None = Field(
-        default=None, alias="DECOMPOSER_MAX_MODEL_LEN"
-    )
-    aggregator_max_model_len: int | None = Field(
-        default=None, alias="AGGREGATOR_MAX_MODEL_LEN"
+    llm_lightweight_max_model_len: int | None = Field(
+        default=None, alias="LLM_LIGHTWEIGHT_MAX_MODEL_LEN"
     )
     embedding_max_model_len: int | None = Field(
         default=None, alias="EMBEDDING_MAX_MODEL_LEN"
@@ -178,6 +170,23 @@ class Settings(BaseSettings):
         if value == -1 or value > 0:
             return value
         raise ValueError("EMBEDDING_BATCH_MAX_TEXTS must be greater than 0 or -1")
+
+    @field_validator(
+        "llm_standard_extra_body", "llm_lightweight_extra_body", mode="before"
+    )
+    @classmethod
+    def _normalize_llm_extra_body(cls, value: Any) -> dict[str, Any]:
+        """Accept JSON strings or dicts for provider-specific request payload fields."""
+        if value is None or value == "":
+            return {}
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            parsed = json.loads(value)
+            if not isinstance(parsed, dict):
+                raise ValueError("LLM extra_body must decode to a JSON object")
+            return parsed
+        raise ValueError("LLM extra_body must be a JSON object or JSON string")
 
     @property
     def logs_path(self) -> Path:

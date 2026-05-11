@@ -97,11 +97,6 @@ eval = [
     "tqdm>=4.67.0",
 ]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-asyncio_mode = "auto"
-pythonpath = ["src"]
-
 [tool.hatch.build.targets.sdist]
 exclude = ["data*/", "datasets/", "build_data/", "scripts/", "tests/", "docs/", "examples/"]
 

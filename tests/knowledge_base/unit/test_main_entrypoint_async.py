@@ -198,7 +198,9 @@ async def test_knowledge_base_schema_initializes_lazily_with_provider_config(
             recorded["bootstrap_connection"] = connection
 
     async def fake_build_bootstrap_service(settings, provider=None):
-        await provider.get_config("embedding")
+        from by_qa.core.model_config import LLMModelProfile
+
+        await provider.get_config(LLMModelProfile.EMBEDDING)
         recorded["bootstrap"] = (settings, provider)
         return FakeBootstrap()
 

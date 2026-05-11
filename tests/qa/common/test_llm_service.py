@@ -1,28 +1,23 @@
 """Tests for QA LLM service compatibility behavior."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from by_qa.core.exceptions import LLMGenerationError
-from by_qa.core.model_config import ModelConfig
+from by_qa.core.model_config import LLMModelProfile, ModelConfig
 from by_qa.qa.services.llm_service import LLMService
 
 
 def _mock_provider():
-    async def get_config(model_type: str) -> ModelConfig:
+    async def get_config(model_type: str | LLMModelProfile) -> ModelConfig:
         configs = {
-            "classifier": ModelConfig(
-                "classifier-model", 0.0, "https://example.com/v1", "secret"
+            LLMModelProfile.LIGHTWEIGHT: ModelConfig(
+                "lightweight-model", 0.0, "https://example.com/v1", "secret"
             ),
-            "retrieval": ModelConfig(
-                "retrieval-model", 0.1, "https://example.com/v1", "secret"
-            ),
-            "generator": ModelConfig(
-                "generator-model", 0.2, "https://example.com/v1", "secret"
-            ),
-            "quality": ModelConfig(
-                "quality-model", 0.3, "https://example.com/v1", "secret"
+            LLMModelProfile.STANDARD: ModelConfig(
+                "standard-model", 0.2, "https://example.com/v1", "secret"
             ),
         }
         return configs[model_type]
@@ -96,3 +91,59 @@ async def test_check_health_returns_unhealthy_payload_on_failure():
         result = await service.check_health()
 
     assert result == {"status": "unhealthy", "error": "down"}
+
+
+@pytest.mark.asyncio
+async def test_get_model_merges_default_reasoning_split_with_model_config_extra_body():
+    provider = SimpleNamespace(
+        get_config=AsyncMock(
+            return_value=ModelConfig(
+                model_name="standard-model",
+                temperature=0.2,
+                base_url="https://example.com/v1",
+                api_key="secret",
+                extra_body={"thinking": {"type": "enabled"}},
+            )
+        )
+    )
+    service = LLMService(provider=provider)
+
+    with patch("by_qa.qa.services.llm_service.ChatOpenAI") as chat_openai:
+        await service._get_model(LLMModelProfile.STANDARD, streaming=True)
+
+    chat_openai.assert_called_once_with(
+        model="standard-model",
+        temperature=0.2,
+        base_url="https://example.com/v1",
+        api_key="secret",
+        streaming=True,
+        extra_body={"reasoning_split": True, "thinking": {"type": "enabled"}},
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_model_allows_config_extra_body_to_override_default_reasoning_split():
+    provider = SimpleNamespace(
+        get_config=AsyncMock(
+            return_value=ModelConfig(
+                model_name="standard-model",
+                temperature=0.2,
+                base_url="https://example.com/v1",
+                api_key="secret",
+                extra_body={"reasoning_split": False},
+            )
+        )
+    )
+    service = LLMService(provider=provider)
+
+    with patch("by_qa.qa.services.llm_service.ChatOpenAI") as chat_openai:
+        await service._get_model(LLMModelProfile.STANDARD, streaming=False)
+
+    chat_openai.assert_called_once_with(
+        model="standard-model",
+        temperature=0.2,
+        base_url="https://example.com/v1",
+        api_key="secret",
+        streaming=False,
+        extra_body={"reasoning_split": False},
+    )

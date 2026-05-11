@@ -9,6 +9,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 
 from by_qa.core.logger import info
+from by_qa.core.model_config import LLMModelProfile
 from by_qa.qa.common.config import AgentOverride
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.messages import agent_metadata
@@ -283,7 +284,7 @@ async def build_single_hop_agent_graph(
 ):
     """Build the configurable single-hop agent graph."""
     override = override or AgentOverride()
-    llm = await llm_service._get_streaming_model("retrieval")
+    llm = await llm_service._get_streaming_model(LLMModelProfile.STANDARD)
     tools = list(override.tools)
     middleware = [
         ToolCallGuardMiddleware(),

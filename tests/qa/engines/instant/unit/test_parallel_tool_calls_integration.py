@@ -9,6 +9,7 @@ from langchain.tools import tool
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 
+from by_qa.core.model_config import LLMModelProfile
 from by_qa.qa.agents.multi_hop_react import build_multi_hop_subgraph
 from by_qa.qa.agents.single_hop_react import build_single_hop_subgraph
 from by_qa.qa.common.config import AgentOverride, QARetrievalConfig
@@ -33,16 +34,21 @@ class _FakeLLMService:
 
     def __init__(
         self,
-        retrieval_model: _ToolCapableFakeModel,
-        generator_model: _ToolCapableFakeModel | None = None,
+        standard_models: list[_ToolCapableFakeModel],
+        lightweight_model: _ToolCapableFakeModel | None = None,
     ) -> None:
-        self._retrieval_model = retrieval_model
-        self._generator_model = generator_model
+        self._standard_models = list(standard_models)
+        self._lightweight_model = lightweight_model
 
-    async def _get_streaming_model(self, model_type: str) -> _ToolCapableFakeModel:
-        if model_type == "generator" and self._generator_model is not None:
-            return self._generator_model
-        return self._retrieval_model
+    async def _get_streaming_model(self, model_type) -> _ToolCapableFakeModel:
+        if (
+            model_type == LLMModelProfile.LIGHTWEIGHT
+            and self._lightweight_model is not None
+        ):
+            return self._lightweight_model
+        if not self._standard_models:
+            raise AssertionError("No standard model remaining for test")
+        return self._standard_models.pop(0)
 
 
 class _ParallelSearchProbe:
@@ -135,7 +141,7 @@ def _multi_hop_model() -> _ToolCapableFakeModel:
 @pytest.mark.asyncio
 async def test_single_hop_subgraph_handles_parallel_search_calls_without_state_conflict():
     probe = _ParallelSearchProbe()
-    llm_service = _FakeLLMService(_single_hop_model())
+    llm_service = _FakeLLMService([_single_hop_model()])
 
     from langgraph.checkpoint.memory import InMemorySaver
 
@@ -169,7 +175,7 @@ async def test_single_hop_subgraph_handles_parallel_search_calls_without_state_c
 async def test_multi_hop_subgraph_handles_parallel_search_calls_without_state_conflict():
     probe = _ParallelSearchProbe()
     summary_model = _ToolCapableFakeModel(responses=[AIMessage(content="summary")])
-    llm_service = _FakeLLMService(_multi_hop_model(), generator_model=summary_model)
+    llm_service = _FakeLLMService([_multi_hop_model(), summary_model])
 
     from langgraph.checkpoint.memory import InMemorySaver
 

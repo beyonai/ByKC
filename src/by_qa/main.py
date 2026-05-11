@@ -16,7 +16,7 @@ from redis.asyncio import Redis
 
 from by_qa.config import get_settings
 from by_qa.core import logger
-from by_qa.core.model_config import load_model_config_provider
+from by_qa.core.model_config import LLMModelProfile, load_model_config_provider
 
 settings = get_settings()
 _request_model_config_provider: ContextVar[Any | None] = ContextVar(
@@ -349,7 +349,7 @@ async def _get_or_build_document_chunking_service(provider: Any | None = None):
     if request_provider is not None and provider is None:
         from by_qa.knowledge_build.runtime import build_document_chunking_service
 
-        embedding_config = await request_provider.get_config("embedding")
+        embedding_config = await request_provider.get_config(LLMModelProfile.EMBEDDING)
         return build_document_chunking_service(
             settings, embedding_config=embedding_config
         )
@@ -358,7 +358,7 @@ async def _get_or_build_document_chunking_service(provider: Any | None = None):
         from by_qa.knowledge_build.runtime import build_document_chunking_service
 
         active_provider = provider or _build_model_config_provider()
-        embedding_config = await active_provider.get_config("embedding")
+        embedding_config = await active_provider.get_config(LLMModelProfile.EMBEDDING)
         _document_chunking_service = build_document_chunking_service(
             settings, embedding_config=embedding_config
         )

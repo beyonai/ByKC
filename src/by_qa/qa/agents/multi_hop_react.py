@@ -14,6 +14,7 @@ from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
 
 from by_qa.core.logger import error, info
+from by_qa.core.model_config import LLMModelProfile
 from by_qa.qa.agents.multi_hop_summarizer import build_multi_hop_summary_subgraph
 from by_qa.qa.common.config import AgentOverride
 from by_qa.qa.common.context import QARuntimeContext
@@ -427,7 +428,7 @@ async def build_multi_hop_agent_graph(
 ):
     """Build the configurable multi-hop agent graph."""
     override = override or AgentOverride()
-    llm = await llm_service._get_streaming_model("retrieval")
+    llm = await llm_service._get_streaming_model(LLMModelProfile.STANDARD)
     tools = [next_hop, finalize] + list(override.tools)
     middleware = [
         ToolCallGuardMiddleware(),

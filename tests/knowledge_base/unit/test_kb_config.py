@@ -105,6 +105,17 @@ def test_settings_accept_minus_one_embedding_batch_max_texts():
     assert settings.embedding_batch_max_texts == -1
 
 
+def test_settings_accept_strict_json_llm_extra_body_strings():
+    """LLM extra_body should accept strict JSON strings without env predecode."""
+    settings = Settings(
+        LLM_STANDARD_EXTRA_BODY='{"thinking": {"type": "enabled"}}',
+        LLM_LIGHTWEIGHT_EXTRA_BODY='{"reasoning_split": false}',
+    )
+
+    assert settings.llm_standard_extra_body == {"thinking": {"type": "enabled"}}
+    assert settings.llm_lightweight_extra_body == {"reasoning_split": False}
+
+
 def test_validate_knowledge_base_settings_rejects_missing_runtime_config():
     """Knowledge-base runtime should fail fast when required settings are missing."""
     from by_qa.knowledge_base.infrastructure.runtime import (

@@ -9,6 +9,7 @@ import pytest
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import HumanMessage
 
+from by_qa.core.model_config import LLMModelProfile
 from by_qa.qa.agents.answer_synthesizer import answer_entry_node
 from by_qa.qa.agents.multi_hop_react import build_multi_hop_agent_graph
 from by_qa.qa.agents.query_decomposer import (
@@ -29,8 +30,11 @@ class _FakeModel:
 
 
 class _FakeLLMService:
-    async def _get_streaming_model(self, model_type: str):
-        del model_type
+    def __init__(self):
+        self.requested_model_types = []
+
+    async def _get_streaming_model(self, model_type):
+        self.requested_model_types.append(model_type)
         return _FakeModel()
 
 
@@ -272,3 +276,78 @@ async def test_multi_hop_agent_graph_preserves_defaults_and_appends_override_mid
     assert isinstance(middleware[0], ToolCallGuardMiddleware)
     assert isinstance(middleware[1], DispatcherToolMiddleware)
     assert middleware[2] is extra
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("module_name", "builder", "expected_model_type", "extra_patches"),
+    [
+        (
+            "by_qa.qa.agents.answer_synthesizer",
+            "build_answer_synthesizer_subgraph",
+            LLMModelProfile.STANDARD,
+            (),
+        ),
+        (
+            "by_qa.qa.agents.query_decomposer",
+            "build_decomposer_subgraph",
+            LLMModelProfile.LIGHTWEIGHT,
+            (
+                patch(
+                    "by_qa.qa.agents.query_decomposer.get_settings",
+                    return_value=_mock_settings(),
+                ),
+            ),
+        ),
+        (
+            "by_qa.qa.agents.standalone_question_rewriter",
+            "build_rewriter_subgraph",
+            LLMModelProfile.LIGHTWEIGHT,
+            (),
+        ),
+        (
+            "by_qa.qa.agents.subanswer_aggregator",
+            "build_aggregator_subgraph",
+            LLMModelProfile.STANDARD,
+            (),
+        ),
+        (
+            "by_qa.qa.agents.multi_hop_summarizer",
+            "build_multi_hop_summary_subgraph",
+            LLMModelProfile.STANDARD,
+            (),
+        ),
+    ],
+)
+async def test_agent_builders_request_explicit_llm_profiles(
+    module_name: str,
+    builder: str,
+    expected_model_type: LLMModelProfile,
+    extra_patches,
+):
+    module = importlib.import_module(module_name)
+    llm_service = _FakeLLMService()
+
+    async def _fake_agent_graph(*args, **kwargs):
+        del args, kwargs
+        return {}
+
+    def _fake_create_agent(**kwargs):
+        del kwargs
+        return _fake_agent_graph
+
+    patchers = [
+        patch(f"{module_name}.create_agent", side_effect=_fake_create_agent),
+        *extra_patches,
+    ]
+
+    with ExitStack() as stack:
+        for patcher in patchers:
+            stack.enter_context(patcher)
+        await getattr(module, builder)(
+            llm_service=llm_service,
+            override=AgentOverride(),
+            checkpointer=None,
+        )
+
+    assert llm_service.requested_model_types == [expected_model_type]

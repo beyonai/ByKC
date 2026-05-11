@@ -1,7 +1,7 @@
 """Runtime wiring helpers for knowledge base services."""
 
 from by_qa.config import Settings
-from by_qa.core.model_config import ModelConfig, ModelConfigProvider
+from by_qa.core.model_config import LLMModelProfile, ModelConfig, ModelConfigProvider
 from by_qa.knowledge_base.infrastructure.database import build_connection_factory
 from by_qa.knowledge_base.infrastructure.object_storage import (
     KnowledgeBaseObjectStorage,
@@ -119,7 +119,7 @@ async def build_bootstrap_service(
 ) -> KnowledgeBaseSchemaBootstrapService:
     """Build the schema bootstrap service for the configured embedding model."""
     if provider is not None:
-        embedding_config = await provider.get_config("embedding")
+        embedding_config = await provider.get_config(LLMModelProfile.EMBEDDING)
         model_name = embedding_config.model_name
         dimension = embedding_config.dimension or settings.embedding_dimension
     else:
@@ -139,7 +139,9 @@ async def build_knowledge_base_service(
 ) -> KnowledgeBaseService:
     """Build the knowledge base metadata service."""
     embedding_config = (
-        await provider.get_config("embedding") if provider is not None else None
+        await provider.get_config(LLMModelProfile.EMBEDDING)
+        if provider is not None
+        else None
     )
     validate_knowledge_base_settings(settings, embedding_config=embedding_config)
     return KnowledgeBaseService(
@@ -175,7 +177,7 @@ async def build_knowledge_item_ingestion_service(
 ) -> KnowledgeItemIngestionService:
     """Build the document ingestion service."""
     if provider is not None:
-        embedding_config = await provider.get_config("embedding")
+        embedding_config = await provider.get_config(LLMModelProfile.EMBEDDING)
         dimension = embedding_config.dimension or settings.embedding_dimension
     else:
         embedding_config = None
@@ -204,7 +206,9 @@ async def build_knowledge_item_search_service(
 ) -> KnowledgeItemSearchService:
     """Build the knowledge-base hybrid retrieval service."""
     embedding_config = (
-        await provider.get_config("embedding") if provider is not None else None
+        await provider.get_config(LLMModelProfile.EMBEDDING)
+        if provider is not None
+        else None
     )
     validate_knowledge_base_settings(settings, embedding_config=embedding_config)
     bootstrap = await build_bootstrap_service(settings, provider=provider)

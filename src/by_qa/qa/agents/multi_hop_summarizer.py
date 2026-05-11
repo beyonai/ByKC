@@ -9,6 +9,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
 
 from by_qa.core.logger import info
+from by_qa.core.model_config import LLMModelProfile
 from by_qa.qa.common.config import AgentOverride
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.fallback_messages import FallbackMessage
@@ -263,7 +264,7 @@ async def build_multi_hop_summary_subgraph(
     checkpointer=None,
 ):
     override = override or AgentOverride()
-    llm = await llm_service._get_streaming_model("generator")
+    llm = await llm_service._get_streaming_model(LLMModelProfile.STANDARD)
     agent_graph = create_agent(
         model=llm,
         tools=[],

@@ -7,6 +7,7 @@ from langchain_core.messages import SystemMessage
 
 from by_qa.config import get_settings
 from by_qa.core.logger import info
+from by_qa.core.model_config import LLMModelProfile
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.fallback_messages import FallbackMessage
 
@@ -212,10 +213,12 @@ async def context_manager_node(
         raise RuntimeError(
             "llm_service is required in runtime context for context_manager_node"
         )
-    generator_config = await runtime.context.llm_service.get_model_config("generator")
+    generator_config = await runtime.context.llm_service.get_model_config(
+        LLMModelProfile.STANDARD
+    )
     if generator_config.max_model_len is None:
         raise RuntimeError(
-            "GENERATOR_MAX_MODEL_LEN is required for context_manager_node"
+            "LLM_STANDARD_MAX_MODEL_LEN is required for context_manager_node"
         )
     total_results = len(state["retrieval_results"])
     info(f"[context_manager] Managing context for {total_results} results")

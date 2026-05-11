@@ -6,7 +6,11 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_openai import ChatOpenAI
 
 from by_qa.core.exceptions import LLMGenerationError
-from by_qa.core.model_config import ModelConfigProvider, load_model_config_provider
+from by_qa.core.model_config import (
+    LLMModelProfile,
+    ModelConfigProvider,
+    load_model_config_provider,
+)
 
 
 class LLMService:
@@ -16,22 +20,29 @@ class LLMService:
         self._provider = provider or load_model_config_provider()
 
     async def _get_model(
-        self, model_type: str = "retrieval", streaming: bool = False
+        self,
+        model_type: str | LLMModelProfile = LLMModelProfile.STANDARD,
+        streaming: bool = False,
     ) -> ChatOpenAI:
         config = await self._provider.get_config(model_type)
+        extra_body = {"reasoning_split": True}
+        extra_body.update(config.extra_body)
         return ChatOpenAI(
             model=config.model_name,
             temperature=config.temperature,
             base_url=config.base_url,
             api_key=config.api_key,
             streaming=streaming,
-            extra_body={"reasoning_split": True},
+            extra_body=extra_body,
         )
 
-    async def _get_streaming_model(self, model_type: str = "generator") -> ChatOpenAI:
+    async def _get_streaming_model(
+        self,
+        model_type: str | LLMModelProfile = LLMModelProfile.STANDARD,
+    ) -> ChatOpenAI:
         return await self._get_model(model_type=model_type, streaming=True)
 
-    async def get_model_config(self, model_type: str):
+    async def get_model_config(self, model_type: str | LLMModelProfile):
         """Return the ModelConfig for the given model role."""
         return await self._provider.get_config(model_type)
 
@@ -56,7 +67,7 @@ class LLMService:
     async def generate(
         self,
         messages: list[dict[str, str] | BaseMessage],
-        model_type: str = "generator",
+        model_type: str | LLMModelProfile = LLMModelProfile.STANDARD,
         json_mode: bool = False,
     ) -> str:
         try:
@@ -78,7 +89,7 @@ class LLMService:
     async def generate_stream(
         self,
         messages: list[dict[str, str] | BaseMessage],
-        model_type: str = "generator",
+        model_type: str | LLMModelProfile = LLMModelProfile.STANDARD,
     ) -> AsyncGenerator[str, None]:
         try:
             model = await self._get_streaming_model(model_type=model_type)
@@ -92,16 +103,24 @@ class LLMService:
     async def astream(
         self,
         messages: list[dict[str, str] | BaseMessage],
-        model_type: str = "generator",
+        model_type: str | LLMModelProfile = LLMModelProfile.STANDARD,
     ) -> AsyncGenerator[str, None]:
         async for chunk in self.generate_stream(messages, model_type):
             yield chunk
 
-    async def bind_tools(self, tools: list[Any], model_type: str = "retrieval") -> Any:
+    async def bind_tools(
+        self,
+        tools: list[Any],
+        model_type: str | LLMModelProfile = LLMModelProfile.STANDARD,
+    ) -> Any:
         model = await self._get_streaming_model(model_type=model_type)
         return model.bind_tools(tools)
 
-    async def ainvoke(self, messages: list[Any], model_type: str = "retrieval") -> Any:
+    async def ainvoke(
+        self,
+        messages: list[Any],
+        model_type: str | LLMModelProfile = LLMModelProfile.STANDARD,
+    ) -> Any:
         model = await self._get_streaming_model(model_type=model_type)
         normalized = self._normalize_messages(messages)
         return await model.ainvoke(normalized)
@@ -109,9 +128,9 @@ class LLMService:
     async def check_health(self) -> dict[str, Any]:
         """Check LLM service health."""
         try:
-            model = await self._get_model("classifier")
+            model = await self._get_model(LLMModelProfile.LIGHTWEIGHT)
             await model.ainvoke([HumanMessage(content="Hi")])
-            config = await self._provider.get_config("classifier")
+            config = await self._provider.get_config(LLMModelProfile.LIGHTWEIGHT)
             return {
                 "status": "healthy",
                 "model": config.model_name,

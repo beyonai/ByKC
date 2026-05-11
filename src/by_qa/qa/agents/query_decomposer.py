@@ -14,6 +14,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES, add_messages
 
 from by_qa.config import get_settings
 from by_qa.core.logger import info
+from by_qa.core.model_config import LLMModelProfile
 from by_qa.qa.common.config import AgentOverride
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.messages import agent_metadata, extract_user_query_history
@@ -425,7 +426,7 @@ async def build_decomposer_subgraph(
     prompt = (override.prompt or SYSTEM_PROMPT_WITH_HISTORY).replace(
         "{max_sub_queries}", str(max_sub_queries)
     )
-    llm = await llm_service._get_streaming_model("classifier")
+    llm = await llm_service._get_streaming_model(LLMModelProfile.LIGHTWEIGHT)
     llm = llm.bind(response_format={"type": "json_object"})
 
     agent_graph = create_agent(

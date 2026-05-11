@@ -79,6 +79,14 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Re-run queries with errors/empty answers",
     )
+    run_parser.add_argument(
+        "--concurrency", type=int, default=1, help="Max concurrent queries"
+    )
+    run_parser.add_argument(
+        "--base-url",
+        default=None,
+        help="Knowledge base service URL override",
+    )
 
     # --- judge ---
     judge_parser = subparsers.add_parser(
@@ -142,6 +150,8 @@ def _cmd_run(args: argparse.Namespace) -> None:
             sample=args.sample,
             query_ids=query_ids,
             retry_failed=args.retry_failed,
+            concurrency=args.concurrency,
+            base_url=args.base_url,
         )
     )
 

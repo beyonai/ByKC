@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -20,21 +21,24 @@ if TYPE_CHECKING:
     from eval.datasets.base import DatasetSpec
 
 
-def _build_knowledge_bases(spec: DatasetSpec) -> list[dict]:
+def _build_knowledge_bases(
+    spec: DatasetSpec, base_url: str | None = None
+) -> list[dict]:
     kb_code = spec.get_kb_code()
     kb_config = spec.kb_config
-    return [
-        {
-            "kb_code": kb_code,
-            "kb_name": spec.get_kb_name(),
-            "kb_description": "",
-            "service_name": kb_config.kb_service_name,
-            "operations": {
-                OperationType.KNOWLEDGE_SEARCH: kb_config.kb_search_url,
-            },
-            **({"base_url": kb_config.kb_base_url} if kb_config.kb_base_url else {}),
-        }
-    ]
+    effective_base_url = base_url or kb_config.kb_base_url
+    kb = {
+        "kb_code": kb_code,
+        "kb_name": spec.get_kb_name(),
+        "kb_description": "",
+        "service_name": kb_config.kb_service_name,
+        "operations": {
+            OperationType.KNOWLEDGE_SEARCH: kb_config.kb_search_url,
+        },
+    }
+    if effective_base_url:
+        kb["base_url"] = effective_base_url
+    return [kb]
 
 
 def _build_language_middleware(language: str | None):
@@ -102,23 +106,54 @@ async def _run_single_query(
     query,
     show_tokens: bool,
 ) -> QueryResult:
-    """Run a single query through the engine and collect results."""
+    """Run a single query through the engine and collect results.
+
+    Answer extraction handles two engine paths:
+    - Simple question: FINAL_ANSWER node emits an ANSWER event
+    - Complex question: SUBANSWER_AGGREGATOR streams tokens via its model;
+      we accumulate tokens belonging to that node's instance subtree.
+    """
     request = CoreInput(query=query.question, session_id=str(uuid.uuid4()))
     start = time.perf_counter()
     tokens = 0
     answer = ""
     error_msg: str | None = None
 
+    # Instance ids of answer-producing nodes — tokens from their subtree
+    # are accumulated as the candidate answer.
+    answer_producer_ids: set[str] = set()
+    answer_producer_roles = {"final_answer", "subanswer_aggregator"}
+    token_buf = ""
+
     try:
         async with engine_class(config=config) as engine:
             async for event in engine.stream_search(request):
                 if event.type == StreamEventType.ERROR:
                     error_msg = event.data.get("error", str(event))
+
+                if event.type == StreamEventType.NODE_START:
+                    if event.role in answer_producer_roles and event.instance_id:
+                        answer_producer_ids.add(event.instance_id)
+                        token_buf = ""
+
+                if event.type == StreamEventType.NODE_END:
+                    if event.role in answer_producer_roles:
+                        if token_buf and not answer:
+                            answer = token_buf
+                        if event.instance_id:
+                            answer_producer_ids.discard(event.instance_id)
+
                 if event.type == StreamEventType.TOKEN:
                     content = event.data.get("content", "")
                     tokens += 1
                     if show_tokens and content:
                         print(content, end="", flush=True)
+                    if content and event.parent_ids:
+                        for pid in event.parent_ids:
+                            if pid in answer_producer_ids:
+                                token_buf += content
+                                break
+
                 if event.type == StreamEventType.ANSWER:
                     answer = event.data.get("content", "")
     except Exception as exc:
@@ -147,6 +182,8 @@ async def run_inference(
     query_ids: list[str] | None = None,
     retry_failed: bool = False,
     results_path: Path | None = None,
+    concurrency: int = 1,
+    base_url: str | None = None,
 ) -> Path:
     """Run queries through the QA engine and save results as JSONL.
 
@@ -157,11 +194,13 @@ async def run_inference(
         spec: Dataset spec.
         mode: "instant" or "fast".
         language: Optional output language.
-        show_tokens: Print token stream.
+        show_tokens: Print token stream (serialized when concurrency > 1).
         sample: Run only N queries.
         query_ids: Run only specific query IDs.
         retry_failed: Re-run queries with errors/empty answers from JSONL.
         results_path: Path to the JSONL output file (default: datasets/{name}/inference_results.jsonl).
+        concurrency: Max concurrent queries.
+        base_url: Knowledge base service URL override.
 
     Returns:
         Path to the results JSONL file.
@@ -219,10 +258,13 @@ async def run_inference(
         queries = pending
 
     total = len(queries)
-    print(f"Running {total} queries from dataset '{spec.name}' (mode={mode})")
+    print(
+        f"Running {total} queries from dataset '{spec.name}' "
+        f"(mode={mode}, concurrency={concurrency})"
+    )
 
     # Build engine config
-    kb_config = _build_knowledge_bases(spec)
+    kb_config = _build_knowledge_bases(spec, base_url)
     engine_config = {
         "retrieval": {"knowledge_bases": kb_config},
         "agents": _build_language_middleware(language),
@@ -238,31 +280,49 @@ async def run_inference(
 
         engine_cls = InstantQAEngine
 
-    # Run queries (sequential), append to JSONL
+    # Run queries concurrently, append to JSONL (with lock)
     results_path.parent.mkdir(parents=True, exist_ok=True)
+    sem = asyncio.Semaphore(concurrency)
+    write_lock = asyncio.Lock()
+    counter_lock = asyncio.Lock()
     completed = 0
     errors = 0
+    done_count = 0
 
-    with open(results_path, "a", encoding="utf-8") as out_f:
-        for i, query in enumerate(queries):
-            print(f"\n[{i + 1}/{total}] {query.question[:80]}...", flush=True)
+    async def _run_one(query, index: int) -> None:
+        nonlocal completed, errors, done_count
+        async with sem:
+            if show_tokens and concurrency == 1:
+                print(f"\n[{index + 1}/{total}] {query.question[:80]}...", flush=True)
             result = await _run_single_query(
-                engine_cls, engine_config, query, show_tokens
+                engine_cls, engine_config, query, show_tokens and concurrency == 1
             )
             inf_result = InferenceResult.from_query_result(result)
 
-            # Append to JSONL immediately (checkpoint after each query)
-            out_f.write(json.dumps(inf_result.to_dict(), ensure_ascii=False) + "\n")
-            out_f.flush()
+            async with write_lock:
+                with open(results_path, "a", encoding="utf-8") as out_f:
+                    out_f.write(
+                        json.dumps(inf_result.to_dict(), ensure_ascii=False) + "\n"
+                    )
+                    out_f.flush()
 
-            if result.error:
-                print(f"  ERROR: {result.error[:100]}")
-                errors += 1
-            elif not result.answer:
-                print("  WARNING: empty answer")
-                errors += 1
-            else:
-                completed += 1
+            async with counter_lock:
+                done_count += 1
+                if result.error:
+                    errors += 1
+                    status = f"ERROR: {result.error[:100]}"
+                elif not result.answer:
+                    errors += 1
+                    status = "WARNING: empty answer"
+                else:
+                    completed += 1
+                    status = "OK"
+                print(
+                    f"[{done_count}/{total}] qid={query.query_id} {status}", flush=True
+                )
+
+    tasks = [_run_one(query, i) for i, query in enumerate(queries)]
+    await asyncio.gather(*tasks)
 
     print(f"\nInference complete: {completed} succeeded, {errors} errors")
     print(f"Results saved to: {results_path}")

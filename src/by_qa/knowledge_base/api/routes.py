@@ -440,12 +440,6 @@ def register_routes(
                     "filePath": file_path,
                     "fileDescription": file_description,
                     "fileContent": payload,
-                    "fileName": file_content.filename
-                    if file_content is not None
-                    else None,
-                    "contentType": (
-                        file_content.content_type if file_content is not None else None
-                    ),
                 }
             )
         except ValidationError as exc:
@@ -455,11 +449,10 @@ def register_routes(
                 status_code=422,
             )
         logger.info(
-            "upload_file request received: kb_code=%s, file_path=%s, has_description=%s, file_name=%s",
+            "upload_file request received: kb_code=%s, file_path=%s, has_description=%s",
             request.kb_code,
             request.file_path,
             request.file_description is not None,
-            request.file_name,
         )
         try:
             service = await get_knowledge_item_ingestion_service()
@@ -716,7 +709,7 @@ def register_routes(
             logger.info(
                 "list_dir service call succeeded: directory_path=%s, item_count=%s",
                 request.directory_path,
-                len(result.items),
+                len(result.data),
             )
         except KnowledgeBaseConfigurationError as exc:
             logger.warning(
@@ -755,11 +748,11 @@ def register_routes(
 
         logger.info(
             "list_dir response ready: code=200, item_count=%s",
-            len(result.items),
+            len(result.data),
         )
         return _documented_success_response(
             result_object={
-                "data": [item.model_dump(by_alias=True) for item in result.items]
+                "data": [item.model_dump(by_alias=True) for item in result.data]
             }
         )
 
@@ -788,7 +781,7 @@ def register_routes(
             logger.info(
                 "glob service call succeeded: path_rule=%s, item_count=%s",
                 request.path_rule,
-                len(result.items),
+                len(result.data),
             )
         except KnowledgeBaseConfigurationError as exc:
             logger.warning(
@@ -827,11 +820,11 @@ def register_routes(
 
         logger.info(
             "glob response ready: code=200, item_count=%s",
-            len(result.items),
+            len(result.data),
         )
         return _documented_success_response(
             result_object={
-                "data": [item.model_dump(by_alias=True) for item in result.items]
+                "data": [item.model_dump(by_alias=True) for item in result.data]
             }
         )
 

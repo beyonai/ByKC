@@ -93,7 +93,7 @@ class KnowledgeItemSearchService:
         merged = self._merge_hits(text_hits=text_hits, vector_hits=vector_hits)
         items = [
             SearchHit(
-                kn_code=item["kb_code"],
+                kb_code=item["kb_code"],
                 file_path="/" + item["full_path"],
                 chunk_no=item["chunk_no"],
                 chunk_id=item["chunk_id"],

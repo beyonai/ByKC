@@ -107,120 +107,6 @@ def test_delete_knowledge_item_request_accepts_documented_fields():
     assert request.file_path == "/考勤制度/异常考勤处理办法.pdf"
 
 
-def test_import_manifest_rejects_duplicate_chunk_numbers():
-    """Import manifest should reject duplicate chunk numbers in one request."""
-    from by_qa.knowledge_base.api.schemas import KnowledgeItemImportManifest
-
-    with pytest.raises(ValidationError):
-        KnowledgeItemImportManifest(
-            kb_code="hr-policy",
-            document={
-                "item_code": "item-1",
-                "full_path": "dir1/item-1.md",
-                "title": "操作手册.pdf",
-                "status": "ACTIVE",
-                "source_code": "oa",
-                "type_code": "policy_markdown",
-                "version": "v1",
-            },
-            chunks=[
-                {
-                    "chunk_no": 1,
-                    "start_line": 1,
-                    "end_line": 10,
-                    "chunk_text": "hello",
-                    "embedding": [0.1, 0.2],
-                },
-                {
-                    "chunk_no": 1,
-                    "start_line": 11,
-                    "end_line": 20,
-                    "chunk_text": "world",
-                    "embedding": [0.3, 0.4],
-                },
-            ],
-        )
-
-
-def test_import_manifest_rejects_invalid_document_status():
-    """Import manifest should only accept ACTIVE or INACTIVE document status."""
-    from by_qa.knowledge_base.api.schemas import KnowledgeItemImportManifest
-
-    with pytest.raises(ValidationError):
-        KnowledgeItemImportManifest(
-            kb_code="hr-policy",
-            document={
-                "item_code": "item-1",
-                "full_path": "dir1/item-1.md",
-                "title": "操作手册.pdf",
-                "status": "DELETED",
-                "source_code": "oa",
-                "type_code": "policy_markdown",
-                "version": "v1",
-            },
-            chunks=[
-                {
-                    "chunk_no": 1,
-                    "start_line": 1,
-                    "end_line": 10,
-                    "chunk_text": "hello",
-                    "embedding": [0.1, 0.2],
-                }
-            ],
-        )
-
-
-def test_import_manifest_ignores_legacy_content_hash_field():
-    """Import manifest schema should no longer expose client-provided content_hash."""
-    from by_qa.knowledge_base.api.schemas import KnowledgeItemImportManifest
-
-    manifest = KnowledgeItemImportManifest(
-        kb_code="hr-policy",
-        document={
-            "item_code": "item-1",
-            "full_path": "dir1/item-1.md",
-            "title": "操作手册.pdf",
-            "status": "ACTIVE",
-            "source_code": "oa",
-            "type_code": "policy_markdown",
-            "version": "v1",
-            "content_hash": "client-controlled-value",
-        },
-        chunks=[
-            {
-                "chunk_no": 1,
-                "start_line": 1,
-                "end_line": 10,
-                "chunk_text": "hello",
-                "embedding": [0.1, 0.2],
-            }
-        ],
-    )
-
-    assert not hasattr(manifest.document, "content_hash")
-
-
-def test_import_response_excludes_internal_ids():
-    """Import success responses should only expose business fields."""
-    from by_qa.knowledge_base.api.schemas import KnowledgeItemImportResponse
-
-    response = KnowledgeItemImportResponse(
-        kb_code="hr-policy",
-        full_path="dir1/item-1.md",
-        version="v1",
-        status="ACTIVE",
-        chunk_count=2,
-    )
-
-    assert response.model_dump() == {
-        "kb_code": "hr-policy",
-        "full_path": "dir1/item-1.md",
-        "version": "v1",
-        "status": "ACTIVE",
-        "chunk_count": 2,
-    }
-
-
 def test_upload_request_accepts_documented_form_fields():
     """Multipart upload requests should accept documented field names."""
     from by_qa.knowledge_base.api.schemas import KnowledgeItemUploadRequest
@@ -230,43 +116,12 @@ def test_upload_request_accepts_documented_form_fields():
         filePath="/dir1/item-1.pdf",
         fileDescription="操作手册",
         fileContent=b"hello",
-        fileName="item-1.pdf",
-        contentType="application/pdf",
     )
 
     assert request.kb_code == "hr-policy"
     assert request.file_path == "/dir1/item-1.pdf"
     assert request.file_description == "操作手册"
     assert request.file_content == b"hello"
-
-
-def test_import_response_serializes_combined_file_and_chunk_summary():
-    """Combined import responses should expose file metadata and chunk summary."""
-    from by_qa.knowledge_base.api.schemas import KnowledgeItemImportFileResponse
-
-    response = KnowledgeItemImportFileResponse(
-        kb_code="hr-policy",
-        file_code="file-001",
-        type_code="pdf",
-        file_path="/dir1/item-1.pdf",
-        file_description="操作手册",
-        version="v1",
-        status="ACTIVE",
-        metadata={"owner": "HR"},
-        chunks={"count": 2},
-    )
-
-    assert response.model_dump() == {
-        "kb_code": "hr-policy",
-        "file_code": "file-001",
-        "type_code": "pdf",
-        "file_path": "/dir1/item-1.pdf",
-        "file_description": "操作手册",
-        "version": "v1",
-        "status": "ACTIVE",
-        "metadata": {"owner": "HR"},
-        "chunks": {"count": 2},
-    }
 
 
 def test_glob_request_accepts_documented_fields():

@@ -88,7 +88,6 @@ def test_chunk_and_embed_preserves_body_line_numbers_when_prepending_headings(
     assert len(chunks) == 2
     assert chunks[0].start_line == 5
     assert chunks[0].end_line == 6
-    assert chunks[0].char_start == markdown.index("First paragraph line 1")
     assert chunks[0].chunk_text.startswith("# Report Title\n## First Section\n\n")
     assert chunks[0].chunk_text.endswith(
         "First paragraph line 1\nFirst paragraph line 2"
@@ -96,7 +95,6 @@ def test_chunk_and_embed_preserves_body_line_numbers_when_prepending_headings(
 
     assert chunks[1].start_line == 8
     assert chunks[1].end_line == 9
-    assert chunks[1].char_start == markdown.index("Second paragraph line 1")
     assert chunks[1].chunk_text.startswith("# Report Title\n## First Section\n\n")
     assert chunks[1].chunk_text.endswith(
         "Second paragraph line 1\nSecond paragraph line 2"

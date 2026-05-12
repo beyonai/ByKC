@@ -9,13 +9,10 @@ from typing import Any, Callable
 from by_qa.core import logger
 from by_qa.knowledge_base.api.schemas import (
     CreateDirectoryRequest,
-    CreateDirectoryResponse,
     CreateKnowledgeBaseRequest,
     CreateKnowledgeBaseResponse,
     DeleteDirectoryRequest,
-    DeleteDirectoryResponse,
     DeleteKnowledgeBaseRequest,
-    DeleteKnowledgeBaseResponse,
     FileBuildStatusRequest,
     KnowledgeItemDownloadRequest,
     KnowledgeItemGlobRequest,
@@ -24,9 +21,7 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemListDirResponse,
     ReadFileRequest,
     UpdateDirectoryRequest,
-    UpdateDirectoryResponse,
     UpdateKnowledgeBaseRequest,
-    UpdateKnowledgeBaseResponse,
 )
 from by_qa.knowledge_base.build_status import STATUS_DICT, STEP_DICT
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
@@ -96,9 +91,7 @@ class KnowledgeBaseService:
         finally:
             await connection.close()
 
-    async def delete_knowledge_base(
-        self, request: DeleteKnowledgeBaseRequest
-    ) -> DeleteKnowledgeBaseResponse:
+    async def delete_knowledge_base(self, request: DeleteKnowledgeBaseRequest) -> None:
         """Logically delete a knowledge base and its descendant documents."""
         logger.info(
             "knowledge_base_service.delete_knowledge_base started: kb_code=%s",
@@ -130,16 +123,13 @@ class KnowledgeBaseService:
                 {"knowledge_base_id": knowledge_base_id},
             )
             await connection.commit()
-            return DeleteKnowledgeBaseResponse(kb_code=request.kb_code, is_deleted=True)
         except Exception:
             await connection.rollback()
             raise
         finally:
             await connection.close()
 
-    async def update_knowledge_base(
-        self, request: UpdateKnowledgeBaseRequest
-    ) -> UpdateKnowledgeBaseResponse:
+    async def update_knowledge_base(self, request: UpdateKnowledgeBaseRequest) -> None:
         """Update mutable business fields for one knowledge base."""
         logger.info(
             "knowledge_base_service.update_knowledge_base started: kb_code=%s, has_kb_name=%s, has_description=%s",
@@ -181,28 +171,13 @@ class KnowledgeBaseService:
             )
 
             await connection.commit()
-            next_kb_name = (
-                updates["kb_name"] if "kb_name" in updates else kb_row.get("kb_name")
-            )
-            next_description = (
-                updates["kb_description"]
-                if "kb_description" in updates
-                else kb_row.get("kb_description")
-            )
-            return UpdateKnowledgeBaseResponse(
-                kb_code=request.kb_code,
-                kb_name=next_kb_name,
-                kb_description=next_description,
-            )
         except Exception:
             await connection.rollback()
             raise
         finally:
             await connection.close()
 
-    async def create_directory(
-        self, request: CreateDirectoryRequest
-    ) -> CreateDirectoryResponse:
+    async def create_directory(self, request: CreateDirectoryRequest) -> None:
         """Create one explicit directory under an existing parent directory."""
         logger.info(
             "knowledge_base_service.create_directory started: kb_code=%s, directory_path=%s",
@@ -232,20 +207,13 @@ class KnowledgeBaseService:
             except ValueError as exc:
                 raise KnowledgeBaseValidationError(str(exc)) from exc
             await connection.commit()
-            return CreateDirectoryResponse(
-                kb_code=request.kb_code,
-                directory_path=self._ensure_leading_slash(normalized_directory_path),
-                directory_description=request.directory_description,
-            )
         except Exception:
             await connection.rollback()
             raise
         finally:
             await connection.close()
 
-    async def delete_directory(
-        self, request: DeleteDirectoryRequest
-    ) -> DeleteDirectoryResponse:
+    async def delete_directory(self, request: DeleteDirectoryRequest) -> None:
         """Logically delete one directory subtree and its retrieval projection rows."""
         logger.info(
             "knowledge_base_service.delete_directory started: kb_code=%s, directory_path=%s",
@@ -301,20 +269,13 @@ class KnowledgeBaseService:
                 },
             )
             await connection.commit()
-            return DeleteDirectoryResponse(
-                kb_code=request.kb_code,
-                directory_path=self._ensure_leading_slash(normalized_directory_path),
-                is_deleted=True,
-            )
         except Exception:
             await connection.rollback()
             raise
         finally:
             await connection.close()
 
-    async def update_directory(
-        self, request: UpdateDirectoryRequest
-    ) -> UpdateDirectoryResponse:
+    async def update_directory(self, request: UpdateDirectoryRequest) -> None:
         """Rename one directory by its knowledge-base-relative path."""
         logger.info(
             "knowledge_base_service.update_directory started: kb_code=%s, directory_path=%s, directory_name=%s",
@@ -364,18 +325,7 @@ class KnowledgeBaseService:
                 new_name=request.directory_name,
             )
 
-            directory_path = (
-                await self.knowledge_fs_entry_repository.get_virtual_path_by_entry_id(
-                    cursor,
-                    entry_id=fs_entry_id,
-                )
-            )
             await connection.commit()
-            return UpdateDirectoryResponse(
-                kb_code=request.kb_code,
-                directory_path=self._ensure_leading_slash(str(directory_path or "")),
-                directory_name=request.directory_name,
-            )
         except Exception:
             await connection.rollback()
             raise
@@ -442,7 +392,7 @@ class KnowledgeBaseService:
                 request.directory_path,
                 len(items),
             )
-            return KnowledgeItemListDirResponse(items=items)
+            return KnowledgeItemListDirResponse(data=items)
         finally:
             await connection.close()
 
@@ -558,7 +508,7 @@ class KnowledgeBaseService:
                 request.path_rule,
                 len(items),
             )
-            return KnowledgeItemListDirResponse(items=items)
+            return KnowledgeItemListDirResponse(data=items)
         finally:
             await connection.close()
 

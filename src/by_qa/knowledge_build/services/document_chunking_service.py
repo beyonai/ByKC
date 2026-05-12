@@ -118,8 +118,6 @@ class DocumentChunkingService:
                 end_line=c["end_line"],
                 chunk_text=c["chunk_text"],
                 embedding=emb,
-                char_start=c["char_start"],
-                char_end=c["char_end"],
             )
             for c, emb in zip(chunks, embeddings)
         ]

@@ -4,17 +4,10 @@ from fastapi.testclient import TestClient
 
 from by_qa.knowledge_base.api import routes
 from by_qa.knowledge_base.api.schemas import (
-    CreateDirectoryResponse,
     CreateKnowledgeBaseResponse,
-    DeleteDirectoryResponse,
-    DeleteKnowledgeBaseResponse,
-    DeleteKnowledgeItemResponse,
     KnowledgeItemListDirItem,
     KnowledgeItemListDirResponse,
-    KnowledgeItemUploadResponse,
     SearchHit,
-    UpdateDirectoryResponse,
-    UpdateKnowledgeBaseResponse,
 )
 from by_qa.knowledge_base.services.errors import (
     KnowledgeBaseConfigurationError,
@@ -43,50 +36,26 @@ class FakeKBService:
 
     async def create_directory(self, request):
         self.created_directory_requests.append(request)
-        return CreateDirectoryResponse(
-            kb_code=request.kb_code,
-            directory_path=request.directory_path,
-            directory_description=request.directory_description,
-        )
+        return None
 
     async def delete_directory(self, request):
-        return DeleteDirectoryResponse(
-            kb_code=request.kb_code,
-            directory_path=request.directory_path,
-            is_deleted=True,
-        )
+        return None
 
     async def update_directory(self, request):
-        return UpdateDirectoryResponse(
-            kb_code=request.kb_code,
-            directory_path="/考勤制度/历史归档",
-            directory_name=request.directory_name,
-        )
+        return None
 
     async def delete_knowledge_base(self, request):
-        return DeleteKnowledgeBaseResponse(kb_code=request.kb_code, is_deleted=True)
+        return None
 
     async def update_knowledge_base(self, request):
-        return UpdateKnowledgeBaseResponse(
-            kb_code=request.kb_code,
-            kb_name=request.kb_name or "人力制度知识库",
-            kb_description=request.kb_description,
-        )
+        return None
 
     async def delete_knowledge_item(self, request):
-        return DeleteKnowledgeItemResponse(
-            kb_code=request.kb_code,
-            file_path=request.file_path,
-            is_deleted=True,
-        )
+        return None
 
     async def upload_file(self, request):
         self.import_calls.append(request)
-        return KnowledgeItemUploadResponse(
-            kb_code=request.kb_code,
-            file_path=request.file_path,
-            file_description=request.file_description,
-        )
+        return None
 
     async def create_file_to_markdown_index_task(self, request):
         self.file_build_task_requests.append(request)
@@ -146,7 +115,7 @@ class FakeKBService:
     async def search_v2(self, request):
         return [
             SearchHit(
-                kn_code="hr-policy",
+                kb_code="hr-policy",
                 file_path="/employee-handbook.md",
                 chunk_no=1,
                 chunk_id=42,
@@ -160,7 +129,7 @@ class FakeKBService:
 
     async def list_dir(self, request):
         return KnowledgeItemListDirResponse(
-            items=[
+            data=[
                 KnowledgeItemListDirItem(
                     kb_code=request.kb_code,
                     name="/dir1/doc.md",
@@ -172,7 +141,7 @@ class FakeKBService:
 
     async def glob(self, request):
         return KnowledgeItemListDirResponse(
-            items=[
+            data=[
                 KnowledgeItemListDirItem(
                     kb_code=request.kb_code,
                     name="/dir1/doc.md",

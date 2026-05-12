@@ -1,12 +1,8 @@
 """Pydantic schemas for knowledge base APIs."""
 
-from typing import Any, Literal, Optional
+from typing import Literal, Optional
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
-
-from by_qa.knowledge_common.schemas import KnowledgeItemChunkPayload
-
-Status = Literal["ACTIVE", "INACTIVE"]
 
 
 class CreateKnowledgeBaseRequest(BaseModel):
@@ -45,13 +41,6 @@ class DeleteKnowledgeBaseRequest(BaseModel):
     )
 
 
-class DeleteKnowledgeBaseResponse(BaseModel):
-    """Business response for logically deleting a knowledge base."""
-
-    kb_code: str
-    is_deleted: bool
-
-
 class UpdateKnowledgeBaseRequest(BaseModel):
     """Request body for updating knowledge base business fields."""
 
@@ -69,14 +58,6 @@ class UpdateKnowledgeBaseRequest(BaseModel):
         default=None,
         validation_alias=AliasChoices("knDescription", "kb_description"),
     )
-
-
-class UpdateKnowledgeBaseResponse(BaseModel):
-    """Business response for knowledge base updates."""
-
-    kb_code: str
-    kb_name: str
-    kb_description: str | None = None
 
 
 class CreateDirectoryRequest(BaseModel):
@@ -98,14 +79,6 @@ class CreateDirectoryRequest(BaseModel):
     )
 
 
-class CreateDirectoryResponse(BaseModel):
-    """Business response for successfully creating a directory."""
-
-    kb_code: str
-    directory_path: str
-    directory_description: str | None = None
-
-
 class DeleteDirectoryRequest(BaseModel):
     """Request body for logically deleting one directory subtree."""
 
@@ -119,14 +92,6 @@ class DeleteDirectoryRequest(BaseModel):
         min_length=1,
         validation_alias=AliasChoices("directoryPath", "directory_path"),
     )
-
-
-class DeleteDirectoryResponse(BaseModel):
-    """Business response for logically deleting one directory subtree."""
-
-    kb_code: str
-    directory_path: str
-    is_deleted: bool
 
 
 class UpdateDirectoryRequest(BaseModel):
@@ -156,14 +121,6 @@ class UpdateDirectoryRequest(BaseModel):
         return self
 
 
-class UpdateDirectoryResponse(BaseModel):
-    """Business response for renaming one directory."""
-
-    kb_code: str
-    directory_path: str
-    directory_name: str
-
-
 class DeleteKnowledgeItemRequest(BaseModel):
     """Request body for logically deleting a knowledge item."""
 
@@ -177,14 +134,6 @@ class DeleteKnowledgeItemRequest(BaseModel):
         min_length=1,
         validation_alias=AliasChoices("filePath", "file_path"),
     )
-
-
-class DeleteKnowledgeItemResponse(BaseModel):
-    """Business response for logically deleting a knowledge item."""
-
-    kb_code: str
-    file_path: str
-    is_deleted: bool
 
 
 class FileToMarkdownIndexRequest(BaseModel):
@@ -217,25 +166,6 @@ class FileBuildStatusRequest(BaseModel):
     )
 
 
-class KnowledgeItemImportFileResponse(BaseModel):
-    """Business response for the combined import endpoint."""
-
-    class ChunkSummary(BaseModel):
-        """Chunk summary for combined import responses."""
-
-        count: int
-
-    kb_code: str
-    file_code: str
-    type_code: str
-    file_path: str
-    file_description: str | None = None
-    version: str
-    status: Status
-    metadata: dict[str, Any] | None = None
-    chunks: ChunkSummary
-
-
 class KnowledgeItemUploadRequest(BaseModel):
     """Request body for multipart file upload aligned with the public API."""
 
@@ -257,60 +187,6 @@ class KnowledgeItemUploadRequest(BaseModel):
         min_length=1,
         validation_alias=AliasChoices("fileContent", "file_content"),
     )
-    file_name: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("fileName", "file_name"),
-    )
-    content_type: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("contentType", "content_type"),
-    )
-
-
-class KnowledgeItemUploadResponse(BaseModel):
-    """Business response for public file upload."""
-
-    kb_code: str
-    file_path: str
-    file_description: str | None = None
-
-
-class KnowledgeItemDocumentPayload(BaseModel):
-    """Document metadata carried in the import manifest."""
-
-    item_code: str
-    full_path: str
-    status: Status = "ACTIVE"
-    source_code: str
-    type_code: str
-    version: str
-    metadata: dict[str, Any] | None = None
-
-
-class KnowledgeItemImportManifest(BaseModel):
-    """Import manifest parsed from the multipart request."""
-
-    kb_code: str
-    document: KnowledgeItemDocumentPayload
-    chunks: list[KnowledgeItemChunkPayload] = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def validate_unique_chunk_numbers(self) -> "KnowledgeItemImportManifest":
-        """Reject duplicate chunk numbers within one request."""
-        chunk_numbers = [chunk.chunk_no for chunk in self.chunks]
-        if len(chunk_numbers) != len(set(chunk_numbers)):
-            raise ValueError("chunk_no must be unique within one import request")
-        return self
-
-
-class KnowledgeItemImportResponse(BaseModel):
-    """Business response for successful document import."""
-
-    kb_code: str
-    full_path: str
-    version: str
-    status: Status
-    chunk_count: int
 
 
 class KnowledgeItemListDirRequest(BaseModel):
@@ -338,9 +214,9 @@ class KnowledgeItemListDirItem(BaseModel):
 
 
 class KnowledgeItemListDirResponse(BaseModel):
-    """Business response for list_dir."""
+    """Business response for list_dir and glob."""
 
-    items: list[KnowledgeItemListDirItem]
+    data: list[KnowledgeItemListDirItem]
 
 
 class KnowledgeItemGlobRequest(BaseModel):
@@ -444,7 +320,7 @@ class SearchHit(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    kn_code: str = Field(serialization_alias="knCode")
+    kb_code: str = Field(serialization_alias="knCode")
     file_path: str = Field(serialization_alias="filePath")
     chunk_no: int = Field(serialization_alias="chunkNo")
     chunk_id: int = Field(serialization_alias="chunkId")

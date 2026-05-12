@@ -53,8 +53,6 @@ class FakeDocumentChunkingService:
                 end_line=line_count,
                 chunk_text=content.strip(),
                 embedding=self.embedding,
-                char_start=0,
-                char_end=len(file_bytes),
             )
         ]
 

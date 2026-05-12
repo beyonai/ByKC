@@ -934,8 +934,7 @@ async def test_delete_knowledge_base_marks_kb_and_descendants_deleted():
         DeleteKnowledgeBaseRequest(kb_code="hr-policy")
     )
 
-    assert response.kb_code == "hr-policy"
-    assert response.is_deleted is True
+    assert response is None
     assert connection.committed is True
     assert (
         "soft_delete_by_code",
@@ -982,7 +981,7 @@ async def test_update_knowledge_base_commits_and_returns_success():
         )
     )
 
-    assert response.kb_code == "hr-policy"
+    assert response is None
     assert connection.committed is True
     assert ("get_by_code", {"kb_code": "hr-policy"}) in knowledge_base_repository.calls
     assert (
@@ -1092,7 +1091,7 @@ async def test_update_knowledge_base_keeps_omitted_fields_unchanged():
         )
     )
 
-    assert response.kb_description == "旧描述"
+    assert response is None
     assert (
         "update_knowledge_base",
         {
@@ -1130,7 +1129,7 @@ async def test_update_knowledge_base_clears_fields_only_when_null_is_explicit():
         )
     )
 
-    assert response.kb_description is None
+    assert response is None
     assert (
         "update_knowledge_base",
         {
@@ -1167,9 +1166,7 @@ async def test_create_directory_commits_and_returns_business_fields():
         )
     )
 
-    assert response.kb_code == "hr-policy"
-    assert response.directory_path == "/考勤制度/归档"
-    assert response.directory_description == "考勤制度归档目录"
+    assert response is None
     assert connection.committed is True
     assert (
         "create_directory_entry",
@@ -1207,7 +1204,7 @@ async def test_create_directory_supports_recursive_creation():
         )
     )
 
-    assert response.directory_path == "/missing-dir/归档"
+    assert response is None
     assert connection.committed is True
 
 
@@ -1249,9 +1246,7 @@ async def test_delete_directory_marks_subtree_deleted_and_clears_projection():
         )
     )
 
-    assert response.kb_code == "hr-policy"
-    assert response.directory_path == "/考勤制度/归档"
-    assert response.is_deleted is True
+    assert response is None
     assert connection.committed is True
     assert (
         "get_directory_by_path",
@@ -1355,9 +1350,7 @@ async def test_update_directory_renames_directory_by_path():
         )
     )
 
-    assert response.kb_code == "hr-policy"
-    assert response.directory_path == "/考勤制度/历史归档"
-    assert response.directory_name == "历史归档"
+    assert response is None
     assert connection.committed is True
     assert (
         "get_directory_by_path",
@@ -1421,7 +1414,7 @@ async def test_update_directory_allows_same_name_without_conflict():
         )
     )
 
-    assert response.directory_name == "归档"
+    assert response is None
     assert connection.committed is True
 
 
@@ -1519,9 +1512,7 @@ async def test_delete_knowledge_item_marks_file_entry_deleted_and_clears_artifac
         DeleteKnowledgeItemRequest(kb_code="hr-policy", file_path="/Policies/delete.md")
     )
 
-    assert response.kb_code == "hr-policy"
-    assert response.file_path == "/Policies/delete.md"
-    assert response.is_deleted is True
+    assert response is None
     assert connection.committed is True
     assert (
         "get_file_by_path",
@@ -1610,16 +1601,10 @@ async def test_upload_file_commits_object_and_updates_fs_entry_storage():
             filePath="/dir1/item-1.pdf",
             fileDescription="操作手册",
             fileContent=b"pdf-bytes",
-            fileName="item-1.pdf",
-            contentType="application/pdf",
         )
     )
 
-    assert response.model_dump() == {
-        "kb_code": "hr-policy",
-        "file_path": "/dir1/item-1.pdf",
-        "file_description": "操作手册",
-    }
+    assert response is None
     assert connection.committed is True
     assert (
         "create_file_entry",
@@ -1673,12 +1658,10 @@ async def test_upload_file_recursively_creates_missing_parent_directories():
             knCode="hr-policy",
             filePath="/missing-dir/item-1.pdf",
             fileContent=b"pdf-bytes",
-            fileName="item-1.pdf",
-            contentType="application/pdf",
         )
     )
 
-    assert response.file_path == "/missing-dir/item-1.pdf"
+    assert response is None
     assert connection.committed is True
     assert (
         "create_file_entry",
@@ -1713,7 +1696,7 @@ async def test_list_dir_root_returns_top_level_entries():
         KnowledgeItemListDirRequest(kb_code="hr-policy", directory_path="/")
     )
 
-    assert response.model_dump()["items"] == [
+    assert response.model_dump()["data"] == [
         {"kb_code": "hr-policy", "name": "/dir1", "type": "directory", "size": 0}
     ]
     assert knowledge_fs_entry_repository.calls == [
@@ -1740,7 +1723,7 @@ async def test_list_dir_directory_path_returns_direct_children_only():
         KnowledgeItemListDirRequest(kb_code="hr-policy", directory_path="/dir1")
     )
 
-    assert response.model_dump()["items"] == [
+    assert response.model_dump()["data"] == [
         {"kb_code": "hr-policy", "name": "/dir1/doc.md", "type": "file", "size": 128},
         {
             "kb_code": "hr-policy",
@@ -1806,7 +1789,7 @@ async def test_glob_pattern_matches_one_segment_at_a_time():
         KnowledgeItemGlobRequest(kb_code="hr-policy", path_rule="/dir1/*.md")
     )
 
-    assert response.model_dump()["items"] == [
+    assert response.model_dump()["data"] == [
         {
             "kb_code": "hr-policy",
             "name": "/dir1/doc.md",

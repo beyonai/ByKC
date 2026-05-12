@@ -10,10 +10,8 @@ from typing import Any, Callable
 from by_qa.core import logger
 from by_qa.knowledge_base.api.schemas import (
     DeleteKnowledgeItemRequest,
-    DeleteKnowledgeItemResponse,
     FileToMarkdownIndexRequest,
     KnowledgeItemUploadRequest,
-    KnowledgeItemUploadResponse,
 )
 from by_qa.knowledge_base.build_status import (
     BUILD_STATUS_COMPLETE,
@@ -25,6 +23,13 @@ from by_qa.knowledge_base.build_status import (
     BUILD_STEP_VECTORIZING,
 )
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
+
+
+def _guess_mime_type(path: str) -> str:
+    suffix = PurePosixPath(path).suffix.lower()
+    if suffix in {".md", ".markdown"}:
+        return "text/markdown"
+    return mimetypes.guess_type(path)[0] or "application/octet-stream"
 
 
 @dataclass
@@ -40,9 +45,7 @@ class KnowledgeItemIngestionService:
     embedding_dimension: int
     knowledge_build_task_repository: Any | None = None
 
-    async def upload_file(
-        self, request: KnowledgeItemUploadRequest
-    ) -> KnowledgeItemUploadResponse:
+    async def upload_file(self, request: KnowledgeItemUploadRequest) -> None:
         """Upload one original file and register its storage metadata on the file entry."""
         logger.info(
             "knowledge_item_ingestion_service.upload_file started: kb_code=%s, file_path=%s, file_size=%s",
@@ -57,11 +60,7 @@ class KnowledgeItemIngestionService:
         if not normalized_object_path:
             raise KnowledgeBaseValidationError("file_path must not be root")
 
-        mime_type = (
-            request.content_type
-            or mimetypes.guess_type(normalized_object_path)[0]
-            or "application/octet-stream"
-        )
+        mime_type = _guess_mime_type(normalized_object_path)
         checksum = hashlib.sha256(request.file_content).hexdigest()
 
         connection = await self.connection_factory()
@@ -115,11 +114,6 @@ class KnowledgeItemIngestionService:
                 temp_object_key,
                 final_object_key,
                 bucket_name=self.object_storage.bucket_name,
-            )
-            return KnowledgeItemUploadResponse(
-                kb_code=request.kb_code,
-                file_path=normalized_file_path,
-                file_description=request.file_description,
             )
         except Exception:
             await connection.rollback()
@@ -418,9 +412,7 @@ class KnowledgeItemIngestionService:
         finally:
             await connection.close()
 
-    async def delete_knowledge_item(
-        self, request: DeleteKnowledgeItemRequest
-    ) -> DeleteKnowledgeItemResponse:
+    async def delete_knowledge_item(self, request: DeleteKnowledgeItemRequest) -> None:
         """Logically delete one file entry and clear derived artifacts."""
         logger.info(
             "knowledge_item_ingestion_service.delete_knowledge_item started: kb_code=%s, file_path=%s",
@@ -491,11 +483,6 @@ class KnowledgeItemIngestionService:
                     bucket_name=markdown_bucket_name
                     or self.object_storage.markdown_bucket_name,
                 )
-            return DeleteKnowledgeItemResponse(
-                kb_code=request.kb_code,
-                file_path=request.file_path,
-                is_deleted=True,
-            )
         except Exception:
             await connection.rollback()
             raise

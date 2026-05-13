@@ -317,6 +317,36 @@
 
 将文档上传到指定知识库下面。
 
+行为描述：
+
+- 当上传文件为 Markdown 时，服务端可以额外解析文档开头的 YAML front matter header。
+- 若解析到合法的 YAML front matter header，则会将其中字段按同名 `propertyName` 自动录入为该文件的元数据。
+- 该行为适用于类似 Obsidian 文档头的结构化元数据写法。
+- 如果已有属性不存在于知识库系统，则文件上传失败
+
+YAML front matter header 示例：
+
+```yaml
+---
+title: LLM Wiki 中间层知识构建
+aliases:
+  - LLM Wiki Middle Layer Construction
+  - Karpathy LLM Wiki 中间层设计
+tags:
+  - llm-wiki
+  - knowledge-construction
+  - obsidian/pkm
+  - knowledge-base/research
+doc_type: research
+status: active
+source: official-research
+owner: by-qa
+created: 2026-05-11
+updated: 2026-05-11
+module: karpathy
+---
+```
+
 请求体：`multipart/form-data`
 
 | 字段 | 类型 | 必填 | 说明 |

@@ -58,7 +58,7 @@ class MetadataPropertyRepository:
     ) -> dict[str, Any] | None:
         await cursor.execute(
             """
-            SELECT kid, property_name, value_type, description, ext_params
+            SELECT kid, property_name, value_type, description, ext_params, is_system
             FROM knowledge_metadata_property_def
             WHERE property_name = %(property_name)s
               AND is_deleted = false

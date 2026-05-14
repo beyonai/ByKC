@@ -207,6 +207,8 @@ async def build_knowledge_item_ingestion_service(
             settings, embedding_config=embedding_config
         ),
         embedding_dimension=dimension,
+        metadata_property_repository=MetadataPropertyRepository(),
+        file_metadata_value_repository=FileMetadataValueRepository(),
     )
 
 

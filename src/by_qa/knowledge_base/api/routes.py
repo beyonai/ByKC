@@ -12,6 +12,12 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from by_qa.core import logger
+from by_qa.knowledge_base.api.metadata_schemas import (
+    BatchCreateMetadataPropertyRequest,
+    CreateMetadataPropertyRequest,
+    DeleteMetadataPropertyRequest,
+    ListMetadataPropertyRequest,
+)
 from by_qa.knowledge_base.api.schemas import (
     CreateDirectoryRequest,
     CreateKnowledgeBaseRequest,
@@ -115,6 +121,7 @@ def register_routes(
     get_knowledge_item_ingestion_service,
     get_knowledge_item_search_service,
     get_document_chunking_service,
+    get_metadata_property_service,
 ):
     """Register knowledge base API routes on the FastAPI app."""
 
@@ -959,6 +966,98 @@ def register_routes(
             headers={
                 "Content-Disposition": _build_content_disposition(quoted_filename)
             },
+        )
+
+    @app.post("/api/v1/metadataProperties/create")
+    async def create_metadata_property(body: dict[str, Any] = Body(...)):
+        try:
+            request = CreateMetadataPropertyRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        try:
+            service = await get_metadata_property_service()
+            result = await service.create_property(request)
+        except KnowledgeBaseValidationError as exc:
+            return _documented_error_response(result_msg=str(exc), result_object={})
+        except Exception as exc:
+            logger.exception("create_metadata_property error: %s", exc)
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error", result_object={}
+            )
+        return _documented_success_response(
+            result_object=result.model_dump(by_alias=True)
+        )
+
+    @app.post("/api/v1/metadataProperties/batchCreate")
+    async def batch_create_metadata_properties(body: dict[str, Any] = Body(...)):
+        try:
+            request = BatchCreateMetadataPropertyRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        try:
+            service = await get_metadata_property_service()
+            results = await service.batch_create(request)
+        except KnowledgeBaseValidationError as exc:
+            return _documented_error_response(result_msg=str(exc), result_object={})
+        except Exception as exc:
+            logger.exception("batch_create_metadata_properties error: %s", exc)
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error", result_object={}
+            )
+        return _documented_success_response(
+            result_object={"data": [r.model_dump(by_alias=True) for r in results]}
+        )
+
+    @app.post("/api/v1/metadataProperties/delete")
+    async def delete_metadata_property(body: dict[str, Any] = Body(...)):
+        try:
+            request = DeleteMetadataPropertyRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        try:
+            service = await get_metadata_property_service()
+            await service.delete_property(request)
+        except KnowledgeBaseValidationError as exc:
+            return _documented_error_response(result_msg=str(exc), result_object={})
+        except Exception as exc:
+            logger.exception("delete_metadata_property error: %s", exc)
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error", result_object={}
+            )
+        return _documented_success_response(result_object={})
+
+    @app.post("/api/v1/metadataProperties/list")
+    async def list_metadata_properties(body: dict[str, Any] = Body(...)):
+        try:
+            request = ListMetadataPropertyRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        try:
+            service = await get_metadata_property_service()
+            results = await service.list_properties(request)
+        except Exception as exc:
+            logger.exception("list_metadata_properties error: %s", exc)
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error", result_object={}
+            )
+        return _documented_success_response(
+            result_object={"data": [r.model_dump(by_alias=True) for r in results]}
         )
 
 

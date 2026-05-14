@@ -28,6 +28,7 @@ _knowledge_item_ingestion_service: Any | None = None
 _knowledge_item_search_service: Any | None = None
 _knowledge_fetch_cache_cleanup_service: Any | None = None
 _document_chunking_service: Any | None = None
+_metadata_property_service: Any | None = None
 _knowledge_base_schema_initialized = False
 _knowledge_base_schema_lock = asyncio.Lock()
 
@@ -56,6 +57,7 @@ API_MODULES = (
             ),
             "get_knowledge_item_search_service": resolve_knowledge_item_search_service,
             "get_document_chunking_service": resolve_document_chunking_service,
+            "get_metadata_property_service": resolve_metadata_property_service,
         },
     ),
 )
@@ -383,6 +385,28 @@ async def resolve_knowledge_item_search_service():
 async def resolve_document_chunking_service():
     """Resolve the document chunking service dynamically for optional modules."""
     return await _get_or_build_document_chunking_service()
+
+
+def get_metadata_property_service():
+    """Get or create the metadata property definition service."""
+    return _metadata_property_service
+
+
+async def _get_or_build_metadata_property_service():
+    """Get or build the metadata property definition service."""
+    global _metadata_property_service
+    if _metadata_property_service is None:
+        from by_qa.knowledge_base.infrastructure.runtime import (
+            build_metadata_property_service,
+        )
+
+        _metadata_property_service = await build_metadata_property_service(settings)
+    return _metadata_property_service
+
+
+async def resolve_metadata_property_service():
+    """Resolve the metadata property service dynamically so tests can monkeypatch."""
+    return await _get_or_build_metadata_property_service()
 
 
 def _detect_missing_packages(required_packages: tuple[str, ...]) -> list[str]:

@@ -6,6 +6,9 @@ from by_qa.knowledge_base.infrastructure.database import build_connection_factor
 from by_qa.knowledge_base.infrastructure.object_storage import (
     KnowledgeBaseObjectStorage,
 )
+from by_qa.knowledge_base.repositories.file_metadata_value_repository import (
+    FileMetadataValueRepository,
+)
 from by_qa.knowledge_base.repositories.knowledge_base_repository import (
     KnowledgeBaseRepository,
 )
@@ -35,6 +38,7 @@ from by_qa.knowledge_base.services.bootstrap_service import (
 )
 from by_qa.knowledge_base.services.embedding_query_service import EmbeddingQueryService
 from by_qa.knowledge_base.services.errors import KnowledgeBaseConfigurationError
+from by_qa.knowledge_base.services.file_metadata_service import FileMetadataService
 from by_qa.knowledge_base.services.knowledge_base_service import KnowledgeBaseService
 from by_qa.knowledge_base.services.knowledge_fetch_cache_cleanup_service import (
     KnowledgeFetchCacheCleanupService,
@@ -233,4 +237,18 @@ async def build_metadata_property_service(
     return MetadataPropertyService(
         connection_factory=build_connection_factory(settings),
         metadata_property_repository=MetadataPropertyRepository(),
+    )
+
+
+async def build_file_metadata_service(
+    settings: Settings,
+) -> FileMetadataService:
+    """Build the file metadata value service."""
+    validate_knowledge_base_settings(settings, require_embedding=False)
+    return FileMetadataService(
+        connection_factory=build_connection_factory(settings),
+        knowledge_base_repository=KnowledgeBaseRepository(),
+        knowledge_fs_entry_repository=KnowledgeFsEntryRepository(),
+        metadata_property_repository=MetadataPropertyRepository(),
+        file_metadata_value_repository=FileMetadataValueRepository(),
     )

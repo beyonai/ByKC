@@ -1,313 +1,397 @@
-# by-qa
+<div align="center">
 
-`by-qa` 是一个按模块组织的开源知识与问答服务仓库，当前包含：
+# ByKC
 
-- `knowledge_base`：知识库管理、文件解析/切片/embedding 构建、导入结果落库和检索
-- `qa.instant`：即时问答核心编排能力
+**Beyond Knowledge Core · Enterprise Knowledge Hub**
 
-项目采用可选依赖安装，不同模块可以按需安装和启用。
+From document ingestion to multi-hop reasoning — a knowledge foundation for enterprise AI agents.
 
-## 模块概览
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-green.svg)](https://fastapi.tiangolo.com/)
+[![LangGraph](https://img.shields.io/badge/LangGraph-0.2+-purple.svg)](https://github.com/langchain-ai/langgraph)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-### Knowledge Base
+English | [中文](README_zh.md)
 
-`knowledge_base` 提供知识库管理、文档导入、`fileToMarkdownIndex` 知识构建、文件读取和检索能力，适合用作知识数据的存储与检索承载层。
+</div>
 
-相关文档：
+---
 
-- [模块框架](docs/modules/knowledge/framework.md)
-- [模块设计](docs/modules/knowledge/design.md)
-- [接口说明](docs/modules/knowledge/api.md)
-- [MinIO 说明](docs/modules/knowledge/minio.md)
+## Project Positioning
 
-知识构建能力已经并入 `knowledge_base`，旧的 `file-to-markdown`、`build-markdown-index`、`file-to-markdown-index` 独立接口均已弃用并移除；当前统一通过 `POST /api/v1/fileToMarkdownIndex` 触发文件解析、切片、向量化和落库链路。
+ByKC (Beyond Knowledge Core) is an open-source enterprise knowledge reasoning engine — the company's "digital senior expert". It weaves information scattered across messaging apps, email, meetings, and code into a living knowledge network, so newcomers can tap into the experience of senior staff from day one.
 
-### Instant QA
+Technically, ByKC aims to **improve the accuracy of existing RAG knowledge bases on complex QA scenarios**.
 
-`qa.instant` 提供即时问答的代码级能力入口，保留了单跳、多跳、上下文管理和流式事件模型。当前不包含深度问答、HTTP/SSE 对外接口和 worker 适配层。
+The core flow of traditional RAG is "retrieve top-K chunks → concatenate → generate", which has systemic gaps when facing real business questions:
 
-相关文档：
+| Traditional RAG Problem | ByKC Approach |
+|---|---|
+| **Compound questions fail** — "How do A and B differ?" needs separate retrievals to compare; a single retrieval mixes targets and yields low-relevance hits | **Sub-question decomposition** — QueryDecomposer splits a compound question into independent sub-questions, each issuing its own retrieval. Single-target retrievals produce more relevant hits<br/>*Example: "How do product A and B differ in battery life and weight?" → split into 4 sub-retrievals: "A battery life", "A weight", "B battery life", "B weight"* |
+| **Multi-hop reasoning breaks** — "What projects does Zhang San's manager own?" has chained dependencies; one retrieval cannot fetch the full answer | **Step-by-step iterative retrieval** — MultiHop Agent runs retrieval in iterative rounds along the reasoning chain, rebuilding the next query from the previous round's result, advancing until the full evidence chain is gathered<br/>*Example: "What projects does Zhang San's manager own?" → round 1 retrieves "Who is Zhang San's manager" → gets "Li Si" → round 2 retrieves "Projects owned by Li Si"* |
+| **Cross-KB silos** — Information lives in multiple knowledge bases; a single retrieval only hits one source | **KBs unified as agent tools** — ServiceToolDispatcher exposes multiple knowledge bases as a standard agent tool set. The agent calls them in parallel and aggregates results uniformly<br/>*Example: "What's the company's remote work policy?" → calls HR-policy, IT-security, and finance-reimbursement KBs in parallel, then aggregates into a complete answer* |
 
-- [模块框架](docs/modules/instant-qa/framework.md)
-- [模块设计](docs/modules/instant-qa/design.md)
-- [处理流程](docs/modules/instant-qa/process.md)
+To deliver these capabilities, ByKC adopts a layered architecture — the reasoning engines connect to knowledge storage through an adapter layer. You can use the built-in knowledge base end-to-end, or layer ByKC directly on top of your existing RAG infrastructure:
 
-## 安装
+```mermaid
+graph TD
+    subgraph engine [QA Reasoning Engines]
+        direction LR
+        Fast[<b>Fast Engine</b>]
+        Instant[<b>Instant Engine</b>]
+    end
 
-只安装知识库：
+    subgraph adapter [Adapter Layer]
+        Dispatcher[<b>ServiceToolDispatcher</b>]
+    end
 
-```bash
-pip install by-qa[knowledge]
+    subgraph storage [Knowledge Storage]
+        subgraph builtin [ByKC Built-in KB]
+            KB["knowledge_base
+Document mgmt · Hybrid search"]
+            Build["knowledge_build
+Parse · Chunk · Embed"]
+            subgraph infra [Infrastructure]
+                OG[OpenGauss]
+                MIO[MinIO]
+            end
+        end
+        External["Existing Enterprise KB
+RAG / Vector DB / Doc System"]
+    end
+
+    Fast --> Dispatcher
+    Instant --> Dispatcher
+    Dispatcher --> builtin
+    Dispatcher --> External
+    KB --> infra
+    Build --> infra
+
+    style engine fill:#dbeafe,stroke:#3b82f6,stroke-width:2px,color:#000
+    style adapter fill:#fef3c7,stroke:#f59e0b,stroke-width:2px,color:#000
+    style storage fill:#d1fae5,stroke:#10b981,stroke-width:2px,color:#000
+    style builtin fill:#ecfdf5,stroke:#10b981,color:#000
+    style infra fill:#f3f4f6,stroke:#6b7280,color:#000
+    style Fast fill:#bfdbfe,stroke:#3b82f6,color:#000
+    style Instant fill:#bfdbfe,stroke:#3b82f6,color:#000
+    style Dispatcher fill:#fde68a,stroke:#f59e0b,color:#000
+    style External fill:#fee2e2,stroke:#ef4444,color:#000
+    style OG fill:#f3f4f6,stroke:#6b7280,color:#000
+    style MIO fill:#f3f4f6,stroke:#6b7280,color:#000
+    style KB fill:#ecfdf5,stroke:#10b981,color:#000
+    style Build fill:#ecfdf5,stroke:#10b981,color:#000
 ```
 
-只安装问答：
+---
 
-```bash
-pip install by-qa[qa]
+## Core Features
+
+- **Dual-mode QA engines** — Fast Engine handles simple questions; Instant Engine handles multi-hop complex questions. One codebase, switch by scenario.
+- **AgentOverride hot-swap** — Each reasoning node (decomposer, retrieval agent, aggregator, generator) supports independent replacement of prompt / middleware / tools, so the same engine adapts to legal, customer service, R&D, and other domains.
+- **Knowledge bases as a tool set** — ServiceToolDispatcher automatically converts remote knowledge-base APIs into LangGraph tools (search / listDir / glob / readFile). The QA engine is not bound to any specific storage and works with any compatible service.
+
+---
+
+## Core Design
+
+### Dual Engines: Fast vs Instant
+
+| | **Fast Engine** | **Instant Engine** |
+|---|---|---|
+| **Scenario** | Factual lookup, definition, single information point | Comparison, multi-condition filtering, cross-document synthesis |
+| **Flow** | Linear: rewrite → retrieve → generate | Graph: decompose → parallel agents → aggregate → final answer |
+| **Latency** | Low (single-round LLM + single retrieval) | Higher (multi-round tool calls, parallel sub-questions offset some latency) |
+| **Example** | "What is the reimbursement process?" | "How do products A and B differ in reliability and performance?" |
+
+### AgentOverride: Per-Node Behavior Configuration
+
+Every agent node in both engines can be configured independently via `AgentOverride` — no engine code changes needed:
+
+```python
+from by_qa.qa.common.config import AgentOverride
+
+config = {
+    "agents": {
+        # Instant engine nodes:
+        #   decomposer_agent / single_hop_agent / multi_hop_agent /
+        #   multi_hop_summary_agent / aggregator_agent
+        "single_hop_agent": AgentOverride(
+            prompt="You are a legal document assistant. Always cite the original clause number...",
+            middleware=[YourCustomMiddleware()],
+            tools=[your_extra_tool],
+        ),
+        # Fast engine nodes:
+        #   rewriter_agent / answer_agent
+        "answer_agent": AgentOverride(
+            prompt="Answer in three sentences or fewer, friendly tone...",
+        ),
+    }
+}
 ```
 
-安装全部模块：
+Same engine code: legal scenarios swap in a strict-citation prompt, customer service injects a concise style, R&D adds a code search tool.
+
+### ServiceToolDispatcher: Knowledge Base → Agent Tools
+
+The QA engine never accesses a database directly; it converts remote knowledge-base services into LangGraph tools:
+
+```python
+dispatcher = ServiceToolDispatcher(knowledge_bases=[
+    KnowledgeBaseConfig(
+        kb_code="product_docs",
+        service_name="by-qa-manager",
+        operations={
+            OperationType.KNOWLEDGE_SEARCH: "/api/v1/knowledgeItems/search",
+            OperationType.LIST_DIR: "/api/v1/listDir",
+            OperationType.GLOB: "/api/v1/glob",
+            OperationType.READ_FILE: "/api/v1/readFile",
+        }
+    )
+])
+tools = dispatcher.build_tools()
+# → [search_knowledge, list_directory, glob_search, read_file]
+```
+
+- Works with any service that implements the same protocol — not tied to ByKC's own knowledge_base module
+- Agents get full knowledge-exploration powers: search, list directories, glob, read original content
+- Parallel retrieval across multiple KBs, results unified by relevance
+
+---
+
+## Quick Start
+
+### Requirements
+
+- Python 3.12+
+- [uv](https://github.com/astral-sh/uv) (recommended) or pip
+- Docker (required by the knowledge base module)
+
+### Install
 
 ```bash
+# pip install (recommended)
 pip install by-qa[all]
+
+# Or via uv
+uv pip install by-qa[all]
+
+# Install on demand
+pip install by-qa[knowledge]   # knowledge base only
+pip install by-qa[qa]          # QA engines only
 ```
 
-如果使用 `uv`：
+From source:
 
 ```bash
-uv sync --extra knowledge
-uv sync --extra qa
+git clone https://github.com/beyonai/ByKC.git && cd ByKC
 uv sync --all-extras
 ```
 
-开发环境推荐：
+### Start Middleware
 
 ```bash
-uv sync --extra dev --extra knowledge --extra qa
+make kb-stack-up   # Bring up OpenGauss + MinIO + Redis in one shot
 ```
 
-## 启动
-
-项目入口会根据当前已安装模块动态注册 API。
-
-本地启动：
-
-```bash
-uv run python -m by_qa.main
-```
-
-或：
-
-```bash
-by-qa
-```
-
-默认健康检查接口：
-
-```text
-GET /health
-```
-
-健康检查响应中会包含当前已启用和被跳过的模块信息，便于确认模块是否按预期加载。
-
-## End-to-End Example
-
-如果你希望按 `pip install by-qa[all]` 的方式完整体验“服务拉起 -> 知识构建 -> 入库 -> `list_dir` / `glob` / 检索 -> 即时问答”，可以直接使用仓库根目录下的示例：
-
-```bash
-bash examples/e2e_kb_qa/start_kb_service.sh
-python examples/e2e_kb_qa/run_kb_flow.py
-python examples/e2e_kb_qa/run_instant_qa.py
-```
-
-详细说明见 [examples/e2e_kb_qa/README.md](./examples/e2e_kb_qa/README.md)。
-
-## 配置
-
-项目通过仓库根目录的 `.env` 文件读取配置，参考示例：
+### Configure
 
 ```bash
 cp .env.example .env
 ```
 
-常见配置分组包括：
-
-- 服务启动配置
-- 知识库存储配置
-- embedding 配置
-- 即时问答模型与运行时配置
-
-默认情况下，模型配置来自 `.env` 中的 `LLM_*`、`EMBEDDING_*` 和各角色模型变量。pip 安装后如果需要接入自建配置中心或模型网关，可以将 provider 包安装到同一个 Python 环境，并设置：
+Key variables:
 
 ```bash
-BY_QA_MODEL_CONFIG_PROVIDER=my_provider.package:CustomModelConfigProvider
+LLM_BASE_URL=http://your-llm/v1       # OpenAI-compatible endpoint
+LLM_API_KEY=your-key
+LLM_STANDARD_MODEL=gpt-4o             # Primary reasoning
+LLM_LIGHTWEIGHT_MODEL=gpt-4o-mini     # Decomposition / rewrite
+
+EMBEDDING_BASE_URL=http://your-embedding
+EMBEDDING_MODEL_NAME=bge-m3
+EMBEDDING_DIMENSION=1024
 ```
 
-该 provider 需要实现 `by_qa.core.ModelConfigProvider` 协议，返回 `by_qa.core.ModelConfig`。未设置时服务继续使用内置的环境变量 provider。
-
-如果使用 `knowledge_base`，需要同时准备 openGauss、MinIO、Redis 和 embedding 相关配置；如果运行完整的 `by-qa` 服务，`qa.instant` 也会复用同一套运行时基础设施。其中 Redis 是必需项，因为项目依赖 `by-framework` 提供运行时基础能力。
-
-## 中间件依赖
-
-不同模块依赖的中间件不同：
-
-- `knowledge_base`：依赖 openGauss、MinIO、Redis 和 embedding 服务，并承载知识构建接口
-- `qa.instant`：当前是代码级能力入口，本身不直接操作 openGauss 或 MinIO，但服务运行仍依赖 `by-framework`，因此 Redis 仍是必需中间件；如果结合知识检索使用，通常也会依赖 `knowledge_base`
-
-### openGauss
-
-`knowledge_base` 需要一份带扩展能力的 openGauss 环境。当前仓库默认使用自定义镜像，而不是直接使用原始官方镜像。
-
-需要满足的能力包括：
-
-- `vector` 类型与 `ivfflat` 索引能力
-- `age` 扩展
-- `ltree` 扩展
-- `pg_trgm` 扩展
-
-其中：
-
-- `vector` 与 `age` 依赖底层 openGauss / DataVec 能力
-- `ltree` 和 `pg_trgm` 由仓库里的自定义镜像在构建时编译并安装
-
-相关文件：
-
-- 自定义镜像定义：`docker/opengauss/custom/Dockerfile`
-- 初始化脚本：`docker/opengauss/init/init-opengauss.sh`
-- 编排文件：`docker-compose.kb-stack.yml`
-
-初始化脚本会在数据库可用后执行以下检查和准备：
-
-- 校验 `ltree`、`pg_trgm`、`age` 是否可用
-- 校验 `vector` 类型是否可用
-- 创建扩展、图谱和 smoke test 表
-- 验证 `ivfflat` 索引是否可正常创建
-
-### MinIO
-
-`knowledge_base` 用 MinIO 存放原始文件和读取链接。默认编排同时提供：
-
-- MinIO 服务
-- bucket 初始化容器
-
-相关文件：
-
-- MinIO 初始化脚本：`docker/minio/init/init-minio.sh`
-- 编排文件：`docker-compose.kb-stack.yml`
-
-### Redis
-
-仓库默认编排提供 Redis。Redis 是必需中间件，因为项目依赖 `by-framework` 提供服务注册等运行时基础能力。
-
-相关文件：
-
-- 编排文件：`docker-compose.kb-stack.yml`
-- 环境变量示例：`.env.example`
-
-### 构建 openGauss 自定义镜像
-
-如果你要本地运行知识库，推荐直接使用仓库提供的 compose 配置构建镜像：
+### Run
 
 ```bash
-docker compose -f docker-compose.kb-stack.yml build opengauss
+by-qa
 ```
 
-如果希望单独构建镜像，也可以直接执行：
+Visit `/health` to see loaded modules and `/docs` for the knowledge base API reference.
+
+### End-to-End Walkthrough
+
+After installing by-qa via pip/uv, you can run the full pipeline:
 
 ```bash
-docker build \
-  -f docker/opengauss/custom/Dockerfile \
-  -t by_qa/opengauss-server-kb:7.0.0-RC1 \
-  .
+# Install
+pip install by-qa[all]
+# Or
+uv pip install by-qa[all]
+
+# Configure env vars (LLM, embedding, middleware addresses)
+cp .env.example .env && vi .env
+
+# Start the service
+by-qa
 ```
 
-默认会基于 `opengauss/opengauss-server:7.0.0-RC1` 构建，并从 openGauss 对应源码中编译 `ltree` 与 `pg_trgm`。
-
-### 启动知识库中间件
-
-启动 openGauss、MinIO 和 Redis：
+Once the service is up, call the APIs in order to build knowledge and ask questions:
 
 ```bash
-docker compose -f docker-compose.kb-stack.yml up -d opengauss minio redis
+# 1. Create a knowledge base
+curl -X POST http://127.0.0.1:8000/api/v1/knowledgeBases/create \
+  -H "Content-Type: application/json" \
+  -d '{"knName": "my-docs", "knDescription": "Product docs"}'
+# → {"resultObject": {"knCode": "74", ...}}
+
+# 2. Import a file (PDF/Word/PPT/Excel/Markdown/CSV supported)
+curl -X POST http://127.0.0.1:8000/api/v1/knowledgeItems/import \
+  -F "knCode=74" \
+  -F "filePath=/docs/handbook.md" \
+  -F "fileContent=@handbook.md"
+
+# 3. Trigger parsing → chunking → embedding (async background)
+curl -X POST http://127.0.0.1:8000/api/v1/fileToMarkdownIndex \
+  -H "Content-Type: application/json" \
+  -d '{"knCode": "74", "filePath": "/docs/handbook.md"}'
+
+# 4. Check build status (status=complete means ready)
+curl -X POST http://127.0.0.1:8000/api/v1/fileBuildStatus \
+  -H "Content-Type: application/json" \
+  -d '{"knCode": "74", "filePath": "/docs/handbook.md"}'
+
+# 5. Verify retrieval
+curl -X POST http://127.0.0.1:8000/api/v1/knowledgeItems/search \
+  -H "Content-Type: application/json" \
+  -d '{"knCodeList": ["74"], "query": "how to use", "topK": 3, "searchMode": "mixedRecall"}'
 ```
 
-执行初始化：
+After knowledge is built, use the QA scripts in the repo to ask questions:
 
 ```bash
-docker compose -f docker-compose.kb-stack.yml --profile init up --abort-on-container-exit opengauss-init minio-init
+# Instant engine (multi-hop, for complex questions)
+python examples/e2e_kb_qa/run_instant_qa.py --query "What's the difference between A and B?"
+
+# Fast engine (linear pipeline, for simple questions)
+python examples/e2e_kb_qa/run_instant_qa.py --mode fast --query "What is the reimbursement process?"
+
+# More options
+python examples/e2e_kb_qa/run_instant_qa.py --help
 ```
 
-如果需要重置或验证环境，也可以使用仓库脚本：
+---
 
-```bash
-/bin/bash scripts/reset_kb_stack.sh
-/bin/bash scripts/verify_kb_stack.sh
+## Usage
+
+### Knowledge Base API
+
+The knowledge base exposes full document management and retrieval via REST. See the [API reference](docs/modules/knowledge/api.md).
+
+### QA Engines (Code-Level Integration)
+
+The QA engines are code-level entry points for upper-layer agent frameworks or business services to integrate:
+
+```python
+from by_qa.qa.engines.instant.engine import InstantQAEngine
+from by_qa.qa.engines.fast.engine import FastQAEngine
+from by_qa.qa.common.models import CoreInput
+from by_qa.qa.common.config import AgentOverride
+
+retrieval_config = {
+    "knowledge_bases": [{
+        "kb_code": "my_kb",
+        "kb_name": "Product docs",
+        "service_name": "by-qa-manager",
+        "base_url": "http://127.0.0.1:8000",
+        "operations": {
+            "knowledgeSearch": "/api/v1/knowledgeItems/search",
+            "listDir": "/api/v1/listDir",
+            "readFile": "/api/v1/readFile",
+        }
+    }]
+}
+
+# Simple question → Fast
+async with FastQAEngine({"retrieval": retrieval_config}) as engine:
+    async for event in engine.stream_search(CoreInput(query="What is the reimbursement process?")):
+        if event.type == "token":
+            print(event.data["content"], end="")
+
+# Complex question → Instant + customized agent behavior
+async with InstantQAEngine({
+    "retrieval": retrieval_config,
+    "agents": {"single_hop_agent": AgentOverride(prompt="When citing original text, include the page number...")}
+}) as engine:
+    async for event in engine.stream_search(CoreInput(query="How do the breach clauses in the two contracts differ?")):
+        if event.type == "token":
+            print(event.data["content"], end="")
 ```
 
-## 测试
+---
 
-知识库单元测试：
+## Evaluation
 
-```bash
-bash scripts/knowledge_base/run_unit_tests.sh
-```
-
-问答单元测试：
+A standardized evaluation framework is built in. Currently supports the [FRAMES](https://huggingface.co/datasets/google/frames-benchmark) multi-hop QA benchmark:
 
 ```bash
-bash scripts/qa/run_unit_tests.sh
-```
-
-运行全部代码质量检查：
-
-```bash
-uv run pre-commit run --all-files
-```
-
-## 评估
-
-`eval/` 提供标准化的 QA 准确率评估流程，按数据集组织，当前支持 FRAMES benchmark。
-
-```bash
-# 安装 eval 依赖
 uv sync --extra eval --extra qa
-
-# 1. 下载数据集（维基百科页面）
 uv run python -m eval.cli download frames
-
-# 2. 入库到知识库
 uv run python -m eval.cli ingest frames --kb-base-url http://127.0.0.1:8000
-
-# 3. 运行评估
 uv run python -m eval.cli run frames --mode instant --sample 10
-
-# 报告输出到 eval/reports/
 ```
 
-三步流程分离执行，`kb_code` 由 ingest 步骤自动记录到 `.ingest_state.json`，评估时自动读取，无需手动指定。
+Adding a new dataset: implement the `DatasetSpec` protocol under `eval/datasets/<name>/`.
 
-添加新数据集：在 `eval/datasets/<name>/` 下实现 `DatasetSpec` 协议（`download`、`ingest`、`load_queries`），并在注册表中注册即可。
+---
 
-## CI 与发布
+## Project Structure
 
-当前仓库已配置：
-
-- GitHub Actions CI
-- PyPI 发布
-- GitHub Releases 发布
-
-正式发布由 `v*` tag 触发，并会校验 tag 版本与 `pyproject.toml` 中的版本一致。
-
-## 仓库结构
-
-```text
-eval/
-├── cli.py
-├── runner.py
-├── judge.py
-├── models.py
-└── datasets/
-    └── frames/
+```
 src/by_qa/
-├── core/
+├── main.py                 # FastAPI entry, dynamic module registration
+├── config.py               # Pydantic Settings
+├── core/                   # ModelConfigProvider protocol, logging, service discovery
 ├── knowledge_base/
-├── knowledge_common/
+│   ├── api/                # REST routes
+│   ├── services/           # KB management, ingestion, retrieval
+│   ├── repositories/       # OpenGauss data access
+│   └── infrastructure/     # DB connection pool, MinIO client
+├── knowledge_build/
+│   └── services/           # Document parsing, semantic chunking, embedding
+├── knowledge_common/       # Cross-module shared schemas
 └── qa/
+    ├── common/
+    │   ├── base_engine.py          # BaseQAEngine abstract base class
+    │   ├── config.py               # QAEngineConfig / AgentOverride / QARetrievalConfig
+    │   ├── models.py               # StreamEvent / CoreInput / CoreOutput
+    │   ├── operation_registry.py   # Tool registry
+    │   └── middleware/             # ToolCallGuardMiddleware
+    ├── agents/                     # Reusable subgraphs
+    │   ├── query_decomposer.py
+    │   ├── single_hop_react.py
+    │   ├── multi_hop_react.py
+    │   ├── subanswer_aggregator.py
+    │   └── answer_synthesizer.py
+    ├── engines/
+    │   ├── instant/                # Instant engine
+    │   └── fast/                   # Fast engine
+    ├── services/                   # LLMService, CheckpointerFactory
+    └── tools/                      # ServiceToolDispatcher
 ```
 
-## 当前边界
+---
 
-当前仓库已经开源并维护的是：
+## Roadmap
 
-- `knowledge_base`
-- `qa.instant`
+- [ ] AgentOverride extensions: support MCP Server, external Tools, and Skills as agent capability extensions, for seamless integration with the external tool ecosystem
+- [ ] Knowledge base metadata system: custom metadata import with switchable structured / semantic / hybrid retrieval modes
+- [ ] Structured anchors: tag unstructured documents with business master data, automatically linking documents to business entities
+- [ ] Compounding flywheel: user graph → enterprise graph, turning personal knowledge sediment into reusable organizational assets
 
-当前还不在开源范围内或未恢复为对外能力的包括：
-
-- `qa.deep`
-- 即时问答对外 Web API
-- 生产级知识构建流水线
+---
 
 ## License
 
-MIT
+[MIT License](LICENSE)

@@ -19,23 +19,74 @@
 
 ## 项目定位
 
-ByKC（Beyond Knowledge Core）是鲸智百应企业 AI 操作系统的知识中枢，开源发布。
+ByKC（Beyond Knowledge Core）是一套开源的企业知识推理引擎——企业的"数字老师傅"。它能够把散在钉钉、邮件、会议、代码等各种知识体系下的信息组成一张活的知识网络，让新人一上手就能调用老员工的经验。
 
-传统 RAG 的问题在于：检索能搜到片段，但回答不了需要跨文档、多步推理的问题。ByKC 的设计目标是让知识库不只是"被搜索"，而是成为 AI 智能体的生产资料——Agent 可以像人一样浏览目录、定位文件、阅读原文、多轮检索，最终给出有依据的完整答案。
+技术层面，ByKC 的目标是**提升存量 RAG 知识库在复杂问答场景下的准确性**。
 
-**两层能力：**
+传统 RAG 的核心流程是”检索 Top-K 片段 → 拼接 → 生成”，面对真实业务问题时存在系统性缺陷：
 
-| 层 | 模块 | 职责 |
-|---|---|---|
-| **知识存储与构建** | `knowledge_base` | 知识库管理、文件导入、文档解析→分块→向量化、混合检索、文件浏览 |
-| **知识推理** | `qa.engines` | 面向 Agent 的代码级问答引擎（非 HTTP 接口），流式事件输出 |
+| 传统 RAG 的问题 | ByKC 的做法 |
+|---|---|
+| **复合问答失败** — “A和B有何差异？”需要分别检索再对比，单次检索目标混杂导致命中内容相关度低 | **子问题分解检索** — QueryDecomposer 将复合问题拆分为多个独立子问题，每个子问题单独发起检索，单次检索目标单一，命中内容相关度更高<br/>*例：“A产品和B产品在续航和重量上有何差异？” → 拆为「A产品续航」「A产品重量」「B产品续航」「B产品重量」四个子问题* |
+| **多跳推理断链** — “张三领导负责哪些项目？”存在推理链依赖，一次检索拿不到完整答案 | **逐步迭代检索推理** — MultiHop Agent 沿推理链多轮迭代检索，每一轮基于上一轮结果重构 query，逐步推进直至拿到完整证据链<br/>*例：“张三领导负责哪些项目？” → 第一轮检索“张三的领导是谁” → 得到“李四” → 第二轮检索“李四负责的项目”* |
+| **跨库信息孤岛** — 信息分散在多个知识库，单次检索只能命中一个来源 | **知识库统一为 Agent 工具** — ServiceToolDispatcher 将多个知识库整合为标准 Agent 工具集，Agent 并行调用各工具检索后统一聚合结果<br/>*例：“公司远程办公政策？” → 同时调用 HR制度库、IT安全库、财务报销库 三个工具，聚合后形成完整答案* |
+
+为了实现上述能力，ByKC 采用分层架构——推理引擎通过接入层对接知识存储，既可使用内置的知识库全套能力，也可直接叠加在企业已有的 RAG 基础设施之上：
+
+```mermaid
+graph TD
+    subgraph engine [QA 推理引擎]
+        direction LR
+        Fast[<b>Fast Engine</b>]
+        Instant[<b>Instant Engine</b>]
+    end
+
+    subgraph adapter [接入层]
+        Dispatcher[<b>ServiceToolDispatcher</b>]
+    end
+
+    subgraph storage [知识存储]
+        subgraph builtin [ByKC 内置知识库]
+            KB["knowledge_base
+文档管理 · 混合检索"]
+            Build["knowledge_build
+解析 · 分块 · 向量化"]
+            subgraph infra [基础设施]
+                OG[OpenGauss]
+                MIO[MinIO]
+            end
+        end
+        External["企业存量知识库
+已有 RAG / 向量数据库 / 文档系统"]
+    end
+
+    Fast --> Dispatcher
+    Instant --> Dispatcher
+    Dispatcher --> builtin
+    Dispatcher --> External
+    KB --> infra
+    Build --> infra
+
+    style engine fill:#dbeafe,stroke:#3b82f6,stroke-width:2px,color:#000
+    style adapter fill:#fef3c7,stroke:#f59e0b,stroke-width:2px,color:#000
+    style storage fill:#d1fae5,stroke:#10b981,stroke-width:2px,color:#000
+    style builtin fill:#ecfdf5,stroke:#10b981,color:#000
+    style infra fill:#f3f4f6,stroke:#6b7280,color:#000
+    style Fast fill:#bfdbfe,stroke:#3b82f6,color:#000
+    style Instant fill:#bfdbfe,stroke:#3b82f6,color:#000
+    style Dispatcher fill:#fde68a,stroke:#f59e0b,color:#000
+    style External fill:#fee2e2,stroke:#ef4444,color:#000
+    style OG fill:#f3f4f6,stroke:#6b7280,color:#000
+    style MIO fill:#f3f4f6,stroke:#6b7280,color:#000
+    style KB fill:#ecfdf5,stroke:#10b981,color:#000
+    style Build fill:#ecfdf5,stroke:#10b981,color:#000
+```
 
 ---
 
-## 亮点
+## 核心特性
 
-- **双模式 QA 引擎** — Fast（改写→检索→生成）应对简单问题；Instant（分解→并行 ReAct Agent→聚合）处理多跳复杂问题。同一套代码，按场景切换。
-- **问题依赖链分析** — QueryDecomposer 不是简单拆句，而是识别子问题间的依赖关系和推理跳数，有依赖的不拆、无依赖的并行，避免信息断裂。
+- **双模式 QA 引擎** — Fast Engine应对简单问题；Instant Engine处理多跳复杂问题。同一套代码，按场景切换。
 - **AgentOverride 热插拔** — 每个推理节点（分解器、检索 agent、聚合器、生成器）均可独立替换 prompt / middleware / tools，同一引擎适配法务、客服、研发等不同业务场景。
 - **知识库即工具集** — ServiceToolDispatcher 将远程知识库 API 自动转化为 LangGraph 工具（search / listDir / glob / readFile），QA 引擎不绑定特定存储，可对接任何兼容服务。
 
@@ -51,33 +102,6 @@ ByKC（Beyond Knowledge Core）是鲸智百应企业 AI 操作系统的知识中
 | **流程** | 线性：改写 → 检索 → 生成 | 图：分解 → 并行 Agent → 聚合 → 终答 |
 | **延迟** | 低（单轮 LLM + 单次检索） | 较高（多轮工具调用，子问题并行抵消部分延迟） |
 | **示例** | "报销流程是什么？" | "A产品和B产品在可靠性和性能上有何差异？" |
-
-**Fast 引擎**：
-
-```mermaid
-graph LR
-    Q[用户问题] --> R[QuestionRewriter<br/>消歧/补全]
-    R --> S[检索]
-    S --> A[AnswerSynthesizer<br/>生成答案]
-```
-
-**Instant 引擎**：
-
-```mermaid
-graph TD
-    Q[用户问题] --> D[QueryDecomposer<br/>分析依赖链 · 标注跳数]
-    D -->|"LangGraph Send() 并行派发"| W1[SingleHop ReAct Agent<br/>子问题A]
-    D -->|并行| W2[SingleHop ReAct Agent<br/>子问题B]
-    D -->|并行| W3[MultiHop ReAct Agent<br/>子问题C]
-    W1 --> AGG[SubAnswerAggregator]
-    W2 --> AGG
-    W3 --> AGG
-    AGG --> F[FinalAnswer]
-```
-
-- 每个 Worker 是完整的 ReAct Agent，可多轮调用检索工具，自主判断信息是否充分
-- ToolCallGuardMiddleware 拦截无效工具调用（错误工具名 / 参数校验失败 / 运行时异常），结构化返回错误而非崩溃
-- 全程流式事件输出，前端可实时展示分解过程、检索进度、子答案生成
 
 ### AgentOverride：节点级行为配置
 

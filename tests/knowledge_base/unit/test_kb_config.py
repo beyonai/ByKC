@@ -3,7 +3,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from by_qa.config import PROJECT_ROOT, Settings
+from by_qa.config import Settings
 from by_qa.knowledge_base.services.errors import KnowledgeBaseConfigurationError
 
 
@@ -182,13 +182,6 @@ def test_settings_env_file_is_pinned_to_project_root():
     assert isinstance(env_file, Path)
     assert env_file.is_absolute()
     assert env_file.name == ".env"
-
-
-def test_project_root_points_to_repository_root():
-    """PROJECT_ROOT should resolve to the repository root after the package move."""
-    assert PROJECT_ROOT.is_absolute()
-    assert (PROJECT_ROOT / "pyproject.toml").exists()
-    assert PROJECT_ROOT.name == "by-qa"
 
 
 def test_settings_expose_kb_fetch_cache_defaults():

@@ -1,5 +1,9 @@
 """Runtime wiring helpers for knowledge base services."""
 
+from __future__ import annotations
+
+from typing import Any
+
 from by_qa.config import Settings
 from by_qa.core.model_config import LLMModelProfile, ModelConfig, ModelConfigProvider
 from by_qa.knowledge_base.infrastructure.database import build_connection_factory
@@ -29,6 +33,9 @@ from by_qa.knowledge_base.repositories.knowledge_item_search_repository import (
 )
 from by_qa.knowledge_base.repositories.metadata_property_repository import (
     MetadataPropertyRepository,
+)
+from by_qa.knowledge_base.repositories.metadata_search_repository import (
+    MetadataSearchRepository,
 )
 from by_qa.knowledge_base.repositories.retrieval_projection_repository import (
     RetrievalProjectionRepository,
@@ -228,6 +235,8 @@ async def build_knowledge_item_search_service(
         connection_factory=build_connection_factory(settings),
         search_repository=KnowledgeItemSearchRepository(bootstrap.embedding_table_name),
         embedding_query_service=EmbeddingQueryService(provider=provider),
+        metadata_property_repository=MetadataPropertyRepository(),
+        metadata_search_repository=MetadataSearchRepository(),
     )
 
 
@@ -253,4 +262,21 @@ async def build_file_metadata_service(
         knowledge_fs_entry_repository=KnowledgeFsEntryRepository(),
         metadata_property_repository=MetadataPropertyRepository(),
         file_metadata_value_repository=FileMetadataValueRepository(),
+    )
+
+
+async def build_metadata_search_service(
+    settings: Settings,
+) -> Any:
+    """Build the pure metadata search service."""
+    from by_qa.knowledge_base.services.metadata_search_service import (
+        MetadataSearchService,
+    )
+
+    validate_knowledge_base_settings(settings, require_embedding=False)
+    return MetadataSearchService(
+        connection_factory=build_connection_factory(settings),
+        knowledge_base_repository=KnowledgeBaseRepository(),
+        metadata_property_repository=MetadataPropertyRepository(),
+        metadata_search_repository=MetadataSearchRepository(),
     )

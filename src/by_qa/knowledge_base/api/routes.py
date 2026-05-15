@@ -13,12 +13,15 @@ from pydantic import ValidationError
 
 from by_qa.core import logger
 from by_qa.knowledge_base.api.metadata_schemas import (
+    AgentSearchRequest,
     BatchCreateMetadataPropertyRequest,
     CreateMetadataPropertyRequest,
     DeleteMetadataPropertyRequest,
     GetFileMetadataRequest,
     ListMetadataFieldsRequest,
     ListMetadataPropertyRequest,
+    MetadataSearchRequest,
+    SearchFileRequest,
     UpdateFileMetadataRequest,
 )
 from by_qa.knowledge_base.api.schemas import (
@@ -38,6 +41,7 @@ from by_qa.knowledge_base.api.schemas import (
     UpdateDirectoryRequest,
     UpdateKnowledgeBaseRequest,
 )
+from by_qa.knowledge_base.dsl.errors import DslValidationError
 from by_qa.knowledge_base.services.errors import (
     KnowledgeBaseConfigurationError,
     KnowledgeBaseValidationError,
@@ -126,6 +130,7 @@ def register_routes(
     get_document_chunking_service,
     get_metadata_property_service,
     get_file_metadata_service,
+    get_metadata_search_service,
 ):
     """Register knowledge base API routes on the FastAPI app."""
 
@@ -649,6 +654,36 @@ def register_routes(
     @app.post("/api/v1/knowledgeItems/search")
     @app.post("/api/v1/knowledge-items/search")
     async def search_knowledge_items(body: dict[str, Any] = Body(...)):
+        # Try Agent DSL request first (has 'where' or 'metadataFieldList')
+        if "where" in body or "metadataFieldList" in body:
+            try:
+                request = AgentSearchRequest.model_validate(body)
+            except ValidationError as exc:
+                return _documented_error_response(
+                    result_msg="request validation failed",
+                    result_object={"errors": json.loads(exc.json())},
+                    status_code=422,
+                )
+            try:
+                service = await get_knowledge_item_search_service()
+                results = await service.search_with_dsl(request)
+            except DslValidationError as exc:
+                return _documented_error_response(
+                    result_msg=str(exc),
+                    result_object=exc.to_result_object(),
+                )
+            except KnowledgeBaseValidationError as exc:
+                return _documented_error_response(result_msg=str(exc), result_object={})
+            except Exception as exc:
+                logger.exception("search_knowledge_items (agent dsl) error: %s", exc)
+                return _documented_error_response(
+                    result_msg=str(exc) or "internal error", result_object={}
+                )
+            return _documented_success_response(
+                result_object={"data": [r.model_dump(by_alias=True) for r in results]}
+            )
+
+        # Fall back to legacy search
         try:
             request = SearchRequest.model_validate(body)
         except ValidationError as exc:
@@ -1137,6 +1172,64 @@ def register_routes(
             return _documented_error_response(result_msg=str(exc), result_object={})
         except Exception as exc:
             logger.exception("list_metadata_fields error: %s", exc)
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error", result_object={}
+            )
+        return _documented_success_response(
+            result_object={"data": [r.model_dump(by_alias=True) for r in results]}
+        )
+
+    @app.post("/api/v1/knowledgeItems/metadataSearch")
+    async def metadata_search(body: dict[str, Any] = Body(...)):
+        try:
+            request = MetadataSearchRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        try:
+            service = await get_metadata_search_service()
+            results = await service.search(request)
+        except DslValidationError as exc:
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object=exc.to_result_object(),
+            )
+        except KnowledgeBaseValidationError as exc:
+            return _documented_error_response(result_msg=str(exc), result_object={})
+        except Exception as exc:
+            logger.exception("metadata_search error: %s", exc)
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error", result_object={}
+            )
+        return _documented_success_response(
+            result_object={"data": [r.model_dump(by_alias=True) for r in results]}
+        )
+
+    @app.post("/api/v1/knowledgeItems/searchFile")
+    async def search_file(body: dict[str, Any] = Body(...)):
+        try:
+            request = SearchFileRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        try:
+            service = await get_knowledge_item_search_service()
+            results = await service.search_file_with_dsl(request)
+        except DslValidationError as exc:
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object=exc.to_result_object(),
+            )
+        except KnowledgeBaseValidationError as exc:
+            return _documented_error_response(result_msg=str(exc), result_object={})
+        except Exception as exc:
+            logger.exception("search_file error: %s", exc)
             return _documented_error_response(
                 result_msg=str(exc) or "internal error", result_object={}
             )

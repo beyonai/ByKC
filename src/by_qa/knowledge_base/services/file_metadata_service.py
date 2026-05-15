@@ -96,10 +96,6 @@ class FileMetadataService:
                     raise KnowledgeBaseValidationError(
                         f"metadata property not defined: {op.property_name}"
                     )
-                if prop.get("is_system"):
-                    raise KnowledgeBaseValidationError(
-                        f"cannot modify system metadata property: {op.property_name}"
-                    )
                 value_type = prop["value_type"]
                 prop_def_id = prop["kid"]
 

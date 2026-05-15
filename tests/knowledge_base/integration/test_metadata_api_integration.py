@@ -386,13 +386,11 @@ def test_property_create_system_field_conflict(monkeypatch):
 
 
 @pytest.mark.integration
-def test_property_delete_system_property_fails(monkeypatch):
-    """Cannot delete a system property (is_system flag)."""
+def test_property_delete_nonexistent_fails(monkeypatch):
+    """Deleting a property that doesn't exist returns a not-found error."""
     settings = _kb_settings()
     _reset_runtime(monkeypatch, settings)
 
-    # We cannot create a system property, but the test verifies that
-    # trying to delete a non-existent property returns the right error.
     with TestClient(main_module.app) as client:
         resp = client.post(
             "/api/v1/metadataProperties/delete",

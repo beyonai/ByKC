@@ -145,10 +145,6 @@ class MetadataPropertyService:
                 raise KnowledgeBaseValidationError(
                     f"metadata property not found: {request.property_name}"
                 )
-            if existing.get("is_system"):
-                raise KnowledgeBaseValidationError(
-                    f"cannot delete system metadata property: {request.property_name}"
-                )
             ref_count = await self.metadata_property_repository.count_references(
                 cursor, property_def_id=existing["kid"]
             )

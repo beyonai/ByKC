@@ -42,7 +42,7 @@ class MetadataPropertyRepository:
                 %(property_name)s, %(value_type)s, %(description)s,
                 %(ext_params)s, NOW(), NOW()
             )
-            RETURNING kid, property_name, value_type, description, ext_params, is_system
+            RETURNING kid, property_name, value_type, description, ext_params
             """,
             {
                 "property_name": property_name,
@@ -58,7 +58,7 @@ class MetadataPropertyRepository:
     ) -> dict[str, Any] | None:
         await cursor.execute(
             """
-            SELECT kid, property_name, value_type, description, ext_params, is_system
+            SELECT kid, property_name, value_type, description, ext_params
             FROM knowledge_metadata_property_def
             WHERE property_name = %(property_name)s
               AND is_deleted = false

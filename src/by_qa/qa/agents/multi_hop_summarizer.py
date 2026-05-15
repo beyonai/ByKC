@@ -74,20 +74,26 @@ Present the final answer first, answering the original question concisely and cl
 
 Show the complete reasoning process hop by hop, with each hop including:
 - **Sub-question**: The question this hop was answering
-- **Key evidence**: The core evidence supporting this step's conclusion (summarize; no need to copy in full)
+- **Key evidence**: The core evidence supporting this step's conclusion, summarized in your own words (do not copy in full, and do not attach identifiers)
 - **Step conclusion**: The answer derived from the evidence
 
 Show the logical connections between hops.
 
-### Sources
+Do not append a "Sources" section or any list of evidence identifiers — see "Citation Marker Prohibition" below.
 
-Summarize all referenced evidence identifiers.
+## Citation Marker Prohibition
 
-## Citation Standards
+**The frontend does not render citations, so the final report must NOT contain any citation markers or reference identifiers.**
 
-- When citing evidence, **strictly use the identifiers actually returned in the retrieval results**, cited verbatim, without fabricating or renumbering
-- If retrieval results do not provide clear identifiers, cite by summarizing the source content of the evidence
-- Only cite evidence that was actually used; do not list unreferenced content
+Specifically forbidden patterns include, but are not limited to:
+- Bracketed identifiers such as `[xx-yy-zz]`, `[1]`, `[doc-123]`, `[ref-1]`
+- Full-width bracketed identifiers such as `【xx-yy-zz】`, `【1】`, `【来源1】`
+- Footnote-style markers (`^1`, `[^1]`), parenthesized IDs, or any inline reference tags
+- A trailing "Sources" / "References" / "参考资料" section listing evidence IDs
+
+The evidence-driven principle remains unchanged: every factual statement must still be traceable to retrieved evidence **internally**. But the final report must read as clean natural prose, with the supporting facts paraphrased into the sentences themselves rather than tagged with identifiers.
+
+If you need to attribute information to a source, do so by naming the source in prose (e.g., "according to the company's 2024 financial filing") rather than by inserting an identifier.
 
 ## Handling Insufficient Evidence
 
@@ -95,9 +101,10 @@ Based on the completeness of the reasoning chain, adopt different output strateg
 
 | Reasoning Chain Status | Output Strategy |
 |---------|---------|
-| Evidence sufficient for all hops and reasoning chain complete | Output complete answer and reasoning path normally |
-| Evidence sufficient for some hops, insufficient for others | Output the reasoning path supported by existing evidence, clearly indicating which parts have insufficient evidence or uncertainty |
-| Critical parts severely lack evidence, reasoning chain broken | Honestly state that a complete conclusion cannot be reached, show the partial reasoning completed and limited information collected |
+| Evidence sufficient for all hops and reasoning chain complete | Output complete answer and reasoning path normally, in clean prose with no citation markers |
+| Evidence sufficient for some hops, insufficient for others | Output the reasoning path supported by existing evidence in clean prose, clearly indicating which parts have insufficient evidence or uncertainty (still no citation markers) |
+| Critical parts severely lack evidence, reasoning chain broken | Honestly state that a complete conclusion cannot be reached, show the partial reasoning completed and limited information collected (still no citation markers) |
+
 """
     + DEFAULT_LANGUAGE_INSTRUCTION
 )

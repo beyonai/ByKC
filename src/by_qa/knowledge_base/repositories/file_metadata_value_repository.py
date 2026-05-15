@@ -31,6 +31,31 @@ class FileMetadataValueRepository:
     ) -> dict[str, Any] | None:
         col = self._value_column(value_type)
         serialized = json.dumps(value) if value_type == "stringList" else value
+
+        # Try UPDATE first (portable approach that works with OpenGauss)
+        await cursor.execute(
+            f"""
+            UPDATE knowledge_file_metadata_value
+            SET {col} = %(value)s,
+                is_deleted = false,
+                updated_at = NOW()
+            WHERE fs_entry_id = %(fs_entry_id)s
+              AND property_def_id = %(property_def_id)s
+              AND is_deleted = false
+            RETURNING kid
+            """,
+            {
+                "fs_entry_id": fs_entry_id,
+                "knowledge_base_id": knowledge_base_id,
+                "property_def_id": property_def_id,
+                "value": serialized,
+            },
+        )
+        row = await cursor.fetchone()
+        if row:
+            return row
+
+        # No existing row — INSERT new one
         await cursor.execute(
             f"""
             INSERT INTO knowledge_file_metadata_value (
@@ -41,12 +66,6 @@ class FileMetadataValueRepository:
                 %(fs_entry_id)s, %(knowledge_base_id)s, %(property_def_id)s,
                 %(value)s, false, NOW(), NOW()
             )
-            ON CONFLICT (fs_entry_id, property_def_id)
-                WHERE is_deleted = false
-            DO UPDATE SET
-                {col} = %(value)s,
-                is_deleted = false,
-                updated_at = NOW()
             RETURNING kid
             """,
             {

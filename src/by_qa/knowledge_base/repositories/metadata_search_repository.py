@@ -43,13 +43,29 @@ class MetadataSearchRepository:
 
         full_where = " AND ".join(conditions)
         sql = f"""
-            SELECT fe.kid, kb.kid AS kb_id,
-                   CAST(kb.kid AS text) AS kb_code,
-                   fe.name AS full_path
-            FROM knowledge_fs_entry fe
-            JOIN knowledge_base kb ON kb.kid = fe.knowledge_base_id
-            WHERE {full_where}
-            ORDER BY fe.kid DESC
+            WITH RECURSIVE path_parts AS (
+                SELECT fe.kid, fe.name AS segment, fe.parent_entry_id, 0 AS depth,
+                       kb.kid AS kb_id, CAST(kb.kid AS text) AS kb_code
+                FROM knowledge_fs_entry fe
+                JOIN knowledge_base kb ON kb.kid = fe.knowledge_base_id
+                WHERE {full_where}
+
+                UNION ALL
+
+                SELECT pp.kid, p.name, p.parent_entry_id, pp.depth + 1,
+                       NULL::bigint, NULL::text
+                FROM path_parts pp
+                JOIN knowledge_fs_entry p ON p.kid = pp.parent_entry_id
+                WHERE pp.parent_entry_id IS NOT NULL
+            )
+            SELECT kid,
+                   MAX(kb_id) AS kb_id,
+                   MAX(kb_code) AS kb_code,
+                   string_agg(segment, '/' ORDER BY depth DESC) AS full_path
+            FROM path_parts
+            WHERE kb_id IS NOT NULL OR parent_entry_id IS NULL
+            GROUP BY kid
+            ORDER BY kid DESC
             LIMIT %(limit)s
         """
         params = {**where_params, "kb_ids": kb_ids, "limit": limit}

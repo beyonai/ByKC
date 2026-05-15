@@ -54,7 +54,6 @@ def _validate_node(
                     path=path,
                     code="TOO_DEEP_BOOLEAN_NESTING",
                     message=f"boolean nesting depth exceeds limit {MAX_DEPTH}",
-                    suggestion="flatten the filter expression",
                 )
             )
             return
@@ -106,19 +105,21 @@ def _validate_node(
                     path=path,
                     code="TOO_MANY_CONDITIONS",
                     message=f"leaf condition count exceeds limit {MAX_LEAF_COUNT}",
-                    suggestion="reduce the number of filter conditions",
                 )
             )
             return
         _validate_leaf(node, operator, known_fields, errors, path=path)
 
     else:
+        allowed = ", ".join(sorted(LEAF_OPERATORS | BOOLEAN_OPERATORS))
         errors.append(
             DslValidationDetail(
                 path=path,
                 code="UNSUPPORTED_OPERATOR",
-                message=f"operator '{operator}' is not supported",
-                suggestion=f"use one of: {', '.join(sorted(LEAF_OPERATORS | BOOLEAN_OPERATORS))}",
+                message=(
+                    f"operator '{operator}' is not supported; "
+                    f"allowed operators: {allowed}"
+                ),
             )
         )
 

@@ -52,8 +52,7 @@
       {
         "path": "filter.and[1].contains.fieldName",
         "code": "UNKNOWN_FIELD",
-        "message": "fieldName 'tagz' is not defined",
-        "suggestion": "use 'tags' instead"
+        "message": "fieldName 'tagz' is not defined"
       }
     ]
   }
@@ -189,7 +188,6 @@ DSL 校验失败时，优先根据以下字段修正请求：
 - `errorList[].path`
 - `errorList[].code`
 - `errorList[].message`
-- `errorList[].suggestion`
 
 ## 接口总览
 
@@ -731,8 +729,7 @@ Agent DSL 版纯元数据检索，只返回文件级结果。
       {
         "path": "where.and[2]",
         "code": "TOO_MANY_CONDITIONS",
-        "message": "leaf condition count exceeds limit 12",
-        "suggestion": "reduce the number of filter conditions"
+        "message": "leaf condition count exceeds limit 12"
       }
     ]
   }
@@ -889,8 +886,7 @@ Agent DSL 版文件级语义检索。
       {
         "path": "where.eq.fieldName",
         "code": "UNKNOWN_FIELD",
-        "message": "fieldName 'statuz' is not defined",
-        "suggestion": "use 'status' instead"
+        "message": "fieldName 'statuz' is not defined"
       }
     ]
   }

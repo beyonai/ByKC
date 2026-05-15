@@ -10,17 +10,13 @@ class DslValidationDetail:
     path: str
     code: str
     message: str
-    suggestion: str | None = None
 
-    def to_dict(self) -> dict[str, str | None]:
-        result: dict[str, str | None] = {
+    def to_dict(self) -> dict[str, str]:
+        return {
             "path": self.path,
             "code": self.code,
             "message": self.message,
         }
-        if self.suggestion:
-            result["suggestion"] = self.suggestion
-        return result
 
 
 @dataclass

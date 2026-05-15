@@ -87,3 +87,110 @@ def test_exists_operator():
 def test_not_operator():
     where = {"not": {"eq": {"fieldName": "status", "value": "draft"}}}
     validate_where_clause(where, known_fields=KNOWN_FIELDS)
+
+
+def test_eq_string_rejects_non_string_value():
+    where = {"eq": {"fieldName": "status", "value": 123}}
+    with pytest.raises(DslValidationError) as exc_info:
+        validate_where_clause(where, known_fields=KNOWN_FIELDS)
+    assert exc_info.value.error_list[0].code == "INVALID_FIELD_VALUE_TYPE"
+    assert exc_info.value.error_list[0].path == "where.eq.value"
+
+
+def test_eq_number_rejects_string_value():
+    where = {"eq": {"fieldName": "priority", "value": "3"}}
+    with pytest.raises(DslValidationError) as exc_info:
+        validate_where_clause(where, known_fields=KNOWN_FIELDS)
+    assert exc_info.value.error_list[0].code == "INVALID_FIELD_VALUE_TYPE"
+
+
+def test_eq_number_rejects_boolean_value():
+    """bool is an int subclass in Python; the validator must reject it."""
+    where = {"eq": {"fieldName": "priority", "value": True}}
+    with pytest.raises(DslValidationError) as exc_info:
+        validate_where_clause(where, known_fields=KNOWN_FIELDS)
+    assert exc_info.value.error_list[0].code == "INVALID_FIELD_VALUE_TYPE"
+
+
+def test_eq_boolean_accepts_bool():
+    where = {"eq": {"fieldName": "archived", "value": True}}
+    validate_where_clause(where, known_fields=KNOWN_FIELDS)
+
+
+def test_eq_datetime_accepts_iso8601_with_z():
+    where = {"eq": {"fieldName": "effectiveAt", "value": "2026-05-15T10:00:00Z"}}
+    validate_where_clause(where, known_fields=KNOWN_FIELDS)
+
+
+def test_eq_datetime_rejects_non_iso_string():
+    where = {"eq": {"fieldName": "effectiveAt", "value": "yesterday"}}
+    with pytest.raises(DslValidationError) as exc_info:
+        validate_where_clause(where, known_fields=KNOWN_FIELDS)
+    assert exc_info.value.error_list[0].code == "INVALID_FIELD_VALUE_TYPE"
+
+
+def test_in_requires_non_empty_array():
+    where = {"in": {"fieldName": "status", "value": []}}
+    with pytest.raises(DslValidationError) as exc_info:
+        validate_where_clause(where, known_fields=KNOWN_FIELDS)
+    assert exc_info.value.error_list[0].code == "INVALID_FIELD_VALUE_TYPE"
+
+
+def test_in_rejects_element_type_mismatch():
+    where = {"in": {"fieldName": "status", "value": ["active", 1]}}
+    with pytest.raises(DslValidationError) as exc_info:
+        validate_where_clause(where, known_fields=KNOWN_FIELDS)
+    assert exc_info.value.error_list[0].code == "INVALID_FIELD_VALUE_TYPE"
+    assert exc_info.value.error_list[0].path == "where.in.value[1]"
+
+
+def test_in_rejects_string_list_field():
+    where = {"in": {"fieldName": "tags", "value": ["a"]}}
+    with pytest.raises(DslValidationError) as exc_info:
+        validate_where_clause(where, known_fields=KNOWN_FIELDS)
+    assert exc_info.value.error_list[0].code == "INVALID_FIELD_VALUE_TYPE"
+
+
+def test_contains_only_for_string_list():
+    where = {"contains": {"fieldName": "status", "value": "x"}}
+    with pytest.raises(DslValidationError) as exc_info:
+        validate_where_clause(where, known_fields=KNOWN_FIELDS)
+    assert exc_info.value.error_list[0].code == "INVALID_FIELD_VALUE_TYPE"
+
+
+def test_contains_value_must_be_single_string():
+    where = {"contains": {"fieldName": "tags", "value": ["a", "b"]}}
+    with pytest.raises(DslValidationError) as exc_info:
+        validate_where_clause(where, known_fields=KNOWN_FIELDS)
+    assert exc_info.value.error_list[0].code == "INVALID_FIELD_VALUE_TYPE"
+
+
+def test_exists_must_not_carry_value():
+    where = {"exists": {"fieldName": "status", "value": "x"}}
+    with pytest.raises(DslValidationError) as exc_info:
+        validate_where_clause(where, known_fields=KNOWN_FIELDS)
+    assert exc_info.value.error_list[0].code == "INVALID_FIELD_VALUE_TYPE"
+
+
+def test_gt_rejects_string_field():
+    where = {"gt": {"fieldName": "status", "value": "x"}}
+    with pytest.raises(DslValidationError) as exc_info:
+        validate_where_clause(where, known_fields=KNOWN_FIELDS)
+    assert exc_info.value.error_list[0].code == "INVALID_FIELD_VALUE_TYPE"
+
+
+def test_gt_accepts_number_and_datetime():
+    validate_where_clause(
+        {"gt": {"fieldName": "priority", "value": 3}}, known_fields=KNOWN_FIELDS
+    )
+    validate_where_clause(
+        {"gt": {"fieldName": "effectiveAt", "value": "2026-01-01T00:00:00Z"}},
+        known_fields=KNOWN_FIELDS,
+    )
+
+
+def test_eq_requires_value_key():
+    where = {"eq": {"fieldName": "status"}}
+    with pytest.raises(DslValidationError) as exc_info:
+        validate_where_clause(where, known_fields=KNOWN_FIELDS)
+    assert exc_info.value.error_list[0].code == "INVALID_FIELD_VALUE_TYPE"

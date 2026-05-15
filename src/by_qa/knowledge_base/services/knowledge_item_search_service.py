@@ -317,8 +317,8 @@ class KnowledgeItemSearchService:
         field_names = _collect_field_names(where)
         if not field_names:
             return {}
-        rows = await self.metadata_property_repository.get_by_names(
-            cursor, list(field_names)
+        rows = await self.metadata_property_repository.list_properties(
+            cursor, property_names=list(field_names)
         )
         return {
             row["property_name"]: {

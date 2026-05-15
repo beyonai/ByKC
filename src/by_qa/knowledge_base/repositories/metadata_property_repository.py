@@ -67,20 +67,6 @@ class MetadataPropertyRepository:
         )
         return await cursor.fetchone()
 
-    async def get_by_names(
-        self, cursor: Any, property_names: list[str]
-    ) -> list[dict[str, Any]]:
-        await cursor.execute(
-            """
-            SELECT kid, property_name, value_type, description, ext_params
-            FROM knowledge_metadata_property_def
-            WHERE property_name = ANY(%(names)s)
-              AND is_deleted = false
-            """,
-            {"names": property_names},
-        )
-        return await cursor.fetchall()
-
     async def list_properties(
         self, cursor: Any, *, property_names: list[str] | None
     ) -> list[dict[str, Any]]:

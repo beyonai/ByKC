@@ -1,0 +1,88 @@
+"""Unit tests for Agent DSL compiler (where AST -> SQL)."""
+
+from __future__ import annotations
+
+from by_qa.knowledge_base.dsl.compiler import compile_where_to_sql
+
+PROPERTY_MAP = {
+    "status": {"def_id": 1, "value_type": "string"},
+    "tags": {"def_id": 2, "value_type": "stringList"},
+    "priority": {"def_id": 3, "value_type": "number"},
+    "archived": {"def_id": 4, "value_type": "boolean"},
+}
+
+
+def test_none_where_returns_empty():
+    sql, params = compile_where_to_sql(None, property_map=PROPERTY_MAP)
+    assert sql == ""
+    assert params == {}
+
+
+def test_simple_eq_string():
+    where = {"eq": {"fieldName": "status", "value": "active"}}
+    sql, params = compile_where_to_sql(where, property_map=PROPERTY_MAP)
+    assert "property_def_id" in sql
+    assert "value_string" in sql
+    assert "active" in params.values()
+
+
+def test_simple_eq_number():
+    where = {"eq": {"fieldName": "priority", "value": 3}}
+    sql, params = compile_where_to_sql(where, property_map=PROPERTY_MAP)
+    assert "value_number" in sql
+    assert 3 in params.values()
+
+
+def test_contains_string_list():
+    where = {"contains": {"fieldName": "tags", "value": "contract"}}
+    sql, params = compile_where_to_sql(where, property_map=PROPERTY_MAP)
+    assert "value_string_list" in sql
+    assert "contract" in str(params.values())
+
+
+def test_and_combination():
+    where = {
+        "and": [
+            {"eq": {"fieldName": "status", "value": "active"}},
+            {"eq": {"fieldName": "priority", "value": 1}},
+        ]
+    }
+    sql, params = compile_where_to_sql(where, property_map=PROPERTY_MAP)
+    assert " AND " in sql
+    assert len(params) == 4  # 2 def_ids + 2 values
+
+
+def test_or_combination():
+    where = {
+        "or": [
+            {"eq": {"fieldName": "status", "value": "active"}},
+            {"eq": {"fieldName": "status", "value": "draft"}},
+        ]
+    }
+    sql, params = compile_where_to_sql(where, property_map=PROPERTY_MAP)
+    assert " OR " in sql
+
+
+def test_not_operator():
+    where = {"not": {"eq": {"fieldName": "status", "value": "draft"}}}
+    sql, params = compile_where_to_sql(where, property_map=PROPERTY_MAP)
+    assert "NOT" in sql
+
+
+def test_exists_operator():
+    where = {"exists": {"fieldName": "status"}}
+    sql, params = compile_where_to_sql(where, property_map=PROPERTY_MAP)
+    assert "EXISTS" in sql or "IS NOT NULL" in sql
+
+
+def test_gt_number():
+    where = {"gt": {"fieldName": "priority", "value": 2}}
+    sql, params = compile_where_to_sql(where, property_map=PROPERTY_MAP)
+    assert ">" in sql
+    assert 2 in params.values()
+
+
+def test_in_operator():
+    where = {"in": {"fieldName": "status", "value": ["active", "draft"]}}
+    sql, params = compile_where_to_sql(where, property_map=PROPERTY_MAP)
+    assert "ANY" in sql or "IN" in sql

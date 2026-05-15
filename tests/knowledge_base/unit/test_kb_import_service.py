@@ -951,6 +951,12 @@ async def test_delete_knowledge_base_marks_kb_and_descendants_deleted():
                 """,
         {"knowledge_base_id": 7},
     ) in connection.cursor_obj.executed
+    assert any(
+        "update knowledge_file_metadata_value" in sql.lower()
+        and "set is_deleted = true" in sql.lower()
+        and params == {"knowledge_base_id": 7}
+        for sql, params in connection.cursor_obj.executed
+    )
 
 
 async def test_update_knowledge_base_commits_and_returns_success():
@@ -1260,13 +1266,16 @@ async def test_delete_directory_marks_subtree_deleted_and_clears_projection():
         "soft_delete_subtree",
         {"knowledge_base_id": 7, "root_fs_entry_id": 81},
     ) in knowledge_fs_entry_repository.calls
-    assert connection.cursor_obj.executed[-1] == (
-        """
-                DELETE FROM knowledge_chunk_retrieval_mv
-                WHERE knowledge_base_id = %(knowledge_base_id)s
-                  AND fs_entry_id = ANY(%(fs_entry_ids)s)
-                """,
-        {"knowledge_base_id": 7, "fs_entry_ids": [81, 82, 83]},
+    assert any(
+        "delete from knowledge_chunk_retrieval_mv" in sql.lower()
+        and params == {"knowledge_base_id": 7, "fs_entry_ids": [81, 82, 83]}
+        for sql, params in connection.cursor_obj.executed
+    )
+    assert any(
+        "update knowledge_file_metadata_value" in sql.lower()
+        and "set is_deleted = true" in sql.lower()
+        and params == {"knowledge_base_id": 7, "fs_entry_ids": [81, 82, 83]}
+        for sql, params in connection.cursor_obj.executed
     )
 
 
@@ -1529,6 +1538,12 @@ async def test_delete_knowledge_item_marks_file_entry_deleted_and_clears_artifac
     )
     assert any(
         "delete from knowledge_fetch_cache_index" in sql.lower()
+        and params == {"knowledge_base_id": 7, "fs_entry_id": 71}
+        for sql, params in connection.cursor_obj.executed
+    )
+    assert any(
+        "update knowledge_file_metadata_value" in sql.lower()
+        and "set is_deleted = true" in sql.lower()
         and params == {"knowledge_base_id": 7, "fs_entry_id": 71}
         for sql, params in connection.cursor_obj.executed
     )

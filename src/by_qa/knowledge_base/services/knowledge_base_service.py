@@ -122,6 +122,15 @@ class KnowledgeBaseService:
                 """,
                 {"knowledge_base_id": knowledge_base_id},
             )
+            await cursor.execute(
+                """
+                UPDATE knowledge_file_metadata_value
+                   SET is_deleted = true, updated_at = NOW()
+                 WHERE knowledge_base_id = %(knowledge_base_id)s
+                   AND is_deleted = false
+                """,
+                {"knowledge_base_id": knowledge_base_id},
+            )
             await connection.commit()
         except Exception:
             await connection.rollback()
@@ -262,6 +271,19 @@ class KnowledgeBaseService:
                 DELETE FROM knowledge_chunk_retrieval_mv
                 WHERE knowledge_base_id = %(knowledge_base_id)s
                   AND fs_entry_id = ANY(%(fs_entry_ids)s)
+                """,
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "fs_entry_ids": fs_entry_ids,
+                },
+            )
+            await cursor.execute(
+                """
+                UPDATE knowledge_file_metadata_value
+                   SET is_deleted = true, updated_at = NOW()
+                 WHERE knowledge_base_id = %(knowledge_base_id)s
+                   AND fs_entry_id = ANY(%(fs_entry_ids)s)
+                   AND is_deleted = false
                 """,
                 {
                     "knowledge_base_id": knowledge_base_id,

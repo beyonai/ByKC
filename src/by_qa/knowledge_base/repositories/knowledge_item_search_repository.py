@@ -113,3 +113,88 @@ class KnowledgeItemSearchRepository:
         )
         fetchall = getattr(cursor, "fetchall", None)
         return await fetchall() if callable(fetchall) else []
+
+    async def search_text_v2_filtered(
+        self,
+        cursor: Any,
+        *,
+        query: str,
+        kb_codes: list[str],
+        where_sql: str,
+        where_params: dict[str, Any],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Full-text search with optional DSL metadata filter."""
+        extra_condition = f"AND {where_sql}" if where_sql else ""
+        sql = f"""
+            SELECT
+                r.chunk_id,
+                kb.kid::text AS kb_code,
+                r.full_path,
+                r.chunk_no,
+                r.start_line,
+                r.end_line,
+                r.chunk_text,
+                r.fs_entry_id,
+                ts_rank_cd(
+                    r.search_text,
+                    plainto_tsquery('simple', %(query)s)
+                ) AS text_score
+            FROM knowledge_chunk_retrieval_mv r
+            JOIN knowledge_base kb ON kb.kid = r.knowledge_base_id
+            JOIN knowledge_fs_entry fe ON fe.kid = r.fs_entry_id
+            WHERE kb.kid = ANY(%(kb_codes)s::bigint[])
+              AND kb.is_deleted = FALSE
+              AND r.search_text @@ plainto_tsquery('simple', %(query)s)
+              {extra_condition}
+            ORDER BY text_score DESC, r.chunk_id DESC
+            LIMIT %(limit)s
+        """
+        params = {**where_params, "query": query, "kb_codes": kb_codes, "limit": limit}
+        await cursor.execute(sql, params)
+        fetchall = getattr(cursor, "fetchall", None)
+        return await fetchall() if callable(fetchall) else []
+
+    async def search_vector_v2_filtered(
+        self,
+        cursor: Any,
+        *,
+        query_embedding: list[float],
+        kb_codes: list[str],
+        where_sql: str,
+        where_params: dict[str, Any],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Vector search with optional DSL metadata filter."""
+        extra_condition = f"AND {where_sql}" if where_sql else ""
+        vector_literal = "[" + ",".join(str(value) for value in query_embedding) + "]"
+        sql = f"""
+            SELECT
+                r.chunk_id,
+                kb.kid::text AS kb_code,
+                r.full_path,
+                r.chunk_no,
+                r.start_line,
+                r.end_line,
+                r.chunk_text,
+                r.fs_entry_id,
+                1 - (e.embedding <=> %(query_embedding)s) AS vector_score
+            FROM {self.embedding_table_name} e
+            JOIN knowledge_chunk_retrieval_mv r ON r.chunk_id = e.chunk_id
+            JOIN knowledge_base kb ON kb.kid = r.knowledge_base_id
+            JOIN knowledge_fs_entry fe ON fe.kid = r.fs_entry_id
+            WHERE kb.kid = ANY(%(kb_codes)s::bigint[])
+              AND kb.is_deleted = FALSE
+              {extra_condition}
+            ORDER BY e.embedding <=> %(query_embedding)s ASC, r.chunk_id DESC
+            LIMIT %(limit)s
+        """
+        params = {
+            **where_params,
+            "query_embedding": vector_literal,
+            "kb_codes": kb_codes,
+            "limit": limit,
+        }
+        await cursor.execute(sql, params)
+        fetchall = getattr(cursor, "fetchall", None)
+        return await fetchall() if callable(fetchall) else []

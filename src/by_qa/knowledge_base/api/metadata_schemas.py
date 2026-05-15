@@ -6,6 +6,8 @@ from typing import Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
+from by_qa.knowledge_base.metadata_types import METADATA_VALUE_TYPES
+
 # --- Property Definition Schemas ---
 
 
@@ -30,9 +32,10 @@ class CreateMetadataPropertyRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_value_type(self) -> "CreateMetadataPropertyRequest":
-        allowed = {"string", "stringList", "number", "boolean", "datetime"}
-        if self.value_type not in allowed:
-            raise ValueError(f"valueType must be one of {', '.join(sorted(allowed))}")
+        if self.value_type not in METADATA_VALUE_TYPES:
+            raise ValueError(
+                f"valueType must be one of {', '.join(sorted(METADATA_VALUE_TYPES))}"
+            )
         return self
 
 

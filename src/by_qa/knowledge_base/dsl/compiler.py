@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from by_qa.knowledge_base.metadata_types import VALUE_TYPE_TO_COLUMN
+
 COMPARISON_OPS = {
     "eq": "=",
     "ne": "!=",
@@ -40,14 +42,7 @@ class _CompilerContext:
 
 
 def _value_column(value_type: str) -> str:
-    mapping = {
-        "string": "value_string",
-        "number": "value_number",
-        "boolean": "value_boolean",
-        "datetime": "value_datetime",
-        "stringList": "value_string_list",
-    }
-    return mapping[value_type]
+    return VALUE_TYPE_TO_COLUMN[value_type]
 
 
 def _compile_node(

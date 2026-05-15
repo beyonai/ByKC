@@ -5,19 +5,14 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from by_qa.knowledge_base.metadata_types import VALUE_TYPE_TO_COLUMN
+
 
 class FileMetadataValueRepository:
     """CRUD operations on knowledge_file_metadata_value."""
 
     def _value_column(self, value_type: str) -> str:
-        mapping = {
-            "string": "value_string",
-            "number": "value_number",
-            "boolean": "value_boolean",
-            "datetime": "value_datetime",
-            "stringList": "value_string_list",
-        }
-        return mapping[value_type]
+        return VALUE_TYPE_TO_COLUMN[value_type]
 
     async def upsert_value(
         self,

@@ -103,10 +103,24 @@ def _reset_runtime(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
 
 @contextlib.contextmanager
 def runtime(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
-    """Reset runtime + return a TestClient hitting real services."""
+    """Reset runtime + return a TestClient hitting real services.
+
+    Schema bootstrap is currently triggered only by `knowledgeBases/*`,
+    `directories/*`, and `knowledgeItems/*` routes; the metadata routes
+    do not call `_ensure_knowledge_base_schema_initialized` themselves.
+    Tests that hit ONLY the metadata endpoints would otherwise fail with
+    `relation "knowledge_metadata_property_def" does not exist`.  Pre-warm
+    by creating a throwaway KB so the bootstrap runs once per process.
+    """
     settings = _settings()
     _reset_runtime(monkeypatch, settings)
     with TestClient(main_module.app) as client:
+        warmup = client.post(
+            "/api/v1/knowledgeBases/create",
+            json={"knName": f"WarmUp_{uuid4().hex[:8]}"},
+        )
+        assert warmup.status_code == 200, warmup.text
+        assert warmup.json()["resultCode"] == "0", warmup.text
         yield client
 
 

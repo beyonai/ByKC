@@ -25,6 +25,9 @@ from tests.knowledge_base.integration._metadata_helpers import (
     runtime,
     set_metadata,
 )
+from tests.knowledge_base.integration.test_kb_api_stateful_integration import (
+    _upload_file,  # plain helper, not a fake
+)
 
 # ===================================================================
 # Section 1: Property definition lifecycle  (M1.a-M1.i)
@@ -822,3 +825,132 @@ def test_front_matter_malformed_imports_clean(monkeypatch, label, body):
             json={"knCode": kb_code, "filePath": path},
         ).json()["resultObject"]["metadata"]
         assert got == {}
+
+
+# ===================================================================
+# Section 7: Cascade cleanup on delete  (M7.a-M7.c)
+# ===================================================================
+
+
+@pytest.mark.integration
+def test_delete_file_clears_metadata(monkeypatch):
+    """M7.a: knowledgeItems/delete soft-deletes the file's metadata values."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        prop = f"d_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            value="active",
+        )
+
+        resp = client.post(
+            "/api/v1/knowledgeItems/delete",
+            json={"knCode": kb_code, "filePath": file_path},
+        )
+        assert resp.json()["resultCode"] == "0"
+
+        # metadataSearch should not return the deleted file
+        search = client.post(
+            "/api/v1/knowledgeItems/metadataSearch",
+            json={
+                "knCodeList": [kb_code],
+                "where": {"eq": {"fieldName": prop, "value": "active"}},
+                "topK": 10,
+            },
+        )
+        paths = [h["filePath"] for h in search.json()["resultObject"]["data"]]
+        assert file_path not in paths
+
+        # metadata/get on a deleted file: file not found
+        got = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={"knCode": kb_code, "filePath": file_path},
+        )
+        assert got.json()["resultCode"] == "-1"
+        assert "file not found" in got.json()["resultMsg"]
+
+
+@pytest.mark.integration
+def test_delete_directory_clears_metadata(monkeypatch):
+    """M7.b: directories/delete cascades metadata cleanup to all subtree files."""
+    with runtime(monkeypatch) as client:
+        kb_code = new_kb(client)
+        client.post(
+            "/api/v1/directories/create",
+            json={"knCode": kb_code, "directoryPath": "/A"},
+        )
+        client.post(
+            "/api/v1/directories/create",
+            json={"knCode": kb_code, "directoryPath": "/A/B"},
+        )
+        prop = f"d_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+        for path in ["/A/x.md", "/A/B/y.md"]:
+            _upload_file(
+                client, kb_code=kb_code, file_path=path, file_content=b"# F\nbody."
+            )
+            set_metadata(
+                client,
+                kb_code=kb_code,
+                file_path=path,
+                property_name=prop,
+                value="active",
+            )
+
+        resp = client.post(
+            "/api/v1/directories/delete",
+            json={"knCode": kb_code, "directoryPath": "/A"},
+        )
+        assert resp.json()["resultCode"] == "0"
+
+        search = client.post(
+            "/api/v1/knowledgeItems/metadataSearch",
+            json={
+                "knCodeList": [kb_code],
+                "where": {"eq": {"fieldName": prop, "value": "active"}},
+                "topK": 10,
+            },
+        )
+        paths = [h["filePath"] for h in search.json()["resultObject"]["data"]]
+        assert "/A/x.md" not in paths
+        assert "/A/B/y.md" not in paths
+
+        fields = client.post(
+            "/api/v1/knowledgeItems/metadataFields/list",
+            json={"knCodeList": [kb_code]},
+        ).json()["resultObject"]["data"]
+        assert all(field["propertyName"] != prop for field in fields)
+
+
+@pytest.mark.integration
+def test_delete_kb_clears_metadata(monkeypatch):
+    """M7.c: knowledgeBases/delete soft-deletes every metadata value in the KB."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        prop = f"d_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            value="active",
+        )
+
+        resp = client.post(
+            "/api/v1/knowledgeBases/delete",
+            json={"knCode": kb_code},
+        )
+        assert resp.json()["resultCode"] == "0"
+
+        # metadataFields/list against a deleted KB: KB not found
+        fields = client.post(
+            "/api/v1/knowledgeItems/metadataFields/list",
+            json={"knCodeList": [kb_code]},
+        )
+        assert fields.json()["resultCode"] == "-1"
+        assert "knowledge base not found" in fields.json()["resultMsg"]

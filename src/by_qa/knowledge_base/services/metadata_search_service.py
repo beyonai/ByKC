@@ -57,7 +57,7 @@ class MetadataSearchService:
 
             property_map = await self._build_property_map(cursor, request.where)
 
-            if request.where:
+            if request.where is not None:
                 known_fields = _build_known_fields(property_map)
                 validate_where_clause(request.where, known_fields=known_fields)
 

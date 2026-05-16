@@ -746,3 +746,79 @@ def test_front_matter_multi_type(monkeypatch):
         assert got[s]["value"] == "active"
         assert got[n]["value"] == 7
         assert got[lst]["value"] == ["hr", "contract"]
+
+
+@pytest.mark.integration
+def test_front_matter_absent_imports_clean(monkeypatch):
+    """M6.d: a markdown file without any YAML front matter imports successfully and has no metadata.
+
+    Locks down the fail-soft contract: the import endpoint must NOT reject a
+    file just because it lacks `---` fences.  The vast majority of real .md
+    files have no front matter; treating absence as an error would break them.
+    """
+    with runtime(monkeypatch) as client:
+        kb_code = new_kb(client)
+        client.post(
+            "/api/v1/directories/create",
+            json={"knCode": kb_code, "directoryPath": "/docs"},
+        )
+        path = f"/docs/plain_{uuid4().hex[:6]}.md"
+        body = b"# Hello\n\nJust some markdown.\n"
+        resp = _import_md(client, kb_code, path, body)
+        assert resp.json()["resultCode"] == "0", resp.text
+
+        got = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={"knCode": kb_code, "filePath": path},
+        ).json()["resultObject"]["metadata"]
+        assert got == {}
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "label, body",
+    [
+        pytest.param(
+            "no_closing_fence",
+            b"---\nstatus: active\n# Hello\n",
+            id="no_closing_fence",
+        ),
+        pytest.param(
+            "yaml_syntax_error",
+            b"---\nstatus: : :\n---\n# Hello\n",
+            id="yaml_syntax_error",
+        ),
+        pytest.param(
+            "yaml_top_level_list",
+            b"---\n- a\n- b\n---\n# Hello\n",
+            id="yaml_top_level_list",
+        ),
+        pytest.param(
+            "yaml_top_level_scalar",
+            b"---\njust a string\n---\n# Hello\n",
+            id="yaml_top_level_scalar",
+        ),
+    ],
+)
+def test_front_matter_malformed_imports_clean(monkeypatch, label, body):
+    """M6.e: malformed YAML front matter is treated as 'no front matter'.
+
+    The parser silently returns an empty dict for: opening fence without close,
+    YAML syntax errors, and YAML payloads that are not a top-level mapping.
+    The import still succeeds, and the file has no auto-set metadata.
+    """
+    with runtime(monkeypatch) as client:
+        kb_code = new_kb(client)
+        client.post(
+            "/api/v1/directories/create",
+            json={"knCode": kb_code, "directoryPath": "/docs"},
+        )
+        path = f"/docs/bad_{label}_{uuid4().hex[:6]}.md"
+        resp = _import_md(client, kb_code, path, body)
+        assert resp.json()["resultCode"] == "0", resp.text
+
+        got = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={"knCode": kb_code, "filePath": path},
+        ).json()["resultObject"]["metadata"]
+        assert got == {}

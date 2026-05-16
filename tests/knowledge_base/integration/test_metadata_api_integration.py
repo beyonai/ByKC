@@ -19,8 +19,10 @@ from uuid import uuid4
 import pytest
 
 from tests.knowledge_base.integration._metadata_helpers import (
+    new_kb_with_file,
     register_property,
     runtime,
+    set_metadata,
 )
 
 # ===================================================================
@@ -265,3 +267,90 @@ def test_batch_create_empty_list_rejected(monkeypatch):
         assert resp.status_code == 200
         assert resp.json()["resultCode"] == "-1"
         assert "request validation failed" in resp.json()["resultMsg"]
+
+
+# ===================================================================
+# Section 3: Reference-count protection  (M3.a-M3.c)
+# ===================================================================
+
+
+@pytest.mark.integration
+def test_property_delete_referenced_rejected(monkeypatch):
+    """M3.a: deleting a property that has at least one active value is rejected."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        prop = f"ref_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            value="active",
+        )
+
+        resp = client.post(
+            "/api/v1/metadataProperties/delete",
+            json={"propertyName": prop},
+        )
+        assert resp.json()["resultCode"] == "-1"
+        assert "still referenced" in resp.json()["resultMsg"]
+
+
+@pytest.mark.integration
+def test_property_delete_after_unset_succeeds(monkeypatch):
+    """M3.b: unset releases the reference so delete now succeeds."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        prop = f"ref_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            value="active",
+        )
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            operation="unset",
+        )
+
+        resp = client.post(
+            "/api/v1/metadataProperties/delete",
+            json={"propertyName": prop},
+        )
+        assert resp.json()["resultCode"] == "0"
+
+
+@pytest.mark.integration
+def test_property_delete_after_clear_still_rejected(monkeypatch):
+    """M3.c: clear empties the list but keeps the value row, so delete still blocks."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        prop = f"reflist_{uuid4().hex[:6]}"
+        register_property(client, prop, "stringList")
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            value=["a", "b"],
+        )
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            operation="clear",
+        )
+
+        resp = client.post(
+            "/api/v1/metadataProperties/delete",
+            json={"propertyName": prop},
+        )
+        assert resp.json()["resultCode"] == "-1"
+        assert "still referenced" in resp.json()["resultMsg"]

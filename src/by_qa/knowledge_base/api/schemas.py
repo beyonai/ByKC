@@ -287,19 +287,27 @@ class SearchRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     query: str = Field(min_length=1)
-    kb_codes: list[str] = Field(
+    kb_code_list: list[str] = Field(
         min_length=1,
-        validation_alias=AliasChoices("knCodeList", "kb_codes"),
+        validation_alias=AliasChoices("knCodeList", "kb_code_list", "kb_codes"),
     )
     top_k: int = Field(
         validation_alias=AliasChoices("topK", "top_k"),
     )
+    search_mode: str = Field(
+        validation_alias=AliasChoices("searchMode", "search_mode"),
+    )
+    where: dict | None = None
+    metadata_field_list: Optional[list[str]] = Field(
+        default=None,
+        validation_alias=AliasChoices("metadataFieldList", "metadata_field_list"),
+    )
+    # Legacy alias: fileTypeList is folded into where as an `in` filter on
+    # the fileType system field. Kept for backwards compatibility with
+    # existing clients that haven't migrated to the DSL form.
     file_type_list: Optional[list[str]] = Field(
         default=None,
         validation_alias=AliasChoices("fileTypeList", "file_type_list"),
-    )
-    search_mode: str = Field(
-        validation_alias=AliasChoices("searchMode", "search_mode"),
     )
 
     @model_validator(mode="after")
@@ -329,3 +337,4 @@ class SearchHit(BaseModel):
     image_path: str = Field(default="", serialization_alias="imagePath")
     start_line: int = Field(serialization_alias="startLine")
     end_line: int = Field(serialization_alias="endLine")
+    metadata: dict | None = None

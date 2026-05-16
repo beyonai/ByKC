@@ -175,40 +175,6 @@ class MetadataSearchRequest(BaseModel):
         return self
 
 
-class AgentSearchRequest(BaseModel):
-    """Upgraded search request with Agent DSL support."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    query: str = Field(min_length=1)
-    kb_code_list: list[str] | None = Field(
-        default=None,
-        validation_alias=AliasChoices("knCodeList", "kb_code_list"),
-    )
-    where: dict[str, Any] | None = None
-    search_mode: str = Field(
-        validation_alias=AliasChoices("searchMode", "search_mode"),
-    )
-    metadata_field_list: list[str] | None = Field(
-        default=None,
-        validation_alias=AliasChoices("metadataFieldList", "metadata_field_list"),
-    )
-    top_k: int = Field(
-        validation_alias=AliasChoices("topK", "top_k"),
-    )
-
-    @model_validator(mode="after")
-    def validate_fields(self) -> "AgentSearchRequest":
-        if self.top_k <= 0:
-            raise ValueError("topK must be greater than 0")
-        allowed_modes = {"fullTextRecall", "embedding", "mixedRecall"}
-        if self.search_mode not in allowed_modes:
-            raise ValueError(
-                f"searchMode must be one of {', '.join(sorted(allowed_modes))}"
-            )
-        return self
-
-
 class SearchFileRequest(BaseModel):
     """File-level semantic search with Agent DSL."""
 
@@ -251,20 +217,6 @@ class MetadataSearchHit(BaseModel):
 
     kb_code: str = Field(serialization_alias="knCode")
     file_path: str = Field(serialization_alias="filePath")
-    metadata: dict[str, Any] | None = None
-
-
-class AgentSearchHit(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    kb_code: str = Field(serialization_alias="knCode")
-    file_path: str = Field(serialization_alias="filePath")
-    chunk_id: int = Field(serialization_alias="chunkId")
-    chunk_no: int = Field(serialization_alias="chunkNo")
-    chunk_text: str = Field(serialization_alias="chunkText")
-    score: float
-    start_line: int = Field(serialization_alias="startLine")
-    end_line: int = Field(serialization_alias="endLine")
     metadata: dict[str, Any] | None = None
 
 

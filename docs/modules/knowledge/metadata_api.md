@@ -790,11 +790,14 @@ Agent DSL 版纯元数据检索，只返回文件级结果。
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `query` | string | 是 | 检索文本 |
-| `knCodeList` | array[string] | 否 | 知识库范围 |
+| `knCodeList` | array[string] | 是 | 知识库范围 |
 | `where` | object | 否 | Agent DSL 过滤 AST |
 | `searchMode` | string | 是 | 检索模式 |
 | `metadataFieldList` | array[string] | 否 | 需要返回的元数据字段 |
 | `topK` | integer | 是 | 返回条数，必须大于 0 |
+| `fileTypeList` | array[string] | 否 | 按文件类型过滤；向下兼容字段，与 `where` 同时存在时合取 |
+
+> 推荐通过 `where` 中的 `fileType` 系统字段表达文件类型过滤，例如 `{"in": {"fieldName": "fileType", "value": ["md", "pdf"]}}`。`fileTypeList` 仅为兼容老调用方保留，新代码不要依赖。
 
 请求示例：
 

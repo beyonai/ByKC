@@ -790,8 +790,10 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
 | `query` | string | 是 | 需要检索的内容 |
 | `knCodeList` | array[string] | 是 | 知识库编码列表 |
 | `topK` | integer | 是 | 最终返回条数，必须大于 0 |
-| `fileTypeList` | array[string] | 否 | 按照文件类型过滤 |
 | `searchMode` | string | 是 | 检索模式：`fullTextRecall`、`embedding`、`mixedRecall` |
+| `where` | object | 否 | Agent DSL 过滤 AST，详见 metadata_api.md |
+| `metadataFieldList` | array[string] | 否 | 需要返回的元数据字段 |
+| `fileTypeList` | array[string] | 否 | 按文件类型过滤；向下兼容字段，与 `where` 同时存在时合取 |
 
 请求示例：
 
@@ -800,8 +802,8 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
   "query": "员工请假流程是什么",
   "knCodeList": ["1"],
   "topK": 5,
-  "fileTypeList": ["pdf"],
-  "searchMode": "mixedRecall"
+  "searchMode": "mixedRecall",
+  "where": {"in": {"fieldName": "fileType", "value": ["pdf"]}}
 }
 ```
 

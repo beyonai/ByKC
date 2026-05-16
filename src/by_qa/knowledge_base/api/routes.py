@@ -13,7 +13,6 @@ from pydantic import ValidationError
 
 from by_qa.core import logger
 from by_qa.knowledge_base.api.metadata_schemas import (
-    AgentSearchRequest,
     BatchCreateMetadataPropertyRequest,
     CreateMetadataPropertyRequest,
     DeleteMetadataPropertyRequest,
@@ -654,36 +653,6 @@ def register_routes(
     @app.post("/api/v1/knowledgeItems/search")
     @app.post("/api/v1/knowledge-items/search")
     async def search_knowledge_items(body: dict[str, Any] = Body(...)):
-        # Try Agent DSL request first (has 'where' or 'metadataFieldList')
-        if "where" in body or "metadataFieldList" in body:
-            try:
-                request = AgentSearchRequest.model_validate(body)
-            except ValidationError as exc:
-                return _documented_error_response(
-                    result_msg="request validation failed",
-                    result_object={"errors": json.loads(exc.json())},
-                    status_code=422,
-                )
-            try:
-                service = await get_knowledge_item_search_service()
-                results = await service.search_with_dsl(request)
-            except DslValidationError as exc:
-                return _documented_error_response(
-                    result_msg=str(exc),
-                    result_object=exc.to_result_object(),
-                )
-            except KnowledgeBaseValidationError as exc:
-                return _documented_error_response(result_msg=str(exc), result_object={})
-            except Exception as exc:
-                logger.exception("search_knowledge_items (agent dsl) error: %s", exc)
-                return _documented_error_response(
-                    result_msg=str(exc) or "internal error", result_object={}
-                )
-            return _documented_success_response(
-                result_object={"data": [r.model_dump(by_alias=True) for r in results]}
-            )
-
-        # Fall back to legacy search
         try:
             request = SearchRequest.model_validate(body)
         except ValidationError as exc:
@@ -693,19 +662,25 @@ def register_routes(
                 status_code=422,
             )
         logger.info(
-            "search_knowledge_items request received: query=%s, kb_code_count=%s, top_k=%s, search_mode=%s",
+            "search_knowledge_items request received: query=%s, kb_code_count=%s, top_k=%s, search_mode=%s, has_where=%s",
             request.query,
-            len(request.kb_codes),
+            len(request.kb_code_list),
             request.top_k,
             request.search_mode,
+            request.where is not None,
         )
         try:
             service = await get_knowledge_item_search_service()
-            items = await service.search_v2(request)
+            items = await service.search(request)
             logger.info(
                 "search_knowledge_items service call succeeded: returned_count=%s, top_k=%s",
                 len(items),
                 request.top_k,
+            )
+        except DslValidationError as exc:
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object=exc.to_result_object(),
             )
         except KnowledgeBaseConfigurationError as exc:
             logger.warning("search_knowledge_items configuration failed: error=%s", exc)

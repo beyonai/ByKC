@@ -51,7 +51,17 @@ class KnowledgeBaseRepository:
         return await cursor.fetchone()
 
     async def get_by_code(self, cursor: Any, kb_code: str) -> dict[str, Any] | None:
-        """Fetch a knowledge base by business code."""
+        """Fetch a knowledge base by business code.
+
+        A non-integer kb_code can never match the bigint primary key, so we
+        treat it as "not found" rather than letting psycopg raise an
+        InvalidTextRepresentation that callers cannot map to the documented
+        "knowledge base not found" envelope.
+        """
+        try:
+            int(kb_code)
+        except (TypeError, ValueError):
+            return None
         await cursor.execute(
             """
             SELECT kid, kb_name, kb_description, is_deleted
@@ -65,6 +75,10 @@ class KnowledgeBaseRepository:
 
     async def soft_delete_by_code(self, cursor: Any, *, kb_code: str) -> None:
         """Logically delete one knowledge base."""
+        try:
+            int(kb_code)
+        except (TypeError, ValueError):
+            return
         await cursor.execute(
             """
             UPDATE knowledge_base
@@ -94,6 +108,11 @@ class KnowledgeBaseRepository:
             params["kb_description"] = updates["kb_description"]
 
         if not assignments:
+            return
+
+        try:
+            int(kb_code)
+        except (TypeError, ValueError):
             return
 
         await cursor.execute(

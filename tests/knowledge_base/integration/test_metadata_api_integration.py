@@ -171,3 +171,97 @@ def test_property_delete_unused_succeeds(monkeypatch):
             json={"propertyNameList": [n]},
         ).json()["resultObject"]["data"]
         assert listed == []
+
+
+# ===================================================================
+# Section 2: Batch property creation atomicity  (M2.a-M2.d)
+# ===================================================================
+
+
+@pytest.mark.integration
+def test_batch_create_multiple_succeeds(monkeypatch):
+    """M2.a: batchCreate persists every item when none conflict."""
+    with runtime(monkeypatch) as client:
+        a = f"a_{uuid4().hex[:6]}"
+        b = f"b_{uuid4().hex[:6]}"
+        resp = client.post(
+            "/api/v1/metadataProperties/batchCreate",
+            json={
+                "propertyList": [
+                    {"propertyName": a, "valueType": "string"},
+                    {"propertyName": b, "valueType": "number"},
+                ]
+            },
+        )
+        assert resp.json()["resultCode"] == "0"
+        assert {p["propertyName"] for p in resp.json()["resultObject"]["data"]} == {
+            a,
+            b,
+        }
+
+
+@pytest.mark.integration
+def test_batch_create_conflict_rolls_back(monkeypatch):
+    """M2.b: a conflict in one item rolls back the whole batch."""
+    with runtime(monkeypatch) as client:
+        existing = f"e_{uuid4().hex[:6]}"
+        new_one = f"n_{uuid4().hex[:6]}"
+        register_property(client, existing, "string")
+        resp = client.post(
+            "/api/v1/metadataProperties/batchCreate",
+            json={
+                "propertyList": [
+                    {"propertyName": new_one, "valueType": "string"},
+                    {"propertyName": existing, "valueType": "string"},
+                ]
+            },
+        )
+        assert resp.json()["resultCode"] == "-1"
+        assert "already exists" in resp.json()["resultMsg"]
+        listed = client.post(
+            "/api/v1/metadataProperties/list",
+            json={"propertyNameList": [new_one]},
+        ).json()["resultObject"]["data"]
+        assert listed == []  # rollback proven: new_one never persisted
+
+
+@pytest.mark.integration
+def test_batch_create_invalid_type_rolls_back(monkeypatch):
+    """M2.c: an invalid valueType in any item fails the entire batch."""
+    with runtime(monkeypatch) as client:
+        ok = f"ok_{uuid4().hex[:6]}"
+        bad = f"bad_{uuid4().hex[:6]}"
+        resp = client.post(
+            "/api/v1/metadataProperties/batchCreate",
+            json={
+                "propertyList": [
+                    {"propertyName": ok, "valueType": "string"},
+                    {"propertyName": bad, "valueType": "INVALID"},
+                ]
+            },
+        )
+        # Routes normalize Pydantic ValidationError into the documented envelope:
+        # HTTP 200 + resultCode="-1" + resultMsg="request validation failed".
+        assert resp.status_code == 200
+        assert resp.json()["resultCode"] == "-1"
+        assert "request validation failed" in resp.json()["resultMsg"]
+        listed = client.post(
+            "/api/v1/metadataProperties/list",
+            json={"propertyNameList": [ok]},
+        ).json()["resultObject"]["data"]
+        assert listed == []
+
+
+@pytest.mark.integration
+def test_batch_create_empty_list_rejected(monkeypatch):
+    """M2.d: empty propertyList is rejected by min_length=1 schema."""
+    with runtime(monkeypatch) as client:
+        resp = client.post(
+            "/api/v1/metadataProperties/batchCreate",
+            json={"propertyList": []},
+        )
+        # Routes normalize Pydantic ValidationError into the documented envelope:
+        # HTTP 200 + resultCode="-1" + resultMsg="request validation failed".
+        assert resp.status_code == 200
+        assert resp.json()["resultCode"] == "-1"
+        assert "request validation failed" in resp.json()["resultMsg"]

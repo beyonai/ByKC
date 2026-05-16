@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Iterator
 from uuid import uuid4
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -236,7 +237,7 @@ def set_metadata(
     property_name: str,
     value=None,
     operation: str = "set",
-):
+) -> httpx.Response:
     op: dict = {"propertyName": property_name, "operation": operation}
     if value is not None:
         op["value"] = value
@@ -276,7 +277,7 @@ def chunk_search(
     where: dict | None = None,
     metadata_field_list: list[str] | None = None,
     file_type_list: list[str] | None = None,
-):
+) -> httpx.Response:
     body = {
         "query": query,
         "knCodeList": [kb_code],
@@ -333,6 +334,9 @@ def build_dsl_dataset(client: TestClient) -> DslDataset:
 
     ps = register_property_set(client)
 
+    # Inline `_set` is stricter than the public `set_metadata`: it accepts a
+    # multi-op list (needed to seed the dataset atomically) and asserts the
+    # resultCode envelope so a malformed seed fails fast.
     def _set(file_path: str, ops: list[dict]) -> None:
         resp = client.post(
             "/api/v1/knowledgeItems/metadata/update",

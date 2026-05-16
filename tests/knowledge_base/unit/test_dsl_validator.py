@@ -194,3 +194,22 @@ def test_eq_requires_value_key():
     with pytest.raises(DslValidationError) as exc_info:
         validate_where_clause(where, known_fields=KNOWN_FIELDS)
     assert exc_info.value.error_list[0].code == "INVALID_FIELD_VALUE_TYPE"
+
+
+def test_system_field_in_known_fields_is_recognized():
+    """Callers merge SYSTEM_FIELD_VALUE_TYPES into known_fields; verify it works."""
+    from by_qa.knowledge_base.metadata_types import SYSTEM_FIELD_VALUE_TYPES
+
+    known = dict(SYSTEM_FIELD_VALUE_TYPES) | KNOWN_FIELDS
+    where = {"eq": {"fieldName": "fileName", "value": "report.md"}}
+    validate_where_clause(where, known_fields=known)
+
+
+def test_system_field_size_enforces_number_type():
+    from by_qa.knowledge_base.metadata_types import SYSTEM_FIELD_VALUE_TYPES
+
+    known = dict(SYSTEM_FIELD_VALUE_TYPES) | KNOWN_FIELDS
+    where = {"gt": {"fieldName": "fileSize", "value": "ten"}}
+    with pytest.raises(DslValidationError) as exc_info:
+        validate_where_clause(where, known_fields=known)
+    assert exc_info.value.error_list[0].code == "INVALID_FIELD_VALUE_TYPE"

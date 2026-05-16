@@ -15,6 +15,11 @@ from by_qa.knowledge_base.api.metadata_schemas import (
 from by_qa.knowledge_base.api.schemas import SearchHit, SearchRequest
 from by_qa.knowledge_base.dsl.compiler import compile_where_to_sql
 from by_qa.knowledge_base.dsl.validator import validate_where_clause
+from by_qa.knowledge_base.metadata_types import SYSTEM_FIELD_VALUE_TYPES
+from by_qa.knowledge_base.services.metadata_search_service import (
+    _build_known_fields,
+    _collect_field_names,
+)
 
 
 @dataclass
@@ -139,10 +144,10 @@ class KnowledgeItemSearchService:
             property_map = await self._build_property_map(cursor, request.where)
 
             if request.where:
-                known_fields = {
-                    name: info["value_type"] for name, info in property_map.items()
-                }
-                validate_where_clause(request.where, known_fields=known_fields)
+                validate_where_clause(
+                    request.where,
+                    known_fields=_build_known_fields(property_map),
+                )
 
             where_sql, where_params = compile_where_to_sql(
                 request.where, property_map=property_map
@@ -226,10 +231,10 @@ class KnowledgeItemSearchService:
             property_map = await self._build_property_map(cursor, request.where)
 
             if request.where:
-                known_fields = {
-                    name: info["value_type"] for name, info in property_map.items()
-                }
-                validate_where_clause(request.where, known_fields=known_fields)
+                validate_where_clause(
+                    request.where,
+                    known_fields=_build_known_fields(property_map),
+                )
 
             where_sql, where_params = compile_where_to_sql(
                 request.where, property_map=property_map
@@ -310,15 +315,14 @@ class KnowledgeItemSearchService:
     ) -> dict[str, dict[str, Any]]:
         if where is None or self.metadata_property_repository is None:
             return {}
-        from by_qa.knowledge_base.services.metadata_search_service import (
-            _collect_field_names,
-        )
-
         field_names = _collect_field_names(where)
         if not field_names:
             return {}
+        custom_names = [n for n in field_names if n not in SYSTEM_FIELD_VALUE_TYPES]
+        if not custom_names:
+            return {}
         rows = await self.metadata_property_repository.list_properties(
-            cursor, property_names=list(field_names)
+            cursor, property_names=custom_names
         )
         return {
             row["property_name"]: {

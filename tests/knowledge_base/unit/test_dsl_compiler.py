@@ -86,3 +86,57 @@ def test_in_operator():
     where = {"in": {"fieldName": "status", "value": ["active", "draft"]}}
     sql, params = compile_where_to_sql(where, property_map=PROPERTY_MAP)
     assert "ANY" in sql or "IN" in sql
+
+
+def test_system_field_eq_emits_fe_column_not_exists():
+    """System fields live on knowledge_fs_entry; compiler must reference fe.col."""
+    where = {"eq": {"fieldName": "fileName", "value": "report.md"}}
+    sql, params = compile_where_to_sql(where, property_map={})
+    assert "fe.name" in sql
+    assert "EXISTS" not in sql
+    assert "report.md" in params.values()
+
+
+def test_system_field_file_type_extracts_extension():
+    """fileType is derived from the trailing extension of fe.name, lowercased."""
+    where = {"eq": {"fieldName": "fileType", "value": "pdf"}}
+    sql, params = compile_where_to_sql(where, property_map={})
+    assert "fe.name" in sql
+    assert "lower" in sql
+    assert "pdf" in params.values()
+
+
+def test_system_field_in_uses_fe_column_directly():
+    where = {"in": {"fieldName": "fileType", "value": ["md", "pdf"]}}
+    sql, params = compile_where_to_sql(where, property_map={})
+    assert "= ANY(" in sql
+    assert "EXISTS" not in sql
+
+
+def test_system_field_gt_on_datetime_emits_direct_compare():
+    where = {"gt": {"fieldName": "createdAt", "value": "2026-01-01T00:00:00Z"}}
+    sql, params = compile_where_to_sql(where, property_map={})
+    assert "fe.created_at" in sql
+    assert "EXISTS" not in sql
+
+
+def test_system_field_exists_uses_fe_column_directly():
+    where = {"exists": {"fieldName": "mimeType"}}
+    sql, params = compile_where_to_sql(where, property_map={})
+    assert "fe.mime_type" in sql
+    assert "IS NOT NULL" in sql
+    assert "EXISTS" not in sql
+
+
+def test_mixed_system_and_custom_fields_combine():
+    """A real query may combine fe.* and metadata-table predicates."""
+    where = {
+        "and": [
+            {"eq": {"fieldName": "fileType", "value": "md"}},
+            {"eq": {"fieldName": "status", "value": "active"}},
+        ]
+    }
+    sql, params = compile_where_to_sql(where, property_map=PROPERTY_MAP)
+    assert " AND " in sql
+    assert "fe.name" in sql
+    assert "value_string" in sql

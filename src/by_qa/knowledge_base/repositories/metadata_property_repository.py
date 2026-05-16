@@ -5,18 +5,15 @@ from __future__ import annotations
 import json
 from typing import Any
 
-# System field names from knowledge_fs_entry / knowledge_base main tables.
-# These names are reserved and cannot be used as metadata property names.
+from by_qa.knowledge_base.metadata_types import SYSTEM_FIELD_VALUE_TYPES
+
+# Names reserved by the file system entry / knowledge base main tables.
+# Users cannot create custom metadata properties under these names.
+# filePath is reserved here even though the DSL does not expose it as a
+# queryable system field — the underlying column is ltree and lacks a
+# stable string equality semantic for AST comparisons.
 SYSTEM_FIELD_NAMES: frozenset[str] = frozenset(
-    {
-        "fileName",
-        "filePath",
-        "fileType",
-        "fileSize",
-        "mimeType",
-        "createdAt",
-        "updatedAt",
-    }
+    set(SYSTEM_FIELD_VALUE_TYPES) | {"filePath"}
 )
 
 

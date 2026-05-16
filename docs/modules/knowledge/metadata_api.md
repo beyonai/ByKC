@@ -169,6 +169,44 @@ Agent DSL
 }
 ```
 
+### 系统字段
+
+`where` 中除自定义元数据属性外，还可以引用以下系统字段；这些字段直接来自文件主表，不需要事先通过 `metadataProperties/create` 注册：
+
+| 字段名 | 类型 | 含义 |
+| --- | --- | --- |
+| `fileName` | `string` | 文件名（含扩展名） |
+| `fileType` | `string` | 文件名末尾扩展名（lowercase，如 `md`、`pdf`） |
+| `fileSize` | `number` | 文件字节数 |
+| `mimeType` | `string` | MIME 类型 |
+| `createdAt` | `datetime` | 创建时间 |
+| `updatedAt` | `datetime` | 更新时间 |
+
+系统字段不支持 `contains`（仅 `stringList` 适用），其余约束与自定义字段一致。
+
+示例：
+
+```json
+{
+  "and": [
+    {"in": {"fieldName": "fileType", "value": ["md", "pdf"]}},
+    {"gt": {"fieldName": "createdAt", "value": "2026-01-01T00:00:00Z"}}
+  ]
+}
+```
+
+### 叶子值类型校验
+
+每个叶子节点的 `value` 必须与 `fieldName` 声明的类型一致，否则返回 `INVALID_FIELD_VALUE_TYPE`：
+
+- `string`：value 必须是字符串
+- `number`：value 必须是数值（不接受布尔值）
+- `boolean`：value 必须是布尔值
+- `datetime`：value 必须是 ISO 8601 字符串（如 `2026-05-15T10:00:00Z`）
+- `stringList`：仅支持 `contains`（值为单个字符串）和 `exists`
+
+`in` 不适用于 `stringList`，请使用 `contains`；`gt/gte/lt/lte` 仅适用于 `number` 和 `datetime` 字段；`exists` 不应携带 `value`。
+
 ### 使用建议
 
 1. 纯元数据检索

@@ -12,6 +12,7 @@ from by_qa.knowledge_base.api.metadata_schemas import (
 )
 from by_qa.knowledge_base.dsl.compiler import compile_where_to_sql
 from by_qa.knowledge_base.dsl.validator import validate_where_clause
+from by_qa.knowledge_base.metadata_types import SYSTEM_FIELD_VALUE_TYPES
 from by_qa.knowledge_base.repositories.knowledge_base_repository import (
     KnowledgeBaseRepository,
 )
@@ -56,9 +57,7 @@ class MetadataSearchService:
             property_map = await self._build_property_map(cursor, request.where)
 
             if request.where:
-                known_fields = {
-                    name: info["value_type"] for name, info in property_map.items()
-                }
+                known_fields = _build_known_fields(property_map)
                 validate_where_clause(request.where, known_fields=known_fields)
 
             where_sql, where_params = compile_where_to_sql(
@@ -115,8 +114,11 @@ class MetadataSearchService:
         field_names = _collect_field_names(where)
         if not field_names:
             return {}
+        custom_names = [n for n in field_names if n not in SYSTEM_FIELD_VALUE_TYPES]
+        if not custom_names:
+            return {}
         rows = await self.metadata_property_repository.list_properties(
-            cursor, property_names=list(field_names)
+            cursor, property_names=custom_names
         )
         return {
             row["property_name"]: {
@@ -125,6 +127,13 @@ class MetadataSearchService:
             }
             for row in rows
         }
+
+
+def _build_known_fields(property_map: dict[str, dict[str, Any]]) -> dict[str, str]:
+    known: dict[str, str] = dict(SYSTEM_FIELD_VALUE_TYPES)
+    for name, info in property_map.items():
+        known[name] = info["value_type"]
+    return known
 
 
 def _collect_field_names(node: dict[str, Any]) -> set[str]:

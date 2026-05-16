@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from by_qa.knowledge_base.metadata_types import VALUE_TYPE_TO_COLUMN
+from by_qa.knowledge_base.metadata_types import (
+    SYSTEM_FIELD_TO_FE_EXPR,
+    VALUE_TYPE_TO_COLUMN,
+)
 
 COMPARISON_OPS = {
     "eq": "=",
@@ -67,6 +70,9 @@ def _compile_node(
     if operator == "exists":
         body = node["exists"]
         field_name = body["fieldName"]
+        if field_name in SYSTEM_FIELD_TO_FE_EXPR:
+            expr, _ = SYSTEM_FIELD_TO_FE_EXPR[field_name]
+            return f"({expr} IS NOT NULL)"
         prop = property_map[field_name]
         def_id_key = ctx.next_param(prop["def_id"])
         col = _value_column(prop["value_type"])
@@ -79,6 +85,8 @@ def _compile_node(
         )
 
     if operator == "contains":
+        # `contains` is validator-restricted to user-defined stringList
+        # fields; no system-field branch here.
         body = node["contains"]
         field_name = body["fieldName"]
         value = body["value"]
@@ -97,6 +105,10 @@ def _compile_node(
         body = node["in"]
         field_name = body["fieldName"]
         value_list = body["value"]
+        if field_name in SYSTEM_FIELD_TO_FE_EXPR:
+            expr, _ = SYSTEM_FIELD_TO_FE_EXPR[field_name]
+            val_key = ctx.next_param(value_list)
+            return f"({expr} = ANY(%({val_key})s))"
         prop = property_map[field_name]
         def_id_key = ctx.next_param(prop["def_id"])
         val_key = ctx.next_param(value_list)
@@ -113,8 +125,12 @@ def _compile_node(
         body = node[operator]
         field_name = body["fieldName"]
         value = body["value"]
-        prop = property_map[field_name]
         sql_op = COMPARISON_OPS[operator]
+        if field_name in SYSTEM_FIELD_TO_FE_EXPR:
+            expr, _ = SYSTEM_FIELD_TO_FE_EXPR[field_name]
+            val_key = ctx.next_param(value)
+            return f"({expr} {sql_op} %({val_key})s)"
+        prop = property_map[field_name]
         def_id_key = ctx.next_param(prop["def_id"])
         val_key = ctx.next_param(value)
         col = _value_column(prop["value_type"])

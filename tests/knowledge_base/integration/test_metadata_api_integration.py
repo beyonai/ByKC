@@ -518,3 +518,148 @@ def test_metadata_unknown_kb_or_file_rejected(monkeypatch):
         )
         assert bad_file.json()["resultCode"] == "-1"
         assert "file not found" in bad_file.json()["resultMsg"]
+
+
+# ===================================================================
+# Section 5: stringList operations  (M5.a-M5.e)
+# ===================================================================
+
+
+@pytest.mark.integration
+def test_metadata_append_dedup(monkeypatch):
+    """M5.a: append skips items already present."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        prop = f"l_{uuid4().hex[:6]}"
+        register_property(client, prop, "stringList")
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            value=["a", "b"],
+        )
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadata/update",
+            json={
+                "knCode": kb_code,
+                "filePath": file_path,
+                "operationList": [
+                    {"propertyName": prop, "operation": "append", "value": ["b", "c"]}
+                ],
+            },
+        )
+        assert resp.json()["resultObject"]["metadata"][prop]["value"] == ["a", "b", "c"]
+
+
+@pytest.mark.integration
+def test_metadata_remove_tolerates_missing(monkeypatch):
+    """M5.b: remove silently ignores items not in the list."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        prop = f"l_{uuid4().hex[:6]}"
+        register_property(client, prop, "stringList")
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            value=["a"],
+        )
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadata/update",
+            json={
+                "knCode": kb_code,
+                "filePath": file_path,
+                "operationList": [
+                    {"propertyName": prop, "operation": "remove", "value": ["x", "y"]}
+                ],
+            },
+        )
+        assert resp.json()["resultCode"] == "0"
+        assert resp.json()["resultObject"]["metadata"][prop]["value"] == ["a"]
+
+
+@pytest.mark.integration
+def test_metadata_set_overwrites_list(monkeypatch):
+    """M5.c: set replaces the list entirely, no merging with prior content."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        prop = f"l_{uuid4().hex[:6]}"
+        register_property(client, prop, "stringList")
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            value=["a", "b"],
+        )
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            value=["x"],
+        )
+        got = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={"knCode": kb_code, "filePath": file_path},
+        ).json()["resultObject"]["metadata"]
+        assert got[prop]["value"] == ["x"]
+
+
+@pytest.mark.integration
+def test_metadata_clear_keeps_value_type(monkeypatch):
+    """M5.d: clear empties the list but the property row + valueType remain visible."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        prop = f"l_{uuid4().hex[:6]}"
+        register_property(client, prop, "stringList")
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            value=["a", "b"],
+        )
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            operation="clear",
+        )
+        got = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={"knCode": kb_code, "filePath": file_path},
+        ).json()["resultObject"]["metadata"]
+        assert got[prop] == {"valueType": "stringList", "value": []}
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "value_type, op, value, expected_msg",
+    [
+        pytest.param("string", "append", ["x"], "not allowed", id="append_on_string"),
+        pytest.param("string", "remove", ["x"], "not allowed", id="remove_on_string"),
+        pytest.param("string", "clear", None, "not allowed", id="clear_on_string"),
+        pytest.param("number", "append", [1], "not allowed", id="append_on_number"),
+    ],
+)
+def test_metadata_op_type_mismatch_rejected(
+    monkeypatch, value_type, op, value, expected_msg
+):
+    """M5.e: list-only ops on scalar fields (and vice versa) are rejected."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        prop = f"m_{uuid4().hex[:6]}"
+        register_property(client, prop, value_type)
+        body_op = {"propertyName": prop, "operation": op}
+        if value is not None:
+            body_op["value"] = value
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadata/update",
+            json={"knCode": kb_code, "filePath": file_path, "operationList": [body_op]},
+        )
+        assert resp.json()["resultCode"] == "-1"
+        assert expected_msg in resp.json()["resultMsg"]

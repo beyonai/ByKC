@@ -354,3 +354,167 @@ def test_property_delete_after_clear_still_rejected(monkeypatch):
         )
         assert resp.json()["resultCode"] == "-1"
         assert "still referenced" in resp.json()["resultMsg"]
+
+
+# ===================================================================
+# Section 4: Scalar metadata operations  (M4.a-M4.f)
+# ===================================================================
+
+SCALAR_VALUE_FIXTURES = [
+    pytest.param("string", "active", id="string"),
+    pytest.param("number", 42, id="number"),
+    pytest.param("boolean", True, id="boolean"),
+    pytest.param("datetime", "2026-05-15T10:00:00Z", id="datetime"),
+    pytest.param("stringList", ["a", "b"], id="stringList"),
+]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("value_type, value", SCALAR_VALUE_FIXTURES)
+def test_metadata_set_all_value_types(monkeypatch, value_type, value):
+    """M4.a: set+get round-trips for every supported valueType."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        prop = f"p_{uuid4().hex[:6]}"
+        register_property(client, prop, value_type)
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            value=value,
+        )
+
+        got = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={"knCode": kb_code, "filePath": file_path},
+        ).json()["resultObject"]["metadata"]
+        assert got[prop]["valueType"] == value_type
+        if value_type == "datetime":
+            # service may store as datetime and emit ISO with offset; allow either form
+            assert got[prop]["value"].startswith("2026-05-15T10:00:00")
+        else:
+            assert got[prop]["value"] == value
+
+
+@pytest.mark.integration
+def test_metadata_set_undefined_property_rejected(monkeypatch):
+    """M4.b: writing to an unregistered property returns 'not defined'."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadata/update",
+            json={
+                "knCode": kb_code,
+                "filePath": file_path,
+                "operationList": [
+                    {"propertyName": "ghost", "operation": "set", "value": "x"}
+                ],
+            },
+        )
+        assert resp.json()["resultCode"] == "-1"
+        assert "not defined" in resp.json()["resultMsg"]
+
+
+@pytest.mark.integration
+def test_metadata_invalid_operation_literal_rejected(monkeypatch):
+    """M4.c: operation outside {set,unset,append,remove,clear} fails the documented envelope."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        prop = f"x_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadata/update",
+            json={
+                "knCode": kb_code,
+                "filePath": file_path,
+                "operationList": [
+                    {"propertyName": prop, "operation": "upsert", "value": "v"}
+                ],
+            },
+        )
+        # Routes normalize Pydantic ValidationError into the documented envelope:
+        # HTTP 200 + resultCode="-1" + resultMsg="request validation failed".
+        assert resp.status_code == 200
+        assert resp.json()["resultCode"] == "-1"
+        assert "request validation failed" in resp.json()["resultMsg"]
+
+
+@pytest.mark.integration
+def test_metadata_multi_op_same_property_in_order(monkeypatch):
+    """M4.d: multiple operations on same property in a single request apply in order."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        prop = f"order_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadata/update",
+            json={
+                "knCode": kb_code,
+                "filePath": file_path,
+                "operationList": [
+                    {"propertyName": prop, "operation": "set", "value": "v1"},
+                    {"propertyName": prop, "operation": "set", "value": "v2"},
+                ],
+            },
+        )
+        assert resp.json()["resultCode"] == "0"
+        assert resp.json()["resultObject"]["metadata"][prop]["value"] == "v2"
+
+
+@pytest.mark.integration
+def test_metadata_unset_nonexistent_idempotent(monkeypatch):
+    """M4.e: unset on a never-set property is a no-op, not an error."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        prop = f"un_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadata/update",
+            json={
+                "knCode": kb_code,
+                "filePath": file_path,
+                "operationList": [{"propertyName": prop, "operation": "unset"}],
+            },
+        )
+        assert resp.json()["resultCode"] == "0"
+        got = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={"knCode": kb_code, "filePath": file_path},
+        ).json()["resultObject"]["metadata"]
+        assert prop not in got
+
+
+@pytest.mark.integration
+def test_metadata_unknown_kb_or_file_rejected(monkeypatch):
+    """M4.f: unknown knCode / filePath both yield resultCode=-1 with descriptive msg."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        prop = f"k_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+
+        bad_kb = client.post(
+            "/api/v1/knowledgeItems/metadata/update",
+            json={
+                "knCode": "9999999",
+                "filePath": file_path,
+                "operationList": [
+                    {"propertyName": prop, "operation": "set", "value": "x"}
+                ],
+            },
+        )
+        assert bad_kb.json()["resultCode"] == "-1"
+        assert "knowledge base not found" in bad_kb.json()["resultMsg"]
+
+        bad_file = client.post(
+            "/api/v1/knowledgeItems/metadata/update",
+            json={
+                "knCode": kb_code,
+                "filePath": "/nope.md",
+                "operationList": [
+                    {"propertyName": prop, "operation": "set", "value": "x"}
+                ],
+            },
+        )
+        assert bad_file.json()["resultCode"] == "-1"
+        assert "file not found" in bad_file.json()["resultMsg"]

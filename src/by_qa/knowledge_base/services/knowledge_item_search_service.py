@@ -83,14 +83,14 @@ class KnowledgeItemSearchService:
         connection = await self.connection_factory()
         try:
             cursor = connection.cursor()
-            text_hits = await self.search_repository.search_text_v2(
+            text_hits = await self.search_repository.search_text(
                 cursor,
                 query=request.query,
                 kb_codes=request.kb_codes,
                 file_type_list=request.file_type_list,
                 limit=request.top_k * 3,
             )
-            vector_hits = await self.search_repository.search_vector_v2(
+            vector_hits = await self.search_repository.search_vector(
                 cursor,
                 query_embedding=query_embedding,
                 kb_codes=request.kb_codes,
@@ -153,7 +153,7 @@ class KnowledgeItemSearchService:
                 request.where, property_map=property_map
             )
 
-            text_hits = await self.search_repository.search_text_v2_filtered(
+            text_hits = await self.search_repository.search_text(
                 cursor,
                 query=request.query,
                 kb_codes=kb_codes,
@@ -161,7 +161,7 @@ class KnowledgeItemSearchService:
                 where_params=where_params,
                 limit=request.top_k * 3,
             )
-            vector_hits = await self.search_repository.search_vector_v2_filtered(
+            vector_hits = await self.search_repository.search_vector(
                 cursor,
                 query_embedding=query_embedding,
                 kb_codes=kb_codes,
@@ -240,7 +240,7 @@ class KnowledgeItemSearchService:
                 request.where, property_map=property_map
             )
 
-            text_hits = await self.search_repository.search_text_v2_filtered(
+            text_hits = await self.search_repository.search_text(
                 cursor,
                 query=request.query,
                 kb_codes=kb_codes,
@@ -248,7 +248,7 @@ class KnowledgeItemSearchService:
                 where_params=where_params,
                 limit=request.top_k * 50,
             )
-            vector_hits = await self.search_repository.search_vector_v2_filtered(
+            vector_hits = await self.search_repository.search_vector(
                 cursor,
                 query_embedding=query_embedding,
                 kb_codes=kb_codes,

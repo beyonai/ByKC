@@ -2,6 +2,73 @@
 
 from typing import Any
 
+# Path-derived file extension used by the legacy file_type_list filter.
+# The retrieval projection only stores full_path, so the extension must
+# be parsed at query time.
+_PATH_EXTENSION_EXPR = """
+    lower(
+        CASE
+            WHEN r.full_path LIKE '%%.%%'
+            THEN substring(r.full_path FROM '[^.]+$')
+            ELSE ''
+        END
+    )
+"""
+
+_FILE_TYPE_FILTER = f"""
+    AND (
+        %(file_type_list)s::text[] IS NULL
+        OR {_PATH_EXTENSION_EXPR.strip()} = ANY(%(file_type_list)s::text[])
+    )
+"""
+
+_CHUNK_COLUMNS = """
+    r.chunk_id,
+    kb.kid::text AS kb_code,
+    r.full_path,
+    r.chunk_no,
+    r.start_line,
+    r.end_line,
+    r.chunk_text,
+    r.fs_entry_id
+"""
+
+
+def _build_candidate_cte(where_sql: str) -> tuple[str, str]:
+    """Compile the optional CTE that pre-filters fs_entry candidates.
+
+    Returns (cte_clause, chunk_join). With a DSL filter, chunks are
+    joined onto the candidate set so the heavy full-text or ANN scan
+    only sees entries that already passed metadata filtering. Without
+    one, chunks are scanned directly with kb-scoped predicates.
+    """
+    if where_sql:
+        cte = f"""
+        WITH candidate_entries AS (
+            SELECT fe.kid AS fs_entry_id
+            FROM knowledge_fs_entry fe
+            WHERE fe.knowledge_base_id = ANY(%(kb_codes)s::bigint[])
+              AND fe.is_deleted = FALSE
+              AND fe.entry_type = 'FILE'
+              AND {where_sql}
+        )
+        """
+        chunk_join = (
+            "FROM candidate_entries c "
+            "JOIN knowledge_chunk_retrieval_mv r "
+            "ON r.fs_entry_id = c.fs_entry_id"
+        )
+        return cte, chunk_join
+    return "", (
+        "FROM knowledge_chunk_retrieval_mv r "
+        "WHERE r.knowledge_base_id = ANY(%(kb_codes)s::bigint[])"
+    )
+
+
+async def _fetchall(cursor: Any) -> list[dict[str, Any]]:
+    fetchall = getattr(cursor, "fetchall", None)
+    return await fetchall() if callable(fetchall) else []
+
 
 class KnowledgeItemSearchRepository:
     """Repository for text and vector candidate retrieval."""
@@ -9,192 +76,93 @@ class KnowledgeItemSearchRepository:
     def __init__(self, embedding_table_name: str):
         self.embedding_table_name = embedding_table_name
 
-    async def search_text_v2(
+    async def search_text(
         self,
         cursor: Any,
         *,
         query: str,
         kb_codes: list[str],
-        file_type_list: list[str] | None,
         limit: int,
+        file_type_list: list[str] | None = None,
+        where_sql: str = "",
+        where_params: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        """Full-text recall against the new retrieval projection table."""
-        await cursor.execute(
-            """
-            SELECT
-                r.chunk_id,
-                kb.kid::text AS kb_code,
-                r.full_path,
-                r.chunk_no,
-                r.start_line,
-                r.end_line,
-                r.chunk_text,
-                ts_rank_cd(
-                    r.search_text,
-                    plainto_tsquery('simple', %(query)s)
-                ) AS text_score
-            FROM knowledge_chunk_retrieval_mv r
-            JOIN knowledge_base kb
-              ON kb.kid = r.knowledge_base_id
-            WHERE kb.kid = ANY(%(kb_codes)s::bigint[])
-              AND kb.is_deleted = FALSE
-              AND (
-                    %(file_type_list)s::text[] IS NULL
-                    OR lower(
-                        CASE
-                            WHEN r.full_path LIKE '%%.%%'
-                            THEN substring(r.full_path FROM '[^.]+$')
-                            ELSE ''
-                        END
-                    ) = ANY(%(file_type_list)s::text[])
-              )
-              AND r.search_text @@ plainto_tsquery('simple', %(query)s)
-            ORDER BY text_score DESC, r.chunk_id DESC
-            LIMIT %(limit)s
-            """,
-            {
-                "query": query,
-                "kb_codes": kb_codes,
-                "file_type_list": file_type_list,
-                "limit": limit,
-            },
-        )
-        fetchall = getattr(cursor, "fetchall", None)
-        return await fetchall() if callable(fetchall) else []
+        """Full-text recall against the retrieval projection.
 
-    async def search_vector_v2(
-        self,
-        cursor: Any,
-        *,
-        query_embedding: list[float],
-        kb_codes: list[str],
-        file_type_list: list[str] | None,
-        limit: int,
-    ) -> list[dict[str, Any]]:
-        """Vector similarity recall against the new retrieval projection table."""
-        vector_literal = "[" + ",".join(str(value) for value in query_embedding) + "]"
-        await cursor.execute(
-            f"""
-            SELECT
-                r.chunk_id,
-                kb.kid::text AS kb_code,
-                r.full_path,
-                r.chunk_no,
-                r.start_line,
-                r.end_line,
-                r.chunk_text,
-                1 - (e.embedding <=> %(query_embedding)s) AS vector_score
-            FROM {self.embedding_table_name} e
-            JOIN knowledge_chunk_retrieval_mv r
-              ON r.chunk_id = e.chunk_id
-            JOIN knowledge_base kb
-              ON kb.kid = r.knowledge_base_id
-            WHERE kb.kid = ANY(%(kb_codes)s::bigint[])
-              AND kb.is_deleted = FALSE
-              AND (
-                    %(file_type_list)s::text[] IS NULL
-                    OR lower(
-                        CASE
-                            WHEN r.full_path LIKE '%%.%%'
-                            THEN substring(r.full_path FROM '[^.]+$')
-                            ELSE ''
-                        END
-                    ) = ANY(%(file_type_list)s::text[])
-              )
-            ORDER BY e.embedding <=> %(query_embedding)s ASC, r.chunk_id DESC
-            LIMIT %(limit)s
-            """,
-            {
-                "query_embedding": vector_literal,
-                "kb_codes": kb_codes,
-                "file_type_list": file_type_list,
-                "limit": limit,
-            },
-        )
-        fetchall = getattr(cursor, "fetchall", None)
-        return await fetchall() if callable(fetchall) else []
-
-    async def search_text_v2_filtered(
-        self,
-        cursor: Any,
-        *,
-        query: str,
-        kb_codes: list[str],
-        where_sql: str,
-        where_params: dict[str, Any],
-        limit: int,
-    ) -> list[dict[str, Any]]:
-        """Full-text search with optional DSL metadata filter."""
-        extra_condition = f"AND {where_sql}" if where_sql else ""
+        file_type_list and DSL filtering can be combined; both are
+        optional. With where_sql, fs_entry candidates are resolved via
+        CTE before the full-text scan.
+        """
+        cte, chunk_clause = _build_candidate_cte(where_sql)
+        # Compose an extra predicate clause that lives inside an explicit
+        # WHERE for the no-DSL path (which already opens a WHERE) and
+        # that prefixes WHERE for the DSL path (which has none yet).
+        prefix = "AND" if not where_sql else "WHERE"
         sql = f"""
+            {cte}
             SELECT
-                r.chunk_id,
-                kb.kid::text AS kb_code,
-                r.full_path,
-                r.chunk_no,
-                r.start_line,
-                r.end_line,
-                r.chunk_text,
-                r.fs_entry_id,
+                {_CHUNK_COLUMNS},
                 ts_rank_cd(
                     r.search_text,
                     plainto_tsquery('simple', %(query)s)
                 ) AS text_score
-            FROM knowledge_chunk_retrieval_mv r
+            {chunk_clause}
             JOIN knowledge_base kb ON kb.kid = r.knowledge_base_id
-            JOIN knowledge_fs_entry fe ON fe.kid = r.fs_entry_id
-            WHERE kb.kid = ANY(%(kb_codes)s::bigint[])
-              AND kb.is_deleted = FALSE
+            {prefix} kb.is_deleted = FALSE
+              {_FILE_TYPE_FILTER}
               AND r.search_text @@ plainto_tsquery('simple', %(query)s)
-              {extra_condition}
             ORDER BY text_score DESC, r.chunk_id DESC
             LIMIT %(limit)s
         """
-        params = {**where_params, "query": query, "kb_codes": kb_codes, "limit": limit}
+        params = {
+            **(where_params or {}),
+            "query": query,
+            "kb_codes": kb_codes,
+            "file_type_list": file_type_list,
+            "limit": limit,
+        }
         await cursor.execute(sql, params)
-        fetchall = getattr(cursor, "fetchall", None)
-        return await fetchall() if callable(fetchall) else []
+        return await _fetchall(cursor)
 
-    async def search_vector_v2_filtered(
+    async def search_vector(
         self,
         cursor: Any,
         *,
         query_embedding: list[float],
         kb_codes: list[str],
-        where_sql: str,
-        where_params: dict[str, Any],
         limit: int,
+        file_type_list: list[str] | None = None,
+        where_sql: str = "",
+        where_params: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        """Vector search with optional DSL metadata filter."""
-        extra_condition = f"AND {where_sql}" if where_sql else ""
+        """Vector similarity recall against the retrieval projection.
+
+        Mirrors search_text: file_type_list and DSL filtering are
+        independently optional, and a present DSL filter pushes
+        fs_entry resolution into a CTE ahead of the ANN scan.
+        """
         vector_literal = "[" + ",".join(str(value) for value in query_embedding) + "]"
+        cte, chunk_clause = _build_candidate_cte(where_sql)
+        prefix = "AND" if not where_sql else "WHERE"
         sql = f"""
+            {cte}
             SELECT
-                r.chunk_id,
-                kb.kid::text AS kb_code,
-                r.full_path,
-                r.chunk_no,
-                r.start_line,
-                r.end_line,
-                r.chunk_text,
-                r.fs_entry_id,
+                {_CHUNK_COLUMNS},
                 1 - (e.embedding <=> %(query_embedding)s) AS vector_score
-            FROM {self.embedding_table_name} e
-            JOIN knowledge_chunk_retrieval_mv r ON r.chunk_id = e.chunk_id
+            {chunk_clause}
+            JOIN {self.embedding_table_name} e ON e.chunk_id = r.chunk_id
             JOIN knowledge_base kb ON kb.kid = r.knowledge_base_id
-            JOIN knowledge_fs_entry fe ON fe.kid = r.fs_entry_id
-            WHERE kb.kid = ANY(%(kb_codes)s::bigint[])
-              AND kb.is_deleted = FALSE
-              {extra_condition}
+            {prefix} kb.is_deleted = FALSE
+              {_FILE_TYPE_FILTER}
             ORDER BY e.embedding <=> %(query_embedding)s ASC, r.chunk_id DESC
             LIMIT %(limit)s
         """
         params = {
-            **where_params,
+            **(where_params or {}),
             "query_embedding": vector_literal,
             "kb_codes": kb_codes,
+            "file_type_list": file_type_list,
             "limit": limit,
         }
         await cursor.execute(sql, params)
-        fetchall = getattr(cursor, "fetchall", None)
-        return await fetchall() if callable(fetchall) else []
+        return await _fetchall(cursor)

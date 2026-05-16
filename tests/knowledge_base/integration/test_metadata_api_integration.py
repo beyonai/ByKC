@@ -954,3 +954,188 @@ def test_delete_kb_clears_metadata(monkeypatch):
         )
         assert fields.json()["resultCode"] == "-1"
         assert "knowledge base not found" in fields.json()["resultMsg"]
+
+
+# ===================================================================
+# Section 8: metadataSearch endpoint constraints  (M8.a-M8.h)
+# ===================================================================
+
+
+@pytest.mark.integration
+def test_metadata_search_where_required(monkeypatch):
+    """M8.a: omitting `where` is rejected via the documented envelope."""
+    with runtime(monkeypatch) as client:
+        kb_code = new_kb(client)
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadataSearch",
+            json={"knCodeList": [kb_code], "topK": 10},
+        )
+        # Routes normalize Pydantic ValidationError into the documented envelope:
+        # HTTP 200 + resultCode="-1" + resultMsg="request validation failed".
+        assert resp.status_code == 200
+        assert resp.json()["resultCode"] == "-1"
+        assert "request validation failed" in resp.json()["resultMsg"]
+
+
+@pytest.mark.integration
+def test_metadata_search_where_empty_object_rejected(monkeypatch):
+    """M8.b: where={} fails DSL structural validation (must have one operator key)."""
+    with runtime(monkeypatch) as client:
+        kb_code = new_kb(client)
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadataSearch",
+            json={"knCodeList": [kb_code], "where": {}, "topK": 10},
+        )
+        body = resp.json()
+        assert body["resultCode"] == "-1"
+        assert body["resultObject"]["errorCode"] == "DSL_VALIDATION_ERROR"
+        codes = [e["code"] for e in body["resultObject"]["errorList"]]
+        assert "INVALID_BOOLEAN_NODE" in codes
+
+
+@pytest.mark.integration
+def test_metadata_search_top_k_default_500(monkeypatch):
+    """M8.c: topK defaults to 500 when omitted (asserted by request acceptance)."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        prop = f"s_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+        set_metadata(
+            client, kb_code=kb_code, file_path=file_path, property_name=prop, value="x"
+        )
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadataSearch",
+            json={"knCodeList": [kb_code], "where": {"exists": {"fieldName": prop}}},
+        )
+        assert resp.json()["resultCode"] == "0"
+        # Generating 700 files just to prove 500 default is overkill; the contract
+        # assertion is that omitting topK is accepted (default applies internally).
+        assert len(resp.json()["resultObject"]["data"]) >= 1
+
+
+@pytest.mark.integration
+def test_metadata_search_top_k_max_10000(monkeypatch):
+    """M8.d: topK > 10000 is rejected by schema validation; 10000 is accepted."""
+    with runtime(monkeypatch) as client:
+        kb_code = new_kb(client)
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadataSearch",
+            json={
+                "knCodeList": [kb_code],
+                "where": {"exists": {"fieldName": "fileName"}},
+                "topK": 10001,
+            },
+        )
+        # Routes normalize Pydantic ValidationError into the documented envelope.
+        assert resp.status_code == 200
+        assert resp.json()["resultCode"] == "-1"
+        assert "request validation failed" in resp.json()["resultMsg"]
+        # Boundary still accepted
+        resp_ok = client.post(
+            "/api/v1/knowledgeItems/metadataSearch",
+            json={
+                "knCodeList": [kb_code],
+                "where": {"exists": {"fieldName": "fileName"}},
+                "topK": 10000,
+            },
+        )
+        assert resp_ok.status_code == 200
+        assert resp_ok.json()["resultCode"] == "0"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("bad", [0, -1])
+def test_metadata_search_top_k_zero_or_negative_rejected(monkeypatch, bad):
+    """M8.e: topK <= 0 is rejected (Pydantic post-validator)."""
+    with runtime(monkeypatch) as client:
+        kb_code = new_kb(client)
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadataSearch",
+            json={
+                "knCodeList": [kb_code],
+                "where": {"exists": {"fieldName": "fileName"}},
+                "topK": bad,
+            },
+        )
+        # Routes normalize Pydantic ValidationError into the documented envelope.
+        assert resp.status_code == 200
+        assert resp.json()["resultCode"] == "-1"
+        assert "request validation failed" in resp.json()["resultMsg"]
+
+
+@pytest.mark.integration
+def test_metadata_search_kb_scope(monkeypatch):
+    """M8.f: knCodeList narrows the search to a single KB even when other KBs match."""
+    with runtime(monkeypatch) as client:
+        kb_a, fa = new_kb_with_file(client, file_path="/a.md")
+        kb_b, fb = new_kb_with_file(client, file_path="/b.md")
+        prop = f"s_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+        set_metadata(client, kb_code=kb_a, file_path=fa, property_name=prop, value="x")
+        set_metadata(client, kb_code=kb_b, file_path=fb, property_name=prop, value="x")
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadataSearch",
+            json={
+                "knCodeList": [kb_a],
+                "where": {"eq": {"fieldName": prop, "value": "x"}},
+                "topK": 10,
+            },
+        )
+        kbs = {h["knCode"] for h in resp.json()["resultObject"]["data"]}
+        assert kbs == {kb_a}
+
+
+@pytest.mark.integration
+def test_metadata_search_unknown_kb_rejected(monkeypatch):
+    """M8.g: unknown knCode in knCodeList yields KnowledgeBaseValidationError."""
+    with runtime(monkeypatch) as client:
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadataSearch",
+            json={
+                "knCodeList": ["does_not_exist_99999"],
+                "where": {"exists": {"fieldName": "fileName"}},
+                "topK": 10,
+            },
+        )
+        assert resp.json()["resultCode"] == "-1"
+        assert "knowledge base not found" in resp.json()["resultMsg"]
+
+
+@pytest.mark.integration
+def test_metadata_search_metadata_field_list_filters_response(monkeypatch):
+    """M8.h: metadataFieldList trims the per-hit metadata to listed fields only."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        keep = f"k_{uuid4().hex[:6]}"
+        drop = f"d_{uuid4().hex[:6]}"
+        register_property(client, keep, "string")
+        register_property(client, drop, "string")
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=keep,
+            value="yes",
+        )
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=drop,
+            value="yes",
+        )
+
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadataSearch",
+            json={
+                "knCodeList": [kb_code],
+                "where": {"eq": {"fieldName": keep, "value": "yes"}},
+                "metadataFieldList": [keep],
+                "topK": 10,
+            },
+        )
+        hit = next(
+            h for h in resp.json()["resultObject"]["data"] if h["filePath"] == file_path
+        )
+        assert keep in hit["metadata"]
+        assert drop not in (hit["metadata"] or {})

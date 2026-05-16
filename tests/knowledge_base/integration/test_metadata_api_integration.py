@@ -19,6 +19,7 @@ from uuid import uuid4
 import pytest
 
 from tests.knowledge_base.integration._metadata_helpers import (
+    new_kb,
     new_kb_with_file,
     register_property,
     runtime,
@@ -663,3 +664,85 @@ def test_metadata_op_type_mismatch_rejected(
         )
         assert resp.json()["resultCode"] == "-1"
         assert expected_msg in resp.json()["resultMsg"]
+
+
+# ===================================================================
+# Section 6: YAML front matter auto metadata  (M6.a-M6.c)
+# ===================================================================
+
+
+def _import_md(client, kb_code, file_path, content: bytes):
+    return client.post(
+        "/api/v1/knowledgeItems/import",
+        data={"knCode": kb_code, "filePath": file_path},
+        files={"fileContent": (file_path.split("/")[-1], content, "text/markdown")},
+    )
+
+
+@pytest.mark.integration
+def test_front_matter_auto_metadata(monkeypatch):
+    """M6.a: registered front matter fields are auto-populated on import."""
+    with runtime(monkeypatch) as client:
+        kb_code = new_kb(client)
+        prop = f"status_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+        client.post(
+            "/api/v1/directories/create",
+            json={"knCode": kb_code, "directoryPath": "/docs"},
+        )
+        path = f"/docs/fm_{uuid4().hex[:6]}.md"
+        body = f"---\n{prop}: active\n---\n# Hello\n".encode()
+        resp = _import_md(client, kb_code, path, body)
+        assert resp.json()["resultCode"] == "0", resp.text
+
+        got = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={"knCode": kb_code, "filePath": path},
+        ).json()["resultObject"]["metadata"]
+        assert got[prop]["value"] == "active"
+
+
+@pytest.mark.integration
+def test_front_matter_undefined_rejected(monkeypatch):
+    """M6.b: front matter referring to an unregistered field rejects import."""
+    with runtime(monkeypatch) as client:
+        kb_code = new_kb(client)
+        client.post(
+            "/api/v1/directories/create",
+            json={"knCode": kb_code, "directoryPath": "/docs"},
+        )
+        path = f"/docs/fm_{uuid4().hex[:6]}.md"
+        body = b"---\nundefined_xyz: 1\n---\n# Hello\n"
+        resp = _import_md(client, kb_code, path, body)
+        assert resp.json()["resultCode"] == "-1"
+        assert "not a defined metadata property" in resp.json()["resultMsg"]
+
+
+@pytest.mark.integration
+def test_front_matter_multi_type(monkeypatch):
+    """M6.c: front matter populates string / number / stringList in one shot."""
+    with runtime(monkeypatch) as client:
+        kb_code = new_kb(client)
+        client.post(
+            "/api/v1/directories/create",
+            json={"knCode": kb_code, "directoryPath": "/docs"},
+        )
+        s = f"s_{uuid4().hex[:6]}"
+        n = f"n_{uuid4().hex[:6]}"
+        lst = f"l_{uuid4().hex[:6]}"
+        register_property(client, s, "string")
+        register_property(client, n, "number")
+        register_property(client, lst, "stringList")
+        path = f"/docs/fm_{uuid4().hex[:6]}.md"
+        body = (
+            f"---\n{s}: active\n{n}: 7\n{lst}:\n  - hr\n  - contract\n---\n# Hello\n"
+        ).encode()
+        resp = _import_md(client, kb_code, path, body)
+        assert resp.json()["resultCode"] == "0", resp.text
+        got = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={"knCode": kb_code, "filePath": path},
+        ).json()["resultObject"]["metadata"]
+        assert got[s]["value"] == "active"
+        assert got[n]["value"] == 7
+        assert got[lst]["value"] == ["hr", "contract"]

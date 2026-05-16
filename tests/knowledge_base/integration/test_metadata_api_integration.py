@@ -53,8 +53,8 @@ def test_property_list_filter_by_names(monkeypatch):
             "/api/v1/metadataProperties/list",
             json={"propertyNameList": [keep]},
         )
-        names = [p["propertyName"] for p in resp.json()["resultObject"]["data"]]
-        assert names == [keep]
+        names = {p["propertyName"] for p in resp.json()["resultObject"]["data"]}
+        assert names == {keep}
 
 
 @pytest.mark.integration

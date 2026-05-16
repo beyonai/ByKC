@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -36,9 +37,9 @@ class MetadataSearchService:
 
     async def search(self, request: MetadataSearchRequest) -> list[MetadataSearchHit]:
         logger.info(
-            "metadata_search_service.search started: top_k=%s, has_where=%s",
+            "metadata_search_service.search started: top_k=%s, where=%s",
             request.top_k,
-            request.where is not None,
+            json.dumps(request.where, ensure_ascii=False),
         )
         connection = await self.connection_factory()
         try:

@@ -1166,7 +1166,7 @@ def test_search_route_emits_summary_logs(monkeypatch):
 
     assert response.status_code == 200
     assert info_messages == [
-        "search_knowledge_items request received: query=员工请假制度怎么规定, kb_code_count=1, top_k=10, search_mode=mixedRecall, has_where=False",
+        "search_knowledge_items request received: query=员工请假制度怎么规定, kb_code_count=1, top_k=10, search_mode=mixedRecall, where=None",
         "search_knowledge_items service call succeeded: returned_count=1, top_k=10",
         "search_knowledge_items response ready: code=200, returned_count=1",
     ]

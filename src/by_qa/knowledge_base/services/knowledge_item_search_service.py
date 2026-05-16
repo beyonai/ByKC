@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -64,12 +65,12 @@ class KnowledgeItemSearchService:
     async def search(self, request: SearchRequest) -> list[SearchHit]:
         """Execute hybrid retrieval with optional DSL metadata filtering."""
         logger.info(
-            "knowledge_item_search_service.search started: query=%s, kb_code_count=%s, top_k=%s, search_mode=%s, has_where=%s",
+            "knowledge_item_search_service.search started: query=%s, kb_code_count=%s, top_k=%s, search_mode=%s, where=%s",
             request.query,
             len(request.kb_code_list),
             request.top_k,
             request.search_mode,
-            request.where is not None,
+            json.dumps(request.where, ensure_ascii=False) if request.where else None,
         )
         query_embedding = await self.embedding_query_service.embed_query(request.query)
         connection = await self.connection_factory()

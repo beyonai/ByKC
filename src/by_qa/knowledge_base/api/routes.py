@@ -662,12 +662,12 @@ def register_routes(
                 status_code=422,
             )
         logger.info(
-            "search_knowledge_items request received: query=%s, kb_code_count=%s, top_k=%s, search_mode=%s, has_where=%s",
+            "search_knowledge_items request received: query=%s, kb_code_count=%s, top_k=%s, search_mode=%s, where=%s",
             request.query,
             len(request.kb_code_list),
             request.top_k,
             request.search_mode,
-            request.where is not None,
+            json.dumps(request.where, ensure_ascii=False) if request.where else None,
         )
         try:
             service = await get_knowledge_item_search_service()
@@ -1164,6 +1164,12 @@ def register_routes(
                 result_object={"errors": json.loads(exc.json())},
                 status_code=422,
             )
+        logger.info(
+            "metadata_search request received: kb_code_count=%s, top_k=%s, where=%s",
+            len(request.kb_code_list) if request.kb_code_list else 0,
+            request.top_k,
+            json.dumps(request.where, ensure_ascii=False),
+        )
         try:
             service = await get_metadata_search_service()
             results = await service.search(request)

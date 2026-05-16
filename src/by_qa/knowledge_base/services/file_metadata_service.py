@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, Callable
 
 from by_qa.core import logger
@@ -35,7 +36,17 @@ def _extract_value(row: dict[str, Any]) -> Any:
     if vt == "string":
         return row["value_string"]
     elif vt == "number":
-        return row["value_number"]
+        raw = row["value_number"]
+        if raw is None:
+            return None
+        # The NUMERIC column may come back as Decimal from psycopg; coerce to a
+        # JSON-serializable primitive.  Whole-valued numbers stay as int so
+        # `42` doesn't round-trip as `42.0`.
+        if isinstance(raw, Decimal):
+            if raw == raw.to_integral_value():
+                return int(raw)
+            return float(raw)
+        return raw
     elif vt == "boolean":
         return row["value_boolean"]
     elif vt == "datetime":

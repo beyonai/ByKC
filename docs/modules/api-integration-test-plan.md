@@ -74,6 +74,33 @@
 | 29 | 异常与恢复 | 运行时依赖未配置 | 覆盖 KB runtime/fetch runtime/embedding 配置缺失 | 返回 `configuration_error` 风格错误 | 已写 |
 | 30 | 异常与恢复 | 构建或落库失败不留下半成功状态 | `knowledgeItems/import failure` 或 `fileToMarkdownIndex failure` | 不留下可见但不可读、可检索但不可读等异常状态 | 已写 |
 
+## 元数据与 DSL 检索场景总表
+
+说明：
+
+- 这一组场景覆盖元数据属性定义、文件元数据增量更新、纯元数据检索、DSL 升级版 chunk/file 检索的端到端调用链。
+- 系统字段（`fileName`/`fileType`/`fileSize`/`mimeType`/`createdAt`/`updatedAt`）不需要 `metadataProperties/create`，但其余自定义属性必须先注册再使用。
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| M1 | 元数据管理员 | 属性定义生命周期 | `metadataProperties/create -> metadataProperties/list -> metadataProperties/delete -> metadataProperties/list` | 创建后可见；重复创建冲突；系统字段同名拒绝；删除后从 list 中消失 | 待补 |
+| M2 | 元数据管理员 | 批量创建原子性 | `metadataProperties/batchCreate (含一项与既有冲突)` | 整批回滚，不留下任何成功项 | 待补 |
+| M3 | 元数据管理员 | 引用计数保护 | `metadataProperties/create -> knowledgeItems/metadata/update set -> metadataProperties/delete -> 释放引用 -> metadataProperties/delete` | 被引用时拒绝删除；释放后可删除 | 待补 |
+| M4 | 内容管理员 | 标量元数据增量更新 | `metadata/update set/unset -> metadata/get` | `set` 覆盖、`unset` 移除；非法操作类型拒绝；返回值含 valueType+value | 待补 |
+| M5 | 内容管理员 | 列表元数据增量更新 | `metadata/update append/remove/clear -> metadata/get` | `append` 去重追加；`remove` 容忍不存在元素；`clear` 置空保留属性 | 待补 |
+| M6 | 内容管理员 | YAML front matter 自动注入 | `knowledgeItems/import (md with front matter) -> metadata/get -> readFile/search` | 已注册字段自动写入；未注册字段拒绝导入；front matter 不出现在切分内容/检索结果中 | 待补 |
+| M7 | 内容管理员 | 删除联动清理 | `metadata/update -> knowledgeItems/delete -> metadataSearch/metadataFields/list` | 删除文件后元数据从所有读接口消失；目录删除/KB 删除等价表现 | 待补 |
+| M8 | DSL 调用方 | 纯元数据检索（必传 where） | `metadataSearch where { in/exists/eq } -> 返回文件列表` | where 必填；不传 topK 默认返回 500；topK 上限 10000；topK 0/<0/>10000 拒绝 | 待补 |
+| M9 | DSL 调用方 | DSL 算子覆盖 | `metadataSearch` 分别使用 `eq/ne/in/contains/exists/gt/gte/lt/lte/and/or/not` | 命中行为符合算子语义；contains 仅 stringList；in 不接受 stringList；exists 不携带 value 否则报错 | 待补 |
+| M10 | DSL 调用方 | DSL 类型校验失败 | 对 `string` 字段传 `number` 等不匹配值；datetime 传非 ISO8601 | 返回 `INVALID_FIELD_VALUE_TYPE`，含 path/code/message | 待补 |
+| M11 | DSL 调用方 | DSL 复杂度上限 | 嵌套深度超过 3 / 叶子条件超过 12 | 返回 `TOO_DEEP_BOOLEAN_NESTING` 或 `TOO_MANY_CONDITIONS` | 待补 |
+| M12 | DSL 调用方 | 系统字段进 DSL | `metadataSearch where {in: { fieldName: "fileType", value: ["md"] }}` | 命中文件名以 .md 结尾的文件；fileSize/createdAt/updatedAt 等以正确类型校验 | 待补 |
+| M13 | DSL 调用方 | 升级版 chunk 检索 | `knowledgeItems/search` 同时传 `query + where + metadataFieldList` | 先按 where 圈定 fs_entry 再 chunk 召回；返回结果含 metadata 字段 | 待补 |
+| M14 | DSL 调用方 | fileTypeList 向下兼容 | `knowledgeItems/search` 仅传 `fileTypeList` 等价于传 `where` 的 `in fileType` | 旧调用方行为不变；与 `where` 同时存在时合取 | 待补 |
+| M15 | DSL 调用方 | 文件级语义检索 | `knowledgeItems/searchFile` query+where+metadataFieldList | 候选 chunk 聚合到 file；保证一个 filePath 不重复出现；返回 metadata | 待补 |
+| M16 | 跨接口一致性 | 元数据 + 检索一致 | `metadata/update -> search where eq -> metadata/get` | 命中文件的元数据值与 `metadata/get` 一致；删除元数据后不再被 where 命中 | 待补 |
+| M17 | DSL 调用方 | 已删除文件不污染检索 | `metadata/update -> knowledgeItems/delete -> metadataSearch/search where 命中条件` | 已软删文件不出现在结果中（涉及 fs_entry.is_deleted 与 metadata_value.is_deleted 双重过滤） | 待补 |
+
 ## knowledge_build 场景总表
 
 > **已弃用：** `knowledge_build` 独立路由（`file-to-markdown`、`build-markdown-index`、`file-to-markdown-index`）已全部移除。构建功能已整合到 `/api/v1/fileToMarkdownIndex`，作为 `knowledge_base` 模块的一部分。以下场景仅作历史参考。
@@ -92,6 +119,7 @@
 | --- | --- | --- |
 | `tests/knowledge_build/integration/test_api_integration.py` | ~~`knowledge_build` 三接口正常/异常与组合链路等价性~~ | 已弃用（`knowledge_build` 独立路由已移除） |
 | `tests/knowledge_base/integration/test_kb_api_stateful_integration.py` | 混合导入构建（`knowledgeItems/import` + `fileToMarkdownIndex`）、知识库改名、单文件/目录删除、多级目录改名删除、读取窗口校验、`downloadFile` 的中文文件名/二进制文件下载、真实搜索链路与失败保护 | 有效 |
+| `tests/knowledge_base/integration/test_metadata_api_integration.py` | 元数据属性 CRUD、文件元数据增量更新、metadataSearch、search 升级版 DSL 过滤；M 系列场景按编号在此文件落地或新增 | 有效 |
 
 ## 下一轮优先补充建议
 

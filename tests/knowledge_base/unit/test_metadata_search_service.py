@@ -95,8 +95,36 @@ async def test_metadata_search_no_where():
         kb_code_list=["2"],
         top_k=20,
         metadata_field_list=["status"],
+        where={"exists": {"fieldName": "fileName"}},
     )
     results = await service.search(request)
 
     assert len(results) == 1
     assert results[0].kb_code == "2"
+
+
+def test_metadata_search_request_requires_where():
+    """`where` is mandatory so callers cannot accidentally request a full scan."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        MetadataSearchRequest(top_k=10)
+
+
+def test_metadata_search_request_top_k_defaults_to_500():
+    request = MetadataSearchRequest(where={"exists": {"fieldName": "fileName"}})
+    assert request.top_k == 500
+
+
+def test_metadata_search_request_rejects_top_k_above_cap():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        MetadataSearchRequest(where={"exists": {"fieldName": "fileName"}}, top_k=10001)
+
+
+def test_metadata_search_request_rejects_top_k_zero():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        MetadataSearchRequest(where={"exists": {"fieldName": "fileName"}}, top_k=0)

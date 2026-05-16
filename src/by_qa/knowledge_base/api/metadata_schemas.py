@@ -153,12 +153,16 @@ class MetadataSearchRequest(BaseModel):
         default=None,
         validation_alias=AliasChoices("knCodeList", "kb_code_list"),
     )
-    where: dict[str, Any] | None = None
+    where: dict[str, Any] = Field(
+        ...,
+        description="Agent DSL filter; required so the query is bounded.",
+    )
     metadata_field_list: list[str] | None = Field(
         default=None,
         validation_alias=AliasChoices("metadataFieldList", "metadata_field_list"),
     )
     top_k: int = Field(
+        default=500,
         validation_alias=AliasChoices("topK", "top_k"),
     )
 
@@ -166,6 +170,8 @@ class MetadataSearchRequest(BaseModel):
     def validate_top_k(self) -> "MetadataSearchRequest":
         if self.top_k <= 0:
             raise ValueError("topK must be greater than 0")
+        if self.top_k > 10000:
+            raise ValueError("topK must not exceed 10000")
         return self
 
 

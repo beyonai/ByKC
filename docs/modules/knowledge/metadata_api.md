@@ -708,9 +708,9 @@ Agent DSL 版纯元数据检索，只返回文件级结果。
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `knCodeList` | array[string] | 否 | 知识库范围 |
-| `where` | object | 否 | Agent DSL 过滤 AST |
+| `where` | object | 是 | Agent DSL 过滤 AST |
 | `metadataFieldList` | array[string] | 否 | 需要返回的元数据字段 |
-| `topK` | integer | 是 | 返回条数，必须大于 0 |
+| `topK` | integer | 否 | 返回条数，省略时默认 500，最大 10000 |
 
 请求示例：
 

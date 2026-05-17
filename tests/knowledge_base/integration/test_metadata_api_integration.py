@@ -1836,3 +1836,88 @@ def test_search_where_custom_and_system_field_intersect(monkeypatch):
             top_k=10,
         )
         assert resp_empty.json()["resultObject"]["data"] == []
+
+
+@pytest.mark.integration
+def test_search_where_drives_recall_not_postfilter(monkeypatch):
+    """M13.h: with `where` excluding the strongest hit, the next-best file rises.
+
+    Distinguishes pre-filter (where_sql baked into recall SQL) from
+    post-filter (drop-after-top-K).  Post-filter would leave top-1 empty.
+    """
+    with runtime(monkeypatch) as client:
+        kb_code = new_kb(client)
+        client.post(
+            "/api/v1/directories/create",
+            json={"knCode": kb_code, "directoryPath": "/docs"},
+        )
+        path_a = "/docs/A.md"
+        path_b = "/docs/B.md"
+        # A is a near-verbatim match for the query; B is a weaker but real
+        # match.  Both share the noun "续签" so neither is filtered out by
+        # vocabulary alone.
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path=path_a,
+            file_content=(
+                "# 续签流程\n"
+                "续签流程是合同续签的核心步骤,续签需要业务负责人发起审批,"
+                "再由人事确认续签条款。续签完成后系统会归档。\n"
+            ).encode("utf-8"),
+        )
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path=path_b,
+            file_content=(
+                "# 入职指南\n员工入职需要完成基本资料登记。续签问题请咨询人事。\n"
+            ).encode("utf-8"),
+        )
+        for path in (path_a, path_b):
+            resp = client.post(
+                "/api/v1/fileToMarkdownIndex",
+                json={"knCode": kb_code, "filePath": path},
+            )
+            assert resp.json()["resultCode"] == "0", resp.text
+
+        prop = f"status_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=path_a,
+            property_name=prop,
+            value="archived",
+        )
+
+        # Baseline: no where filter -> top1 should be A (closer match).
+        resp_no_where = chunk_search(
+            client,
+            kb_code=kb_code,
+            query="续签流程",
+            top_k=1,
+        )
+        assert resp_no_where.json()["resultCode"] == "0"
+        baseline = resp_no_where.json()["resultObject"]["data"]
+        assert len(baseline) == 1, baseline
+        assert baseline[0]["filePath"] == path_a, baseline
+
+        # With `where` excluding A's status, B must rise into top-1.
+        # If `where` were a post-filter, top-1 would already be A (which
+        # the post-filter then drops), leaving an empty result.
+        resp_with_where = chunk_search(
+            client,
+            kb_code=kb_code,
+            query="续签流程",
+            top_k=1,
+            where={"not": {"eq": {"fieldName": prop, "value": "archived"}}},
+        )
+        assert resp_with_where.json()["resultCode"] == "0"
+        promoted = resp_with_where.json()["resultObject"]["data"]
+        assert len(promoted) == 1, (
+            "Expected top-K to be re-populated with the next-best file "
+            f"after `where` excludes A, got {promoted}.  Empty result "
+            "would indicate post-filter behavior."
+        )
+        assert promoted[0]["filePath"] == path_b, promoted

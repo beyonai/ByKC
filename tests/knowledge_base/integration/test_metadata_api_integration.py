@@ -530,6 +530,32 @@ def test_metadata_unknown_kb_or_file_rejected(monkeypatch):
         assert "file not found" in bad_file.json()["resultMsg"]
 
 
+@pytest.mark.integration
+def test_metadata_get_unknown_kb_rejected(monkeypatch):
+    """M4.g: metadata/get against an unknown knCode returns 'knowledge base not found'."""
+    with runtime(monkeypatch) as client:
+        # Need a live runtime; the warmup KB inside runtime() initializes the schema.
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={"knCode": "9999999", "filePath": "/whatever.md"},
+        )
+        assert resp.json()["resultCode"] == "-1"
+        assert "knowledge base not found" in resp.json()["resultMsg"]
+
+
+@pytest.mark.integration
+def test_metadata_get_unknown_file_rejected(monkeypatch):
+    """M4.h: metadata/get against a known KB but absent filePath returns 'file not found'."""
+    with runtime(monkeypatch) as client:
+        kb_code = new_kb(client)
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={"knCode": kb_code, "filePath": "/never_imported.md"},
+        )
+        assert resp.json()["resultCode"] == "-1"
+        assert "file not found" in resp.json()["resultMsg"]
+
+
 # ===================================================================
 # Section 5: stringList operations  (M5.a-M5.e)
 # ===================================================================
@@ -960,6 +986,80 @@ def test_delete_kb_clears_metadata(monkeypatch):
         )
         assert fields.json()["resultCode"] == "-1"
         assert "knowledge base not found" in fields.json()["resultMsg"]
+
+
+@pytest.mark.integration
+def test_metadata_fields_list_kn_code_list_required(monkeypatch):
+    """M7.d: metadataFields/list rejects requests that omit or empty knCodeList."""
+    with runtime(monkeypatch) as client:
+        # 1) omitted -> documented validation envelope
+        resp_missing = client.post(
+            "/api/v1/knowledgeItems/metadataFields/list",
+            json={},
+        )
+        assert resp_missing.status_code == 200
+        assert resp_missing.json()["resultCode"] == "-1"
+        assert "request validation failed" in resp_missing.json()["resultMsg"]
+
+        # 2) empty list -> same envelope
+        resp_empty = client.post(
+            "/api/v1/knowledgeItems/metadataFields/list",
+            json={"knCodeList": []},
+        )
+        assert resp_empty.status_code == 200
+        assert resp_empty.json()["resultCode"] == "-1"
+        assert "request validation failed" in resp_empty.json()["resultMsg"]
+
+
+@pytest.mark.integration
+def test_metadata_fields_list_aggregates_across_kbs(monkeypatch):
+    """M7.e: metadataFields/list with multiple knCodes returns the union of properties used."""
+    with runtime(monkeypatch) as client:
+        kb_a, fa = new_kb_with_file(client, file_path="/a.md")
+        kb_b, fb = new_kb_with_file(client, file_path="/b.md")
+        prop_x = f"x_{uuid4().hex[:6]}"
+        prop_y = f"y_{uuid4().hex[:6]}"
+        register_property(client, prop_x, "string")
+        register_property(client, prop_y, "string")
+        set_metadata(
+            client, kb_code=kb_a, file_path=fa, property_name=prop_x, value="v"
+        )
+        set_metadata(
+            client, kb_code=kb_b, file_path=fb, property_name=prop_y, value="v"
+        )
+
+        listed = client.post(
+            "/api/v1/knowledgeItems/metadataFields/list",
+            json={"knCodeList": [kb_a, kb_b]},
+        ).json()["resultObject"]["data"]
+        names = {f["propertyName"] for f in listed}
+        assert {prop_x, prop_y}.issubset(names)
+
+
+@pytest.mark.integration
+def test_metadata_fields_list_kb_scope_isolation(monkeypatch):
+    """M7.f: metadataFields/list scoped to one KB excludes properties only used elsewhere."""
+    with runtime(monkeypatch) as client:
+        kb_a, fa = new_kb_with_file(client, file_path="/a.md")
+        kb_b, fb = new_kb_with_file(client, file_path="/b.md")
+        prop_x = f"x_{uuid4().hex[:6]}"
+        prop_y = f"y_{uuid4().hex[:6]}"
+        register_property(client, prop_x, "string")
+        register_property(client, prop_y, "string")
+        set_metadata(
+            client, kb_code=kb_a, file_path=fa, property_name=prop_x, value="v"
+        )
+        set_metadata(
+            client, kb_code=kb_b, file_path=fb, property_name=prop_y, value="v"
+        )
+
+        listed_a = client.post(
+            "/api/v1/knowledgeItems/metadataFields/list",
+            json={"knCodeList": [kb_a]},
+        ).json()["resultObject"]["data"]
+        names_a = {f["propertyName"] for f in listed_a}
+        assert prop_x in names_a
+        assert prop_y not in names_a
 
 
 # ===================================================================
@@ -1665,6 +1765,62 @@ def test_system_field_contains_rejected(monkeypatch):
         assert "INVALID_FIELD_VALUE_TYPE" in codes
 
 
+@pytest.mark.integration
+def test_metadata_search_custom_and_system_field_intersect(monkeypatch):
+    """M12.f: metadataSearch combining custom + system fields applies both filters.
+
+    Two .md files plus one .txt, custom `status` set on a subset.  The
+    `and: [eq status active, in fileType [md]]` predicate must keep only
+    the .md files whose status is `active`.
+    """
+    with runtime(monkeypatch) as client:
+        kb_code = new_kb(client)
+        prop = f"status_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+        # Three files; only md_active satisfies BOTH constraints.
+        md_active = "/md_active.md"
+        md_archived = "/md_archived.md"
+        txt_active = "/note_active.txt"
+        for path in (md_active, md_archived, txt_active):
+            _upload_file(client, kb_code=kb_code, file_path=path, file_content=b"# F\n")
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=md_active,
+            property_name=prop,
+            value="active",
+        )
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=md_archived,
+            property_name=prop,
+            value="archived",
+        )
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=txt_active,
+            property_name=prop,
+            value="active",
+        )
+
+        paths = set(
+            metadata_search_paths(
+                client,
+                kb_code=kb_code,
+                where={
+                    "and": [
+                        {"eq": {"fieldName": prop, "value": "active"}},
+                        {"in": {"fieldName": "fileType", "value": ["md"]}},
+                    ]
+                },
+                top_k=20,
+            )
+        )
+        assert paths == {md_active}
+
+
 # ===================================================================
 # Section 12: knowledgeItems/search with DSL  (M13.a-M13.g)
 # ===================================================================
@@ -2202,6 +2358,65 @@ def test_search_file_where_system_field_created_at(monkeypatch):
             },
         )
         assert resp_future.json()["resultObject"]["data"] == []
+
+
+@pytest.mark.integration
+def test_search_file_custom_and_system_field_intersect(monkeypatch):
+    """M15.f: searchFile with `and: [custom, system]` applies both filters.
+
+    Build .md and .txt, set custom `status=active` only on the .md.
+    `and: [eq status active, in fileType [md, txt]]` must keep only the
+    .md.  Tightening to `[txt]` makes the AND unsatisfiable -> empty.
+    """
+    with runtime(monkeypatch) as client:
+        kb_code, md_path, txt_path = _build_two_kinds(client)
+        prop = f"status_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=md_path,
+            property_name=prop,
+            value="active",
+        )
+        # Note: txt_path intentionally has no status set.
+
+        resp = client.post(
+            "/api/v1/knowledgeItems/searchFile",
+            json={
+                "query": "续签",
+                "knCodeList": [kb_code],
+                "topK": 10,
+                "searchMode": "mixedRecall",
+                "where": {
+                    "and": [
+                        {"eq": {"fieldName": prop, "value": "active"}},
+                        {"in": {"fieldName": "fileType", "value": ["md", "txt"]}},
+                    ]
+                },
+            },
+        )
+        paths = {h["filePath"] for h in resp.json()["resultObject"]["data"]}
+        assert md_path in paths
+        assert txt_path not in paths
+
+        # Tightening fileType to txt makes the AND unsatisfiable.
+        resp_empty = client.post(
+            "/api/v1/knowledgeItems/searchFile",
+            json={
+                "query": "续签",
+                "knCodeList": [kb_code],
+                "topK": 10,
+                "searchMode": "mixedRecall",
+                "where": {
+                    "and": [
+                        {"eq": {"fieldName": prop, "value": "active"}},
+                        {"in": {"fieldName": "fileType", "value": ["txt"]}},
+                    ]
+                },
+            },
+        )
+        assert resp_empty.json()["resultObject"]["data"] == []
 
 
 # ===================================================================

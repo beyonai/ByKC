@@ -80,26 +80,158 @@
 
 - 这一组场景覆盖元数据属性定义、文件元数据增量更新、纯元数据检索、DSL 升级版 chunk/file 检索的端到端调用链。
 - 系统字段（`fileName`/`fileType`/`fileSize`/`mimeType`/`createdAt`/`updatedAt`）不需要 `metadataProperties/create`，但其余自定义属性必须先注册再使用。
+- 错误响应统一使用文档化信封：HTTP 200 + `resultCode="-1"` + `resultMsg="..."`（包括 Pydantic 校验失败）。
+- 编号与 `tests/knowledge_base/integration/test_metadata_api_integration.py` 的测试函数 1:1 对应。
+
+### 元数据属性定义生命周期
 
 | 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| M1 | 元数据管理员 | 属性定义生命周期 | `metadataProperties/create -> metadataProperties/list -> metadataProperties/delete -> metadataProperties/list` | 创建后可见；重复创建冲突；系统字段同名拒绝；删除后从 list 中消失 | 待补 |
-| M2 | 元数据管理员 | 批量创建原子性 | `metadataProperties/batchCreate (含一项与既有冲突)` | 整批回滚，不留下任何成功项 | 待补 |
-| M3 | 元数据管理员 | 引用计数保护 | `metadataProperties/create -> knowledgeItems/metadata/update set -> metadataProperties/delete -> 释放引用 -> metadataProperties/delete` | 被引用时拒绝删除；释放后可删除 | 待补 |
-| M4 | 内容管理员 | 标量元数据增量更新 | `metadata/update set/unset -> metadata/get` | `set` 覆盖、`unset` 移除；非法操作类型拒绝；返回值含 valueType+value | 待补 |
-| M5 | 内容管理员 | 列表元数据增量更新 | `metadata/update append/remove/clear -> metadata/get` | `append` 去重追加；`remove` 容忍不存在元素；`clear` 置空保留属性 | 待补 |
-| M6 | 内容管理员 | YAML front matter 自动注入 | `knowledgeItems/import (md with front matter) -> metadata/get -> readFile/search` | 已注册字段自动写入；未注册字段拒绝导入；front matter 不出现在切分内容/检索结果中 | 待补 |
-| M7 | 内容管理员 | 删除联动清理 | `metadata/update -> knowledgeItems/delete -> metadataSearch/metadataFields/list` | 删除文件后元数据从所有读接口消失；目录删除/KB 删除等价表现 | 待补 |
-| M8 | DSL 调用方 | 纯元数据检索（必传 where） | `metadataSearch where { in/exists/eq } -> 返回文件列表` | where 必填；不传 topK 默认返回 500；topK 上限 10000；topK 0/<0/>10000 拒绝 | 待补 |
-| M9 | DSL 调用方 | DSL 算子覆盖 | `metadataSearch` 分别使用 `eq/ne/in/contains/exists/gt/gte/lt/lte/and/or/not` | 命中行为符合算子语义；contains 仅 stringList；in 不接受 stringList；exists 不携带 value 否则报错 | 待补 |
-| M10 | DSL 调用方 | DSL 类型校验失败 | 对 `string` 字段传 `number` 等不匹配值；datetime 传非 ISO8601 | 返回 `INVALID_FIELD_VALUE_TYPE`，含 path/code/message | 待补 |
-| M11 | DSL 调用方 | DSL 复杂度上限 | 嵌套深度超过 3 / 叶子条件超过 12 | 返回 `TOO_DEEP_BOOLEAN_NESTING` 或 `TOO_MANY_CONDITIONS` | 待补 |
-| M12 | DSL 调用方 | 系统字段进 DSL | `metadataSearch where {in: { fieldName: "fileType", value: ["md"] }}` | 命中文件名以 .md 结尾的文件；fileSize/createdAt/updatedAt 等以正确类型校验 | 待补 |
-| M13 | DSL 调用方 | 升级版 chunk 检索 | `knowledgeItems/search` 同时传 `query + where + metadataFieldList` | 先按 where 圈定 fs_entry 再 chunk 召回；返回结果含 metadata 字段 | 待补 |
-| M14 | DSL 调用方 | fileTypeList 向下兼容 | `knowledgeItems/search` 仅传 `fileTypeList` 等价于传 `where` 的 `in fileType` | 旧调用方行为不变；与 `where` 同时存在时合取 | 待补 |
-| M15 | DSL 调用方 | 文件级语义检索 | `knowledgeItems/searchFile` query+where+metadataFieldList | 候选 chunk 聚合到 file；保证一个 filePath 不重复出现；返回 metadata | 待补 |
-| M16 | 跨接口一致性 | 元数据 + 检索一致 | `metadata/update -> search where eq -> metadata/get` | 命中文件的元数据值与 `metadata/get` 一致；删除元数据后不再被 where 命中 | 待补 |
-| M17 | DSL 调用方 | 已删除文件不污染检索 | `metadata/update -> knowledgeItems/delete -> metadataSearch/search where 命中条件` | 已软删文件不出现在结果中（涉及 fs_entry.is_deleted 与 metadata_value.is_deleted 双重过滤） | 待补 |
+| M1.a | 元数据管理员 | 创建多个属性后全量列出 | `metadataProperties/create * 3 -> metadataProperties/list` | 三者都出现在结果中 | 已写 |
+| M1.b | 元数据管理员 | 按 propertyNameList 过滤 | `create A,B -> list propertyNameList=[A]` | 仅返回 A | 已写 |
+| M1.c | 元数据管理员 | propertyNameList 含未知名 | `list propertyNameList=[ghost]` | 返回 `data=[]`，不报错 | 已写 |
+| M1.d | 元数据管理员 | 重复创建冲突 | `create A -> create A` | 第二次返回 `resultCode=-1` `"already exists"` | 已写 |
+| M1.e | 元数据管理员 | 系统字段同名拒绝 | `create propertyName=fileName` 等 | `resultCode=-1` `"conflicts with system field"` | 已写 |
+| M1.f | 元数据管理员 | propertyName 边界 | `create propertyName=""` 或 129 字符 | 文档化信封 | 已写 |
+| M1.g | 元数据管理员 | 非法 valueType | `create valueType=int/json/STRING` | 文档化信封 | 已写 |
+| M1.h | 元数据管理员 | 删除不存在属性 | `metadataProperties/delete propertyName=ghost` | `resultCode=-1` `"not found"` | 已写 |
+| M1.i | 元数据管理员 | 删除无引用属性 | `create -> delete -> list` | 删除成功；list 不再返回 | 已写 |
+| M2.a | 元数据管理员 | 批量创建多项成功 | `batchCreate [A,B]` | 全部入库 | 已写 |
+| M2.b | 元数据管理员 | 批量含冲突项整批回滚 | `create A -> batchCreate [B,A]` | 全失败；B 不留下 | 已写 |
+| M2.c | 元数据管理员 | 批量含非法 valueType 整批回滚 | `batchCreate [ok,bad]` | 文档化信封；ok 不留下 | 已写 |
+| M2.d | 元数据管理员 | 批量 propertyList 为空 | `batchCreate {propertyList:[]}` | 文档化信封 | 已写 |
+| M3.a | 元数据管理员 | 被引用时拒绝删除 | `create P -> metadata/update set P -> metadataProperties/delete P` | `resultCode=-1` `"still referenced"` | 已写 |
+| M3.b | 元数据管理员 | 释放引用后允许删除 | 续 M3.a:`metadata/update unset P -> delete P` | 删除成功 | 已写 |
+| M3.c | 元数据管理员 | clear 后仍计为引用 | `set list -> clear -> delete` | 仍拒删 | 已写 |
+
+### 文件元数据增量更新
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| M4.a | 内容管理员 | 五种类型 set+get 回读 | 分别 set string/number/boolean/datetime/stringList → `metadata/get` | `valueType` 与 `value` 都正确 | 已写 |
+| M4.b | 内容管理员 | 未注册属性写入被拒 | `metadata/update set undefined` | `resultCode=-1` `"not defined"` | 已写 |
+| M4.c | 内容管理员 | 非法 operation 字面量 | `operation=upsert` | 文档化信封 | 已写 |
+| M4.d | 内容管理员 | 同请求多 op 同属性按序生效 | 一次请求里 `[set v1, set v2]` | 最终为 v2 | 已写 |
+| M4.e | 内容管理员 | unset 不存在属性幂等 | 文件无该属性时 `unset` | 成功；`metadata/get` 仍无该属性 | 已写 |
+| M4.f | 内容管理员 | 错误 KB / 文件路径 | 未知 knCode / filePath | `resultCode=-1` `"knowledge base not found"` / `"file not found"` | 已写 |
+| M5.a | 内容管理员 | append 去重 | `set [a,b] -> append [b,c]` | `[a,b,c]` | 已写 |
+| M5.b | 内容管理员 | remove 容忍不存在元素 | `set [a] -> remove [x,y]` | `[a]`，不报错 | 已写 |
+| M5.c | 内容管理员 | set 整值覆盖列表 | `set [a,b] -> set [x]` | `[x]` | 已写 |
+| M5.d | 内容管理员 | clear 后保留 valueType | `set [a,b] -> clear -> get` | `valueType=stringList, value=[]` | 已写 |
+| M5.e | 内容管理员 | 列表/标量 op 类型不匹配 | string 字段 `append`、number 字段 `append` 等 | `resultCode=-1` `"not allowed"` | 已写 |
+| M6.a | 内容管理员 | front matter 自动注入 | `import md(--- prop: active ---)` | metadata 自动写入 | 已写 |
+| M6.b | 内容管理员 | front matter 未注册字段 | `import md(--- ghost: 1 ---)` | `resultCode=-1` `"not a defined metadata property"` | 已写 |
+| M6.c | 内容管理员 | front matter 多类型 | string + number + stringList 一起 | 全部正确 | 已写 |
+| M6.d | 内容管理员 | 无 front matter 仍可导入 | `import md(无 --- 块)` | 导入成功；metadata 为空 | 已写 |
+| M6.e | 内容管理员 | front matter 格式错容错 | 缺收尾 ---、YAML 语法错、顶层非 dict | 导入成功；metadata 为空（fail-soft） | 已写 |
+
+### 删除联动
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| M7.a | 内容管理员 | 删除文件清理元数据 | `metadata/update -> knowledgeItems/delete -> metadataSearch / metadata/get` | metadataSearch 不命中；metadata/get 报 file not found | 已写 |
+| M7.b | 目录管理员 | 删除目录联动 | `import 多个 -> directories/delete -> metadataSearch / metadataFields/list` | 子树文件全部从读接口消失 | 已写 |
+| M7.c | 知识库管理员 | 删除知识库联动 | `knowledgeBases/delete -> metadataFields/list` | KB 级 KB not found，元数据全部失效 | 已写 |
+
+### metadataSearch 接口约束
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| M8.a | DSL 调用方 | where 必填 | 不传 where | 文档化信封 | 已写 |
+| M8.b | DSL 调用方 | where 为空对象 | `where={}` | DSL_VALIDATION_ERROR / INVALID_BOOLEAN_NODE | 已写 |
+| M8.c | DSL 调用方 | topK 默认 500 | 不传 topK | 请求被接受 | 已写 |
+| M8.d | DSL 调用方 | topK 上限 10000 | `topK=10001` 拒绝；`topK=10000` 通过 | 文档化信封 / 200 | 已写 |
+| M8.e | DSL 调用方 | topK 0 / 负数 | `topK=0/-1` | 文档化信封 | 已写 |
+| M8.f | DSL 调用方 | knCodeList 缩范围 | 两 KB 命中，knCodeList=[A] | 仅返 A | 已写 |
+| M8.g | DSL 调用方 | knCodeList 含未知 KB | `knCodeList=[ghost]` | `resultCode=-1` `"knowledge base not found"` | 已写 |
+| M8.h | DSL 调用方 | metadataFieldList 返回控制 | `metadataFieldList=[keep]` | 仅返 keep | 已写 |
+| M8.i | DSL 调用方 | knCodeList 必填非空 | 不传 / `knCodeList=[]` | 文档化信封 | 已写 |
+
+### DSL 算子矩阵
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| M9.eq | DSL 调用方 | eq | `eq status active` | 命中 status=active 文件 | 已写 |
+| M9.ne | DSL 调用方 | ne | `ne status active` | 命中 status≠active 且属性存在的文件 | 已写 |
+| M9.in | DSL 调用方 | in | `in status [active,pending]` | 命中其一 | 已写 |
+| M9.contains | DSL 调用方 | contains | `contains tags contract` | 命中 tags 含 contract 的文件 | 已写 |
+| M9.exists | DSL 调用方 | exists | `exists archived` | 命中所有设置过 archived 的文件 | 已写 |
+| M9.gt | DSL 调用方 | gt number | `gt priority 5` | 命中 >5 | 已写 |
+| M9.gte | DSL 调用方 | gte number | `gte priority 5` | 含等号 | 已写 |
+| M9.lt | DSL 调用方 | lt number | `lt priority 5` | 命中 <5 | 已写 |
+| M9.lte | DSL 调用方 | lte number | `lte priority 5` | 含等号 | 已写 |
+| M9.gt-dt | DSL 调用方 | gt datetime | `gt publishedAt 2026-02-01...Z` | 时间窗口命中 | 已写 |
+| M9.and | DSL 调用方 | and 平铺 | `and [eq, contains]` | 取交集 | 已写 |
+| M9.or | DSL 调用方 | or 平铺 | `or [eq, eq]` | 取并集 | 已写 |
+| M9.not | DSL 调用方 | not 包叶子 | `not eq status archived` | 排除 archived 文件 | 已写 |
+| M9.nest1 | DSL 调用方 | and(or, leaf) 二层 | active/pending 且 priority>3 | 交集 | 已写 |
+| M9.nest2 | DSL 调用方 | or(not, leaf) 二层 | not exists archived 或 status=active | 并集 | 已写 |
+| M9.nest3 | DSL 调用方 | 三层嵌套（depth=3 边界） | `and[or[and[eq,contains]]]` | 通过；命中 active+hr | 已写 |
+| M9.demor | DSL 调用方 | 德摩根等价 | `not(or[A,B]) ≡ and[not A, not B]` | 两侧命中集合相同 | 已写 |
+
+### DSL 校验错误
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| M10.a | DSL 调用方 | string 字段传 number | `eq status 1` | INVALID_FIELD_VALUE_TYPE | 已写 |
+| M10.b | DSL 调用方 | number 字段传 string | `eq priority "5"` | INVALID_FIELD_VALUE_TYPE | 已写 |
+| M10.c | DSL 调用方 | number 字段传 bool | `eq priority true` | INVALID_FIELD_VALUE_TYPE | 已写 |
+| M10.d | DSL 调用方 | datetime 非 ISO8601 | `gt publishedAt "yesterday"` | INVALID_FIELD_VALUE_TYPE | 已写 |
+| M10.e | DSL 调用方 | exists 携带 value | `exists{... value:"x"}` | INVALID_FIELD_VALUE_TYPE | 已写 |
+| M10.f | DSL 调用方 | in 用于 stringList | `in tags ["hr"]` | INVALID_FIELD_VALUE_TYPE | 已写 |
+| M10.g | DSL 调用方 | contains 用于非 stringList | `contains status "active"` | INVALID_FIELD_VALUE_TYPE | 已写 |
+| M10.h | DSL 调用方 | gt 用于 string | `gt status "active"` | INVALID_FIELD_VALUE_TYPE | 已写 |
+| M10.i | DSL 调用方 | in.value 空数组 | `in status []` | INVALID_FIELD_VALUE_TYPE | 已写 |
+| M10.j | DSL 调用方 | in.value 数组项类型不一致 | `in priority [1,"two"]` | INVALID_FIELD_VALUE_TYPE | 已写 |
+| M10.k | DSL 调用方 | 节点对象多于一个 key | `{eq:..., ne:...}` | INVALID_BOOLEAN_NODE | 已写 |
+| M10.l | DSL 调用方 | and 操作数空数组 | `{and:[]}` | INVALID_BOOLEAN_NODE | 已写 |
+| M10.m | DSL 调用方 | not 操作数为数组 | `{not:[...]}` | INVALID_BOOLEAN_NODE | 已写 |
+| M10.n | DSL 调用方 | 未知算子 | `{between: ...}` | UNSUPPORTED_OPERATOR | 已写 |
+| M10.o | DSL 调用方 | 未知 fieldName | `{eq:{fieldName:'ghost', value:'x'}}` | UNKNOWN_FIELD | 已写 |
+| M11.a | DSL 调用方 | 嵌套深度 4 | 四层嵌套布尔 | TOO_DEEP_BOOLEAN_NESTING | 已写 |
+| M11.b | DSL 调用方 | 叶子条件 13 | `and: 13 个 leaf` | TOO_MANY_CONDITIONS | 已写 |
+| M11.c | DSL 调用方 | 多错误同时返回 | unknown_field + 类型错 | errorList ≥ 2 条 | 已写 |
+
+### 系统字段进 DSL（metadataSearch）
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| M12.a | DSL 调用方 | in fileType | `in fileType ["md","pdf"]` | 命中扩展名匹配文件 | 已写 |
+| M12.b | DSL 调用方 | eq fileName | `eq fileName "note.txt"` | 精确命中 | 已写 |
+| M12.c | DSL 调用方 | gt fileSize | `gt fileSize 1000` | 命中大文件 | 已写 |
+| M12.d | DSL 调用方 | gt createdAt | `gt createdAt ISO8601` | 时间窗口命中 | 已写 |
+| M12.e | DSL 调用方 | contains 用于系统字段 | `contains fileType "md"` | INVALID_FIELD_VALUE_TYPE | 已写 |
+
+### 升级版 chunk 检索 / 文件级检索 / 兼容字段
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| M13.a | DSL 调用方 | 三 mode × where 都生效 | `search` 三种 mode + where eq status active | 命中目标文件 | 已写 |
+| M13.b | DSL 调用方 | 不传 metadataFieldList 不返 metadata | `search`（无 metadataFieldList） | metadata=None | 已写 |
+| M13.c | DSL 调用方 | metadataFieldList 限制返回字段 | `search metadataFieldList=[keep]` | 仅含 keep | 已写 |
+| M13.d | DSL 调用方 | where 圈定为空 | `search where eq status archived` | data=[] | 已写 |
+| M13.e | DSL 调用方 | topK 边界 | `search topK=0/-1/缺失` | 文档化信封 | 已写 |
+| M13.f | DSL 调用方 | system field in fileType（chunk） | `search where in fileType ["md"]` | 仅 md 文件命中 | 已写 |
+| M13.g | DSL 调用方 | custom + system 合取（chunk） | `search where and:[custom, gt fileSize]` | 两端都满足才命中 | 已写 |
+| M13.h | DSL 调用方 | where 进入召回 SQL（前过滤证明） | top1=A → 加 `where 排除 A` → top1=B | B 上位证明 where 是前过滤而非后过滤 | 已写 |
+| M14.a | DSL 调用方 | fileTypeList 单独使用 | `search fileTypeList=["md"]` | md 命中、txt 不中 | 已写 |
+| M14.b | DSL 调用方 | fileTypeList 与 where 合取 | `fileTypeList=["md"]` + `where in fileType ["txt"]` | 交集为空 | 已写 |
+| M15.a | DSL 调用方 | searchFile 同 filePath 不重复 | 单文件 ≥2 chunk 命中 → searchFile | 同 filePath ==1 次（前置确认 chunk 多命中） | 已写 |
+| M15.b | DSL 调用方 | searchFile + where + metadataFieldList | searchFile + active 过滤 + metadata 返回 | 命中 + metadata.value=active | 已写 |
+| M15.c | DSL 调用方 | searchFile knCodeList 必填非空 | 不传 / `knCodeList=[]` | 文档化信封 | 已写 |
+| M15.d | DSL 调用方 | system field in fileType（file） | `searchFile where in fileType ["md","txt"]` | 文件级聚合后扩展名过滤生效 | 已写 |
+| M15.e | DSL 调用方 | system field gt createdAt（file） | `searchFile where gt createdAt past/future` | 时间窗口命中/不中 | 已写 |
+
+### 跨接口一致 / 软删保护
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| M16.a | 跨接口一致性 | update→search→get 三向一致 | set/unset 后三向比对 | 三方观察一致 | 已写 |
+| M16.b | 跨接口一致性 | metadataFields/list 与值同步 | set 后含；unset 后无 | 同步反映 | 已写 |
+| M16.c | 跨接口一致性 | clear 后字段仍出现在 fields/list | set→clear→list | 仍含该 propertyName | 已写 |
+| M17.a | DSL 调用方 | 软删文件不在 metadataSearch | `update -> delete -> metadataSearch` | 不命中已删文件 | 已写 |
+| M17.b | DSL 调用方 | 软删文件不在 search/searchFile | `delete -> search/searchFile` | 不命中 | 已写 |
+| M17.c | DSL 调用方 | 重新导入同路径仅命中新文件 | `delete -> import same path -> metadataSearch` | 旧值 0 命中、新值精确 1 命中 | 已写 |
 
 ## knowledge_build 场景总表
 
@@ -119,7 +251,7 @@
 | --- | --- | --- |
 | `tests/knowledge_build/integration/test_api_integration.py` | ~~`knowledge_build` 三接口正常/异常与组合链路等价性~~ | 已弃用（`knowledge_build` 独立路由已移除） |
 | `tests/knowledge_base/integration/test_kb_api_stateful_integration.py` | 混合导入构建（`knowledgeItems/import` + `fileToMarkdownIndex`）、知识库改名、单文件/目录删除、多级目录改名删除、读取窗口校验、`downloadFile` 的中文文件名/二进制文件下载、真实搜索链路与失败保护 | 有效 |
-| `tests/knowledge_base/integration/test_metadata_api_integration.py` | 元数据属性 CRUD、文件元数据增量更新、metadataSearch、search 升级版 DSL 过滤；M 系列场景按编号在此文件落地或新增 | 有效 |
+| `tests/knowledge_base/integration/test_metadata_api_integration.py` | M1–M17 全场景：属性 CRUD/批量原子性/引用计数；文件元数据五类型 set/list 操作矩阵；YAML front matter（auto/拒绝/缺失/格式错容错）；删除三档级联；metadataSearch 接口约束（where 必填/topK 边界/KB scope/字段裁剪/knCodeList 必填）；DSL 算子矩阵 + 三层布尔嵌套 + 德摩根；DSL 类型/结构/复杂度错误矩阵；系统字段（metadataSearch + chunk + searchFile）；search 升级版（三 mode/metadataFieldList/where 短路/前过滤证明）；fileTypeList 兼容；searchFile（多 chunk 去重/where/系统字段/knCodeList 必填）；跨接口一致；软删保护 | 有效 |
 
 ## 下一轮优先补充建议
 

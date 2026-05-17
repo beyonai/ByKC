@@ -24,6 +24,7 @@ from tests.knowledge_base.integration._metadata_helpers import (
     new_kb,
     new_kb_with_file,
     register_property,
+    register_property_set,
     runtime,
     set_metadata,
 )
@@ -1365,3 +1366,176 @@ def test_dsl_boolean_demorgan_equivalence(dsl):  # pylint: disable=redefined-out
         )
     )
     assert left == right
+
+
+# ===================================================================
+# Section 10-11: DSL validation errors  (M10.a-M10.o, M11.a-M11.c)
+# ===================================================================
+
+
+@pytest.fixture
+def dsl_props(monkeypatch):
+    """Lighter fixture: register the prop set without seeding files."""
+    with runtime(monkeypatch) as client:
+        kb_code = new_kb(client)
+        ps = register_property_set(client)
+        yield client, kb_code, ps
+
+
+def _expect_dsl_error(client, kb_code, where, *, code, top_k=10):
+    resp = client.post(
+        "/api/v1/knowledgeItems/metadataSearch",
+        json={"knCodeList": [kb_code], "where": where, "topK": top_k},
+    )
+    body = resp.json()
+    assert body["resultCode"] == "-1", body
+    assert body["resultObject"]["errorCode"] == "DSL_VALIDATION_ERROR", body
+    codes = [e["code"] for e in body["resultObject"]["errorList"]]
+    assert code in codes, f"expected {code} in {codes}"
+    return body["resultObject"]["errorList"]
+
+
+@pytest.mark.integration
+def test_dsl_invalid_value_type(dsl_props):  # pylint: disable=redefined-outer-name
+    """M10.a..M10.j: leaf-level type / shape errors map to INVALID_FIELD_VALUE_TYPE."""
+    client, kb_code, p = dsl_props
+    cases = [
+        (
+            "string_takes_number",
+            {"eq": {"fieldName": p.status, "value": 1}},
+        ),
+        (
+            "number_takes_string",
+            {"eq": {"fieldName": p.priority, "value": "5"}},
+        ),
+        (
+            "number_takes_bool",
+            {"eq": {"fieldName": p.priority, "value": True}},
+        ),
+        (
+            "datetime_bad_format",
+            {"gt": {"fieldName": p.published_at, "value": "yesterday"}},
+        ),
+        (
+            "exists_with_value",
+            {"exists": {"fieldName": p.status, "value": "active"}},
+        ),
+        (
+            "in_on_stringList",
+            {"in": {"fieldName": p.tags, "value": ["hr"]}},
+        ),
+        (
+            "contains_on_string",
+            {"contains": {"fieldName": p.status, "value": "active"}},
+        ),
+        (
+            "gt_on_string",
+            {"gt": {"fieldName": p.status, "value": "active"}},
+        ),
+        (
+            "in_empty_array",
+            {"in": {"fieldName": p.status, "value": []}},
+        ),
+        (
+            "in_mixed_types",
+            {"in": {"fieldName": p.priority, "value": [1, "two"]}},
+        ),
+    ]
+    for case_id, where in cases:
+        try:
+            _expect_dsl_error(client, kb_code, where, code="INVALID_FIELD_VALUE_TYPE")
+        except AssertionError as exc:
+            raise AssertionError(f"case={case_id}: {exc}") from exc
+
+
+@pytest.mark.integration
+def test_dsl_structural(dsl_props):  # pylint: disable=redefined-outer-name
+    """M10.k..M10.o: structural / unknown-operator / unknown-field errors."""
+    client, kb_code, p = dsl_props
+    cases = [
+        (
+            "multi_key_node",
+            {
+                "eq": {"fieldName": p.status, "value": "active"},
+                "ne": {"fieldName": p.status, "value": "x"},
+            },
+            "INVALID_BOOLEAN_NODE",
+        ),
+        (
+            "and_empty",
+            {"and": []},
+            "INVALID_BOOLEAN_NODE",
+        ),
+        (
+            "not_array",
+            {"not": [{"eq": {"fieldName": p.status, "value": "x"}}]},
+            "INVALID_BOOLEAN_NODE",
+        ),
+        (
+            "unsupported_operator",
+            {"between": {"fieldName": p.priority, "value": [1, 5]}},
+            "UNSUPPORTED_OPERATOR",
+        ),
+        (
+            "unknown_field",
+            {"eq": {"fieldName": "not_a_field", "value": "x"}},
+            "UNKNOWN_FIELD",
+        ),
+    ]
+    for case_id, where, code in cases:
+        try:
+            _expect_dsl_error(client, kb_code, where, code=code)
+        except AssertionError as exc:
+            raise AssertionError(f"case={case_id}: {exc}") from exc
+
+
+@pytest.mark.integration
+def test_dsl_too_deep(dsl_props):  # pylint: disable=redefined-outer-name
+    """M11.a: nesting depth > 3 yields TOO_DEEP_BOOLEAN_NESTING."""
+    client, kb_code, p = dsl_props
+    where = {
+        "and": [
+            {
+                "or": [
+                    {
+                        "and": [
+                            {
+                                "or": [
+                                    {"eq": {"fieldName": p.status, "value": "active"}},
+                                ]
+                            },
+                        ]
+                    },
+                ]
+            },
+        ]
+    }
+    _expect_dsl_error(client, kb_code, where, code="TOO_DEEP_BOOLEAN_NESTING")
+
+
+@pytest.mark.integration
+def test_dsl_too_many_conditions(dsl_props):  # pylint: disable=redefined-outer-name
+    """M11.b: leaf condition count > 12 yields TOO_MANY_CONDITIONS."""
+    client, kb_code, p = dsl_props
+    where = {
+        "and": [{"eq": {"fieldName": p.status, "value": str(i)}} for i in range(13)]
+    }
+    _expect_dsl_error(client, kb_code, where, code="TOO_MANY_CONDITIONS")
+
+
+@pytest.mark.integration
+def test_dsl_multiple_errors_aggregated(dsl_props):  # pylint: disable=redefined-outer-name
+    """M11.c: a single request with two distinct issues returns both errors."""
+    client, kb_code, p = dsl_props
+    where = {
+        "and": [
+            {"eq": {"fieldName": "ghost", "value": "x"}},
+            {"eq": {"fieldName": p.status, "value": 7}},
+        ]
+    }
+    errors = _expect_dsl_error(client, kb_code, where, code="UNKNOWN_FIELD")
+    codes = {e["code"] for e in errors}
+    assert "INVALID_FIELD_VALUE_TYPE" in codes
+    paths = [e["path"] for e in errors]
+    assert any("[0]" in pp for pp in paths)
+    assert any("[1]" in pp for pp in paths)

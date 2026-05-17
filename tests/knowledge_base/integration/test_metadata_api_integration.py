@@ -2012,15 +2012,44 @@ def test_search_file_type_list_intersect_where(monkeypatch):
 
 @pytest.mark.integration
 def test_search_file_dedup_by_path(monkeypatch):
-    """M15.a: searchFile aggregates chunk hits; each filePath appears at most once."""
+    """M15.a: searchFile aggregates multi-chunk hits to one filePath entry.
+
+    Builds a markdown long enough to produce >=2 chunks (chunk_size=512 in
+    the chunking service).  Verifies via chunk search that the file truly
+    has multiple chunks recalled by the same query, then asserts that
+    searchFile returns the file exactly once after aggregation.
+    """
+    long_paragraph = (
+        "续签合同流程是合同续签的核心步骤,需要由业务负责人发起审批,人事确认续签条款。 "
+        * 60
+    )
     with runtime(monkeypatch) as client:
         kb_code, file_path = new_kb_with_built_file(
             client,
-            markdown=(
-                "# 续签流程\n"
-                "续签步骤一\n续签步骤二\n续签步骤三\n续签步骤四\n续签步骤五\n"
-            ),
+            markdown=f"# 续签流程\n\n{long_paragraph}\n",
         )
+
+        # Pre-condition: chunk search must see at least 2 chunks of this file
+        # for the dedup assertion below to be meaningful.
+        chunk_resp = chunk_search(
+            client,
+            kb_code=kb_code,
+            query="续签",
+            top_k=20,
+        )
+        chunk_hits_for_file = [
+            h
+            for h in chunk_resp.json()["resultObject"]["data"]
+            if h["filePath"] == file_path
+        ]
+        assert len(chunk_hits_for_file) >= 2, (
+            f"setup failed: file produced only {len(chunk_hits_for_file)} "
+            "chunk hit(s); the dedup test needs >=2 to be meaningful"
+        )
+        # Sanity: distinct chunk_no across the recalled chunks.
+        assert len({h["chunkNo"] for h in chunk_hits_for_file}) >= 2
+
+        # Actual claim: searchFile aggregates the multi-chunk recall to one entry.
         resp = client.post(
             "/api/v1/knowledgeItems/searchFile",
             json={
@@ -2031,7 +2060,10 @@ def test_search_file_dedup_by_path(monkeypatch):
             },
         )
         paths = [h["filePath"] for h in resp.json()["resultObject"]["data"]]
-        assert paths.count(file_path) <= 1
+        assert paths.count(file_path) == 1, (
+            f"expected exactly one searchFile hit for {file_path}, got "
+            f"{paths.count(file_path)} (paths={paths})"
+        )
 
 
 @pytest.mark.integration

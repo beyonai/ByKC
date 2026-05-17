@@ -149,8 +149,8 @@ class ListMetadataFieldsRequest(BaseModel):
 class MetadataSearchRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    kb_code_list: list[str] | None = Field(
-        default=None,
+    kb_code_list: list[str] = Field(
+        min_length=1,
         validation_alias=AliasChoices("knCodeList", "kb_code_list"),
     )
     where: dict[str, Any] = Field(
@@ -181,8 +181,8 @@ class SearchFileRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     query: str = Field(min_length=1)
-    kb_code_list: list[str] | None = Field(
-        default=None,
+    kb_code_list: list[str] = Field(
+        min_length=1,
         validation_alias=AliasChoices("knCodeList", "kb_code_list"),
     )
     where: dict[str, Any] | None = None

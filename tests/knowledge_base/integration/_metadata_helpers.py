@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import time
 from dataclasses import dataclass
 from typing import Iterator
 from uuid import uuid4
@@ -208,6 +209,49 @@ def new_kb_with_file(
     return kb_code, file_path
 
 
+def wait_for_build(
+    client: TestClient,
+    *,
+    kb_code: str,
+    file_path: str,
+    timeout_s: float = 60.0,
+    poll_interval_s: float = 0.2,
+) -> None:
+    """Block until /api/v1/fileBuildStatus reports `complete` for one file.
+
+    Raises AssertionError if the build reports `failed` or if the deadline
+    elapses.  Tests must call this after `fileToMarkdownIndex` before
+    issuing search/readFile requests so they don't depend on Starlette's
+    TestClient quirk of awaiting BackgroundTasks before yielding.
+    """
+    deadline = time.monotonic() + timeout_s
+    last_status: str | None = None
+    last_step: str | None = None
+    while True:
+        resp = client.post(
+            "/api/v1/fileBuildStatus",
+            json={"knCode": kb_code, "filePath": file_path},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["resultCode"] == "0", body
+        status = body["resultObject"]["status"]
+        step = body["resultObject"].get("currentStep")
+        last_status, last_step = status, step
+        if status == "complete":
+            return
+        if status == "failed":
+            raise AssertionError(
+                f"build failed for {file_path}: status={status}, currentStep={step}"
+            )
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                f"build did not complete within {timeout_s}s for {file_path}: "
+                f"status={last_status}, currentStep={last_step}"
+            )
+        time.sleep(poll_interval_s)
+
+
 def new_kb_with_built_file(
     client: TestClient,
     *,
@@ -236,6 +280,7 @@ def new_kb_with_built_file(
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["resultCode"] == "0", resp.text
+    wait_for_build(client, kb_code=kb_code, file_path=file_path)
     return kb_code, file_path
 
 

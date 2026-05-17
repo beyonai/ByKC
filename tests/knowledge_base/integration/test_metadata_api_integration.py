@@ -20,8 +20,10 @@ import pytest
 
 from tests.knowledge_base.integration._metadata_helpers import (
     build_dsl_dataset,
+    chunk_search,
     metadata_search_paths,
     new_kb,
+    new_kb_with_built_file,
     new_kb_with_file,
     register_property,
     register_property_set,
@@ -1634,3 +1636,203 @@ def test_system_field_contains_rejected(monkeypatch):
         assert body["resultCode"] == "-1"
         codes = [e["code"] for e in body["resultObject"]["errorList"]]
         assert "INVALID_FIELD_VALUE_TYPE" in codes
+
+
+# ===================================================================
+# Section 12: knowledgeItems/search with DSL  (M13.a-M13.g)
+# ===================================================================
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("mode", ["fullTextRecall", "embedding", "mixedRecall"])
+def test_search_modes_with_where(monkeypatch, mode):
+    """M13.a: each searchMode honors the DSL `where` filter."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_built_file(client)
+        prop = f"s_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            value="active",
+        )
+
+        resp = chunk_search(
+            client,
+            kb_code=kb_code,
+            query="续签",
+            mode=mode,
+            where={"eq": {"fieldName": prop, "value": "active"}},
+        )
+        assert resp.status_code == 200
+        data = resp.json()["resultObject"]["data"]
+        assert any(h["filePath"] == file_path for h in data)
+
+
+@pytest.mark.integration
+def test_search_metadata_excluded_by_default(monkeypatch):
+    """M13.b: when metadataFieldList is omitted, hits do not carry metadata."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_built_file(client)
+        prop = f"s_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            value="active",
+        )
+
+        resp = chunk_search(client, kb_code=kb_code, query="续签")
+        for hit in resp.json()["resultObject"]["data"]:
+            assert hit["metadata"] is None
+
+
+@pytest.mark.integration
+def test_search_metadata_field_list_filters_response(monkeypatch):
+    """M13.c: metadataFieldList limits returned per-hit metadata to listed fields."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_built_file(client)
+        keep = f"keep_{uuid4().hex[:6]}"
+        drop = f"drop_{uuid4().hex[:6]}"
+        register_property(client, keep, "string")
+        register_property(client, drop, "string")
+        set_metadata(
+            client, kb_code=kb_code, file_path=file_path, property_name=keep, value="y"
+        )
+        set_metadata(
+            client, kb_code=kb_code, file_path=file_path, property_name=drop, value="y"
+        )
+        resp = chunk_search(
+            client, kb_code=kb_code, query="续签", metadata_field_list=[keep]
+        )
+        hits = [
+            h for h in resp.json()["resultObject"]["data"] if h["filePath"] == file_path
+        ]
+        assert hits and keep in hits[0]["metadata"]
+        assert drop not in hits[0]["metadata"]
+
+
+@pytest.mark.integration
+def test_search_where_empty_result(monkeypatch):
+    """M13.d: a non-matching `where` short-circuits to zero hits."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_built_file(client)
+        prop = f"s_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            value="active",
+        )
+
+        resp = chunk_search(
+            client,
+            kb_code=kb_code,
+            query="续签",
+            where={"eq": {"fieldName": prop, "value": "archived"}},
+        )
+        assert resp.json()["resultObject"]["data"] == []
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("top_k", [0, -1])
+def test_search_top_k_bounds_rejected(monkeypatch, top_k):
+    """M13.e: topK<=0 is rejected; missing topK also rejected."""
+    with runtime(monkeypatch) as client:
+        kb_code, _ = new_kb_with_built_file(client)
+        resp = chunk_search(client, kb_code=kb_code, query="x", top_k=top_k)
+        # Documented envelope: HTTP 200 + resultCode="-1" + "request validation failed".
+        assert resp.status_code == 200
+        assert resp.json()["resultCode"] == "-1"
+        assert "request validation failed" in resp.json()["resultMsg"]
+        # missing topK
+        resp_missing = client.post(
+            "/api/v1/knowledgeItems/search",
+            json={"query": "x", "knCodeList": [kb_code], "searchMode": "mixedRecall"},
+        )
+        assert resp_missing.status_code == 200
+        assert resp_missing.json()["resultCode"] == "-1"
+
+
+@pytest.mark.integration
+def test_search_where_system_field_file_type(monkeypatch):
+    """M13.f: chunk search filters by `where: in fileType [...]` (system field).
+
+    The PDF is uploaded but NOT indexed (fileToMarkdownIndex is not called for
+    it) — it has no chunks, so it can never appear in chunk search results
+    regardless of the filter.  The assertion confirms the md filter returns the
+    md file and that the pdf path is absent (it has no chunks to return).
+    """
+    with runtime(monkeypatch) as client:
+        kb_code, md_path = new_kb_with_built_file(client)
+        pdf_path = "/制度/续签流程.pdf"
+        _upload_file(
+            client, kb_code=kb_code, file_path=pdf_path, file_content=b"%PDF-1.4\n"
+        )
+        # Do NOT call fileToMarkdownIndex for the fake PDF — PyMuPDF cannot
+        # parse a stub PDF and would raise FzErrorFormat.  The file exists in
+        # the KB as a file entry but has no chunks, so it cannot appear in any
+        # chunk search result.
+
+        resp = chunk_search(
+            client,
+            kb_code=kb_code,
+            query="续签",
+            where={"in": {"fieldName": "fileType", "value": ["md"]}},
+            top_k=10,
+        )
+        paths = [h["filePath"] for h in resp.json()["resultObject"]["data"]]
+        assert md_path in paths
+        assert pdf_path not in paths
+
+
+@pytest.mark.integration
+def test_search_where_custom_and_system_field_intersect(monkeypatch):
+    """M13.g: chunk search where with `and: [custom, system]` applies both filters."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_built_file(client)
+        prop = f"s_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            value="active",
+        )
+
+        resp = chunk_search(
+            client,
+            kb_code=kb_code,
+            query="续签",
+            where={
+                "and": [
+                    {"eq": {"fieldName": prop, "value": "active"}},
+                    {"gt": {"fieldName": "fileSize", "value": 1}},
+                ]
+            },
+            top_k=10,
+        )
+        paths = [h["filePath"] for h in resp.json()["resultObject"]["data"]]
+        assert file_path in paths
+
+        # Negative: tighter system filter -> AND unsat -> empty result
+        resp_empty = chunk_search(
+            client,
+            kb_code=kb_code,
+            query="续签",
+            where={
+                "and": [
+                    {"eq": {"fieldName": prop, "value": "active"}},
+                    {"gt": {"fieldName": "fileSize", "value": 10**9}},
+                ]
+            },
+            top_k=10,
+        )
+        assert resp_empty.json()["resultObject"]["data"] == []

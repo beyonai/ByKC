@@ -2202,3 +2202,228 @@ def test_search_file_where_system_field_created_at(monkeypatch):
             },
         )
         assert resp_future.json()["resultObject"]["data"] == []
+
+
+# ===================================================================
+# Section 14: cross-interface consistency + soft-delete isolation
+#                (M16.a-M16.c, M17.a-M17.c)
+# ===================================================================
+
+
+@pytest.mark.integration
+def test_consistency_update_search_get(monkeypatch):
+    """M16.a: update -> metadataSearch -> metadata/get all agree on the same value.
+
+    After unset, the file disappears from a search that was matching the
+    unset value, and metadata/get no longer returns the property.
+    """
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        prop = f"c_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            value="active",
+        )
+        # search hits
+        paths = metadata_search_paths(
+            client,
+            kb_code=kb_code,
+            where={"eq": {"fieldName": prop, "value": "active"}},
+        )
+        assert file_path in paths
+        # get returns same value
+        got = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={"knCode": kb_code, "filePath": file_path},
+        ).json()["resultObject"]["metadata"]
+        assert got[prop]["value"] == "active"
+
+        # unset
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            operation="unset",
+        )
+        paths = metadata_search_paths(
+            client,
+            kb_code=kb_code,
+            where={"eq": {"fieldName": prop, "value": "active"}},
+        )
+        assert file_path not in paths
+        got = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={"knCode": kb_code, "filePath": file_path},
+        ).json()["resultObject"]["metadata"]
+        assert prop not in got
+
+
+@pytest.mark.integration
+def test_consistency_fields_list_reflects_values(monkeypatch):
+    """M16.b: a property only appears in metadataFields/list once it has a value."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        a = f"a_{uuid4().hex[:6]}"
+        b = f"b_{uuid4().hex[:6]}"
+        register_property(client, a, "string")
+        register_property(client, b, "string")
+        set_metadata(
+            client, kb_code=kb_code, file_path=file_path, property_name=a, value="x"
+        )
+
+        listed = client.post(
+            "/api/v1/knowledgeItems/metadataFields/list",
+            json={"knCodeList": [kb_code]},
+        ).json()["resultObject"]["data"]
+        names = {f["propertyName"] for f in listed}
+        assert a in names
+        assert b not in names
+
+        # After unset, a disappears too
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=a,
+            operation="unset",
+        )
+        listed = client.post(
+            "/api/v1/knowledgeItems/metadataFields/list",
+            json={"knCodeList": [kb_code]},
+        ).json()["resultObject"]["data"]
+        names = {f["propertyName"] for f in listed}
+        assert a not in names
+
+
+@pytest.mark.integration
+def test_consistency_clear_keeps_field(monkeypatch):
+    """M16.c: clear leaves the value row in place, so metadataFields/list still lists it."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        prop = f"l_{uuid4().hex[:6]}"
+        register_property(client, prop, "stringList")
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            value=["a"],
+        )
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            operation="clear",
+        )
+        listed = client.post(
+            "/api/v1/knowledgeItems/metadataFields/list",
+            json={"knCodeList": [kb_code]},
+        ).json()["resultObject"]["data"]
+        assert prop in {f["propertyName"] for f in listed}
+
+
+@pytest.mark.integration
+def test_soft_delete_excluded_from_metadata_search(monkeypatch):
+    """M17.a: a soft-deleted file is excluded from metadataSearch."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        prop = f"s_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            value="active",
+        )
+        client.post(
+            "/api/v1/knowledgeItems/delete",
+            json={"knCode": kb_code, "filePath": file_path},
+        )
+        paths = metadata_search_paths(
+            client,
+            kb_code=kb_code,
+            where={"eq": {"fieldName": prop, "value": "active"}},
+        )
+        assert file_path not in paths
+
+
+@pytest.mark.integration
+def test_soft_delete_excluded_from_chunk_and_file_search(monkeypatch):
+    """M17.b: soft-deleted files do not appear in `search` or `searchFile`."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_built_file(client)
+        client.post(
+            "/api/v1/knowledgeItems/delete",
+            json={"knCode": kb_code, "filePath": file_path},
+        )
+
+        chunk = chunk_search(client, kb_code=kb_code, query="续签").json()
+        assert all(h["filePath"] != file_path for h in chunk["resultObject"]["data"])
+
+        file_resp = client.post(
+            "/api/v1/knowledgeItems/searchFile",
+            json={
+                "query": "续签",
+                "knCodeList": [kb_code],
+                "topK": 10,
+                "searchMode": "mixedRecall",
+            },
+        ).json()
+        assert all(
+            h["filePath"] != file_path for h in file_resp["resultObject"]["data"]
+        )
+
+
+@pytest.mark.integration
+def test_soft_delete_then_reimport_no_pollution(monkeypatch):
+    """M17.c: re-importing the same path uses fresh metadata; old values stay hidden."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client)
+        prop = f"s_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            value="old_value",
+        )
+
+        client.post(
+            "/api/v1/knowledgeItems/delete",
+            json={"knCode": kb_code, "filePath": file_path},
+        )
+
+        _upload_file(
+            client, kb_code=kb_code, file_path=file_path, file_content=b"# T\nbody2"
+        )
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            value="new_value",
+        )
+
+        # old value not findable
+        old_paths = metadata_search_paths(
+            client,
+            kb_code=kb_code,
+            where={"eq": {"fieldName": prop, "value": "old_value"}},
+        )
+        assert file_path not in old_paths
+        # new value findable, exactly once
+        new_paths = metadata_search_paths(
+            client,
+            kb_code=kb_code,
+            where={"eq": {"fieldName": prop, "value": "new_value"}},
+        )
+        assert new_paths.count(file_path) == 1

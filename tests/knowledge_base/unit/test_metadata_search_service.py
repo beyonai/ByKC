@@ -108,11 +108,28 @@ def test_metadata_search_request_requires_where():
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
-        MetadataSearchRequest(top_k=10)
+        MetadataSearchRequest(kb_code_list=["1"], top_k=10)
+
+
+def test_metadata_search_request_requires_kb_code_list():
+    """`knCodeList` is mandatory and must be non-empty."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        MetadataSearchRequest(where={"exists": {"fieldName": "fileName"}}, top_k=10)
+    with pytest.raises(ValidationError):
+        MetadataSearchRequest(
+            kb_code_list=[],
+            where={"exists": {"fieldName": "fileName"}},
+            top_k=10,
+        )
 
 
 def test_metadata_search_request_top_k_defaults_to_500():
-    request = MetadataSearchRequest(where={"exists": {"fieldName": "fileName"}})
+    request = MetadataSearchRequest(
+        kb_code_list=["1"],
+        where={"exists": {"fieldName": "fileName"}},
+    )
     assert request.top_k == 500
 
 
@@ -120,11 +137,19 @@ def test_metadata_search_request_rejects_top_k_above_cap():
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
-        MetadataSearchRequest(where={"exists": {"fieldName": "fileName"}}, top_k=10001)
+        MetadataSearchRequest(
+            kb_code_list=["1"],
+            where={"exists": {"fieldName": "fileName"}},
+            top_k=10001,
+        )
 
 
 def test_metadata_search_request_rejects_top_k_zero():
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
-        MetadataSearchRequest(where={"exists": {"fieldName": "fileName"}}, top_k=0)
+        MetadataSearchRequest(
+            kb_code_list=["1"],
+            where={"exists": {"fieldName": "fileName"}},
+            top_k=0,
+        )

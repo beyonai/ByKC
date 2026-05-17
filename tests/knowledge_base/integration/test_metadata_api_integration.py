@@ -29,6 +29,7 @@ from tests.knowledge_base.integration._metadata_helpers import (
     register_property_set,
     runtime,
     set_metadata,
+    wait_for_build,
 )
 from tests.knowledge_base.integration.test_kb_api_stateful_integration import (
     _upload_file,  # plain helper, not a fake
@@ -1880,6 +1881,7 @@ def test_search_where_drives_recall_not_postfilter(monkeypatch):
                 json={"knCode": kb_code, "filePath": path},
             )
             assert resp.json()["resultCode"] == "0", resp.text
+            wait_for_build(client, kb_code=kb_code, file_path=path)
 
         prop = f"status_{uuid4().hex[:6]}"
         register_property(client, prop, "string")

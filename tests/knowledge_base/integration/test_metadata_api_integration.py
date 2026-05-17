@@ -19,6 +19,8 @@ from uuid import uuid4
 import pytest
 
 from tests.knowledge_base.integration._metadata_helpers import (
+    build_dsl_dataset,
+    metadata_search_paths,
     new_kb,
     new_kb_with_file,
     register_property,
@@ -1139,3 +1141,227 @@ def test_metadata_search_metadata_field_list_filters_response(monkeypatch):
         )
         assert keep in hit["metadata"]
         assert drop not in (hit["metadata"] or {})
+
+
+# ===================================================================
+# Section 9: DSL operator matrix  (M9.*)
+#
+# These tests share one DslDataset (6 files, 5 properties).  Each
+# case-id maps 1:1 to a row in api-integration-test-plan.md.
+# ===================================================================
+
+
+@pytest.fixture
+def dsl(monkeypatch):
+    with runtime(monkeypatch) as client:
+        ds = build_dsl_dataset(client)
+        yield client, ds
+
+
+def _leaf_cases(props):
+    return [
+        pytest.param(
+            {"eq": {"fieldName": props.status, "value": "active"}},
+            {"/dsl/F1.md", "/dsl/F2.md", "/dsl/F5.pdf"},
+            id="eq",
+        ),
+        pytest.param(
+            {"ne": {"fieldName": props.status, "value": "active"}},
+            {"/dsl/F3.md", "/dsl/F4.md"},
+            id="ne",
+        ),
+        pytest.param(
+            {"in": {"fieldName": props.status, "value": ["active", "pending"]}},
+            {"/dsl/F1.md", "/dsl/F2.md", "/dsl/F3.md", "/dsl/F5.pdf"},
+            id="in",
+        ),
+        pytest.param(
+            {"contains": {"fieldName": props.tags, "value": "contract"}},
+            {"/dsl/F2.md", "/dsl/F3.md"},
+            id="contains",
+        ),
+        pytest.param(
+            {"exists": {"fieldName": props.archived}},
+            {"/dsl/F1.md", "/dsl/F2.md", "/dsl/F3.md", "/dsl/F4.md", "/dsl/F5.pdf"},
+            id="exists",
+        ),
+        pytest.param(
+            {"gt": {"fieldName": props.priority, "value": 5}},
+            {"/dsl/F4.md"},
+            id="gt",
+        ),
+        pytest.param(
+            {"gte": {"fieldName": props.priority, "value": 5}},
+            {"/dsl/F2.md", "/dsl/F3.md", "/dsl/F4.md"},
+            id="gte",
+        ),
+        pytest.param(
+            {"lt": {"fieldName": props.priority, "value": 5}},
+            {"/dsl/F1.md", "/dsl/F5.pdf"},
+            id="lt",
+        ),
+        pytest.param(
+            {"lte": {"fieldName": props.priority, "value": 5}},
+            {"/dsl/F1.md", "/dsl/F2.md", "/dsl/F3.md", "/dsl/F5.pdf"},
+            id="lte",
+        ),
+        pytest.param(
+            {"gt": {"fieldName": props.published_at, "value": "2026-02-01T00:00:00Z"}},
+            {"/dsl/F2.md", "/dsl/F3.md"},
+            id="gt_datetime",
+        ),
+    ]
+
+
+@pytest.mark.integration
+def test_dsl_operator(dsl):  # pylint: disable=redefined-outer-name
+    """M9.eq..M9.gt-dt: each leaf operator returns the expected file set.
+
+    pytest.parametrize cannot drive over a fixture-derived value, so we
+    iterate the cases manually.  Each pytest.param's `id` preserves the
+    M9.* sub-id in failure messages.
+    """
+    client, ds = dsl
+    for param in _leaf_cases(ds.props):
+        where, expected = param.values
+        hit_paths = set(
+            metadata_search_paths(
+                client,
+                kb_code=ds.kb_code,
+                where=where,
+                top_k=50,
+            )
+        )
+        assert hit_paths == expected, f"case={param.id} got={hit_paths}"
+
+
+@pytest.mark.integration
+def test_dsl_boolean(dsl):  # pylint: disable=redefined-outer-name
+    """M9.and..M9.nest3: boolean operators (and/or/not) and depth=3 nesting."""
+    client, ds = dsl
+    p = ds.props
+    cases = [
+        pytest.param(
+            {
+                "and": [
+                    {"eq": {"fieldName": p.status, "value": "active"}},
+                    {"contains": {"fieldName": p.tags, "value": "contract"}},
+                ]
+            },
+            {"/dsl/F2.md"},
+            id="and_flat",
+        ),
+        pytest.param(
+            {
+                "or": [
+                    {"eq": {"fieldName": p.status, "value": "active"}},
+                    {"eq": {"fieldName": p.status, "value": "pending"}},
+                ]
+            },
+            {"/dsl/F1.md", "/dsl/F2.md", "/dsl/F3.md", "/dsl/F5.pdf"},
+            id="or_flat",
+        ),
+        pytest.param(
+            # Compiler emits NOT (EXISTS ... mv match).  For files that have
+            # NO status set (F6), the inner EXISTS is FALSE so NOT-EXISTS is
+            # TRUE → F6 is included.  Encode that semantics here.  If the
+            # implementation later changes to "NOT must keep only files
+            # where the property is set", update the expected set together.
+            {"not": {"eq": {"fieldName": p.status, "value": "archived"}}},
+            {"/dsl/F1.md", "/dsl/F2.md", "/dsl/F3.md", "/dsl/F5.pdf", "/dsl/F6.md"},
+            id="not_leaf",
+        ),
+        pytest.param(
+            {
+                "and": [
+                    {
+                        "or": [
+                            {"eq": {"fieldName": p.status, "value": "active"}},
+                            {"eq": {"fieldName": p.status, "value": "pending"}},
+                        ]
+                    },
+                    {"gt": {"fieldName": p.priority, "value": 3}},
+                ]
+            },
+            {"/dsl/F2.md", "/dsl/F3.md"},
+            id="nest_and_or_leaf",
+        ),
+        pytest.param(
+            {
+                "or": [
+                    {"not": {"exists": {"fieldName": p.archived}}},
+                    {"eq": {"fieldName": p.status, "value": "active"}},
+                ]
+            },
+            {"/dsl/F1.md", "/dsl/F2.md", "/dsl/F5.pdf", "/dsl/F6.md"},
+            id="nest_or_not_leaf",
+        ),
+        pytest.param(
+            {
+                "and": [
+                    {
+                        "or": [
+                            {
+                                "and": [
+                                    {
+                                        "eq": {
+                                            "fieldName": p.status,
+                                            "value": "active",
+                                        }
+                                    },
+                                    {
+                                        "contains": {
+                                            "fieldName": p.tags,
+                                            "value": "hr",
+                                        }
+                                    },
+                                ]
+                            },
+                        ]
+                    },
+                ]
+            },
+            {"/dsl/F1.md", "/dsl/F2.md", "/dsl/F5.pdf"},
+            id="nest_three_depth",
+        ),
+    ]
+    for case in cases:
+        where, expected = case.values
+        hit_paths = set(
+            metadata_search_paths(
+                client,
+                kb_code=ds.kb_code,
+                where=where,
+                top_k=50,
+            )
+        )
+        assert hit_paths == expected, f"case={case.id} got={hit_paths}"
+
+
+@pytest.mark.integration
+def test_dsl_boolean_demorgan_equivalence(dsl):  # pylint: disable=redefined-outer-name
+    """M9.demor: NOT (A OR B) ≡ AND[NOT A, NOT B] over the dataset."""
+    client, ds = dsl
+    p = ds.props
+    a = {"eq": {"fieldName": p.status, "value": "active"}}
+    b = {"eq": {"fieldName": p.status, "value": "pending"}}
+
+    not_or = {"not": {"or": [a, b]}}
+    and_not = {"and": [{"not": a}, {"not": b}]}
+    left = set(
+        metadata_search_paths(
+            client,
+            kb_code=ds.kb_code,
+            where=not_or,
+            top_k=50,
+        )
+    )
+    right = set(
+        metadata_search_paths(
+            client,
+            kb_code=ds.kb_code,
+            where=and_not,
+            top_k=50,
+        )
+    )
+    assert left == right

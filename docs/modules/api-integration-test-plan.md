@@ -114,6 +114,8 @@
 | M4.d | 内容管理员 | 同请求多 op 同属性按序生效 | 一次请求里 `[set v1, set v2]` | 最终为 v2 | 已写 |
 | M4.e | 内容管理员 | unset 不存在属性幂等 | 文件无该属性时 `unset` | 成功；`metadata/get` 仍无该属性 | 已写 |
 | M4.f | 内容管理员 | 错误 KB / 文件路径 | 未知 knCode / filePath | `resultCode=-1` `"knowledge base not found"` / `"file not found"` | 已写 |
+| M4.g | 内容管理员 | metadata/get 未知 KB | `metadata/get knCode=ghost` | `resultCode=-1` `"knowledge base not found"` | 已写 |
+| M4.h | 内容管理员 | metadata/get 未知文件 | `metadata/get filePath=/never.md` | `resultCode=-1` `"file not found"` | 已写 |
 | M5.a | 内容管理员 | append 去重 | `set [a,b] -> append [b,c]` | `[a,b,c]` | 已写 |
 | M5.b | 内容管理员 | remove 容忍不存在元素 | `set [a] -> remove [x,y]` | `[a]`，不报错 | 已写 |
 | M5.c | 内容管理员 | set 整值覆盖列表 | `set [a,b] -> set [x]` | `[x]` | 已写 |
@@ -132,6 +134,9 @@
 | M7.a | 内容管理员 | 删除文件清理元数据 | `metadata/update -> knowledgeItems/delete -> metadataSearch / metadata/get` | metadataSearch 不命中；metadata/get 报 file not found | 已写 |
 | M7.b | 目录管理员 | 删除目录联动 | `import 多个 -> directories/delete -> metadataSearch / metadataFields/list` | 子树文件全部从读接口消失 | 已写 |
 | M7.c | 知识库管理员 | 删除知识库联动 | `knowledgeBases/delete -> metadataFields/list` | KB 级 KB not found，元数据全部失效 | 已写 |
+| M7.d | 知识库管理员 | metadataFields/list knCodeList 必填非空 | 不传 / `knCodeList=[]` | 文档化信封 | 已写 |
+| M7.e | 知识库管理员 | metadataFields/list 多 KB 合并 | `knCodeList=[A,B]`,各自用过 prop_x/prop_y | 返回 prop_x 与 prop_y 的并集 | 已写 |
+| M7.f | 知识库管理员 | metadataFields/list 单 KB scope 隔离 | `knCodeList=[A]`,A 用过 prop_x、B 用过 prop_y | 仅返 prop_x | 已写 |
 
 ### metadataSearch 接口约束
 
@@ -201,6 +206,7 @@
 | M12.c | DSL 调用方 | gt fileSize | `gt fileSize 1000` | 命中大文件 | 已写 |
 | M12.d | DSL 调用方 | gt createdAt | `gt createdAt ISO8601` | 时间窗口命中 | 已写 |
 | M12.e | DSL 调用方 | contains 用于系统字段 | `contains fileType "md"` | INVALID_FIELD_VALUE_TYPE | 已写 |
+| M12.f | DSL 调用方 | metadataSearch 系统+自定义混合 | `and: [eq custom status active, in fileType ["md"]]` | 仅 .md 且 status=active 的文件命中 | 已写 |
 
 ### 升级版 chunk 检索 / 文件级检索 / 兼容字段
 
@@ -221,6 +227,7 @@
 | M15.c | DSL 调用方 | searchFile knCodeList 必填非空 | 不传 / `knCodeList=[]` | 文档化信封 | 已写 |
 | M15.d | DSL 调用方 | system field in fileType（file） | `searchFile where in fileType ["md","txt"]` | 文件级聚合后扩展名过滤生效 | 已写 |
 | M15.e | DSL 调用方 | system field gt createdAt（file） | `searchFile where gt createdAt past/future` | 时间窗口命中/不中 | 已写 |
+| M15.f | DSL 调用方 | searchFile 系统+自定义混合 | `and: [eq custom status active, in fileType ["md","txt"]]`,收紧 fileType 后取空 | 自定义+系统两侧都生效 | 已写 |
 
 ### 跨接口一致 / 软删保护
 
@@ -251,7 +258,7 @@
 | --- | --- | --- |
 | `tests/knowledge_build/integration/test_api_integration.py` | ~~`knowledge_build` 三接口正常/异常与组合链路等价性~~ | 已弃用（`knowledge_build` 独立路由已移除） |
 | `tests/knowledge_base/integration/test_kb_api_stateful_integration.py` | 混合导入构建（`knowledgeItems/import` + `fileToMarkdownIndex`）、知识库改名、单文件/目录删除、多级目录改名删除、读取窗口校验、`downloadFile` 的中文文件名/二进制文件下载、真实搜索链路与失败保护 | 有效 |
-| `tests/knowledge_base/integration/test_metadata_api_integration.py` | M1–M17 全场景：属性 CRUD/批量原子性/引用计数；文件元数据五类型 set/list 操作矩阵；YAML front matter（auto/拒绝/缺失/格式错容错）；删除三档级联；metadataSearch 接口约束（where 必填/topK 边界/KB scope/字段裁剪/knCodeList 必填）；DSL 算子矩阵 + 三层布尔嵌套 + 德摩根；DSL 类型/结构/复杂度错误矩阵；系统字段（metadataSearch + chunk + searchFile）；search 升级版（三 mode/metadataFieldList/where 短路/前过滤证明）；fileTypeList 兼容；searchFile（多 chunk 去重/where/系统字段/knCodeList 必填）；跨接口一致；软删保护 | 有效 |
+| `tests/knowledge_base/integration/test_metadata_api_integration.py` | M1–M17 全场景:属性 CRUD/批量原子性/引用计数;文件元数据五类型 set/list 操作矩阵;`metadata/get` 错路径(unknown KB/file);YAML front matter(auto/拒绝/缺失/格式错容错);删除三档级联;`metadataFields/list`(KB 必填/多 KB 合并/单 KB 隔离);metadataSearch 接口约束(where 必填/topK 边界/KB scope/字段裁剪/knCodeList 必填);DSL 算子矩阵 + 三层布尔嵌套 + 德摩根;DSL 类型/结构/复杂度错误矩阵;系统字段(metadataSearch 单系统/混合 + chunk + searchFile 单系统/混合);search 升级版(三 mode/metadataFieldList/where 短路/前过滤证明);fileTypeList 兼容;searchFile(多 chunk 去重/where/系统字段/knCodeList 必填);跨接口一致;软删保护 | 有效 |
 
 ## 下一轮优先补充建议
 

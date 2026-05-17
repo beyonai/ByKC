@@ -1923,3 +1923,201 @@ def test_search_where_drives_recall_not_postfilter(monkeypatch):
             "would indicate post-filter behavior."
         )
         assert promoted[0]["filePath"] == path_b, promoted
+
+
+# ===================================================================
+# Section 13: fileTypeList legacy + searchFile  (M14.a-M14.b, M15.a-M15.e)
+# ===================================================================
+
+
+def _build_two_kinds(client) -> tuple[str, str, str]:
+    """Create a KB with one .md + one .txt, both built. Returns (kb, md, txt)."""
+    kb_code, md_path = new_kb_with_built_file(client)
+    # Reuse the "/制度" directory created by new_kb_with_built_file.
+    txt_path = "/制度/续签备注.txt"
+    _upload_file(
+        client,
+        kb_code=kb_code,
+        file_path=txt_path,
+        file_content=b"continuance renewal continued contract.\n",
+    )
+    resp = client.post(
+        "/api/v1/fileToMarkdownIndex",
+        json={"knCode": kb_code, "filePath": txt_path},
+    )
+    assert resp.json()["resultCode"] == "0", resp.text
+    wait_for_build(client, kb_code=kb_code, file_path=txt_path)
+    return kb_code, md_path, txt_path
+
+
+@pytest.mark.integration
+def test_search_file_type_list_legacy(monkeypatch):
+    """M14.a: fileTypeList alone works like {in fileType [...]}."""
+    with runtime(monkeypatch) as client:
+        kb_code, md_path, txt_path = _build_two_kinds(client)
+        resp = chunk_search(
+            client,
+            kb_code=kb_code,
+            query="续签",
+            file_type_list=["md"],
+            top_k=10,
+        )
+        paths = [h["filePath"] for h in resp.json()["resultObject"]["data"]]
+        assert md_path in paths
+        assert txt_path not in paths
+
+
+@pytest.mark.integration
+def test_search_file_type_list_intersect_where(monkeypatch):
+    """M14.b: fileTypeList AND where(fileType) intersect; mismatched sets -> empty."""
+    with runtime(monkeypatch) as client:
+        kb_code = _build_two_kinds(client)[0]
+        # md from fileTypeList ∩ txt from where → empty
+        resp = chunk_search(
+            client,
+            kb_code=kb_code,
+            query="续签",
+            where={"in": {"fieldName": "fileType", "value": ["txt"]}},
+            file_type_list=["md"],
+            top_k=10,
+        )
+        assert resp.json()["resultObject"]["data"] == []
+
+
+@pytest.mark.integration
+def test_search_file_dedup_by_path(monkeypatch):
+    """M15.a: searchFile aggregates chunk hits; each filePath appears at most once."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_built_file(
+            client,
+            markdown=(
+                "# 续签流程\n"
+                "续签步骤一\n续签步骤二\n续签步骤三\n续签步骤四\n续签步骤五\n"
+            ),
+        )
+        resp = client.post(
+            "/api/v1/knowledgeItems/searchFile",
+            json={
+                "query": "续签",
+                "knCodeList": [kb_code],
+                "topK": 10,
+                "searchMode": "mixedRecall",
+            },
+        )
+        paths = [h["filePath"] for h in resp.json()["resultObject"]["data"]]
+        assert paths.count(file_path) <= 1
+
+
+@pytest.mark.integration
+def test_search_file_with_dsl_and_metadata(monkeypatch):
+    """M15.b: searchFile honors `where` and returns metadata for listed fields."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_built_file(client)
+        prop = f"s_{uuid4().hex[:6]}"
+        register_property(client, prop, "string")
+        set_metadata(
+            client,
+            kb_code=kb_code,
+            file_path=file_path,
+            property_name=prop,
+            value="active",
+        )
+
+        resp = client.post(
+            "/api/v1/knowledgeItems/searchFile",
+            json={
+                "query": "续签",
+                "knCodeList": [kb_code],
+                "topK": 10,
+                "searchMode": "mixedRecall",
+                "where": {"eq": {"fieldName": prop, "value": "active"}},
+                "metadataFieldList": [prop],
+            },
+        )
+        hits = [
+            h for h in resp.json()["resultObject"]["data"] if h["filePath"] == file_path
+        ]
+        assert hits, resp.text
+        assert hits[0]["metadata"][prop]["value"] == "active"
+
+
+@pytest.mark.integration
+def test_search_file_global_scope(monkeypatch):
+    """M15.c: searchFile without knCodeList searches across all KBs."""
+    with runtime(monkeypatch) as client:
+        file_path = new_kb_with_built_file(client)[1]
+        resp = client.post(
+            "/api/v1/knowledgeItems/searchFile",
+            json={"query": "续签", "topK": 10, "searchMode": "mixedRecall"},
+        )
+        assert resp.status_code == 200
+        paths = [h["filePath"] for h in resp.json()["resultObject"]["data"]]
+        assert file_path in paths
+
+
+@pytest.mark.integration
+def test_search_file_where_system_field_file_type(monkeypatch):
+    """M15.d: searchFile filters by `where: in fileType [...]` (system field)."""
+    with runtime(monkeypatch) as client:
+        kb_code, md_path, txt_path = _build_two_kinds(client)
+        resp = client.post(
+            "/api/v1/knowledgeItems/searchFile",
+            json={
+                "query": "续签",
+                "knCodeList": [kb_code],
+                "topK": 10,
+                "searchMode": "mixedRecall",
+                "where": {"in": {"fieldName": "fileType", "value": ["md", "txt"]}},
+            },
+        )
+        paths = {h["filePath"] for h in resp.json()["resultObject"]["data"]}
+        assert {md_path, txt_path}.issubset(paths)
+
+        resp_only_txt = client.post(
+            "/api/v1/knowledgeItems/searchFile",
+            json={
+                "query": "续签",
+                "knCodeList": [kb_code],
+                "topK": 10,
+                "searchMode": "mixedRecall",
+                "where": {"in": {"fieldName": "fileType", "value": ["txt"]}},
+            },
+        )
+        only_txt = {h["filePath"] for h in resp_only_txt.json()["resultObject"]["data"]}
+        assert md_path not in only_txt
+        assert txt_path in only_txt
+
+
+@pytest.mark.integration
+def test_search_file_where_system_field_created_at(monkeypatch):
+    """M15.e: searchFile honors `gt createdAt <past_date>` system filter."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_built_file(client)
+        resp_past = client.post(
+            "/api/v1/knowledgeItems/searchFile",
+            json={
+                "query": "续签",
+                "knCodeList": [kb_code],
+                "topK": 10,
+                "searchMode": "mixedRecall",
+                "where": {
+                    "gt": {"fieldName": "createdAt", "value": "2000-01-01T00:00:00Z"}
+                },
+            },
+        )
+        paths = [h["filePath"] for h in resp_past.json()["resultObject"]["data"]]
+        assert file_path in paths
+
+        resp_future = client.post(
+            "/api/v1/knowledgeItems/searchFile",
+            json={
+                "query": "续签",
+                "knCodeList": [kb_code],
+                "topK": 10,
+                "searchMode": "mixedRecall",
+                "where": {
+                    "gt": {"fieldName": "createdAt", "value": "2099-01-01T00:00:00Z"}
+                },
+            },
+        )
+        assert resp_future.json()["resultObject"]["data"] == []

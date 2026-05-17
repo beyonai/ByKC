@@ -1147,6 +1147,32 @@ def test_metadata_search_metadata_field_list_filters_response(monkeypatch):
         assert drop not in (hit["metadata"] or {})
 
 
+@pytest.mark.integration
+def test_metadata_search_kn_code_list_required(monkeypatch):
+    """M8.i: metadataSearch rejects requests that omit or empty knCodeList."""
+    with runtime(monkeypatch) as client:
+        new_kb(client)
+        resp_missing = client.post(
+            "/api/v1/knowledgeItems/metadataSearch",
+            json={"where": {"exists": {"fieldName": "fileName"}}, "topK": 5},
+        )
+        assert resp_missing.status_code == 200
+        assert resp_missing.json()["resultCode"] == "-1"
+        assert "request validation failed" in resp_missing.json()["resultMsg"]
+
+        resp_empty = client.post(
+            "/api/v1/knowledgeItems/metadataSearch",
+            json={
+                "knCodeList": [],
+                "where": {"exists": {"fieldName": "fileName"}},
+                "topK": 5,
+            },
+        )
+        assert resp_empty.status_code == 200
+        assert resp_empty.json()["resultCode"] == "-1"
+        assert "request validation failed" in resp_empty.json()["resultMsg"]
+
+
 # ===================================================================
 # Section 9: DSL operator matrix  (M9.*)
 #
@@ -2042,17 +2068,40 @@ def test_search_file_with_dsl_and_metadata(monkeypatch):
 
 
 @pytest.mark.integration
-def test_search_file_global_scope(monkeypatch):
-    """M15.c: searchFile without knCodeList searches across all KBs."""
+def test_search_file_kn_code_list_required(monkeypatch):
+    """M15.c: searchFile rejects requests that omit or empty knCodeList.
+
+    Without a kb scope the underlying SQL would always return zero rows
+    (kb_codes=[] makes `ANY(kb_codes)` false for every chunk), so the
+    schema makes knCodeList required with min_length=1 and the route
+    returns the documented validation envelope when callers omit it.
+    """
     with runtime(monkeypatch) as client:
-        file_path = new_kb_with_built_file(client)[1]
-        resp = client.post(
+        # Existing KB just to ensure the schema check runs against a live runtime.
+        new_kb_with_built_file(client)
+
+        # 1) omitted knCodeList -> documented validation envelope.
+        resp_missing = client.post(
             "/api/v1/knowledgeItems/searchFile",
             json={"query": "续签", "topK": 10, "searchMode": "mixedRecall"},
         )
-        assert resp.status_code == 200
-        paths = [h["filePath"] for h in resp.json()["resultObject"]["data"]]
-        assert file_path in paths
+        assert resp_missing.status_code == 200
+        assert resp_missing.json()["resultCode"] == "-1"
+        assert "request validation failed" in resp_missing.json()["resultMsg"]
+
+        # 2) empty knCodeList -> same envelope.
+        resp_empty = client.post(
+            "/api/v1/knowledgeItems/searchFile",
+            json={
+                "query": "续签",
+                "knCodeList": [],
+                "topK": 10,
+                "searchMode": "mixedRecall",
+            },
+        )
+        assert resp_empty.status_code == 200
+        assert resp_empty.json()["resultCode"] == "-1"
+        assert "request validation failed" in resp_empty.json()["resultMsg"]
 
 
 @pytest.mark.integration

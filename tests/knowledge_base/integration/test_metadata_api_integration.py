@@ -1539,3 +1539,98 @@ def test_dsl_multiple_errors_aggregated(dsl_props):  # pylint: disable=redefined
     paths = [e["path"] for e in errors]
     assert any("[0]" in pp for pp in paths)
     assert any("[1]" in pp for pp in paths)
+
+
+# ===================================================================
+# Section 11: System fields in DSL  (M12.a-M12.e)
+# ===================================================================
+
+
+def _seed_mixed_kb(client):
+    """KB with files of different extensions / sizes / dates for system-field tests."""
+    kb_code = new_kb(client)
+    files = {}
+    for path, body in [
+        ("/sm.md", b"# tiny\n"),  # ~7 bytes
+        ("/lg.md", b"# big\n" + b"x" * 10_000),  # ~10006 bytes
+        ("/doc.pdf", b"%PDF-1.4\n%fake\n"),
+        ("/note.txt", b"plain text\n"),
+    ]:
+        _upload_file(client, kb_code=kb_code, file_path=path, file_content=body)
+        files[path] = body
+    return kb_code, files
+
+
+@pytest.mark.integration
+def test_system_field(monkeypatch):
+    """M12.a..M12.d: in fileType / eq fileName / gt fileSize / gt createdAt all work."""
+    with runtime(monkeypatch) as client:
+        kb_code, _ = _seed_mixed_kb(client)
+
+        # M12.a in fileType ["md","pdf"] → /sm.md, /lg.md, /doc.pdf
+        paths = set(
+            metadata_search_paths(
+                client,
+                kb_code=kb_code,
+                where={"in": {"fieldName": "fileType", "value": ["md", "pdf"]}},
+                top_k=20,
+            )
+        )
+        assert paths == {"/sm.md", "/lg.md", "/doc.pdf"}
+
+        # M12.b eq fileName "note.txt" → /note.txt
+        paths = set(
+            metadata_search_paths(
+                client,
+                kb_code=kb_code,
+                where={"eq": {"fieldName": "fileName", "value": "note.txt"}},
+                top_k=10,
+            )
+        )
+        assert paths == {"/note.txt"}
+
+        # M12.c gt fileSize 1000 → only /lg.md exceeds
+        paths = set(
+            metadata_search_paths(
+                client,
+                kb_code=kb_code,
+                where={"gt": {"fieldName": "fileSize", "value": 1000}},
+                top_k=10,
+            )
+        )
+        assert paths == {"/lg.md"}
+
+        # M12.d gt createdAt with a past date → all four files
+        paths = set(
+            metadata_search_paths(
+                client,
+                kb_code=kb_code,
+                where={
+                    "gt": {
+                        "fieldName": "createdAt",
+                        "value": "2000-01-01T00:00:00Z",
+                    }
+                },
+                top_k=10,
+            )
+        )
+        assert paths == {"/sm.md", "/lg.md", "/doc.pdf", "/note.txt"}
+
+
+@pytest.mark.integration
+def test_system_field_contains_rejected(monkeypatch):
+    """M12.e: contains is invalid for system string fields (only stringList allows it)."""
+    with runtime(monkeypatch) as client:
+        kb_code = new_kb(client)
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadataSearch",
+            json={
+                "knCodeList": [kb_code],
+                "where": {"contains": {"fieldName": "fileType", "value": "md"}},
+                "topK": 5,
+            },
+        )
+        body = resp.json()
+        assert body["resultCode"] == "-1"
+        codes = [e["code"] for e in body["resultObject"]["errorList"]]
+        assert "INVALID_FIELD_VALUE_TYPE" in codes

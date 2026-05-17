@@ -42,7 +42,7 @@ SYSTEM_FIELD_TO_FE_EXPR: Final[dict[str, tuple[str, str]]] = {
     "fileName": ("fe.name", "string"),
     "fileType": (
         "lower("
-        "CASE WHEN fe.name LIKE '%.%' "
+        "CASE WHEN fe.name LIKE '%%.%%' "
         "THEN substring(fe.name FROM '[^.]+$') "
         "ELSE '' END"
         ")",

@@ -185,3 +185,32 @@ def test_wildcard_star_only():
     assert "fe.name" in sql
     assert "LIKE" in sql.upper()
     assert "%" in str(params.values())
+
+
+def test_system_field_file_path_eq():
+    where = {"eq": {"fieldName": "filePath", "value": "/docs/report.md"}}
+    sql, params = compile_where_to_sql(where, property_map={})
+    assert "fe.virtual_path" in sql
+    assert "=" in sql
+    assert "EXISTS" not in sql
+    assert "/docs/report.md" in params.values()
+
+
+def test_system_field_file_path_prefix():
+    where = {"prefix": {"fieldName": "filePath", "value": "/docs/"}}
+    sql, params = compile_where_to_sql(where, property_map={})
+    assert "fe.virtual_path" in sql
+    assert "LIKE" in sql.upper()
+    assert "EXISTS" not in sql
+    assert "/docs/%" in params.values()
+
+
+def test_system_field_file_path_wildcard():
+    where = {"wildcard": {"fieldName": "filePath", "value": "/docs/F?.*"}}
+    sql, params = compile_where_to_sql(where, property_map={})
+    assert "fe.virtual_path" in sql
+    assert "LIKE" in sql.upper()
+    assert "ESCAPE" in sql
+    assert "EXISTS" not in sql
+    param_values = list(params.values())
+    assert any("/docs/F_" in str(v) for v in param_values)

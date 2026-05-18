@@ -166,6 +166,8 @@
 | M9.lt | DSL 调用方 | lt number | `lt priority 5` | 命中 <5 | 已写 |
 | M9.lte | DSL 调用方 | lte number | `lte priority 5` | 含等号 | 已写 |
 | M9.gt-dt | DSL 调用方 | gt datetime | `gt publishedAt 2026-02-01...Z` | 时间窗口命中 | 已写 |
+| M9.prefix | DSL 调用方 | prefix string | `prefix status "act"` | 命中 status 以 "act" 开头的文件 | 待补 |
+| M9.wildcard | DSL 调用方 | wildcard string | `wildcard status "act*"` | 命中 status 匹配通配符的文件 | 待补 |
 | M9.and | DSL 调用方 | and 平铺 | `and [eq, contains]` | 取交集 | 已写 |
 | M9.or | DSL 调用方 | or 平铺 | `or [eq, eq]` | 取并集 | 已写 |
 | M9.not | DSL 调用方 | not 包叶子 | `not eq status archived` | 排除 archived 文件 | 已写 |
@@ -173,6 +175,8 @@
 | M9.nest2 | DSL 调用方 | or(not, leaf) 二层 | not exists archived 或 status=active | 并集 | 已写 |
 | M9.nest3 | DSL 调用方 | 三层嵌套（depth=3 边界） | `and[or[and[eq,contains]]]` | 通过；命中 active+hr | 已写 |
 | M9.demor | DSL 调用方 | 德摩根等价 | `not(or[A,B]) ≡ and[not A, not B]` | 两侧命中集合相同 | 已写 |
+| M9.prefix-fn | DSL 调用方 | prefix 系统字段 fileName | `prefix fileName "F"` | 命中 fileName 以 "F" 开头的文件 | 待补 |
+| M9.wildcard-fn | DSL 调用方 | wildcard 系统字段 fileName | `wildcard fileName "F?.md"` | 命中 F1.md..F6.md 不命中 F5.pdf | 待补 |
 
 ### DSL 校验错误
 
@@ -186,6 +190,8 @@
 | M10.f | DSL 调用方 | in 用于 stringList | `in tags ["hr"]` | INVALID_FIELD_VALUE_TYPE | 已写 |
 | M10.g | DSL 调用方 | contains 用于非 stringList | `contains status "active"` | INVALID_FIELD_VALUE_TYPE | 已写 |
 | M10.h | DSL 调用方 | gt 用于 string | `gt status "active"` | INVALID_FIELD_VALUE_TYPE | 已写 |
+| M10.prefix-ns | DSL 调用方 | prefix 用于非 string 字段 | `prefix priority "1"` | INVALID_FIELD_VALUE_TYPE | 待补 |
+| M10.wildcard-ns | DSL 调用方 | wildcard 用于非 string 字段 | `wildcard priority "1*"` | INVALID_FIELD_VALUE_TYPE | 待补 |
 | M10.i | DSL 调用方 | in.value 空数组 | `in status []` | INVALID_FIELD_VALUE_TYPE | 已写 |
 | M10.j | DSL 调用方 | in.value 数组项类型不一致 | `in priority [1,"two"]` | INVALID_FIELD_VALUE_TYPE | 已写 |
 | M10.k | DSL 调用方 | 节点对象多于一个 key | `{eq:..., ne:...}` | INVALID_BOOLEAN_NODE | 已写 |
@@ -207,6 +213,9 @@
 | M12.d | DSL 调用方 | gt createdAt | `gt createdAt ISO8601` | 时间窗口命中 | 已写 |
 | M12.e | DSL 调用方 | contains 用于系统字段 | `contains fileType "md"` | INVALID_FIELD_VALUE_TYPE | 已写 |
 | M12.f | DSL 调用方 | metadataSearch 系统+自定义混合 | `and: [eq custom status active, in fileType ["md"]]` | 仅 .md 且 status=active 的文件命中 | 已写 |
+| M12.filePath-eq | DSL 调用方 | eq filePath 精确匹配 | `eq filePath "/dsl/F1.md"` | 精确命中 F1.md | 待补 |
+| M12.filePath-prefix | DSL 调用方 | prefix filePath 目录匹配 | `prefix filePath "/dsl/"` | 命中 /dsl/ 下全部 6 个文件 | 待补 |
+| M12.filePath-wildcard | DSL 调用方 | wildcard filePath 通配 | `wildcard filePath "/dsl/F?.*"` | 命中 F1.md..F6.md, F5.pdf | 待补 |
 
 ### 升级版 chunk 检索 / 文件级检索 / 兼容字段
 

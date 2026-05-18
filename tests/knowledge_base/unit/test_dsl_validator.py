@@ -213,3 +213,61 @@ def test_system_field_size_enforces_number_type():
     with pytest.raises(DslValidationError) as exc_info:
         validate_where_clause(where, known_fields=known)
     assert exc_info.value.error_list[0].code == "INVALID_FIELD_VALUE_TYPE"
+
+
+# --- prefix operator ---
+
+
+def test_prefix_valid_on_string_field():
+    where = {"prefix": {"fieldName": "status", "value": "act"}}
+    validate_where_clause(where, known_fields=KNOWN_FIELDS)
+
+
+def test_prefix_rejects_on_non_string_field():
+    where = {"prefix": {"fieldName": "priority", "value": "1"}}
+    with pytest.raises(DslValidationError) as exc_info:
+        validate_where_clause(where, known_fields=KNOWN_FIELDS)
+    assert exc_info.value.error_list[0].code == "INVALID_FIELD_VALUE_TYPE"
+
+
+def test_prefix_value_must_be_string():
+    where = {"prefix": {"fieldName": "status", "value": 123}}
+    with pytest.raises(DslValidationError) as exc_info:
+        validate_where_clause(where, known_fields=KNOWN_FIELDS)
+    assert exc_info.value.error_list[0].code == "INVALID_FIELD_VALUE_TYPE"
+
+
+def test_prefix_requires_value():
+    where = {"prefix": {"fieldName": "status"}}
+    with pytest.raises(DslValidationError) as exc_info:
+        validate_where_clause(where, known_fields=KNOWN_FIELDS)
+    assert exc_info.value.error_list[0].code == "INVALID_FIELD_VALUE_TYPE"
+
+
+# --- wildcard operator ---
+
+
+def test_wildcard_valid_on_string_field():
+    where = {"wildcard": {"fieldName": "status", "value": "act*"}}
+    validate_where_clause(where, known_fields=KNOWN_FIELDS)
+
+
+def test_wildcard_rejects_on_non_string_field():
+    where = {"wildcard": {"fieldName": "priority", "value": "1*"}}
+    with pytest.raises(DslValidationError) as exc_info:
+        validate_where_clause(where, known_fields=KNOWN_FIELDS)
+    assert exc_info.value.error_list[0].code == "INVALID_FIELD_VALUE_TYPE"
+
+
+def test_wildcard_value_must_be_string():
+    where = {"wildcard": {"fieldName": "status", "value": ["a*"]}}
+    with pytest.raises(DslValidationError) as exc_info:
+        validate_where_clause(where, known_fields=KNOWN_FIELDS)
+    assert exc_info.value.error_list[0].code == "INVALID_FIELD_VALUE_TYPE"
+
+
+def test_wildcard_requires_value():
+    where = {"wildcard": {"fieldName": "status"}}
+    with pytest.raises(DslValidationError) as exc_info:
+        validate_where_clause(where, known_fields=KNOWN_FIELDS)
+    assert exc_info.value.error_list[0].code == "INVALID_FIELD_VALUE_TYPE"

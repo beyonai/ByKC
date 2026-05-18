@@ -8,7 +8,19 @@ from typing import Any
 from by_qa.knowledge_base.dsl.errors import DslValidationDetail, DslValidationError
 
 BOOLEAN_OPERATORS = {"and", "or", "not"}
-LEAF_OPERATORS = {"eq", "ne", "in", "contains", "exists", "gt", "gte", "lt", "lte"}
+LEAF_OPERATORS = {
+    "eq",
+    "ne",
+    "in",
+    "contains",
+    "exists",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "prefix",
+    "wildcard",
+}
 COMPARISON_OPERATORS = {"eq", "ne", "gt", "gte", "lt", "lte"}
 ORDER_OPERATORS = {"gt", "gte", "lt", "lte"}
 ORDER_VALUE_TYPES = {"number", "datetime"}
@@ -171,6 +183,39 @@ def _validate_leaf(
     value_type = known_fields[field_name]
     has_value_key = "value" in body
     value = body.get("value")
+
+    if operator in ("prefix", "wildcard"):
+        if value_type != "string":
+            errors.append(
+                DslValidationDetail(
+                    path=f"{path}.{operator}.fieldName",
+                    code="INVALID_FIELD_VALUE_TYPE",
+                    message=(
+                        f"'{operator}' is only valid for string fields; "
+                        f"'{field_name}' is {value_type}"
+                    ),
+                )
+            )
+            return
+        if not has_value_key:
+            errors.append(
+                DslValidationDetail(
+                    path=f"{path}.{operator}.value",
+                    code="INVALID_FIELD_VALUE_TYPE",
+                    message=f"'{operator}' requires a value",
+                )
+            )
+            return
+        if not isinstance(value, str):
+            errors.append(
+                DslValidationDetail(
+                    path=f"{path}.{operator}.value",
+                    code="INVALID_FIELD_VALUE_TYPE",
+                    message=f"'{operator}' value must be a string",
+                )
+            )
+            return
+        return
 
     if operator == "exists":
         if has_value_key:

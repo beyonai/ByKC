@@ -1,7 +1,16 @@
 WITH RECURSIVE path_walker AS (
-    SELECT kid, parent_entry_id, name, is_root, '/' AS computed_path
+    SELECT
+        kid,
+        parent_entry_id,
+        name,
+        is_root,
+        CASE
+            WHEN is_root THEN '/'
+            ELSE '/' || name
+        END AS computed_path
     FROM knowledge_fs_entry
     WHERE is_root = true
+       OR (parent_entry_id IS NULL AND is_root = false)
     UNION ALL
     SELECT child.kid, child.parent_entry_id, child.name, child.is_root,
            CASE WHEN parent.computed_path = '/'

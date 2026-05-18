@@ -658,7 +658,7 @@ class KnowledgeFsEntryRepository:
         """Rename one filesystem entry and rebuild its subtree path prefix."""
         await cursor.execute(
             """
-            SELECT kid, parent_entry_id, path_ltree, depth
+            SELECT kid, parent_entry_id, path_ltree, depth, virtual_path
             FROM knowledge_fs_entry
             WHERE kid = %(entry_id)s
               AND is_deleted = FALSE
@@ -671,6 +671,7 @@ class KnowledgeFsEntryRepository:
 
         current_path_ltree = str(self._row_value(target, "path_ltree"))
         depth = int(self._row_value(target, "depth"))
+        current_virtual_path = str(self._row_value(target, "virtual_path"))
         current_parent_path = ".".join(current_path_ltree.split(".")[:-1])
         new_label = self._path_label("d", depth, new_name)
         new_path_ltree = (
@@ -702,6 +703,51 @@ class KnowledgeFsEntryRepository:
                 "new_name": new_name,
                 "new_path_ltree": new_path_ltree,
                 "current_path_ltree": current_path_ltree,
+            },
+        )
+
+        current_parent_virtual_path = (
+            "/".join(current_virtual_path.split("/")[:-1]) or "/"
+        )
+        new_virtual_path = (
+            f"{current_parent_virtual_path}/{new_name}"
+            if current_parent_virtual_path != "/"
+            else f"/{new_name}"
+        )
+
+        # Update the entry itself
+        await cursor.execute(
+            """
+            UPDATE knowledge_fs_entry
+            SET virtual_path = %(new_virtual_path)s,
+                updated_at = NOW()
+            WHERE kid = %(entry_id)s
+              AND is_deleted = FALSE
+            """,
+            {
+                "entry_id": entry_id,
+                "new_virtual_path": new_virtual_path,
+            },
+        )
+
+        # Update descendants: replace old prefix with new prefix
+        await cursor.execute(
+            """
+            UPDATE knowledge_fs_entry
+            SET virtual_path = %(new_virtual_path)s
+                         || substring(virtual_path FROM char_length(%(current_virtual_path)s) + 1),
+                updated_at = NOW()
+            WHERE knowledge_base_id = (
+                    SELECT knowledge_base_id FROM knowledge_fs_entry WHERE kid = %(entry_id)s
+                  )
+              AND virtual_path LIKE %(current_virtual_path_prefix)s
+              AND is_deleted = FALSE
+            """,
+            {
+                "entry_id": entry_id,
+                "new_virtual_path": new_virtual_path,
+                "current_virtual_path": current_virtual_path,
+                "current_virtual_path_prefix": current_virtual_path + "/%",
             },
         )
 

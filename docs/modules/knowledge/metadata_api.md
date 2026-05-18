@@ -146,6 +146,8 @@ Agent DSL
 - `gte`
 - `lt`
 - `lte`
+- `prefix`
+- `wildcard`
 
 叶子示例：
 
@@ -169,6 +171,31 @@ Agent DSL
 }
 ```
 
+### prefix / wildcard 使用说明
+
+`prefix` 和 `wildcard` 仅适用于 `string` 类型字段（含系统字段 `fileName`、`fileType`、`mimeType`、`filePath`），
+编译为 SQL `LIKE`，可利用 btree 索引做高效前缀扫描。
+
+`prefix` 为前缀匹配：
+
+```json
+{"prefix": {"fieldName": "fileName", "value": "report"}}
+```
+
+编译后等价 `fileName LIKE 'report%'`。
+
+`wildcard` 为通配符匹配，语法参考 ES `wildcard` 查询：
+
+- `*` 匹配零个或多个字符（对应 SQL `%`）
+- `?` 匹配恰好一个字符（对应 SQL `_`）
+- 输入中已有的 `%` `_` `\` 会被自动转义
+
+```json
+{"wildcard": {"fieldName": "fileName", "value": "report_?.*"}}
+```
+
+编译后等价 `fileName LIKE 'report\\_._%' ESCAPE '\'`。
+
 ### 系统字段
 
 `where` 中除自定义元数据属性外，还可以引用以下系统字段；这些字段直接来自文件主表，不需要事先通过 `metadataProperties/create` 注册：
@@ -181,8 +208,11 @@ Agent DSL
 | `mimeType` | `string` | MIME 类型 |
 | `createdAt` | `datetime` | 创建时间 |
 | `updatedAt` | `datetime` | 更新时间 |
+| `filePath` | `string` | 文件完整路径（含目录层级和文件名，如 `/制度/人事/续签流程.md`） |
 
 系统字段不支持 `contains`（仅 `stringList` 适用），其余约束与自定义字段一致。
+
+`filePath` 底层通过递归 CTE 从 `path_ltree` 重建，`eq`/`ne`/`in` 以及 `prefix`/`wildcard` 均可使用。`prefix` 适用于目录前缀匹配（如 `/制度/人事/` 下所有文件）。
 
 示例：
 

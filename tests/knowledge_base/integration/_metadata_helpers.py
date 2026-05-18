@@ -469,3 +469,30 @@ def build_dsl_dataset(client: TestClient) -> DslDataset:
         ],
     )
     return DslDataset(kb_code=kb_code, props=ps, files=files)
+
+
+def build_filepath_dsl_dataset(client: TestClient) -> DslDataset:
+    """Extend the standard DSL dataset with extra files for filePath tests.
+
+    Adds:
+    - /dsl/F1.data/nested.txt (subdirectory to test * penetrating /)
+    - /other/G1.md (separate top-level dir for prefix isolation)
+    """
+    ds = build_dsl_dataset(client)
+    _create_dir(client, ds.kb_code, "/dsl/F1.data")
+    _upload_file(
+        client,
+        kb_code=ds.kb_code,
+        file_path="/dsl/F1.data/nested.txt",
+        file_content=b"# Nested\n",
+    )
+    ds.files["nested"] = "/dsl/F1.data/nested.txt"
+    _create_dir(client, ds.kb_code, "/other")
+    _upload_file(
+        client,
+        kb_code=ds.kb_code,
+        file_path="/other/G1.md",
+        file_content=b"# G1\n",
+    )
+    ds.files["G1"] = "/other/G1.md"
+    return ds

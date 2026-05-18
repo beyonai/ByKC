@@ -20,6 +20,7 @@ import pytest
 
 from tests.knowledge_base.integration._metadata_helpers import (
     build_dsl_dataset,
+    build_filepath_dsl_dataset,
     chunk_search,
     metadata_search_paths,
     new_kb,
@@ -1913,6 +1914,132 @@ def test_dsl_prefix_wildcard_on_system_field(monkeypatch):
             "/dsl/F6.md",
         }
         assert "/dsl/F5.pdf" not in paths
+
+
+# ===================================================================
+# Section 11b: filePath system field  (M12.filePath-*)
+# ===================================================================
+
+
+@pytest.mark.integration
+def test_file_path_eq_exact_match(monkeypatch):
+    """M12.filePath-eq: eq filePath exact match returns single file."""
+    with runtime(monkeypatch) as client:
+        ds = build_filepath_dsl_dataset(client)
+
+        paths = set(
+            metadata_search_paths(
+                client,
+                kb_code=ds.kb_code,
+                where={"eq": {"fieldName": "filePath", "value": "/dsl/F1.md"}},
+                top_k=20,
+            )
+        )
+        assert paths == {"/dsl/F1.md"}
+
+
+@pytest.mark.integration
+def test_file_path_prefix_directory(monkeypatch):
+    """M12.filePath-prefix: prefix filePath matches all files under directory."""
+    with runtime(monkeypatch) as client:
+        ds = build_filepath_dsl_dataset(client)
+
+        paths = set(
+            metadata_search_paths(
+                client,
+                kb_code=ds.kb_code,
+                where={"prefix": {"fieldName": "filePath", "value": "/dsl/"}},
+                top_k=50,
+            )
+        )
+        # All files under /dsl/ including nested
+        assert "/dsl/F1.md" in paths
+        assert "/dsl/F5.pdf" in paths
+        assert "/dsl/F1.data/nested.txt" in paths
+        # Files outside /dsl/ excluded
+        assert "/other/G1.md" not in paths
+
+
+@pytest.mark.integration
+def test_file_path_wildcard_single_level(monkeypatch):
+    """M12.filePath-wildcard: wildcard with ? matches single char, . is literal."""
+    with runtime(monkeypatch) as client:
+        ds = build_filepath_dsl_dataset(client)
+
+        paths = set(
+            metadata_search_paths(
+                client,
+                kb_code=ds.kb_code,
+                where={"wildcard": {"fieldName": "filePath", "value": "/dsl/F?.md"}},
+                top_k=20,
+            )
+        )
+        # F + one char + .md
+        assert "/dsl/F1.md" in paths
+        assert "/dsl/F2.md" in paths
+        assert "/dsl/F3.md" in paths
+        assert "/dsl/F4.md" in paths
+        assert "/dsl/F6.md" in paths
+        # F5.pdf does not match *.md
+        assert "/dsl/F5.pdf" not in paths
+        # nested.txt does not match
+        assert "/dsl/F1.data/nested.txt" not in paths
+
+
+@pytest.mark.integration
+def test_file_path_wildcard_star_penetrates_directory(monkeypatch):
+    """M12.filePath-wildcard-penetrate: * matches / (ES wildcard semantics)."""
+    with runtime(monkeypatch) as client:
+        ds = build_filepath_dsl_dataset(client)
+
+        paths = set(
+            metadata_search_paths(
+                client,
+                kb_code=ds.kb_code,
+                where={"wildcard": {"fieldName": "filePath", "value": "/dsl/F?.*"}},
+                top_k=50,
+            )
+        )
+        # F + one char + . + anything (including paths with /)
+        assert "/dsl/F1.md" in paths
+        assert "/dsl/F5.pdf" in paths
+        # F1.data/nested.txt matches: /dsl/ + F + 1 + . + data/nested.txt (* penetrates /)
+        assert "/dsl/F1.data/nested.txt" in paths
+
+
+@pytest.mark.integration
+def test_file_path_only_returns_files_not_directories(monkeypatch):
+    """metadataSearch with filePath prefix returns only FILE entries."""
+    with runtime(monkeypatch) as client:
+        ds = build_filepath_dsl_dataset(client)
+
+        paths = set(
+            metadata_search_paths(
+                client,
+                kb_code=ds.kb_code,
+                where={"prefix": {"fieldName": "filePath", "value": "/"}},
+                top_k=100,
+            )
+        )
+        # All returned items should be files (have file extensions)
+        for p in paths:
+            filename = p.split("/")[-1]
+            assert "." in filename, f"Expected file, got directory-like path: {p}"
+
+
+@pytest.mark.integration
+def test_file_path_wildcard_no_match(monkeypatch):
+    """wildcard filePath with non-existent prefix returns empty."""
+    with runtime(monkeypatch) as client:
+        ds = build_filepath_dsl_dataset(client)
+
+        paths = metadata_search_paths(
+            client,
+            kb_code=ds.kb_code,
+            where={"wildcard": {"fieldName": "filePath", "value": "/nonexistent/X*"}},
+            top_k=20,
+        )
+        assert len(paths) == 0
 
 
 # ===================================================================

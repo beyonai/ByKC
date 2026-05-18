@@ -213,9 +213,7 @@
 | M12.d | DSL 调用方 | gt createdAt | `gt createdAt ISO8601` | 时间窗口命中 | 已写 |
 | M12.e | DSL 调用方 | contains 用于系统字段 | `contains fileType "md"` | INVALID_FIELD_VALUE_TYPE | 已写 |
 | M12.f | DSL 调用方 | metadataSearch 系统+自定义混合 | `and: [eq custom status active, in fileType ["md"]]` | 仅 .md 且 status=active 的文件命中 | 已写 |
-| M12.filePath-eq | DSL 调用方 | eq filePath 精确匹配 | `eq filePath "/dsl/F1.md"` | 精确命中 F1.md | 待补 |
-| M12.filePath-prefix | DSL 调用方 | prefix filePath 目录匹配 | `prefix filePath "/dsl/"` | 命中 /dsl/ 下全部 6 个文件 | 待补 |
-| M12.filePath-wildcard | DSL 调用方 | wildcard filePath 通配 | `wildcard filePath "/dsl/F?.*"` | 命中 F1.md..F6.md, F5.pdf | 待补 |
+
 
 ### 升级版 chunk 检索 / 文件级检索 / 兼容字段
 

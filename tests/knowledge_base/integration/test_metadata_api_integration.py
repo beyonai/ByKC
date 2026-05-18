@@ -1340,6 +1340,16 @@ def _leaf_cases(props):
             {"/dsl/F2.md", "/dsl/F3.md"},
             id="gt_datetime",
         ),
+        pytest.param(
+            {"prefix": {"fieldName": props.status, "value": "act"}},
+            {"/dsl/F1.md", "/dsl/F2.md", "/dsl/F5.pdf"},
+            id="prefix",
+        ),
+        pytest.param(
+            {"wildcard": {"fieldName": props.status, "value": "act*"}},
+            {"/dsl/F1.md", "/dsl/F2.md", "/dsl/F5.pdf"},
+            id="wildcard",
+        ),
     ]
 
 
@@ -1568,6 +1578,14 @@ def test_dsl_invalid_value_type(dsl_props):  # pylint: disable=redefined-outer-n
         (
             "in_mixed_types",
             {"in": {"fieldName": p.priority, "value": [1, "two"]}},
+        ),
+        (
+            "prefix_on_numeric_field",
+            {"prefix": {"fieldName": p.priority, "value": "1"}},
+        ),
+        (
+            "wildcard_on_numeric_field",
+            {"wildcard": {"fieldName": p.priority, "value": "1*"}},
         ),
     ]
     for case_id, where in cases:
@@ -1819,6 +1837,82 @@ def test_metadata_search_custom_and_system_field_intersect(monkeypatch):
             )
         )
         assert paths == {md_active}
+
+
+@pytest.mark.integration
+def test_dsl_prefix_wildcard_on_system_field(monkeypatch):
+    """M9.prefix-fn, M9.wildcard-fn: prefix/wildcard on fileName system field.
+
+    prefix fileName "F" → all 6 files.
+    wildcard fileName "F?.md" → F1.md..F6.md (F5.pdf excluded by ? matching one char).
+    """
+    with runtime(monkeypatch) as client:
+        ds = build_dsl_dataset(client)
+
+        # prefix: fileName starts with "F"
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadataSearch",
+            json={
+                "knCodeList": [ds.kb_code],
+                "where": {"prefix": {"fieldName": "fileName", "value": "F"}},
+                "topK": 20,
+            },
+        )
+        assert resp.status_code == 200 and resp.json()["resultCode"] == "0"
+        paths = {h["filePath"] for h in resp.json()["resultObject"]["data"]}
+        assert paths == {
+            "/dsl/F1.md",
+            "/dsl/F2.md",
+            "/dsl/F3.md",
+            "/dsl/F4.md",
+            "/dsl/F5.pdf",
+            "/dsl/F6.md",
+        }
+
+        # wildcard: fileName matches "F?.*" → all files with 2-char name
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadataSearch",
+            json={
+                "knCodeList": [ds.kb_code],
+                "where": {"wildcard": {"fieldName": "fileName", "value": "F?.*"}},
+                "topK": 20,
+            },
+        )
+        assert resp.status_code == 200 and resp.json()["resultCode"] == "0"
+        paths = {h["filePath"] for h in resp.json()["resultObject"]["data"]}
+        assert paths == {
+            "/dsl/F1.md",
+            "/dsl/F2.md",
+            "/dsl/F3.md",
+            "/dsl/F4.md",
+            "/dsl/F5.pdf",
+            "/dsl/F6.md",
+        }
+
+        # wildcard: narrow to *.md only
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadataSearch",
+            json={
+                "knCodeList": [ds.kb_code],
+                "where": {
+                    "and": [
+                        {"wildcard": {"fieldName": "fileName", "value": "F?.*"}},
+                        {"eq": {"fieldName": "fileType", "value": "md"}},
+                    ]
+                },
+                "topK": 20,
+            },
+        )
+        assert resp.status_code == 200 and resp.json()["resultCode"] == "0"
+        paths = {h["filePath"] for h in resp.json()["resultObject"]["data"]}
+        assert paths == {
+            "/dsl/F1.md",
+            "/dsl/F2.md",
+            "/dsl/F3.md",
+            "/dsl/F4.md",
+            "/dsl/F6.md",
+        }
+        assert "/dsl/F5.pdf" not in paths
 
 
 # ===================================================================

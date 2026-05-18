@@ -2043,6 +2043,69 @@ def test_file_path_wildcard_no_match(monkeypatch):
 
 
 # ===================================================================
+# Section 11c: virtual_path maintenance correctness
+# ===================================================================
+
+
+@pytest.mark.integration
+def test_virtual_path_set_on_file_create(monkeypatch):
+    """virtual_path is correctly set when creating files via API."""
+    with runtime(monkeypatch) as client:
+        ds = build_dsl_dataset(client)
+
+        paths = set(
+            metadata_search_paths(
+                client,
+                kb_code=ds.kb_code,
+                where={"eq": {"fieldName": "filePath", "value": "/dsl/F1.md"}},
+                top_k=5,
+            )
+        )
+        assert paths == {"/dsl/F1.md"}
+
+
+@pytest.mark.integration
+def test_virtual_path_updated_on_rename(monkeypatch):
+    """virtual_path updates for entry and descendants after directory rename."""
+    with runtime(monkeypatch) as client:
+        ds = build_filepath_dsl_dataset(client)
+
+        # Rename /dsl → /renamed via directories/update API
+        resp = client.post(
+            "/api/v1/directories/update",
+            json={
+                "knCode": ds.kb_code,
+                "directoryPath": "/dsl",
+                "directoryName": "renamed",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["resultCode"] == "0", resp.text
+
+        # Files should now be under /renamed/
+        paths = set(
+            metadata_search_paths(
+                client,
+                kb_code=ds.kb_code,
+                where={"prefix": {"fieldName": "filePath", "value": "/renamed/"}},
+                top_k=50,
+            )
+        )
+        assert "/renamed/F1.md" in paths
+        assert "/renamed/F5.pdf" in paths
+        assert "/renamed/F1.data/nested.txt" in paths
+
+        # Old /dsl/ path should return nothing
+        old_paths = metadata_search_paths(
+            client,
+            kb_code=ds.kb_code,
+            where={"prefix": {"fieldName": "filePath", "value": "/dsl/"}},
+            top_k=50,
+        )
+        assert len(old_paths) == 0
+
+
+# ===================================================================
 # Section 12: knowledgeItems/search with DSL  (M13.a-M13.g)
 # ===================================================================
 

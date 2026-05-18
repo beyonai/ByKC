@@ -441,7 +441,8 @@ class KnowledgeFsEntryRepository:
                 markdown_object_key,
                 file_size,
                 mime_type,
-                checksum
+                checksum,
+                virtual_path
             FROM knowledge_fs_entry
             WHERE kid = %(entry_id)s
               AND is_deleted = FALSE

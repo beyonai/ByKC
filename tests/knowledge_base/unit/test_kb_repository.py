@@ -141,6 +141,7 @@ async def test_create_directory_entry_executes_insert_sql():
                 "entry_type": "DIRECTORY",
                 "is_root": False,
                 "depth": 1,
+                "virtual_path": "/考勤制度",
             },
             None,
             {
@@ -152,6 +153,7 @@ async def test_create_directory_entry_executes_insert_sql():
                 "entry_type": "DIRECTORY",
                 "is_root": False,
                 "depth": 2,
+                "virtual_path": "/考勤制度/归档",
             },
         ]
     )
@@ -190,6 +192,7 @@ async def test_create_directory_entry_recursively_creates_missing_parents():
                 "entry_type": "DIRECTORY",
                 "is_root": False,
                 "depth": 1,
+                "virtual_path": "/考勤制度",
             },
             None,
             {
@@ -201,6 +204,7 @@ async def test_create_directory_entry_recursively_creates_missing_parents():
                 "entry_type": "DIRECTORY",
                 "is_root": False,
                 "depth": 2,
+                "virtual_path": "/考勤制度/归档",
             },
         ]
     )
@@ -239,6 +243,7 @@ async def test_create_file_entry_inserts_file_row_without_old_status_columns():
                 "entry_type": "DIRECTORY",
                 "is_root": False,
                 "depth": 1,
+                "virtual_path": "/考勤制度",
             },
             None,
             {
@@ -250,6 +255,7 @@ async def test_create_file_entry_inserts_file_row_without_old_status_columns():
                 "entry_type": "FILE",
                 "is_root": False,
                 "depth": 2,
+                "virtual_path": "/考勤制度/考勤制度.pdf",
             },
         ]
     )
@@ -289,6 +295,7 @@ async def test_create_file_entry_recursively_creates_missing_parents():
                 "entry_type": "DIRECTORY",
                 "is_root": False,
                 "depth": 1,
+                "virtual_path": "/考勤制度",
             },
             None,
             {
@@ -300,6 +307,7 @@ async def test_create_file_entry_recursively_creates_missing_parents():
                 "entry_type": "DIRECTORY",
                 "is_root": False,
                 "depth": 2,
+                "virtual_path": "/考勤制度/归档",
             },
             None,
             {
@@ -311,6 +319,7 @@ async def test_create_file_entry_recursively_creates_missing_parents():
                 "entry_type": "FILE",
                 "is_root": False,
                 "depth": 3,
+                "virtual_path": "/考勤制度/归档/考勤制度.pdf",
             },
         ]
     )
@@ -517,6 +526,7 @@ async def test_rename_entry_updates_name_and_path_ltree_prefix():
                 "parent_entry_id": 80,
                 "path_ltree": "d1_parent.d2_old",
                 "depth": 2,
+                "virtual_path": "/parent/old",
             }
         ]
     )
@@ -524,7 +534,7 @@ async def test_rename_entry_updates_name_and_path_ltree_prefix():
     await repo.rename_entry(cursor, entry_id=81, new_name="新目录")
 
     assert (
-        "select kid, parent_entry_id, path_ltree, depth"
+        "select kid, parent_entry_id, path_ltree, depth, virtual_path"
         in cursor.executed[0][0].lower()
     )
     update_sql, params = cursor.executed[1]

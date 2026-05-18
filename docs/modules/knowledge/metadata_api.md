@@ -173,8 +173,10 @@ Agent DSL
 
 ### prefix / wildcard 使用说明
 
-`prefix` 和 `wildcard` 仅适用于 `string` 类型字段（含系统字段 `fileName`、`fileType`、`mimeType`），
+`prefix` 和 `wildcard` 仅适用于 `string` 类型字段（含系统字段 `fileName`、`fileType`、`mimeType`、`filePath`），
 编译为 SQL `LIKE`，可利用 btree 索引做高效前缀扫描。
+
+`filePath` 特别适合用 `prefix` 做目录级过滤，例如 `{"prefix": {"fieldName": "filePath", "value": "/制度/人事/"}}` 命中该目录下所有文件。`wildcard` 中 `*` 穿透 `/`（ES wildcard 语义），因此 `"/docs/*"` 会匹配 `/docs/a/b/c.md` 等任意深度的后代文件。
 
 `prefix` 为前缀匹配：
 
@@ -206,6 +208,7 @@ Agent DSL
 | `fileType` | `string` | 文件名末尾扩展名（lowercase，如 `md`、`pdf`） |
 | `fileSize` | `number` | 文件字节数 |
 | `mimeType` | `string` | MIME 类型 |
+| `filePath` | `string` | 文件完整路径（如 `/制度/人事/续签流程.md`） |
 | `createdAt` | `datetime` | 创建时间 |
 | `updatedAt` | `datetime` | 更新时间 |
 系统字段不支持 `contains`（仅 `stringList` 适用），其余约束与自定义字段一致。

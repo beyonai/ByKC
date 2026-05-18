@@ -79,7 +79,7 @@
 说明：
 
 - 这一组场景覆盖元数据属性定义、文件元数据增量更新、纯元数据检索、DSL 升级版 chunk/file 检索的端到端调用链。
-- 系统字段（`fileName`/`fileType`/`fileSize`/`mimeType`/`createdAt`/`updatedAt`）不需要 `metadataProperties/create`，但其余自定义属性必须先注册再使用。
+- 系统字段（`fileName`/`fileType`/`fileSize`/`mimeType`/`filePath`/`createdAt`/`updatedAt`）不需要 `metadataProperties/create`，但其余自定义属性必须先注册再使用。
 - 错误响应统一使用文档化信封：HTTP 200 + `resultCode="-1"` + `resultMsg="..."`（包括 Pydantic 校验失败）。
 - 编号与 `tests/knowledge_base/integration/test_metadata_api_integration.py` 的测试函数 1:1 对应。
 
@@ -213,6 +213,14 @@
 | M12.d | DSL 调用方 | gt createdAt | `gt createdAt ISO8601` | 时间窗口命中 | 已写 |
 | M12.e | DSL 调用方 | contains 用于系统字段 | `contains fileType "md"` | INVALID_FIELD_VALUE_TYPE | 已写 |
 | M12.f | DSL 调用方 | metadataSearch 系统+自定义混合 | `and: [eq custom status active, in fileType ["md"]]` | 仅 .md 且 status=active 的文件命中 | 已写 |
+| M12.fp-eq | DSL 调用方 | eq filePath 精确匹配 | `eq filePath "/dsl/F1.md"` | 仅命中 `/dsl/F1.md` | 已写 |
+| M12.fp-prefix | DSL 调用方 | prefix filePath 目录过滤 | `prefix filePath "/dsl/"` | 命中 `/dsl/` 下所有文件含子目录，不含 `/other/` | 已写 |
+| M12.fp-wildcard | DSL 调用方 | wildcard filePath 单级 | `wildcard filePath "/dsl/F?.md"` | 命中 F1–F6.md，不含 F5.pdf 和 nested | 已写 |
+| M12.fp-wildcard-pen | DSL 调用方 | wildcard filePath `*` 穿透 `/` | `wildcard filePath "/dsl/F?.*"` | 命中 F1–F6.md + F5.pdf + nested.txt | 已写 |
+| M12.fp-files-only | DSL 调用方 | filePath 仅返回 FILE | `prefix filePath "/"` | 仅返回 FILE 条目，不含 DIRECTORY | 已写 |
+| M12.fp-no-match | DSL 调用方 | wildcard filePath 无命中 | `wildcard filePath "/dsl/X*"` | 空集 | 已写 |
+| M12.fp-create | DSL 调用方 | virtual_path 创建时赋值 | `import file -> eq filePath` | 创建文件后 filePath 精确可查 | 已写 |
+| M12.fp-rename | DSL 调用方 | virtual_path 目录改名联动 | `rename dir -> prefix filePath new/old` | 子树文件迁移到新路径，旧路径空集 | 已写 |
 
 
 ### 升级版 chunk 检索 / 文件级检索 / 兼容字段

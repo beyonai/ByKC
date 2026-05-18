@@ -19,6 +19,8 @@ COMPARISON_OPS = {
     "lte": "<=",
 }
 
+LIKE_ESCAPE_CHAR = "!"
+
 
 def compile_where_to_sql(
     where: dict[str, Any] | None,
@@ -46,6 +48,15 @@ class _CompilerContext:
 
 def _value_column(value_type: str) -> str:
     return VALUE_TYPE_TO_COLUMN[value_type]
+
+
+def _escape_like_literal(value: str) -> str:
+    """Escape SQL LIKE metacharacters using a single-character ESCAPE token."""
+    return (
+        value.replace(LIKE_ESCAPE_CHAR, LIKE_ESCAPE_CHAR * 2)
+        .replace("%", LIKE_ESCAPE_CHAR + "%")
+        .replace("_", LIKE_ESCAPE_CHAR + "_")
+    )
 
 
 def _compile_node(
@@ -88,11 +99,11 @@ def _compile_node(
         body = node["prefix"]
         field_name = body["fieldName"]
         value = body["value"]
-        escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        escaped = _escape_like_literal(value)
         if field_name in SYSTEM_FIELD_TO_FE_EXPR:
             expr, _ = SYSTEM_FIELD_TO_FE_EXPR[field_name]
             val_key = ctx.next_param(escaped + "%")
-            return f"({expr} LIKE %({val_key})s ESCAPE '\\\\')"
+            return f"({expr} LIKE %({val_key})s ESCAPE '{LIKE_ESCAPE_CHAR}')"
         prop = property_map[field_name]
         def_id_key = ctx.next_param(prop["def_id"])
         val_key = ctx.next_param(escaped + "%")
@@ -102,7 +113,7 @@ def _compile_node(
             f"WHERE mv.fs_entry_id = fe.kid "
             f"AND mv.property_def_id = %({def_id_key})s "
             f"AND mv.is_deleted = false "
-            f"AND mv.{col} LIKE %({val_key})s ESCAPE '\\\\')"
+            f"AND mv.{col} LIKE %({val_key})s ESCAPE '{LIKE_ESCAPE_CHAR}')"
         )
 
     if operator == "wildcard":
@@ -112,13 +123,13 @@ def _compile_node(
         # Translate ES wildcard to SQL LIKE:
         # * -> % (zero or more chars)
         # ? -> _ (exactly one char)
-        # Escape literal \ % _ from user input first, then replace * and ?.
-        like_value = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        # Escape SQL LIKE metacharacters first, then replace ES wildcards.
+        like_value = _escape_like_literal(value)
         like_value = like_value.replace("*", "%").replace("?", "_")
         if field_name in SYSTEM_FIELD_TO_FE_EXPR:
             expr, _ = SYSTEM_FIELD_TO_FE_EXPR[field_name]
             val_key = ctx.next_param(like_value)
-            return f"({expr} LIKE %({val_key})s ESCAPE '\\')"
+            return f"({expr} LIKE %({val_key})s ESCAPE '{LIKE_ESCAPE_CHAR}')"
         prop = property_map[field_name]
         def_id_key = ctx.next_param(prop["def_id"])
         val_key = ctx.next_param(like_value)
@@ -128,7 +139,7 @@ def _compile_node(
             f"WHERE mv.fs_entry_id = fe.kid "
             f"AND mv.property_def_id = %({def_id_key})s "
             f"AND mv.is_deleted = false "
-            f"AND mv.{col} LIKE %({val_key})s ESCAPE '\\')"
+            f"AND mv.{col} LIKE %({val_key})s ESCAPE '{LIKE_ESCAPE_CHAR}')"
         )
 
     if operator == "contains":

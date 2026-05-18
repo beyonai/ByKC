@@ -15,4 +15,4 @@ UPDATE knowledge_fs_entry fe
 SET virtual_path = pw.computed_path
 FROM path_walker pw
 WHERE fe.kid = pw.kid
-  AND (fe.virtual_path IS NULL OR fe.virtual_path <> pw.computed_path);
+  AND fe.virtual_path IS NULL;

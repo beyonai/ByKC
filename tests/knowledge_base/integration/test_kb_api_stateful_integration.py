@@ -26,12 +26,20 @@ DEFAULT_DB_USER = "gaussdb"
 DEFAULT_DB_PASS = "OpenGauss#2026"
 
 
+def _default_embedding_dimension() -> int:
+    return int(os.getenv("EMBEDDING_DIMENSION", "3"))
+
+
+def _default_embedding_vector() -> list[float]:
+    return [0.1] * _default_embedding_dimension()
+
+
 class FakeDocumentChunkingService:
     """Stable knowledge_build double used by cross-module API integration tests."""
 
     def __init__(self, *, markdown_text: str, embedding: list[float] | None = None):
         self.markdown_text = markdown_text
-        self.embedding = embedding or [0.1, 0.2, 0.3]
+        self.embedding = embedding or _default_embedding_vector()
 
     def extract_text_from_file(self, file_bytes: bytes, file_type: str) -> str:  # pylint: disable=unused-argument
         assert isinstance(file_bytes, bytes)
@@ -72,7 +80,7 @@ class FakeEmbeddingQueryService:
     """Deterministic embedding service used to keep search integration offline."""
 
     def __init__(self, embedding: list[float] | None = None):
-        self.embedding = embedding or [0.1, 0.2, 0.3]
+        self.embedding = embedding or _default_embedding_vector()
 
     async def embed_query(self, query: str) -> list[float]:
         assert isinstance(query, str)

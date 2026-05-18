@@ -47,6 +47,7 @@ async def test_search_without_where():
     assert len(results) == 1
     sql = cursor.executed[0][0].lower()
     assert "knowledge_fs_entry" in sql
+    assert "ltrim(fe.virtual_path, '/') as full_path" in sql
     assert "limit" in sql
 
 
@@ -72,6 +73,24 @@ async def test_search_with_where_clause():
     assert len(results) == 1
     sql = cursor.executed[0][0].lower()
     assert "dsl_p1" in sql or "dsl_p1" in str(cursor.executed[0][1])
+
+
+@pytest.mark.asyncio
+async def test_search_with_like_escape_clause_keeps_sql_intact():
+    repo = MetadataSearchRepository()
+    cursor = FakeCursor(fetchall_results=[[]])
+
+    await repo.search_files(
+        cursor,
+        kb_ids=[2],
+        where_sql="(fe.virtual_path LIKE %(dsl_p1)s ESCAPE '!')",
+        where_params={"dsl_p1": "/docs/!_100!%"},
+        limit=20,
+    )
+
+    sql, params = cursor.executed[0]
+    assert "escape '!'" in sql.lower()
+    assert params["dsl_p1"] == "/docs/!_100!%"
 
 
 @pytest.mark.asyncio

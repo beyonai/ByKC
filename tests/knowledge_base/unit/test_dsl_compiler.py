@@ -214,3 +214,19 @@ def test_system_field_file_path_wildcard():
     assert "EXISTS" not in sql
     param_values = list(params.values())
     assert any("/docs/F_" in str(v) for v in param_values)
+
+
+def test_prefix_uses_single_character_escape_sequence():
+    where = {"prefix": {"fieldName": "filePath", "value": "/docs/_100%!tmp"}}
+    sql, params = compile_where_to_sql(where, property_map={})
+
+    assert "ESCAPE '!'" in sql
+    assert next(iter(params.values())) == "/docs/!_100!%!!tmp%"
+
+
+def test_wildcard_uses_single_character_escape_sequence():
+    where = {"wildcard": {"fieldName": "fileName", "value": "report_*!?.md"}}
+    sql, params = compile_where_to_sql(where, property_map={})
+
+    assert "ESCAPE '!'" in sql
+    assert next(iter(params.values())) == "report!_%!!_.md"

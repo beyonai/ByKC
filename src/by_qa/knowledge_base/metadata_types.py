@@ -52,6 +52,7 @@ SYSTEM_FIELD_TO_FE_EXPR: Final[dict[str, tuple[str, str]]] = {
     "mimeType": ("fe.mime_type", "string"),
     "createdAt": ("fe.created_at", "datetime"),
     "updatedAt": ("fe.updated_at", "datetime"),
+    "filePath": ("fe.virtual_path", "string"),
 }
 
 

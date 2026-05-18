@@ -140,3 +140,48 @@ def test_mixed_system_and_custom_fields_combine():
     assert " AND " in sql
     assert "fe.name" in sql
     assert "value_string" in sql
+
+
+def test_prefix_on_custom_string_field():
+    where = {"prefix": {"fieldName": "status", "value": "act"}}
+    sql, params = compile_where_to_sql(where, property_map=PROPERTY_MAP)
+    assert "value_string" in sql
+    assert "LIKE" in sql.upper()
+    assert "act" in str(params.values())
+
+
+def test_prefix_on_system_field_uses_fe_column():
+    where = {"prefix": {"fieldName": "fileName", "value": "report"}}
+    sql, params = compile_where_to_sql(where, property_map={})
+    assert "fe.name" in sql
+    assert "LIKE" in sql.upper()
+    assert "EXISTS" not in sql
+    assert "report%" in params.values()
+
+
+def test_wildcard_on_custom_string_field():
+    where = {"wildcard": {"fieldName": "status", "value": "act*ve"}}
+    sql, params = compile_where_to_sql(where, property_map=PROPERTY_MAP)
+    assert "value_string" in sql
+    assert "LIKE" in sql.upper()
+    assert "act%ve" in str(params.values())
+
+
+def test_wildcard_on_system_field_with_question_mark():
+    where = {"wildcard": {"fieldName": "fileName", "value": "report_?.md"}}
+    sql, params = compile_where_to_sql(where, property_map={})
+    assert "fe.name" in sql
+    assert "LIKE" in sql.upper()
+    assert "EXISTS" not in sql
+    # The _ is escaped to \_, then ? is replaced with _
+    param_value = next(iter(params.values()))
+    assert "?" not in param_value, "? should be replaced by _"
+    assert param_value.count("_") >= 2  # original _ (escaped \_) + ? -> _
+
+
+def test_wildcard_star_only():
+    where = {"wildcard": {"fieldName": "fileName", "value": "*"}}
+    sql, params = compile_where_to_sql(where, property_map={})
+    assert "fe.name" in sql
+    assert "LIKE" in sql.upper()
+    assert "%" in str(params.values())

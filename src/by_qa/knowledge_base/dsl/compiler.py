@@ -84,6 +84,52 @@ def _compile_node(
             f"AND mv.{col} IS NOT NULL)"
         )
 
+    if operator == "prefix":
+        body = node["prefix"]
+        field_name = body["fieldName"]
+        value = body["value"]
+        if field_name in SYSTEM_FIELD_TO_FE_EXPR:
+            expr, _ = SYSTEM_FIELD_TO_FE_EXPR[field_name]
+            val_key = ctx.next_param(value + "%")
+            return f"({expr} LIKE %({val_key})s)"
+        prop = property_map[field_name]
+        def_id_key = ctx.next_param(prop["def_id"])
+        val_key = ctx.next_param(value + "%")
+        col = _value_column(prop["value_type"])
+        return (
+            f"EXISTS (SELECT 1 FROM knowledge_file_metadata_value mv "
+            f"WHERE mv.fs_entry_id = fe.kid "
+            f"AND mv.property_def_id = %({def_id_key})s "
+            f"AND mv.is_deleted = false "
+            f"AND mv.{col} LIKE %({val_key})s)"
+        )
+
+    if operator == "wildcard":
+        body = node["wildcard"]
+        field_name = body["fieldName"]
+        value = body["value"]
+        # Translate ES wildcard to SQL LIKE:
+        # * -> % (zero or more chars)
+        # ? -> _ (exactly one char)
+        # Escape literal \ % _ from user input first, then replace * and ?.
+        like_value = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like_value = like_value.replace("*", "%").replace("?", "_")
+        if field_name in SYSTEM_FIELD_TO_FE_EXPR:
+            expr, _ = SYSTEM_FIELD_TO_FE_EXPR[field_name]
+            val_key = ctx.next_param(like_value)
+            return f"({expr} LIKE %({val_key})s ESCAPE '\\')"
+        prop = property_map[field_name]
+        def_id_key = ctx.next_param(prop["def_id"])
+        val_key = ctx.next_param(like_value)
+        col = _value_column(prop["value_type"])
+        return (
+            f"EXISTS (SELECT 1 FROM knowledge_file_metadata_value mv "
+            f"WHERE mv.fs_entry_id = fe.kid "
+            f"AND mv.property_def_id = %({def_id_key})s "
+            f"AND mv.is_deleted = false "
+            f"AND mv.{col} LIKE %({val_key})s ESCAPE '\\')"
+        )
+
     if operator == "contains":
         # `contains` is validator-restricted to user-defined stringList
         # fields; no system-field branch here.

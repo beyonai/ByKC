@@ -22,6 +22,14 @@ DEFAULT_DB_USER = "gaussdb"
 DEFAULT_DB_PASS = "OpenGauss#2026"
 
 
+def _default_embedding_dimension() -> int:
+    return int(os.getenv("EMBEDDING_DIMENSION", "3"))
+
+
+def _default_embedding_vector() -> list[float]:
+    return [0.1] * _default_embedding_dimension()
+
+
 class FakeDocumentChunkingService:
     """Controllable double for document chunking in integration tests."""
 
@@ -32,7 +40,7 @@ class FakeDocumentChunkingService:
         embedding: list[float] | None = None,
     ):
         self.markdown_text = markdown_text
-        self.embedding = embedding or [0.1, 0.2, 0.3]
+        self.embedding = embedding or _default_embedding_vector()
 
     def extract_text_from_file(self, file_bytes: bytes, file_type: str) -> str:  # pylint: disable=unused-argument
         assert isinstance(file_bytes, bytes)

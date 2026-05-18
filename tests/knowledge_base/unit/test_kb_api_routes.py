@@ -112,7 +112,7 @@ class FakeKBService:
             ],
         }
 
-    async def search_v2(self, request):
+    async def search(self, request):
         return [
             SearchHit(
                 kb_code="hr-policy",
@@ -1166,7 +1166,7 @@ def test_search_route_emits_summary_logs(monkeypatch):
 
     assert response.status_code == 200
     assert info_messages == [
-        "search_knowledge_items request received: query=员工请假制度怎么规定, kb_code_count=1, top_k=10, search_mode=mixedRecall",
+        "search_knowledge_items request received: query=员工请假制度怎么规定, kb_code_count=1, top_k=10, search_mode=mixedRecall, where=None",
         "search_knowledge_items service call succeeded: returned_count=1, top_k=10",
         "search_knowledge_items response ready: code=200, returned_count=1",
     ]
@@ -1176,7 +1176,7 @@ def test_search_route_maps_validation_error_to_documented_error(monkeypatch):
     """Search business validation should use the documented error envelope."""
 
     class BrokenSearchService(FakeKBService):
-        async def search_v2(self, request):
+        async def search(self, request):
             raise KnowledgeBaseValidationError("knCodeList must not be empty")
 
     client = make_test_client(monkeypatch, BrokenSearchService())
@@ -1202,7 +1202,7 @@ def test_search_route_maps_configuration_error_to_documented_error(monkeypatch):
     """Search configuration failures should use the documented error envelope."""
 
     class BrokenSearchService(FakeKBService):
-        async def search_v2(self, request):
+        async def search(self, request):
             raise KnowledgeBaseConfigurationError(
                 "EMBEDDING_BASE_URL is required for retrieval"
             )

@@ -12,6 +12,17 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from by_qa.core import logger
+from by_qa.knowledge_base.api.metadata_schemas import (
+    BatchCreateMetadataPropertyRequest,
+    CreateMetadataPropertyRequest,
+    DeleteMetadataPropertyRequest,
+    GetFileMetadataRequest,
+    ListMetadataFieldsRequest,
+    ListMetadataPropertyRequest,
+    MetadataSearchRequest,
+    SearchFileRequest,
+    UpdateFileMetadataRequest,
+)
 from by_qa.knowledge_base.api.schemas import (
     CreateDirectoryRequest,
     CreateKnowledgeBaseRequest,
@@ -29,6 +40,7 @@ from by_qa.knowledge_base.api.schemas import (
     UpdateDirectoryRequest,
     UpdateKnowledgeBaseRequest,
 )
+from by_qa.knowledge_base.dsl.errors import DslValidationError
 from by_qa.knowledge_base.services.errors import (
     KnowledgeBaseConfigurationError,
     KnowledgeBaseValidationError,
@@ -115,6 +127,9 @@ def register_routes(
     get_knowledge_item_ingestion_service,
     get_knowledge_item_search_service,
     get_document_chunking_service,
+    get_metadata_property_service,
+    get_file_metadata_service,
+    get_metadata_search_service,
 ):
     """Register knowledge base API routes on the FastAPI app."""
 
@@ -647,19 +662,25 @@ def register_routes(
                 status_code=422,
             )
         logger.info(
-            "search_knowledge_items request received: query=%s, kb_code_count=%s, top_k=%s, search_mode=%s",
+            "search_knowledge_items request received: query=%s, kb_code_count=%s, top_k=%s, search_mode=%s, where=%s",
             request.query,
-            len(request.kb_codes),
+            len(request.kb_code_list),
             request.top_k,
             request.search_mode,
+            json.dumps(request.where, ensure_ascii=False) if request.where else None,
         )
         try:
             service = await get_knowledge_item_search_service()
-            items = await service.search_v2(request)
+            items = await service.search(request)
             logger.info(
                 "search_knowledge_items service call succeeded: returned_count=%s, top_k=%s",
                 len(items),
                 request.top_k,
+            )
+        except DslValidationError as exc:
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object=exc.to_result_object(),
             )
         except KnowledgeBaseConfigurationError as exc:
             logger.warning("search_knowledge_items configuration failed: error=%s", exc)
@@ -959,6 +980,242 @@ def register_routes(
             headers={
                 "Content-Disposition": _build_content_disposition(quoted_filename)
             },
+        )
+
+    @app.post("/api/v1/metadataProperties/create")
+    async def create_metadata_property(body: dict[str, Any] = Body(...)):
+        try:
+            request = CreateMetadataPropertyRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        try:
+            service = await get_metadata_property_service()
+            result = await service.create_property(request)
+        except KnowledgeBaseValidationError as exc:
+            return _documented_error_response(result_msg=str(exc), result_object={})
+        except Exception as exc:
+            logger.exception("create_metadata_property error: %s", exc)
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error", result_object={}
+            )
+        return _documented_success_response(
+            result_object=result.model_dump(by_alias=True)
+        )
+
+    @app.post("/api/v1/metadataProperties/batchCreate")
+    async def batch_create_metadata_properties(body: dict[str, Any] = Body(...)):
+        try:
+            request = BatchCreateMetadataPropertyRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        try:
+            service = await get_metadata_property_service()
+            results = await service.batch_create(request)
+        except KnowledgeBaseValidationError as exc:
+            return _documented_error_response(result_msg=str(exc), result_object={})
+        except Exception as exc:
+            logger.exception("batch_create_metadata_properties error: %s", exc)
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error", result_object={}
+            )
+        return _documented_success_response(
+            result_object={"data": [r.model_dump(by_alias=True) for r in results]}
+        )
+
+    @app.post("/api/v1/metadataProperties/delete")
+    async def delete_metadata_property(body: dict[str, Any] = Body(...)):
+        try:
+            request = DeleteMetadataPropertyRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        try:
+            service = await get_metadata_property_service()
+            await service.delete_property(request)
+        except KnowledgeBaseValidationError as exc:
+            return _documented_error_response(result_msg=str(exc), result_object={})
+        except Exception as exc:
+            logger.exception("delete_metadata_property error: %s", exc)
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error", result_object={}
+            )
+        return _documented_success_response(result_object={})
+
+    @app.post("/api/v1/metadataProperties/list")
+    async def list_metadata_properties(body: dict[str, Any] = Body(...)):
+        try:
+            request = ListMetadataPropertyRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        try:
+            service = await get_metadata_property_service()
+            results = await service.list_properties(request)
+        except Exception as exc:
+            logger.exception("list_metadata_properties error: %s", exc)
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error", result_object={}
+            )
+        return _documented_success_response(
+            result_object={"data": [r.model_dump(by_alias=True) for r in results]}
+        )
+
+    @app.post("/api/v1/knowledgeItems/metadata/update")
+    async def update_file_metadata(body: dict[str, Any] = Body(...)):
+        try:
+            request = UpdateFileMetadataRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        try:
+            service = await get_file_metadata_service()
+            metadata = await service.update_metadata(request)
+        except KnowledgeBaseValidationError as exc:
+            return _documented_error_response(result_msg=str(exc), result_object={})
+        except Exception as exc:
+            logger.exception("update_file_metadata error: %s", exc)
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error", result_object={}
+            )
+        return _documented_success_response(
+            result_object={
+                "knCode": request.kb_code,
+                "filePath": request.file_path,
+                "metadata": metadata,
+            }
+        )
+
+    @app.post("/api/v1/knowledgeItems/metadata/get")
+    async def get_file_metadata(body: dict[str, Any] = Body(...)):
+        try:
+            request = GetFileMetadataRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        try:
+            service = await get_file_metadata_service()
+            metadata = await service.get_metadata(request)
+        except KnowledgeBaseValidationError as exc:
+            return _documented_error_response(result_msg=str(exc), result_object={})
+        except Exception as exc:
+            logger.exception("get_file_metadata error: %s", exc)
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error", result_object={}
+            )
+        return _documented_success_response(
+            result_object={
+                "knCode": request.kb_code,
+                "filePath": request.file_path,
+                "metadata": metadata,
+            }
+        )
+
+    @app.post("/api/v1/knowledgeItems/metadataFields/list")
+    async def list_metadata_fields(body: dict[str, Any] = Body(...)):
+        try:
+            request = ListMetadataFieldsRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        try:
+            service = await get_file_metadata_service()
+            results = await service.list_metadata_fields(request)
+        except KnowledgeBaseValidationError as exc:
+            return _documented_error_response(result_msg=str(exc), result_object={})
+        except Exception as exc:
+            logger.exception("list_metadata_fields error: %s", exc)
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error", result_object={}
+            )
+        return _documented_success_response(
+            result_object={"data": [r.model_dump(by_alias=True) for r in results]}
+        )
+
+    @app.post("/api/v1/knowledgeItems/metadataSearch")
+    async def metadata_search(body: dict[str, Any] = Body(...)):
+        try:
+            request = MetadataSearchRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        logger.info(
+            "metadata_search request received: kb_code_count=%s, top_k=%s, where=%s",
+            len(request.kb_code_list) if request.kb_code_list else 0,
+            request.top_k,
+            json.dumps(request.where, ensure_ascii=False),
+        )
+        try:
+            service = await get_metadata_search_service()
+            results = await service.search(request)
+        except DslValidationError as exc:
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object=exc.to_result_object(),
+            )
+        except KnowledgeBaseValidationError as exc:
+            return _documented_error_response(result_msg=str(exc), result_object={})
+        except Exception as exc:
+            logger.exception("metadata_search error: %s", exc)
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error", result_object={}
+            )
+        return _documented_success_response(
+            result_object={"data": [r.model_dump(by_alias=True) for r in results]}
+        )
+
+    @app.post("/api/v1/knowledgeItems/searchFile")
+    async def search_file(body: dict[str, Any] = Body(...)):
+        try:
+            request = SearchFileRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        try:
+            service = await get_knowledge_item_search_service()
+            results = await service.search_file_with_dsl(request)
+        except DslValidationError as exc:
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object=exc.to_result_object(),
+            )
+        except KnowledgeBaseValidationError as exc:
+            return _documented_error_response(result_msg=str(exc), result_object={})
+        except Exception as exc:
+            logger.exception("search_file error: %s", exc)
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error", result_object={}
+            )
+        return _documented_success_response(
+            result_object={"data": [r.model_dump(by_alias=True) for r in results]}
         )
 
 

@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, Callable
 
+import yaml
+
 from by_qa.core import logger
 from by_qa.knowledge_base.api.schemas import (
     DeleteKnowledgeItemRequest,
@@ -32,6 +34,32 @@ def _guess_mime_type(path: str) -> str:
     return mimetypes.guess_type(path)[0] or "application/octet-stream"
 
 
+def _parse_front_matter(content: bytes) -> dict[str, Any]:
+    """Extract YAML front matter from Markdown content.
+
+    Returns an empty dict if no valid front matter is found.
+    """
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return {}
+    if not text.startswith("---"):
+        return {}
+    end_idx = text.find("---", 3)
+    if end_idx == -1:
+        return {}
+    yaml_block = text[3:end_idx].strip()
+    if not yaml_block:
+        return {}
+    try:
+        parsed = yaml.safe_load(yaml_block)
+    except yaml.YAMLError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return parsed
+
+
 @dataclass
 class KnowledgeItemIngestionService:
     """Import markdown documents, chunks, and embeddings transactionally."""
@@ -44,6 +72,8 @@ class KnowledgeItemIngestionService:
     object_storage: Any
     embedding_dimension: int
     knowledge_build_task_repository: Any | None = None
+    metadata_property_repository: Any | None = None
+    file_metadata_value_repository: Any | None = None
 
     async def upload_file(self, request: KnowledgeItemUploadRequest) -> None:
         """Upload one original file and register its storage metadata on the file entry."""
@@ -109,6 +139,15 @@ class KnowledgeItemIngestionService:
                 mime_type=mime_type,
                 checksum=checksum,
             )
+
+            await self._apply_front_matter_metadata(
+                cursor,
+                fs_entry_id=fs_entry_id,
+                knowledge_base_id=knowledge_base_id,
+                content=request.file_content,
+                file_path=normalized_file_path,
+            )
+
             await connection.commit()
             await self.object_storage.promote_temp_object(
                 temp_object_key,
@@ -125,6 +164,52 @@ class KnowledgeItemIngestionService:
             raise
         finally:
             await connection.close()
+
+    async def _apply_front_matter_metadata(
+        self,
+        cursor: Any,
+        *,
+        fs_entry_id: int,
+        knowledge_base_id: int,
+        content: bytes,
+        file_path: str,
+    ) -> None:
+        """Parse front matter and auto-set metadata if repos are available."""
+        if self.metadata_property_repository is None:
+            return
+        if self.file_metadata_value_repository is None:
+            return
+
+        suffix = PurePosixPath(file_path).suffix.lower()
+        if suffix not in {".md", ".markdown"}:
+            return
+
+        front_matter = _parse_front_matter(content)
+        if not front_matter:
+            return
+
+        for field_name in front_matter:
+            prop = await self.metadata_property_repository.get_by_name(
+                cursor, field_name
+            )
+            if prop is None:
+                raise KnowledgeBaseValidationError(
+                    f"front matter field '{field_name}' is not a defined "
+                    f"metadata property"
+                )
+
+        for field_name, value in front_matter.items():
+            prop = await self.metadata_property_repository.get_by_name(
+                cursor, field_name
+            )
+            await self.file_metadata_value_repository.upsert_value(
+                cursor,
+                fs_entry_id=fs_entry_id,
+                knowledge_base_id=knowledge_base_id,
+                property_def_id=prop["kid"],
+                value_type=prop["value_type"],
+                value=value,
+            )
 
     async def file_to_markdown_index(
         self, request: FileToMarkdownIndexRequest, *, document_chunking_service: Any
@@ -461,6 +546,19 @@ class KnowledgeItemIngestionService:
                 DELETE FROM knowledge_fetch_cache_index
                 WHERE knowledge_base_id = %(knowledge_base_id)s
                   AND fs_entry_id = %(fs_entry_id)s
+                """,
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "fs_entry_id": fs_entry_id,
+                },
+            )
+            await cursor.execute(
+                """
+                UPDATE knowledge_file_metadata_value
+                   SET is_deleted = true, updated_at = NOW()
+                 WHERE knowledge_base_id = %(knowledge_base_id)s
+                   AND fs_entry_id = %(fs_entry_id)s
+                   AND is_deleted = false
                 """,
                 {
                     "knowledge_base_id": knowledge_base_id,

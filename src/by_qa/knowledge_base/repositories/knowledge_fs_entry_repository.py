@@ -24,6 +24,7 @@ class KnowledgeFsEntryRepository:
 
         current_parent_id: int | None = None
         current_path_ltree: str | None = None
+        current_virtual_path: str = "/"
         path_segments = normalized_path.split("/")
 
         for index, segment in enumerate(path_segments[:-1], start=1):
@@ -41,6 +42,7 @@ class KnowledgeFsEntryRepository:
                     )
                 current_parent_id = self._row_id(existing)
                 current_path_ltree = self._row_value(existing, "path_ltree")
+                current_virtual_path = self._row_value(existing, "virtual_path")
                 continue
 
             parent_directory = await self._insert_directory_entry(
@@ -48,12 +50,14 @@ class KnowledgeFsEntryRepository:
                 knowledge_base_id=knowledge_base_id,
                 parent_entry_id=current_parent_id,
                 parent_path_ltree=current_path_ltree,
+                parent_virtual_path=current_virtual_path,
                 name=segment,
                 depth=index,
                 description=None,
             )
             current_parent_id = self._row_id(parent_directory)
             current_path_ltree = self._row_value(parent_directory, "path_ltree")
+            current_virtual_path = self._row_value(parent_directory, "virtual_path")
 
         existing_directory = await self._get_child_entry(
             cursor,
@@ -69,6 +73,7 @@ class KnowledgeFsEntryRepository:
             knowledge_base_id=knowledge_base_id,
             parent_entry_id=current_parent_id,
             parent_path_ltree=current_path_ltree,
+            parent_virtual_path=current_virtual_path,
             name=path_segments[-1],
             depth=len(path_segments),
             description=directory_description,
@@ -89,6 +94,7 @@ class KnowledgeFsEntryRepository:
 
         current_parent_id: int | None = None
         current_path_ltree: str | None = None
+        current_virtual_path: str = "/"
         path_segments = normalized_path.split("/")
 
         for index, segment in enumerate(path_segments[:-1], start=1):
@@ -106,6 +112,7 @@ class KnowledgeFsEntryRepository:
                     )
                 current_parent_id = self._row_id(existing)
                 current_path_ltree = self._row_value(existing, "path_ltree")
+                current_virtual_path = self._row_value(existing, "virtual_path")
                 continue
 
             parent_directory = await self._insert_directory_entry(
@@ -113,12 +120,14 @@ class KnowledgeFsEntryRepository:
                 knowledge_base_id=knowledge_base_id,
                 parent_entry_id=current_parent_id,
                 parent_path_ltree=current_path_ltree,
+                parent_virtual_path=current_virtual_path,
                 name=segment,
                 depth=index,
                 description=None,
             )
             current_parent_id = self._row_id(parent_directory)
             current_path_ltree = self._row_value(parent_directory, "path_ltree")
+            current_virtual_path = self._row_value(parent_directory, "virtual_path")
 
         existing_file = await self._get_child_entry(
             cursor,
@@ -133,6 +142,11 @@ class KnowledgeFsEntryRepository:
         path_ltree = (
             f"{current_path_ltree}.{label}" if current_path_ltree is not None else label
         )
+        virtual_path = (
+            f"{current_virtual_path}/{path_segments[-1]}"
+            if current_virtual_path != "/"
+            else f"/{path_segments[-1]}"
+        )
         await cursor.execute(
             """
             INSERT INTO knowledge_fs_entry (
@@ -144,6 +158,7 @@ class KnowledgeFsEntryRepository:
                 path_ltree,
                 depth,
                 description,
+                virtual_path,
                 file_bucket_name,
                 file_object_key,
                 markdown_bucket_name,
@@ -164,6 +179,7 @@ class KnowledgeFsEntryRepository:
                 %(path_ltree)s::ltree,
                 %(depth)s,
                 %(description)s,
+                %(virtual_path)s,
                 NULL,
                 NULL,
                 NULL,
@@ -175,7 +191,7 @@ class KnowledgeFsEntryRepository:
                 NOW(),
                 NOW()
             )
-            RETURNING kid, knowledge_base_id, parent_entry_id, path_ltree, name, entry_type, is_root, depth
+            RETURNING kid, knowledge_base_id, parent_entry_id, path_ltree, name, entry_type, is_root, depth, virtual_path
             """,
             {
                 "knowledge_base_id": knowledge_base_id,
@@ -184,6 +200,7 @@ class KnowledgeFsEntryRepository:
                 "path_ltree": path_ltree,
                 "depth": len(path_segments),
                 "description": file_description,
+                "virtual_path": virtual_path,
             },
         )
         return await cursor.fetchone()
@@ -233,6 +250,7 @@ class KnowledgeFsEntryRepository:
         knowledge_base_id: int,
         parent_entry_id: int | None,
         parent_path_ltree: str | None,
+        parent_virtual_path: str,
         name: str,
         depth: int,
         description: str | None,
@@ -241,6 +259,11 @@ class KnowledgeFsEntryRepository:
         label = self._path_label("d", depth, name)
         path_ltree = (
             f"{parent_path_ltree}.{label}" if parent_path_ltree is not None else label
+        )
+        virtual_path = (
+            f"{parent_virtual_path}/{name}"
+            if parent_virtual_path != "/"
+            else f"/{name}"
         )
         await cursor.execute(
             """
@@ -253,6 +276,7 @@ class KnowledgeFsEntryRepository:
                 path_ltree,
                 depth,
                 description,
+                virtual_path,
                 created_at,
                 updated_at
             )
@@ -265,10 +289,11 @@ class KnowledgeFsEntryRepository:
                 %(path_ltree)s::ltree,
                 %(depth)s,
                 %(description)s,
+                %(virtual_path)s,
                 NOW(),
                 NOW()
             )
-            RETURNING kid, knowledge_base_id, parent_entry_id, path_ltree, name, entry_type, is_root, depth
+            RETURNING kid, knowledge_base_id, parent_entry_id, path_ltree, name, entry_type, is_root, depth, virtual_path
             """,
             {
                 "knowledge_base_id": knowledge_base_id,
@@ -277,6 +302,7 @@ class KnowledgeFsEntryRepository:
                 "path_ltree": path_ltree,
                 "depth": depth,
                 "description": description,
+                "virtual_path": virtual_path,
             },
         )
         return await cursor.fetchone()
@@ -415,7 +441,8 @@ class KnowledgeFsEntryRepository:
                 markdown_object_key,
                 file_size,
                 mime_type,
-                checksum
+                checksum,
+                virtual_path
             FROM knowledge_fs_entry
             WHERE kid = %(entry_id)s
               AND is_deleted = FALSE
@@ -445,6 +472,7 @@ class KnowledgeFsEntryRepository:
                     is_root,
                     depth,
                     description,
+                    virtual_path,
                     file_bucket_name,
                     file_object_key,
                     markdown_bucket_name,
@@ -476,6 +504,7 @@ class KnowledgeFsEntryRepository:
                     is_root,
                     depth,
                     description,
+                    virtual_path,
                     file_bucket_name,
                     file_object_key,
                     markdown_bucket_name,
@@ -630,7 +659,7 @@ class KnowledgeFsEntryRepository:
         """Rename one filesystem entry and rebuild its subtree path prefix."""
         await cursor.execute(
             """
-            SELECT kid, parent_entry_id, path_ltree, depth
+            SELECT kid, parent_entry_id, path_ltree, depth, virtual_path
             FROM knowledge_fs_entry
             WHERE kid = %(entry_id)s
               AND is_deleted = FALSE
@@ -643,6 +672,7 @@ class KnowledgeFsEntryRepository:
 
         current_path_ltree = str(self._row_value(target, "path_ltree"))
         depth = int(self._row_value(target, "depth"))
+        current_virtual_path = str(self._row_value(target, "virtual_path"))
         current_parent_path = ".".join(current_path_ltree.split(".")[:-1])
         new_label = self._path_label("d", depth, new_name)
         new_path_ltree = (
@@ -674,6 +704,51 @@ class KnowledgeFsEntryRepository:
                 "new_name": new_name,
                 "new_path_ltree": new_path_ltree,
                 "current_path_ltree": current_path_ltree,
+            },
+        )
+
+        current_parent_virtual_path = (
+            "/".join(current_virtual_path.split("/")[:-1]) or "/"
+        )
+        new_virtual_path = (
+            f"{current_parent_virtual_path}/{new_name}"
+            if current_parent_virtual_path != "/"
+            else f"/{new_name}"
+        )
+
+        # Update the entry itself
+        await cursor.execute(
+            """
+            UPDATE knowledge_fs_entry
+            SET virtual_path = %(new_virtual_path)s,
+                updated_at = NOW()
+            WHERE kid = %(entry_id)s
+              AND is_deleted = FALSE
+            """,
+            {
+                "entry_id": entry_id,
+                "new_virtual_path": new_virtual_path,
+            },
+        )
+
+        # Update descendants: replace old prefix with new prefix
+        await cursor.execute(
+            """
+            UPDATE knowledge_fs_entry
+            SET virtual_path = %(new_virtual_path)s
+                         || substring(virtual_path FROM char_length(%(current_virtual_path)s) + 1),
+                updated_at = NOW()
+            WHERE knowledge_base_id = (
+                    SELECT knowledge_base_id FROM knowledge_fs_entry WHERE kid = %(entry_id)s
+                  )
+              AND virtual_path LIKE %(current_virtual_path_prefix)s
+              AND is_deleted = FALSE
+            """,
+            {
+                "entry_id": entry_id,
+                "new_virtual_path": new_virtual_path,
+                "current_virtual_path": current_virtual_path,
+                "current_virtual_path_prefix": current_virtual_path + "/%",
             },
         )
 

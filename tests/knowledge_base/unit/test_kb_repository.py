@@ -76,13 +76,13 @@ async def test_soft_delete_knowledge_base_updates_is_deleted_flag():
     repo = KnowledgeBaseRepository()
     cursor = FakeCursor()
 
-    await repo.soft_delete_by_code(cursor, kb_code="hr-policy")
+    await repo.soft_delete_by_code(cursor, kb_code="42")
 
     sql, params = cursor.executed[0]
     lowered = sql.lower()
     assert "update knowledge_base" in lowered
     assert "is_deleted = true" in lowered
-    assert params == {"kb_code": "hr-policy"}
+    assert params == {"kb_code": "42"}
 
 
 async def test_update_knowledge_base_executes_update_sql():
@@ -92,7 +92,7 @@ async def test_update_knowledge_base_executes_update_sql():
 
     await repo.update_knowledge_base(
         cursor,
-        kb_code="hr-policy",
+        kb_code="42",
         updates={
             "kb_name": "新知识库名称",
             "kb_description": "更新后的描述",
@@ -105,7 +105,7 @@ async def test_update_knowledge_base_executes_update_sql():
     assert "kb_name = %(kb_name)s" in sql
     assert "kb_description = %(kb_description)s" in sql
     assert "metadata = %(metadata)s::jsonb" not in sql
-    assert params["kb_code"] == "hr-policy"
+    assert params["kb_code"] == "42"
     assert params["kb_name"] == "新知识库名称"
 
 
@@ -116,7 +116,7 @@ async def test_update_knowledge_base_only_updates_provided_fields():
 
     await repo.update_knowledge_base(
         cursor,
-        kb_code="hr-policy",
+        kb_code="42",
         updates={"kb_name": "新知识库名称"},
     )
 
@@ -124,7 +124,7 @@ async def test_update_knowledge_base_only_updates_provided_fields():
     assert "kb_name = %(kb_name)s" in sql
     assert "kb_description = %(kb_description)s" not in sql
     assert "metadata = %(metadata)s::jsonb" not in sql
-    assert params == {"kb_code": "hr-policy", "kb_name": "新知识库名称"}
+    assert params == {"kb_code": "42", "kb_name": "新知识库名称"}
 
 
 async def test_create_directory_entry_executes_insert_sql():
@@ -141,6 +141,7 @@ async def test_create_directory_entry_executes_insert_sql():
                 "entry_type": "DIRECTORY",
                 "is_root": False,
                 "depth": 1,
+                "virtual_path": "/考勤制度",
             },
             None,
             {
@@ -152,6 +153,7 @@ async def test_create_directory_entry_executes_insert_sql():
                 "entry_type": "DIRECTORY",
                 "is_root": False,
                 "depth": 2,
+                "virtual_path": "/考勤制度/归档",
             },
         ]
     )
@@ -190,6 +192,7 @@ async def test_create_directory_entry_recursively_creates_missing_parents():
                 "entry_type": "DIRECTORY",
                 "is_root": False,
                 "depth": 1,
+                "virtual_path": "/考勤制度",
             },
             None,
             {
@@ -201,6 +204,7 @@ async def test_create_directory_entry_recursively_creates_missing_parents():
                 "entry_type": "DIRECTORY",
                 "is_root": False,
                 "depth": 2,
+                "virtual_path": "/考勤制度/归档",
             },
         ]
     )
@@ -239,6 +243,7 @@ async def test_create_file_entry_inserts_file_row_without_old_status_columns():
                 "entry_type": "DIRECTORY",
                 "is_root": False,
                 "depth": 1,
+                "virtual_path": "/考勤制度",
             },
             None,
             {
@@ -250,6 +255,7 @@ async def test_create_file_entry_inserts_file_row_without_old_status_columns():
                 "entry_type": "FILE",
                 "is_root": False,
                 "depth": 2,
+                "virtual_path": "/考勤制度/考勤制度.pdf",
             },
         ]
     )
@@ -289,6 +295,7 @@ async def test_create_file_entry_recursively_creates_missing_parents():
                 "entry_type": "DIRECTORY",
                 "is_root": False,
                 "depth": 1,
+                "virtual_path": "/考勤制度",
             },
             None,
             {
@@ -300,6 +307,7 @@ async def test_create_file_entry_recursively_creates_missing_parents():
                 "entry_type": "DIRECTORY",
                 "is_root": False,
                 "depth": 2,
+                "virtual_path": "/考勤制度/归档",
             },
             None,
             {
@@ -311,6 +319,7 @@ async def test_create_file_entry_recursively_creates_missing_parents():
                 "entry_type": "FILE",
                 "is_root": False,
                 "depth": 3,
+                "virtual_path": "/考勤制度/归档/考勤制度.pdf",
             },
         ]
     )
@@ -470,12 +479,12 @@ async def test_get_knowledge_base_by_code_filters_deleted_rows():
     repo = KnowledgeBaseRepository()
     cursor = FakeCursor()
 
-    await repo.get_by_code(cursor, "hr-policy")
+    await repo.get_by_code(cursor, "42")
 
     sql, params = cursor.executed[0]
     assert "kid = %(kb_code)s::bigint" in sql
     assert "is_deleted = FALSE" in sql
-    assert params == {"kb_code": "hr-policy"}
+    assert params == {"kb_code": "42"}
 
 
 async def test_soft_delete_fs_entries_by_kb_updates_is_deleted_flag():
@@ -517,6 +526,7 @@ async def test_rename_entry_updates_name_and_path_ltree_prefix():
                 "parent_entry_id": 80,
                 "path_ltree": "d1_parent.d2_old",
                 "depth": 2,
+                "virtual_path": "/parent/old",
             }
         ]
     )
@@ -524,7 +534,7 @@ async def test_rename_entry_updates_name_and_path_ltree_prefix():
     await repo.rename_entry(cursor, entry_id=81, new_name="新目录")
 
     assert (
-        "select kid, parent_entry_id, path_ltree, depth"
+        "select kid, parent_entry_id, path_ltree, depth, virtual_path"
         in cursor.executed[0][0].lower()
     )
     update_sql, params = cursor.executed[1]

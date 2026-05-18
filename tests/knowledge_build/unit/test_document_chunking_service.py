@@ -1008,3 +1008,53 @@ def test_split_inline_table_preserves_header_in_each_chunk():
         assert "City" in lines[0], f"Chunk {i} missing header: {lines[0]}"
         assert "---" in lines[1], f"Chunk {i} missing separator: {lines[1]}"
         assert len(part.text) <= max_body, f"Chunk {i} exceeds limit: {len(part.text)}"
+
+
+def test_extract_text_strips_front_matter_for_markdown():
+    """Markdown front matter is the metadata source and must not reach chunks."""
+    service = _make_service()
+
+    md = "---\ntitle: hello\ntags: [a, b]\n---\n# Heading\n\nbody text"
+    assert service.extract_text_from_file(md.encode("utf-8"), "md") == (
+        "# Heading\n\nbody text"
+    )
+
+
+def test_extract_text_keeps_front_matter_in_txt():
+    """Plain .txt files have no front matter convention; leave content untouched."""
+    service = _make_service()
+
+    txt = "---\ntitle: hello\n---\nbody"
+    assert service.extract_text_from_file(txt.encode("utf-8"), "txt") == txt
+
+
+def test_extract_text_keeps_text_when_front_matter_unterminated():
+    """An unterminated `---` block is not real front matter; keep it."""
+    service = _make_service()
+
+    md = "---\ntitle: hello\nno closing fence\n# heading"
+    assert service.extract_text_from_file(md.encode("utf-8"), "md") == md
+
+
+def test_extract_text_keeps_text_when_front_matter_is_invalid_yaml():
+    """Content between fences that isn't valid YAML stays in body."""
+    service = _make_service()
+
+    md = "---\nthis: is: not: valid: yaml:\n---\n# heading"
+    assert service.extract_text_from_file(md.encode("utf-8"), "md") == md
+
+
+def test_extract_text_keeps_text_when_front_matter_is_not_a_mapping():
+    """A YAML scalar/list between fences isn't a metadata mapping; keep it."""
+    service = _make_service()
+
+    md = "---\n- just\n- a list\n---\n# heading"
+    assert service.extract_text_from_file(md.encode("utf-8"), "md") == md
+
+
+def test_extract_text_keeps_text_when_front_matter_block_is_empty():
+    """`---\\n---` with nothing inside isn't front matter; keep the source."""
+    service = _make_service()
+
+    md = "---\n---\n# heading"
+    assert service.extract_text_from_file(md.encode("utf-8"), "md") == md

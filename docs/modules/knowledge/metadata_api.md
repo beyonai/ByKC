@@ -52,8 +52,7 @@
       {
         "path": "filter.and[1].contains.fieldName",
         "code": "UNKNOWN_FIELD",
-        "message": "fieldName 'tagz' is not defined",
-        "suggestion": "use 'tags' instead"
+        "message": "fieldName 'tagz' is not defined"
       }
     ]
   }
@@ -147,6 +146,8 @@ Agent DSL
 - `gte`
 - `lt`
 - `lte`
+- `prefix`
+- `wildcard`
 
 叶子示例：
 
@@ -170,6 +171,71 @@ Agent DSL
 }
 ```
 
+### prefix / wildcard 使用说明
+
+`prefix` 和 `wildcard` 仅适用于 `string` 类型字段（含系统字段 `fileName`、`fileType`、`mimeType`、`filePath`），
+编译为 SQL `LIKE`，可利用 btree 索引做高效前缀扫描。
+
+`filePath` 特别适合用 `prefix` 做目录级过滤，例如 `{"prefix": {"fieldName": "filePath", "value": "/制度/人事/"}}` 命中该目录下所有文件。`wildcard` 中 `*` 穿透 `/`（ES wildcard 语义），因此 `"/docs/*"` 会匹配 `/docs/a/b/c.md` 等任意深度的后代文件。
+
+`prefix` 为前缀匹配：
+
+```json
+{"prefix": {"fieldName": "fileName", "value": "report"}}
+```
+
+编译后等价 `fileName LIKE 'report%'`。
+
+`wildcard` 为通配符匹配，语法参考 ES `wildcard` 查询：
+
+- `*` 匹配零个或多个字符（对应 SQL `%`）
+- `?` 匹配恰好一个字符（对应 SQL `_`）
+- 输入中已有的 `%` `_` `\` 会被自动转义
+
+```json
+{"wildcard": {"fieldName": "fileName", "value": "report_?.*"}}
+```
+
+编译后等价 `fileName LIKE 'report\\_._%' ESCAPE '\'`。
+
+### 系统字段
+
+`where` 中除自定义元数据属性外，还可以引用以下系统字段；这些字段直接来自文件主表，不需要事先通过 `metadataProperties/create` 注册：
+
+| 字段名 | 类型 | 含义 |
+| --- | --- | --- |
+| `fileName` | `string` | 文件名（含扩展名） |
+| `fileType` | `string` | 文件名末尾扩展名（lowercase，如 `md`、`pdf`） |
+| `fileSize` | `number` | 文件字节数 |
+| `mimeType` | `string` | MIME 类型 |
+| `filePath` | `string` | 文件完整路径（如 `/制度/人事/续签流程.md`） |
+| `createdAt` | `datetime` | 创建时间 |
+| `updatedAt` | `datetime` | 更新时间 |
+系统字段不支持 `contains`（仅 `stringList` 适用），其余约束与自定义字段一致。
+
+示例：
+
+```json
+{
+  "and": [
+    {"in": {"fieldName": "fileType", "value": ["md", "pdf"]}},
+    {"gt": {"fieldName": "createdAt", "value": "2026-01-01T00:00:00Z"}}
+  ]
+}
+```
+
+### 叶子值类型校验
+
+每个叶子节点的 `value` 必须与 `fieldName` 声明的类型一致，否则返回 `INVALID_FIELD_VALUE_TYPE`：
+
+- `string`：value 必须是字符串
+- `number`：value 必须是数值（不接受布尔值）
+- `boolean`：value 必须是布尔值
+- `datetime`：value 必须是 ISO 8601 字符串（如 `2026-05-15T10:00:00Z`）
+- `stringList`：仅支持 `contains`（值为单个字符串）和 `exists`
+
+`in` 不适用于 `stringList`，请使用 `contains`；`gt/gte/lt/lte` 仅适用于 `number` 和 `datetime` 字段；`exists` 不应携带 `value`。
+
 ### 使用建议
 
 1. 纯元数据检索
@@ -189,7 +255,6 @@ DSL 校验失败时，优先根据以下字段修正请求：
 - `errorList[].path`
 - `errorList[].code`
 - `errorList[].message`
-- `errorList[].suggestion`
 
 ## 接口总览
 
@@ -672,9 +737,9 @@ Agent DSL 版纯元数据检索，只返回文件级结果。
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `knCodeList` | array[string] | 否 | 知识库范围 |
-| `where` | object | 否 | Agent DSL 过滤 AST |
+| `where` | object | 是 | Agent DSL 过滤 AST |
 | `metadataFieldList` | array[string] | 否 | 需要返回的元数据字段 |
-| `topK` | integer | 是 | 返回条数，必须大于 0 |
+| `topK` | integer | 否 | 返回条数，省略时默认 500，最大 10000 |
 
 请求示例：
 
@@ -731,8 +796,7 @@ Agent DSL 版纯元数据检索，只返回文件级结果。
       {
         "path": "where.and[2]",
         "code": "TOO_MANY_CONDITIONS",
-        "message": "leaf condition count exceeds limit 12",
-        "suggestion": "reduce the number of filter conditions"
+        "message": "leaf condition count exceeds limit 12"
       }
     ]
   }
@@ -755,11 +819,14 @@ Agent DSL 版纯元数据检索，只返回文件级结果。
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `query` | string | 是 | 检索文本 |
-| `knCodeList` | array[string] | 否 | 知识库范围 |
+| `knCodeList` | array[string] | 是 | 知识库范围 |
 | `where` | object | 否 | Agent DSL 过滤 AST |
 | `searchMode` | string | 是 | 检索模式 |
 | `metadataFieldList` | array[string] | 否 | 需要返回的元数据字段 |
 | `topK` | integer | 是 | 返回条数，必须大于 0 |
+| `fileTypeList` | array[string] | 否 | 按文件类型过滤；向下兼容字段，与 `where` 同时存在时合取 |
+
+> 推荐通过 `where` 中的 `fileType` 系统字段表达文件类型过滤，例如 `{"in": {"fieldName": "fileType", "value": ["md", "pdf"]}}`。`fileTypeList` 仅为兼容老调用方保留，新代码不要依赖。
 
 请求示例：
 
@@ -889,8 +956,7 @@ Agent DSL 版文件级语义检索。
       {
         "path": "where.eq.fieldName",
         "code": "UNKNOWN_FIELD",
-        "message": "fieldName 'statuz' is not defined",
-        "suggestion": "use 'status' instead"
+        "message": "fieldName 'statuz' is not defined"
       }
     ]
   }

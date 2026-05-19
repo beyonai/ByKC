@@ -34,6 +34,10 @@ class KnowledgeItemSearchService:
         text_hits: list[dict[str, Any]],
         vector_hits: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
+        if (not text_hits) or (not vector_hits):
+            text_weight, vector_weights = 1.0, 1.0
+        else:
+            text_weight, vector_weights = 0.4, 0.6
         merged: dict[int, dict[str, Any]] = {}
 
         for hit in text_hits:
@@ -56,7 +60,7 @@ class KnowledgeItemSearchService:
             text_score = item.get("text_score") or 0.0
             vector_score = item.get("vector_score") or 0.0
             dual_hit_bonus = 0.05 if text_score and vector_score else 0.0
-            item["score"] = vector_score * 0.6 + text_score * 0.4 + dual_hit_bonus
+            item["score"] = vector_score * vector_weights + text_score * text_weight + dual_hit_bonus
 
         return sorted(
             merged.values(), key=lambda item: (-item["score"], -item["chunk_id"])
@@ -92,24 +96,26 @@ class KnowledgeItemSearchService:
             where_sql, where_params = compile_where_to_sql(
                 effective_where, property_map=property_map
             )
-
-            text_hits = await self.search_repository.search_text(
-                cursor,
-                query=request.query,
-                kb_codes=request.kb_code_list,
-                where_sql=where_sql,
-                where_params=where_params,
-                limit=request.top_k * 3,
-            )
-            vector_hits = await self.search_repository.search_vector(
-                cursor,
-                query_embedding=query_embedding,
-                kb_codes=request.kb_code_list,
-                where_sql=where_sql,
-                where_params=where_params,
-                limit=request.top_k * 4,
-            )
-
+            
+            text_hits, vector_hits = [], []
+            if request.search_mode in ["fullTextRecall", "mixedRecall"]:
+                text_hits = await self.search_repository.search_text(
+                    cursor,
+                    query=request.query,
+                    kb_codes=request.kb_code_list,
+                    where_sql=where_sql,
+                    where_params=where_params,
+                    limit=request.top_k * 3,
+                )
+            if request.search_mode in ["embedding", "mixedRecall"]:
+                vector_hits = await self.search_repository.search_vector(
+                    cursor,
+                    query_embedding=query_embedding,
+                    kb_codes=request.kb_code_list,
+                    where_sql=where_sql,
+                    where_params=where_params,
+                    limit=request.top_k * 4,
+                )
             merged = self._merge_hits(text_hits=text_hits, vector_hits=vector_hits)
             top_items = merged[: request.top_k]
 

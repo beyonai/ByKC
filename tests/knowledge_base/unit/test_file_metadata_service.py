@@ -23,7 +23,10 @@ from by_qa.knowledge_base.repositories.metadata_property_repository import (
     MetadataPropertyRepository,
 )
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
-from by_qa.knowledge_base.services.file_metadata_service import FileMetadataService
+from by_qa.knowledge_base.services.file_metadata_service import (
+    FileMetadataService,
+    _extract_value,
+)
 
 
 class FakeCursor:
@@ -238,3 +241,16 @@ async def test_update_metadata_invalid_operation_for_type():
 
     with pytest.raises(KnowledgeBaseValidationError, match="not allowed"):
         await service.update_metadata(request)
+
+
+def test_extract_value_preserves_null_for_string_list():
+    row = {
+        "value_type": "stringList",
+        "value_string": None,
+        "value_number": None,
+        "value_boolean": None,
+        "value_datetime": None,
+        "value_string_list": None,
+    }
+
+    assert _extract_value(row) is None

@@ -860,6 +860,30 @@ def test_front_matter_malformed_imports_clean(monkeypatch, label, body):
         assert got == {}
 
 
+@pytest.mark.integration
+def test_front_matter_string_list_null_round_trips_as_null(monkeypatch):
+    """M6.f: stringList front matter set to null persists and reads back as null."""
+    with runtime(monkeypatch) as client:
+        kb_code = new_kb(client)
+        client.post(
+            "/api/v1/directories/create",
+            json={"knCode": kb_code, "directoryPath": "/docs"},
+        )
+        lst = f"l_{uuid4().hex[:6]}"
+        register_property(client, lst, "stringList")
+        path = f"/docs/fm_null_{uuid4().hex[:6]}.md"
+        body = f"---\n{lst}: null\n---\n# Hello\n".encode()
+
+        resp = _import_md(client, kb_code, path, body)
+        assert resp.json()["resultCode"] == "0", resp.text
+
+        got = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={"knCode": kb_code, "filePath": path},
+        ).json()["resultObject"]["metadata"]
+        assert got[lst] == {"valueType": "stringList", "value": None}
+
+
 # ===================================================================
 # Section 7: Cascade cleanup on delete  (M7.a-M7.c)
 # ===================================================================

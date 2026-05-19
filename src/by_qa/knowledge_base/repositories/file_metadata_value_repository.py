@@ -25,7 +25,11 @@ class FileMetadataValueRepository:
         value: Any,
     ) -> dict[str, Any] | None:
         col = self._value_column(value_type)
-        serialized = json.dumps(value) if value_type == "stringList" else value
+        serialized = (
+            json.dumps(value)
+            if value_type == "stringList" and value is not None
+            else value
+        )
 
         # Try UPDATE first (portable approach that works with OpenGauss)
         await cursor.execute(

@@ -53,7 +53,7 @@ def _extract_value(row: dict[str, Any]) -> Any:
         dt = row["value_datetime"]
         return dt.isoformat() if dt else None
     elif vt == "stringList":
-        return row["value_string_list"] or []
+        return row["value_string_list"]
     return None
 
 

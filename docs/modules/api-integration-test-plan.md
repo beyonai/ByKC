@@ -126,6 +126,7 @@
 | M6.c | 内容管理员 | front matter 多类型 | string + number + stringList 一起 | 全部正确 | 已写 |
 | M6.d | 内容管理员 | 无 front matter 仍可导入 | `import md(无 --- 块)` | 导入成功；metadata 为空 | 已写 |
 | M6.e | 内容管理员 | front matter 格式错容错 | 缺收尾 ---、YAML 语法错、顶层非 dict | 导入成功；metadata 为空（fail-soft） | 已写 |
+| M6.f | 内容管理员 | front matter 的 stringList 取 null | `import md(--- tags: null ---)` | 导入成功；`metadata/get` 返回 `valueType=stringList, value=null` | 已写 |
 
 ### 删除联动
 

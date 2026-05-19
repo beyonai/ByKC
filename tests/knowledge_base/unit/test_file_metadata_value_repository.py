@@ -69,6 +69,24 @@ async def test_upsert_string_list_value():
 
 
 @pytest.mark.asyncio
+async def test_upsert_string_list_none_uses_sql_null():
+    repo = FileMetadataValueRepository()
+    cursor = FakeCursor(fetchone_results=[{"kid": 1}])
+
+    await repo.upsert_value(
+        cursor,
+        fs_entry_id=10,
+        knowledge_base_id=2,
+        property_def_id=6,
+        value_type="stringList",
+        value=None,
+    )
+
+    _, params = cursor.executed[0]
+    assert params["value"] is None
+
+
+@pytest.mark.asyncio
 async def test_soft_delete_value():
     repo = FileMetadataValueRepository()
     cursor = FakeCursor(fetchone_results=[{"kid": 1}])

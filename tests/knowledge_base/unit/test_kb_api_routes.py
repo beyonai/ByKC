@@ -1177,7 +1177,8 @@ def test_search_file_route_serializes_decimal_metadata_values(monkeypatch):
 
     assert response.status_code == 200
     assert (
-        response.json()["resultObject"]["data"][0]["metadata"]["amount"]["value"] == 12.5
+        response.json()["resultObject"]["data"][0]["metadata"]["amount"]["value"]
+        == 12.5
     )
 
 

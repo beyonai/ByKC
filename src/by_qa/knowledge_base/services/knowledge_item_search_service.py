@@ -60,7 +60,11 @@ class KnowledgeItemSearchService:
             text_score = item.get("text_score") or 0.0
             vector_score = item.get("vector_score") or 0.0
             dual_hit_bonus = 0.05 if text_score and vector_score else 0.0
-            item["score"] = vector_score * vector_weights + text_score * text_weight + dual_hit_bonus
+            item["score"] = (
+                vector_score * vector_weights
+                + text_score * text_weight
+                + dual_hit_bonus
+            )
 
         return sorted(
             merged.values(), key=lambda item: (-item["score"], -item["chunk_id"])
@@ -96,7 +100,7 @@ class KnowledgeItemSearchService:
             where_sql, where_params = compile_where_to_sql(
                 effective_where, property_map=property_map
             )
-            
+
             text_hits, vector_hits = [], []
             if request.search_mode in ["fullTextRecall", "mixedRecall"]:
                 text_hits = await self.search_repository.search_text(

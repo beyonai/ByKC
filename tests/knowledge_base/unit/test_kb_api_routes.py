@@ -1,8 +1,11 @@
 """Tests for knowledge-base API routes."""
 
+from decimal import Decimal
+
 from fastapi.testclient import TestClient
 
 from by_qa.knowledge_base.api import routes
+from by_qa.knowledge_base.api.metadata_schemas import SearchFileHit
 from by_qa.knowledge_base.api.schemas import (
     CreateKnowledgeBaseResponse,
     KnowledgeItemListDirItem,
@@ -1138,6 +1141,44 @@ def test_search_route_returns_chunk_oriented_business_response(monkeypatch):
     assert hit["imagePath"] == ""
     assert hit["startLine"] == 1
     assert hit["endLine"] == 3
+
+
+def test_search_file_route_serializes_decimal_metadata_values(monkeypatch):
+    """searchFile should return JSON-safe numeric metadata values."""
+
+    class SearchFileService(FakeKBService):
+        async def search_file_with_dsl(self, request):
+            return [
+                SearchFileHit(
+                    kb_code="hr-policy",
+                    file_path="/employee-handbook.md",
+                    score=0.91,
+                    metadata={
+                        "amount": {
+                            "valueType": "number",
+                            "value": Decimal("12.5"),
+                        }
+                    },
+                )
+            ]
+
+    client = make_test_client(monkeypatch, SearchFileService())
+
+    response = client.post(
+        "/api/v1/knowledgeItems/searchFile",
+        json={
+            "query": "员工补贴",
+            "knCodeList": ["hr-policy"],
+            "topK": 10,
+            "searchMode": "mixedRecall",
+            "metadataFieldList": ["amount"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert (
+        response.json()["resultObject"]["data"][0]["metadata"]["amount"]["value"] == 12.5
+    )
 
 
 def test_search_route_emits_summary_logs(monkeypatch):

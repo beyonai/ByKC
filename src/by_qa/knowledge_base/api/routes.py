@@ -8,6 +8,7 @@ from typing import Any, Optional
 from urllib.parse import quote
 
 from fastapi import BackgroundTasks, Body, File, Form, Response, UploadFile
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
@@ -60,11 +61,13 @@ def _documented_success_response(
         )
     return JSONResponse(
         status_code=200,
-        content={
-            "resultCode": "0",
-            "resultMsg": "success",
-            "resultObject": result_object or {},
-        },
+        content=jsonable_encoder(
+            {
+                "resultCode": "0",
+                "resultMsg": "success",
+                "resultObject": result_object or {},
+            }
+        ),
     )
 
 
@@ -82,11 +85,13 @@ def _documented_error_response(
     )
     return JSONResponse(
         status_code=200,
-        content={
-            "resultCode": "-1",
-            "resultMsg": result_msg,
-            "resultObject": result_object or {},
-        },
+        content=jsonable_encoder(
+            {
+                "resultCode": "-1",
+                "resultMsg": result_msg,
+                "resultObject": result_object or {},
+            }
+        ),
     )
 
 

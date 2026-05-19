@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any
 
 
@@ -10,7 +11,14 @@ def _extract_value(row: dict[str, Any]) -> Any:
     if vt == "string":
         return row["value_string"]
     elif vt == "number":
-        return row["value_number"]
+        raw = row["value_number"]
+        if raw is None:
+            return None
+        if isinstance(raw, Decimal):
+            if raw == raw.to_integral_value():
+                return int(raw)
+            return float(raw)
+        return raw
     elif vt == "boolean":
         return row["value_boolean"]
     elif vt == "datetime":

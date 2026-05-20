@@ -399,11 +399,17 @@ def get_metadata_property_service():
 async def _get_or_build_metadata_property_service():
     """Get or build the metadata property definition service."""
     global _metadata_property_service
+    request_provider = _get_request_model_config_provider()
+    if request_provider is not None:
+        await _ensure_knowledge_base_schema_initialized(provider=request_provider)
+
     if _metadata_property_service is None:
         from by_qa.knowledge_base.infrastructure.runtime import (
             build_metadata_property_service,
         )
 
+        if request_provider is None:
+            await _ensure_knowledge_base_schema_initialized()
         _metadata_property_service = await build_metadata_property_service(settings)
     return _metadata_property_service
 
@@ -421,11 +427,17 @@ def get_file_metadata_service():
 async def _get_or_build_file_metadata_service():
     """Get or build the file metadata value service."""
     global _file_metadata_service
+    request_provider = _get_request_model_config_provider()
+    if request_provider is not None:
+        await _ensure_knowledge_base_schema_initialized(provider=request_provider)
+
     if _file_metadata_service is None:
         from by_qa.knowledge_base.infrastructure.runtime import (
             build_file_metadata_service,
         )
 
+        if request_provider is None:
+            await _ensure_knowledge_base_schema_initialized()
         _file_metadata_service = await build_file_metadata_service(settings)
     return _file_metadata_service
 
@@ -443,11 +455,17 @@ def get_metadata_search_service():
 async def _get_or_build_metadata_search_service():
     """Get or build the metadata search service."""
     global _metadata_search_service
+    request_provider = _get_request_model_config_provider()
+    if request_provider is not None:
+        await _ensure_knowledge_base_schema_initialized(provider=request_provider)
+
     if _metadata_search_service is None:
         from by_qa.knowledge_base.infrastructure.runtime import (
             build_metadata_search_service,
         )
 
+        if request_provider is None:
+            await _ensure_knowledge_base_schema_initialized()
         _metadata_search_service = await build_metadata_search_service(settings)
     return _metadata_search_service
 

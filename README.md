@@ -48,7 +48,7 @@ graph TD
     subgraph storage [Knowledge Storage]
         subgraph builtin [ByKC Built-in KB]
             KB["knowledge_base
-Document mgmt · Hybrid search"]
+Document mgmt · Metadata · Hybrid search"]
             Build["knowledge_build
 Parse · Chunk · Embed"]
             subgraph infra [Infrastructure]
@@ -89,6 +89,7 @@ RAG / Vector DB / Doc System"]
 - **Dual-mode QA engines** — Fast Engine handles simple questions; Instant Engine handles multi-hop complex questions. One codebase, switch by scenario.
 - **AgentOverride hot-swap** — Each reasoning node (decomposer, retrieval agent, aggregator, generator) supports independent replacement of prompt / middleware / tools, so the same engine adapts to legal, customer service, R&D, and other domains.
 - **Knowledge bases as a tool set** — ServiceToolDispatcher automatically converts remote knowledge-base APIs into LangGraph tools (search / listDir / glob / readFile). The QA engine is not bound to any specific storage and works with any compatible service.
+- **Metadata management and structured retrieval** — Supports custom metadata fields, file-level metadata write/read, metadata field enumeration, and Agent DSL-based structured filtering. The same knowledge base can run full-text, vector, or hybrid retrieval.
 
 ---
 
@@ -268,6 +269,8 @@ curl -X POST http://127.0.0.1:8000/api/v1/knowledgeItems/search \
   -d '{"knCodeList": ["74"], "query": "how to use", "topK": 3, "searchMode": "mixedRecall"}'
 ```
 
+If you need to define business metadata fields, write file metadata, run pure structured filtering, or add `where` filters to full-text / vector / hybrid retrieval, see the separate [Metadata and Retrieval Extension API](docs/modules/knowledge/metadata_api.md).
+
 After knowledge is built, use the QA scripts in the repo to ask questions:
 
 ```bash
@@ -287,7 +290,19 @@ python examples/e2e_kb_qa/run_instant_qa.py --help
 
 ### Knowledge Base API
 
-The knowledge base exposes full document management and retrieval via REST. See the [API reference](docs/modules/knowledge/api.md).
+The knowledge base documentation is split into two parts:
+
+- Base knowledge-base APIs: document and directory management, knowledge build, original-content reading, and file download. See [Knowledge Module API](docs/modules/knowledge/api.md)
+- Metadata and retrieval extension APIs: metadata field management, file-level metadata maintenance, structured retrieval, and DSL-filtered retrieval. See [Metadata and Retrieval Extension API](docs/modules/knowledge/metadata_api.md)
+
+Current built-in capabilities include:
+
+- Document and directory management: knowledge bases, directories, file import, content read, original file download
+- Knowledge build: parsing, chunking, embedding, build status tracking
+- Metadata management: metadata field definition, batch creation, deletion, file-level metadata update/read, global field enumeration
+- Retrieval modes: full-text, vector, and hybrid retrieval
+- Structured filtering: Agent DSL filters over custom fields and system fields such as `fileName`, `fileType`, `fileSize`, `mimeType`, `createdAt`, `updatedAt`, and `filePath`
+- File-level recall: `searchFile` aggregates multi-chunk hits by file, which is useful when you want to shortlist files before reading the original content
 
 ### QA Engines (Code-Level Integration)
 
@@ -355,7 +370,7 @@ src/by_qa/
 ├── core/                   # ModelConfigProvider protocol, logging, service discovery
 ├── knowledge_base/
 │   ├── api/                # REST routes
-│   ├── services/           # KB management, ingestion, retrieval
+│   ├── services/           # KB management, ingestion, metadata, retrieval
 │   ├── repositories/       # OpenGauss data access
 │   └── infrastructure/     # DB connection pool, MinIO client
 ├── knowledge_build/
@@ -386,7 +401,7 @@ src/by_qa/
 ## Roadmap
 
 - [ ] AgentOverride extensions: support MCP Server, external Tools, and Skills as agent capability extensions, for seamless integration with the external tool ecosystem
-- [ ] Knowledge base metadata system: custom metadata import with switchable structured / semantic / hybrid retrieval modes
+- [x] Knowledge base metadata foundation: custom metadata fields, file-level metadata maintenance, structured retrieval, and full-text / vector / hybrid retrieval modes
 - [ ] Structured anchors: tag unstructured documents with business master data, automatically linking documents to business entities
 - [ ] Compounding flywheel: user graph → enterprise graph, turning personal knowledge sediment into reusable organizational assets
 

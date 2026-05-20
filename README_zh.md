@@ -48,7 +48,7 @@ graph TD
     subgraph storage [知识存储]
         subgraph builtin [ByKC 内置知识库]
             KB["knowledge_base
-文档管理 · 混合检索"]
+文档管理 · 元数据 · 混合检索"]
             Build["knowledge_build
 解析 · 分块 · 向量化"]
             subgraph infra [基础设施]
@@ -89,6 +89,7 @@ graph TD
 - **双模式 QA 引擎** — Fast Engine应对简单问题；Instant Engine处理多跳复杂问题。同一套代码，按场景切换。
 - **AgentOverride 热插拔** — 每个推理节点（分解器、检索 agent、聚合器、生成器）均可独立替换 prompt / middleware / tools，同一引擎适配法务、客服、研发等不同业务场景。
 - **知识库即工具集** — ServiceToolDispatcher 将远程知识库 API 自动转化为 LangGraph 工具（search / listDir / glob / readFile），QA 引擎不绑定特定存储，可对接任何兼容服务。
+- **元数据管理与结构化检索** — 支持自定义元数据字段、文件级元数据写入/读取、字段枚举，以及基于 Agent DSL 的结构化过滤；同一知识库可按全文、向量、混合多种模式检索。
 
 ---
 
@@ -268,6 +269,8 @@ curl -X POST http://127.0.0.1:8000/api/v1/knowledgeItems/search \
   -d '{"knCodeList": ["74"], "query": "如何使用", "topK": 3, "searchMode": "mixedRecall"}'
 ```
 
+如果需要为文件定义业务属性、写入元数据、做纯结构化检索，或在全文/向量/混合检索中叠加 `where` 过滤，请查看独立文档 [元数据与检索扩展接口](docs/modules/knowledge/metadata_api.md)。
+
 知识构建完成后，可使用仓库提供的问答脚本直接提问：
 
 ```bash
@@ -287,7 +290,19 @@ python examples/e2e_kb_qa/run_instant_qa.py --help
 
 ### 知识库 API
 
-知识库通过 REST API 提供完整的文档管理和检索能力，详见 [接口文档](docs/modules/knowledge/api.md)。
+知识库接口文档分为两部分：
+
+- 基础知识库接口：文档与目录管理、知识构建、原文读取与下载，详见 [知识模块接口说明](docs/modules/knowledge/api.md)
+- 元数据与检索扩展接口：元数据字段管理、文件级元数据维护、结构化检索、带 DSL 过滤的检索能力，详见 [元数据与检索扩展接口](docs/modules/knowledge/metadata_api.md)
+
+当前内置能力包括：
+
+- 文档与目录管理：知识库、目录、文件导入、原文读取、原始文件下载
+- 知识构建：解析、分块、向量化、构建状态查询
+- 元数据管理：元数据字段定义、批量创建、删除、文件级元数据更新/读取、全库字段枚举
+- 检索模式：全文检索、向量检索、混合检索
+- 结构化过滤：支持自定义字段与系统字段（如 `fileName`、`fileType`、`fileSize`、`mimeType`、`createdAt`、`updatedAt`、`filePath`）的 Agent DSL 过滤
+- 文件级召回：`searchFile` 会对多 chunk 命中文件做聚合，适合先筛文件、再读原文
 
 ### QA 引擎（代码级集成）
 
@@ -355,7 +370,7 @@ src/by_qa/
 ├── core/                   # ModelConfigProvider 协议、日志、服务发现
 ├── knowledge_base/
 │   ├── api/                # REST 路由
-│   ├── services/           # 知识库管理、导入、检索
+│   ├── services/           # 知识库管理、导入、元数据、检索
 │   ├── repositories/       # OpenGauss 数据访问
 │   └── infrastructure/     # 数据库连接池、MinIO 客户端
 ├── knowledge_build/
@@ -386,7 +401,7 @@ src/by_qa/
 ## 路线图
 
 - [ ] AgentOverride 增强：支持 MCP Server、外部 Tools、Skill 作为 agent 能力扩展，实现引擎与外部工具生态的无缝对接
-- [ ] 知识库元数据体系：支持自定义元数据导入与结构化检索、语义检索、混合检索多模式切换
+- [x] 知识库元数据基础能力：支持自定义元数据字段、文件级元数据维护、结构化检索，以及全文/向量/混合多模式检索
 - [ ] 结构化锚点：以业务主数据标注非结构化文档，建立文档与业务实体的自动关联
 - [ ] 复利飞轮：用户图谱 → 企业图谱，个人知识沉淀为可复用的组织资产
 

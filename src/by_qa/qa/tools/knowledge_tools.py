@@ -83,18 +83,16 @@ class ServiceToolDispatcher:
     Single-KB operations (LIST_DIR, GLOB, READ_FILE) use the built-in simple path.
     """
 
+    # Mapping from OperationType to BaseOperation subclass for parallel dispatch.
+    _PARALLEL_OP_CLASSES: dict[OperationType, type[BaseOperation]] = {
+        OperationType.KNOWLEDGE_SEARCH: KnowledgeSearchOperation,
+    }
+
     def __init__(
         self,
         knowledge_bases: list[KnowledgeBaseConfig],
-        operations: list[BaseOperation] | None = None,
     ) -> None:
         self._knowledge_bases = knowledge_bases
-
-        # Register parallel-dispatch operations
-        self._parallel_ops: dict[OperationType, BaseOperation] = {}
-        if operations:
-            for op in operations:
-                self._parallel_ops[op.operation_type] = op
 
         # Discover supported ops from KB configs
         self._supported_ops: set[OperationType] = set()
@@ -111,14 +109,12 @@ class ServiceToolDispatcher:
                     except ValueError:
                         pass
 
-        # Auto-register default KnowledgeSearchOperation if supported
-        if (
-            OperationType.KNOWLEDGE_SEARCH in self._supported_ops
-            and OperationType.KNOWLEDGE_SEARCH not in self._parallel_ops
-        ):
-            self._parallel_ops[OperationType.KNOWLEDGE_SEARCH] = (
-                KnowledgeSearchOperation()
-            )
+        # Auto-register parallel-dispatch operations
+        self._parallel_ops: dict[OperationType, BaseOperation] = {}
+        for op_type in self._supported_ops:
+            op_cls = self._PARALLEL_OP_CLASSES.get(op_type)
+            if op_cls is not None:
+                self._parallel_ops[op_type] = op_cls()
 
     def build_tools(self) -> list[Any]:
         return [self._make_tool(OPERATION_REGISTRY[op]) for op in self._supported_ops]

@@ -192,14 +192,22 @@ class KnowledgeSearchOperation(BaseOperation):
         ]
 
     def aggregate(self, parts: list[Any]) -> list[dict[str, Any]]:
+        errors: list[dict[str, Any]] = []
         results: list[dict[str, Any]] = []
         for part in parts:
             if isinstance(part, list):
-                results.extend(part)
+                for item in part:
+                    if item.get("is_error"):
+                        errors.append(item)
+                    else:
+                        results.append(item)
             elif isinstance(part, dict):
-                results.append(part)
+                if part.get("is_error"):
+                    errors.append(part)
+                else:
+                    results.append(part)
         results.sort(key=lambda r: r.get("score", 0.0), reverse=True)
-        return results
+        return errors + results
 
 
 __all__ = ["KnowledgeSearchOperation"]

@@ -29,6 +29,7 @@ from by_qa.qa.common.operation_registry import (
     OperationSpec,
     OperationType,
 )
+from by_qa.qa.tools.dsl_guide import DSL_GUIDE_CONTENT
 from by_qa.qa.tools.operations.base import (
     BaseOperation,
     DispatchRequest,
@@ -90,6 +91,9 @@ class ServiceToolDispatcher:
         OperationType.METADATA_FIELDS_LIST: MetadataFieldsListOperation,
     }
 
+    # Built-in operation types that don't require KB config and don't make HTTP calls.
+    _BUILTIN_OPS: set[OperationType] = {OperationType.DSL_GUIDE}
+
     def __init__(
         self,
         knowledge_bases: list[KnowledgeBaseConfig],
@@ -119,7 +123,10 @@ class ServiceToolDispatcher:
                 self._parallel_ops[op_type] = op_cls()
 
     def build_tools(self) -> list[Any]:
-        return [self._make_tool(OPERATION_REGISTRY[op]) for op in self._supported_ops]
+        tools = [self._make_tool(OPERATION_REGISTRY[op]) for op in self._supported_ops]
+        for op_type in self._BUILTIN_OPS:
+            tools.append(self._make_tool(OPERATION_REGISTRY[op_type]))
+        return tools
 
     async def dispatch(
         self,
@@ -129,18 +136,32 @@ class ServiceToolDispatcher:
     ) -> Any:
         """Dispatch an operation.
 
-        Uses a registered BaseOperation for parallel dispatch, or falls back
-        to the simple single-KB path.
+        Uses a registered BaseOperation for parallel dispatch, returns local
+        content for built-in tools, or falls back to the simple single-KB path.
         """
         logger.info(
             "[dispatcher] dispatch: operation_type=%s payload=%s",
             operation_type,
             payload,
         )
+        if operation_type in self._BUILTIN_OPS:
+            return self._dispatch_builtin(operation_type, payload)
         parallel_op = self._parallel_ops.get(operation_type)
         if parallel_op is not None:
             return await self._dispatch_parallel(parallel_op, payload, runtime_context)
         return await self._dispatch_single_kb(operation_type, payload, runtime_context)
+
+    def _dispatch_builtin(
+        self,
+        operation_type: OperationType,
+        payload: dict[str, Any],
+    ) -> Any:
+        if operation_type == OperationType.DSL_GUIDE:
+            return DSL_GUIDE_CONTENT
+        return {
+            "error": f"Unknown builtin operation: {operation_type.value}",
+            "payload": payload,
+        }
 
     def _make_tool(self, spec: OperationSpec) -> Any:
         dispatcher = self
@@ -333,8 +354,31 @@ class DispatcherToolMiddleware(AgentMiddleware):
         self._search_tool_name = OPERATION_REGISTRY[
             OperationType.KNOWLEDGE_SEARCH
         ].tool_name
+        self._metadata_fields_tool_name = OPERATION_REGISTRY[
+            OperationType.METADATA_FIELDS_LIST
+        ].tool_name
+        self._dsl_guide_tool_name = OPERATION_REGISTRY[
+            OperationType.DSL_GUIDE
+        ].tool_name
         self._counter_lock = asyncio.Lock()
         self._result_counters: dict[tuple[str, int, int], int] = {}
+
+    def _check_dsl_prerequisites(self, state: dict) -> list[str]:
+        messages = state.get("messages", [])
+        found_metadata_fields = False
+        found_dsl_guide = False
+        for msg in messages:
+            if isinstance(msg, ToolMessage):
+                if msg.name == self._metadata_fields_tool_name:
+                    found_metadata_fields = True
+                elif msg.name == self._dsl_guide_tool_name:
+                    found_dsl_guide = True
+        missing = []
+        if not found_metadata_fields:
+            missing.append(self._metadata_fields_tool_name)
+        if not found_dsl_guide:
+            missing.append(self._dsl_guide_tool_name)
+        return missing
 
     async def abefore_model(
         self,
@@ -364,6 +408,29 @@ class DispatcherToolMiddleware(AgentMiddleware):
     async def awrap_tool_call(
         self, request: ToolCallRequest, handler: Callable
     ) -> ToolMessage | Command:
+        tool_args = request.tool_call.get("args", {})
+        where = tool_args.get("where")
+        if where is not None and where != {}:
+            missing = self._check_dsl_prerequisites(request.state)
+            if missing:
+                return ToolMessage(
+                    content=json.dumps(
+                        {
+                            "error": True,
+                            "error_type": "DslPrerequisiteNotMet",
+                            "message": (
+                                "Before using 'where', you must call "
+                                f"{', '.join(missing)} first to understand "
+                                "available fields and DSL syntax."
+                            ),
+                            "missing_tools": missing,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    name=request.tool_call["name"],
+                    tool_call_id=request.tool_call["id"],
+                )
+
         result = await handler(request)
         if request.tool_call["name"] != self._search_tool_name:
             return result

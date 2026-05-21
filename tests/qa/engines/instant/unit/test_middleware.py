@@ -32,6 +32,30 @@ def _make_tool_call_request(tool_name: str, state: dict, result_content: list):
     return FakeRequest(), FakeToolMessage()
 
 
+def _make_tool_call_request_with_args(
+    tool_name: str, state: dict, args: dict, result_content: str = "{}"
+):
+    class FakeToolCall(dict):
+        pass
+
+    tc = FakeToolCall({"name": tool_name, "id": "tc-001", "args": args})
+
+    class FakeRequest:
+        tool_call = tc
+
+    FakeRequest.state = state
+    FakeRequest.runtime = type(
+        "FakeRuntime",
+        (),
+        {"config": {"configurable": {"thread_id": "thread-1"}}},
+    )()
+
+    class FakeToolMessage:
+        content = result_content
+
+    return FakeRequest(), FakeToolMessage()
+
+
 @pytest.mark.asyncio
 async def test_dispatcher_middleware_passes_through_non_search_tools():
     middleware = DispatcherToolMiddleware(
@@ -91,3 +115,107 @@ async def test_dispatcher_middleware_multi_hop_index_ids():
     handler = AsyncMock(return_value=fake_result)
     cmd = await middleware.awrap_tool_call(request, handler)
     assert cmd.update["retrieval_results"][0]["index_id"] == "1-1-1"
+
+
+# ── DSL guard tests ───────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_dsl_guard_passes_through_when_no_where():
+    middleware = DispatcherToolMiddleware(
+        index_id_fn=lambda s, st, i: f"{s}-{st}-{i}",
+        follow_up_prompt="继续",
+    )
+    request, fake_result = _make_tool_call_request_with_args(
+        "some_tool", {"messages": []}, {"query": "hello"}
+    )
+    handler = AsyncMock(return_value=fake_result)
+    result = await middleware.awrap_tool_call(request, handler)
+    assert result is fake_result
+
+
+@pytest.mark.asyncio
+async def test_dsl_guard_blocks_when_where_present_without_prerequisites():
+    middleware = DispatcherToolMiddleware(
+        index_id_fn=lambda s, st, i: f"{s}-{st}-{i}",
+        follow_up_prompt="继续",
+    )
+    request, fake_result = _make_tool_call_request_with_args(
+        "some_tool",
+        {"messages": []},
+        {"where": {"eq": {"fieldName": "status", "value": "active"}}, "query": "test"},
+    )
+    handler = AsyncMock(return_value=fake_result)
+    result = await middleware.awrap_tool_call(request, handler)
+    assert isinstance(result, ToolMessage)
+    error = json.loads(result.content)
+    assert error["error"] is True
+    assert error["error_type"] == "DslPrerequisiteNotMet"
+    assert "list_metadata_fields" in error["missing_tools"]
+    assert "get_dsl_guide" in error["missing_tools"]
+    handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dsl_guard_blocks_when_only_metadata_fields_called():
+    middleware = DispatcherToolMiddleware(
+        index_id_fn=lambda s, st, i: f"{s}-{st}-{i}",
+        follow_up_prompt="继续",
+    )
+    request, fake_result = _make_tool_call_request_with_args(
+        "some_tool",
+        {
+            "messages": [
+                ToolMessage(
+                    content="[{}]", name="list_metadata_fields", tool_call_id="tc-old"
+                )
+            ]
+        },
+        {"where": {"eq": {"fieldName": "status", "value": "active"}}, "query": "test"},
+    )
+    handler = AsyncMock(return_value=fake_result)
+    result = await middleware.awrap_tool_call(request, handler)
+    assert isinstance(result, ToolMessage)
+    error = json.loads(result.content)
+    assert error["error"] is True
+    assert error["missing_tools"] == ["get_dsl_guide"]
+    handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dsl_guard_allows_when_both_prerequisites_met():
+    middleware = DispatcherToolMiddleware(
+        index_id_fn=lambda s, st, i: f"{s}-{st}-{i}",
+        follow_up_prompt="继续",
+    )
+    request, fake_result = _make_tool_call_request_with_args(
+        "some_tool",
+        {
+            "messages": [
+                ToolMessage(
+                    content="[{}]", name="list_metadata_fields", tool_call_id="tc-1"
+                ),
+                ToolMessage(content="{}", name="get_dsl_guide", tool_call_id="tc-2"),
+            ]
+        },
+        {"where": {"eq": {"fieldName": "status", "value": "active"}}, "query": "test"},
+    )
+    handler = AsyncMock(return_value=fake_result)
+    result = await middleware.awrap_tool_call(request, handler)
+    assert result is fake_result
+
+
+@pytest.mark.asyncio
+async def test_dsl_guard_passes_through_when_where_is_empty_dict():
+    middleware = DispatcherToolMiddleware(
+        index_id_fn=lambda s, st, i: f"{s}-{st}-{i}",
+        follow_up_prompt="继续",
+    )
+    request, fake_result = _make_tool_call_request_with_args(
+        "some_tool",
+        {"messages": []},
+        {"where": {}, "query": "test"},
+    )
+    handler = AsyncMock(return_value=fake_result)
+    result = await middleware.awrap_tool_call(request, handler)
+    assert result is fake_result

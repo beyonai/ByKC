@@ -36,18 +36,23 @@ def test_build_tools_returns_one_tool_per_supported_op():
     assert tool_names == {
         OPERATION_REGISTRY[OperationType.KNOWLEDGE_SEARCH].tool_name,
         OPERATION_REGISTRY[OperationType.LIST_DIR].tool_name,
+        OPERATION_REGISTRY[OperationType.DSL_GUIDE].tool_name,
     }
 
 
 def test_build_tools_empty_when_no_kbs():
     dispatcher = ServiceToolDispatcher([])
-    assert dispatcher.build_tools() == []
+    tools = dispatcher.build_tools()
+    assert len(tools) == 1
+    assert tools[0].name == OPERATION_REGISTRY[OperationType.DSL_GUIDE].tool_name
 
 
 def test_build_tools_ignores_unknown_operation_types():
     kb = _kb("kb1", "svc-a", {"unknownOp": "/api/v1/unknown"})
     dispatcher = ServiceToolDispatcher([kb])
-    assert dispatcher.build_tools() == []
+    tools = dispatcher.build_tools()
+    assert len(tools) == 1
+    assert tools[0].name == OPERATION_REGISTRY[OperationType.DSL_GUIDE].tool_name
 
 
 @pytest.mark.asyncio

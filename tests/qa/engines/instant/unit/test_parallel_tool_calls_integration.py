@@ -63,10 +63,13 @@ class _ParallelSearchProbe:
 
         @tool("search_knowledge", args_schema=SearchInput)
         async def search_knowledge(
-            query: str, kn_code_list: list[str] | None = None
+            query: str,
+            kn_code_list: list[str] | None = None,
+            **kwargs: Any,
         ) -> str:
             """Fake parallel-safe search tool."""
             del kn_code_list
+            del kwargs
             probe.active += 1
             probe.max_active = max(probe.max_active, probe.active)
             try:

@@ -91,6 +91,7 @@ class MetadataFieldsListInput(BaseModel):
 
 
 class DslGuideInput(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
     """No-arg input for the built-in DSL guide tool."""
 
 

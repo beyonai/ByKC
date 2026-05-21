@@ -1,5 +1,6 @@
 from by_qa.qa.common.operation_registry import (
     OPERATION_REGISTRY,
+    DslGuideInput,
     GlobInput,
     ListDirInput,
     OperationType,
@@ -13,6 +14,7 @@ def test_operation_type_values():
     assert OperationType.LIST_DIR.value == "listDir"
     assert OperationType.GLOB.value == "glob"
     assert OperationType.READ_FILE.value == "readFile"
+    assert OperationType.DSL_GUIDE.value == "dslGuide"
 
 
 def test_registry_has_all_operation_types():
@@ -27,6 +29,7 @@ def test_registry_tool_names():
     assert OPERATION_REGISTRY[OperationType.LIST_DIR].tool_name == "list_directory"
     assert OPERATION_REGISTRY[OperationType.GLOB].tool_name == "glob_search"
     assert OPERATION_REGISTRY[OperationType.READ_FILE].tool_name == "read_file"
+    assert OPERATION_REGISTRY[OperationType.DSL_GUIDE].tool_name == "get_dsl_guide"
 
 
 def test_search_input_accepts_camel_alias():
@@ -73,3 +76,27 @@ def test_search_input_kn_code_list_json_string():
 def test_search_input_kn_code_list_bare_string():
     obj = SearchInput.model_validate({"query": "q", "knCodeList": "kb1"})
     assert obj.kn_code_list == ["kb1"]
+
+
+def test_dsl_guide_input_basic_construction():
+    inp = DslGuideInput.model_validate({})
+    assert inp.model_dump() == {}
+
+
+def test_search_input_accepts_where_and_metadata_field_list():
+    inp = SearchInput.model_validate(
+        {
+            "query": "test",
+            "where": {"eq": {"fieldName": "status", "value": "active"}},
+            "metadataFieldList": ["status", "tags"],
+        }
+    )
+    assert inp.query == "test"
+    assert inp.where == {"eq": {"fieldName": "status", "value": "active"}}
+    assert inp.metadata_field_list == ["status", "tags"]
+
+
+def test_search_input_where_defaults_to_none():
+    inp = SearchInput.model_validate({"query": "test"})
+    assert inp.where is None
+    assert inp.metadata_field_list is None

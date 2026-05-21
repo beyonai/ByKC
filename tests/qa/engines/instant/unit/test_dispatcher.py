@@ -86,7 +86,7 @@ async def test_dispatch_search_groups_by_service_and_posts():
         "by_qa.qa.tools.knowledge_tools.post_discovered_json",
         side_effect=fake_post,
     ):
-        results = await dispatcher._dispatch(
+        results = await dispatcher.dispatch(
             OperationType.KNOWLEDGE_SEARCH, {"query": "q", "knCodeList": None}, ctx
         )
 
@@ -123,7 +123,7 @@ async def test_dispatch_search_filters_by_kn_code_list():
         "by_qa.qa.tools.knowledge_tools.post_discovered_json",
         side_effect=fake_post,
     ):
-        await dispatcher._dispatch(
+        await dispatcher.dispatch(
             OperationType.KNOWLEDGE_SEARCH, {"query": "q", "knCodeList": ["kb1"]}, ctx
         )
 
@@ -153,7 +153,7 @@ async def test_dispatch_search_normalizes_header_values_to_strings():
         "by_qa.qa.tools.knowledge_tools.post_discovered_json",
         side_effect=fake_post,
     ):
-        await dispatcher._dispatch(
+        await dispatcher.dispatch(
             OperationType.KNOWLEDGE_SEARCH, {"query": "q", "knCodeList": None}, ctx
         )
 
@@ -161,7 +161,7 @@ async def test_dispatch_search_normalizes_header_values_to_strings():
 
 
 @pytest.mark.asyncio
-async def test_search_knowledge_public_method_dispatches_single_search():
+async def test_dispatch_search_public_method_dispatches_search():
     kb = _kb(
         "kb1",
         "svc-a",
@@ -179,7 +179,7 @@ async def test_search_knowledge_public_method_dispatches_single_search():
             "resultObject": {
                 "data": [
                     {
-                        "chunkText": "公开方法命中",
+                        "chunkText": "public hit",
                         "score": 0.88,
                         "filePath": "/doc.md",
                     }
@@ -191,17 +191,19 @@ async def test_search_knowledge_public_method_dispatches_single_search():
         "by_qa.qa.tools.knowledge_tools.post_discovered_json",
         side_effect=fake_post,
     ):
-        results = await dispatcher.search_knowledge("完整问题", ctx)
+        results = await dispatcher.dispatch(
+            OperationType.KNOWLEDGE_SEARCH, {"query": "full question"}, ctx
+        )
 
     assert calls == [
         {
-            "query": "完整问题",
+            "query": "full question",
             "knCodeList": ["kb1"],
             "topK": ctx.retrieval.top_k,
             "searchMode": "mixedRecall",
         }
     ]
-    assert results[0]["content"] == "公开方法命中"
+    assert results[0]["content"] == "public hit"
     assert results[0]["source"] == "/doc.md"
 
 
@@ -226,7 +228,7 @@ async def test_dispatch_list_dir_single_post():
         "by_qa.qa.tools.knowledge_tools.post_discovered_json",
         side_effect=fake_post,
     ):
-        results = await dispatcher._dispatch(
+        results = await dispatcher.dispatch(
             OperationType.LIST_DIR, {"knCode": "kb1", "directoryPath": "/src"}, ctx
         )
 
@@ -262,7 +264,7 @@ async def test_dispatch_single_kb_normalizes_header_values_to_strings():
         "by_qa.qa.tools.knowledge_tools.post_discovered_json",
         side_effect=fake_post,
     ):
-        await dispatcher._dispatch(
+        await dispatcher.dispatch(
             OperationType.LIST_DIR, {"knCode": "kb1", "directoryPath": "/src"}, ctx
         )
 
@@ -288,7 +290,7 @@ async def test_dispatch_single_kb_returns_raw_response_on_api_error():
         "by_qa.qa.tools.knowledge_tools.post_discovered_json",
         side_effect=fake_post,
     ):
-        results = await dispatcher._dispatch(
+        results = await dispatcher.dispatch(
             OperationType.LIST_DIR, {"knCode": "kb1", "directoryPath": "/src"}, ctx
         )
 
@@ -308,7 +310,7 @@ async def test_dispatch_single_kb_returns_error_entry_on_service_exception():
         "by_qa.qa.tools.knowledge_tools.post_discovered_json",
         side_effect=fake_post,
     ):
-        results = await dispatcher._dispatch(
+        results = await dispatcher.dispatch(
             OperationType.LIST_DIR, {"knCode": "kb1", "directoryPath": "/src"}, ctx
         )
 
@@ -325,7 +327,7 @@ async def test_dispatch_single_kb_returns_error_when_kn_code_not_found():
     ctx = _make_context(kb)
     dispatcher = ServiceToolDispatcher([kb])
 
-    results = await dispatcher._dispatch(
+    results = await dispatcher.dispatch(
         OperationType.LIST_DIR,
         {"knCode": "unknown-kb", "directoryPath": "/src"},
         ctx,
@@ -346,7 +348,7 @@ async def test_dispatch_single_kb_returns_error_when_operation_not_supported():
     ctx = _make_context(kb)
     dispatcher = ServiceToolDispatcher([kb])
 
-    results = await dispatcher._dispatch(
+    results = await dispatcher.dispatch(
         OperationType.LIST_DIR, {"knCode": "kb1", "directoryPath": "/src"}, ctx
     )
 
@@ -372,7 +374,7 @@ async def test_dispatch_search_returns_error_for_unauthorized_kb_codes():
         "by_qa.qa.tools.knowledge_tools.post_discovered_json",
         side_effect=fake_post,
     ):
-        results = await dispatcher._dispatch(
+        results = await dispatcher.dispatch(
             OperationType.KNOWLEDGE_SEARCH,
             {"query": "q", "knCodeList": ["kb1", "unauthorized-kb"]},
             ctx,
@@ -401,7 +403,7 @@ async def test_dispatch_search_returns_error_entry_on_service_exception():
         "by_qa.qa.tools.knowledge_tools.post_discovered_json",
         side_effect=fake_post,
     ):
-        results = await dispatcher._dispatch(
+        results = await dispatcher.dispatch(
             OperationType.KNOWLEDGE_SEARCH, {"query": "q", "knCodeList": None}, ctx
         )
 
@@ -431,7 +433,7 @@ async def test_dispatch_search_returns_error_entry_on_api_error():
         "by_qa.qa.tools.knowledge_tools.post_discovered_json",
         side_effect=fake_post,
     ):
-        results = await dispatcher._dispatch(
+        results = await dispatcher.dispatch(
             OperationType.KNOWLEDGE_SEARCH, {"query": "q", "knCodeList": None}, ctx
         )
 
@@ -482,7 +484,7 @@ async def test_dispatch_search_direct_mode_posts_to_base_url():
         "by_qa.qa.tools.knowledge_tools._post_direct_json",
         side_effect=fake_direct,
     ):
-        results = await dispatcher._dispatch(
+        results = await dispatcher.dispatch(
             OperationType.KNOWLEDGE_SEARCH, {"query": "q", "knCodeList": None}, ctx
         )
 
@@ -538,7 +540,7 @@ async def test_dispatch_search_mixed_direct_and_discovery():
             "by_qa.qa.tools.knowledge_tools.post_discovered_json", side_effect=fake_post
         ),
     ):
-        results = await dispatcher._dispatch(
+        results = await dispatcher.dispatch(
             OperationType.KNOWLEDGE_SEARCH, {"query": "q", "knCodeList": None}, ctx
         )
 
@@ -571,7 +573,7 @@ async def test_dispatch_single_kb_direct_mode():
         "by_qa.qa.tools.knowledge_tools._post_direct_json",
         side_effect=fake_direct,
     ):
-        results = await dispatcher._dispatch(
+        results = await dispatcher.dispatch(
             OperationType.LIST_DIR, {"knCode": "kb1", "directoryPath": "/src"}, ctx
         )
 
@@ -597,7 +599,7 @@ async def test_dispatch_single_kb_direct_mode_exception():
         "by_qa.qa.tools.knowledge_tools._post_direct_json",
         side_effect=fake_direct,
     ):
-        results = await dispatcher._dispatch(
+        results = await dispatcher.dispatch(
             OperationType.LIST_DIR, {"knCode": "kb1", "directoryPath": "/src"}, ctx
         )
 

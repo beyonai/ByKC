@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 class OperationType(str, Enum):
     KNOWLEDGE_SEARCH = "knowledgeSearch"
     METADATA_FIELDS_LIST = "metadataFieldsList"
+    DSL_GUIDE = "dslGuide"
     LIST_DIR = "listDir"
     GLOB = "glob"
     READ_FILE = "readFile"
@@ -32,6 +33,20 @@ class SearchInput(BaseModel):
         alias="knCodeList",
         serialization_alias="knCodeList",
         description="List of knowledge base codes to search; searches all configured KBs when omitted",
+    )
+    where: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Agent DSL filter AST (optional). "
+            "MUST call list_metadata_fields and get_dsl_guide first to learn "
+            "available field names and DSL syntax before using this parameter."
+        ),
+    )
+    metadata_field_list: list[str] | None = Field(
+        default=None,
+        alias="metadataFieldList",
+        serialization_alias="metadataFieldList",
+        description="List of metadata field names to return alongside results (optional)",
     )
 
     @field_validator("kn_code_list", mode="before")
@@ -73,6 +88,10 @@ class MetadataFieldsListInput(BaseModel):
                 pass
             return [v]
         return v
+
+
+class DslGuideInput(BaseModel):
+    """No-arg input for the built-in DSL guide tool."""
 
 
 class ListDirInput(BaseModel):
@@ -154,14 +173,28 @@ OPERATION_REGISTRY: dict[OperationType, OperationSpec] = {
     OperationType.KNOWLEDGE_SEARCH: OperationSpec(
         operation_type=OperationType.KNOWLEDGE_SEARCH,
         tool_name="search_knowledge",
-        description="Search knowledge bases for relevant content; supports parallel search across multiple KBs",
+        description="Search knowledge bases for relevant content with optional DSL filtering; "
+        "supports parallel search across multiple KBs. "
+        "Before using the 'where' parameter, MUST call list_metadata_fields "
+        "(to discover available field names) and get_dsl_guide (to learn DSL syntax).",
         input_schema=SearchInput,
     ),
     OperationType.METADATA_FIELDS_LIST: OperationSpec(
         operation_type=OperationType.METADATA_FIELDS_LIST,
         tool_name="list_metadata_fields",
-        description="List metadata fields actually used in the specified knowledge bases; queries all authorized KBs when omitted",
+        description="List metadata fields actually used in the specified knowledge bases; "
+        "queries all authorized KBs when knCodeList is omitted. "
+        "MUST call this tool first to discover available field names before using "
+        "'where' DSL filtering on any search tool.",
         input_schema=MetadataFieldsListInput,
+    ),
+    OperationType.DSL_GUIDE: OperationSpec(
+        operation_type=OperationType.DSL_GUIDE,
+        tool_name="get_dsl_guide",
+        description="Get the Agent DSL syntax reference, including available operators, "
+        "type constraints, nesting rules, and usage examples. Must be called before "
+        "using the 'where' parameter on any search tool.",
+        input_schema=DslGuideInput,
     ),
     OperationType.LIST_DIR: OperationSpec(
         operation_type=OperationType.LIST_DIR,
@@ -189,6 +222,7 @@ OPERATION_REGISTRY: dict[OperationType, OperationSpec] = {
 
 __all__ = [
     "OPERATION_REGISTRY",
+    "DslGuideInput",
     "GlobInput",
     "ListDirInput",
     "ListDirItem",

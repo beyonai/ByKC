@@ -35,6 +35,7 @@ from by_qa.qa.tools.operations.base import (
     _normalize_headers,
 )
 from by_qa.qa.tools.operations.knowledge_search import KnowledgeSearchOperation
+from by_qa.qa.tools.operations.metadata_fields_list import MetadataFieldsListOperation
 
 
 def _format_operation_error(
@@ -86,6 +87,7 @@ class ServiceToolDispatcher:
     # Mapping from OperationType to BaseOperation subclass for parallel dispatch.
     _PARALLEL_OP_CLASSES: dict[OperationType, type[BaseOperation]] = {
         OperationType.KNOWLEDGE_SEARCH: KnowledgeSearchOperation,
+        OperationType.METADATA_FIELDS_LIST: MetadataFieldsListOperation,
     }
 
     def __init__(

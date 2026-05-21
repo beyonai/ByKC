@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 class OperationType(str, Enum):
     KNOWLEDGE_SEARCH = "knowledgeSearch"
+    METADATA_FIELDS_LIST = "metadataFieldsList"
     LIST_DIR = "listDir"
     GLOB = "glob"
     READ_FILE = "readFile"
@@ -31,6 +32,31 @@ class SearchInput(BaseModel):
         alias="knCodeList",
         serialization_alias="knCodeList",
         description="List of knowledge base codes to search; searches all configured KBs when omitted",
+    )
+
+    @field_validator("kn_code_list", mode="before")
+    @classmethod
+    def coerce_kn_code_list(cls, v: object) -> object:
+        if isinstance(v, str):
+            import json
+
+            try:
+                parsed = json.loads(v)
+                if isinstance(parsed, list):
+                    return parsed
+            except (json.JSONDecodeError, ValueError):
+                pass
+            return [v]
+        return v
+
+
+class MetadataFieldsListInput(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    kn_code_list: list[str] | None = Field(
+        default=None,
+        alias="knCodeList",
+        serialization_alias="knCodeList",
+        description="List of knowledge base codes; queries all authorized KBs when omitted",
     )
 
     @field_validator("kn_code_list", mode="before")
@@ -131,6 +157,12 @@ OPERATION_REGISTRY: dict[OperationType, OperationSpec] = {
         description="Search knowledge bases for relevant content; supports parallel search across multiple KBs",
         input_schema=SearchInput,
     ),
+    OperationType.METADATA_FIELDS_LIST: OperationSpec(
+        operation_type=OperationType.METADATA_FIELDS_LIST,
+        tool_name="list_metadata_fields",
+        description="List metadata fields actually used in the specified knowledge bases; queries all authorized KBs when omitted",
+        input_schema=MetadataFieldsListInput,
+    ),
     OperationType.LIST_DIR: OperationSpec(
         operation_type=OperationType.LIST_DIR,
         tool_name="list_directory",
@@ -160,6 +192,7 @@ __all__ = [
     "GlobInput",
     "ListDirInput",
     "ListDirItem",
+    "MetadataFieldsListInput",
     "OperationSpec",
     "OperationType",
     "ReadFileInput",

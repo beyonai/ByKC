@@ -4,4 +4,5 @@ set -euo pipefail
 
 uv run python -m pytest \
   tests/knowledge_build/unit \
+  tests/knowledge_common \
   -q

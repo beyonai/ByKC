@@ -52,6 +52,7 @@ async def test_search_text_uses_cte_when_dsl_filter_present():
     )
     assert cursor.executed_params["dsl_p1"] == "x.md"
     assert cursor.executed_params["query"] == "hello"
+    assert "segmented_query" in cursor.executed_params
     assert cursor.executed_params["kb_codes"] == ["1"]
     assert cursor.executed_params["limit"] == 10
     assert cursor.executed_params["file_type_list"] is None
@@ -140,3 +141,26 @@ async def test_search_vector_omits_cte_when_no_dsl_filter():
     sql = cursor.executed_sql
     assert "candidate_entries" not in sql
     assert "<=>" in sql
+
+
+@pytest.mark.asyncio
+async def test_search_text_segments_chinese_query():
+    """Chinese query must be segmented before plainto_tsquery."""
+    repo = KnowledgeItemSearchRepository(embedding_table_name="emb")
+    cursor = _RecordingCursor()
+
+    await repo.search_text(
+        cursor,
+        query="如何部署Kubernetes集群",
+        kb_codes=["1"],
+        limit=10,
+    )
+
+    params = cursor.executed_params
+    assert params["query"] == "如何部署Kubernetes集群"
+    assert "segmented_query" in params
+    segmented = params["segmented_query"]
+    assert "部署" in segmented
+    assert " " in segmented  # jieba inserts spaces between words
+    assert "plainto_tsquery" in cursor.executed_sql
+    assert "%(segmented_query)s" in cursor.executed_sql

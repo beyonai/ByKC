@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from by_qa.knowledge_common.text_segmentation import segment_for_fts
+
 # Path-derived file extension used by the legacy file_type_list filter.
 # The retrieval projection only stores full_path, so the extension must
 # be parsed at query time.
@@ -111,20 +113,21 @@ class KnowledgeItemSearchRepository:
                 {_CHUNK_COLUMNS},
                 ts_rank_cd(
                     r.search_text,
-                    plainto_tsquery('simple', %(query)s)
+                    plainto_tsquery('simple', %(segmented_query)s)
                 ) AS text_score
             {chunk_from}
             JOIN knowledge_base kb ON kb.kid = r.knowledge_base_id
             WHERE {kb_scope}
               AND kb.is_deleted = FALSE
               {_FILE_TYPE_FILTER}
-              AND r.search_text @@ plainto_tsquery('simple', %(query)s)
+              AND r.search_text @@ plainto_tsquery('simple', %(segmented_query)s)
             ORDER BY text_score DESC, r.chunk_id DESC
             LIMIT %(limit)s
         """
         params = {
             **(where_params or {}),
             "query": query,
+            "segmented_query": segment_for_fts(query),
             "kb_codes": kb_codes,
             "file_type_list": file_type_list,
             "limit": limit,

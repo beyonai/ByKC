@@ -857,7 +857,7 @@ class DocumentChunkingService:
     def _split_block_on_sentences(
         self, block: _TextBlock, text: str
     ) -> list[_TextBlock]:
-        sentence_breaks = "。！？；;!?"
+        sentence_breaks = "。！？!?"
         pieces: list[_TextBlock] = []
         piece_start = block.start_char
         piece_start_line = block.start_line

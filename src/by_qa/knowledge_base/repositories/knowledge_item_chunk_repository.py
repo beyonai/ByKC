@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from by_qa.knowledge_common.text_segmentation import segment_for_fts
+
 
 class KnowledgeItemChunkRepository:
     """Repository for chunks and dynamic vector records."""
@@ -58,7 +60,7 @@ class KnowledgeItemChunkRepository:
                     %(start_line)s,
                     %(end_line)s,
                     %(chunk_text)s,
-                    to_tsvector('simple', %(chunk_text)s),
+                    to_tsvector('simple', %(segmented_text)s),
                     NOW(),
                     NOW()
                 )
@@ -71,6 +73,7 @@ class KnowledgeItemChunkRepository:
                     "start_line": chunk["start_line"],
                     "end_line": chunk["end_line"],
                     "chunk_text": chunk["chunk_text"],
+                    "segmented_text": segment_for_fts(chunk["chunk_text"]),
                 },
             )
             row = await cursor.fetchone()
@@ -160,7 +163,7 @@ class KnowledgeItemChunkRepository:
                     %(start_line)s,
                     %(end_line)s,
                     %(chunk_text)s,
-                    to_tsvector('simple', %(chunk_text)s),
+                    to_tsvector('simple', %(segmented_text)s),
                     NOW(),
                     NOW()
                 )
@@ -172,6 +175,7 @@ class KnowledgeItemChunkRepository:
                     "start_line": chunk["start_line"],
                     "end_line": chunk["end_line"],
                     "chunk_text": chunk["chunk_text"],
+                    "segmented_text": segment_for_fts(chunk["chunk_text"]),
                 },
             )
             row = await cursor.fetchone()

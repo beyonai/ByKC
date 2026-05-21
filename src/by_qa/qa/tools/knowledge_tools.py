@@ -341,9 +341,10 @@ class DispatcherToolMiddleware(AgentMiddleware):
     async def abefore_model(
         self,
         state: StateT,
-        _: Runtime[ContextT],
+        runtime: Runtime[ContextT],
     ) -> dict[str, Any] | None:
         """Inject follow-up prompt if the last tool call was a knowledge search."""
+        _ = runtime
         messages = state.get("messages", [])
         if not messages:
             return None

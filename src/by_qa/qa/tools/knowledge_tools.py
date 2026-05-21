@@ -29,55 +29,12 @@ from by_qa.qa.common.operation_registry import (
     OperationSpec,
     OperationType,
 )
-
-
-def _format_search_result(item: dict[str, Any]) -> dict[str, Any]:
-    file_path = item.get("filePath") or item.get("file_path", "")
-    return {
-        "content": item.get("chunkText") or item.get("chunk_text", ""),
-        "source": file_path,
-        "source_type": "knowledge_base",
-        "score": item.get("score", 0.0),
-        "kb_code": item.get("knCode") or item.get("kb_code"),
-        "file_code": item.get("file_code"),
-        "version": item.get("version"),
-        "chunk_no": item.get("chunkNo") or item.get("chunk_no"),
-        "source_code": item.get("source_code"),
-        "type_code": item.get("type_code"),
-        "file_path": file_path,
-    }
-
-
-def _format_search_error(
-    *, service_name: str, path: str, exc: Exception
-) -> dict[str, Any]:
-    return {
-        "content": f"Search failed — {exc}",
-        "source": f"{service_name}{path}",
-        "source_type": "knowledge_base",
-        "score": 0.0,
-        "is_error": True,
-        "error": str(exc),
-        "error_type": type(exc).__name__,
-        "service_name": service_name,
-        "path": path,
-    }
-
-
-def _format_search_api_error(
-    *, service_name: str, path: str, result_msg: str
-) -> dict[str, Any]:
-    return {
-        "content": f"Search API error — {result_msg}",
-        "source": f"{service_name}{path}",
-        "source_type": "knowledge_base",
-        "score": 0.0,
-        "is_error": True,
-        "error": result_msg,
-        "error_type": "ApiError",
-        "service_name": service_name,
-        "path": path,
-    }
+from by_qa.qa.tools.operations.base import (
+    BaseOperation,
+    DispatchRequest,
+    _normalize_headers,
+)
+from by_qa.qa.tools.operations.knowledge_search import KnowledgeSearchOperation
 
 
 def _format_operation_error(
@@ -100,14 +57,6 @@ def _format_operation_error(
     }
 
 
-def _normalize_headers(headers: dict[str, Any] | None) -> dict[str, str] | None:
-    if not headers:
-        return None
-    return {
-        str(key): "" if value is None else str(value) for key, value in headers.items()
-    }
-
-
 async def _post_direct_json(
     *,
     base_url: str,
@@ -127,10 +76,27 @@ async def _post_direct_json(
 
 
 class ServiceToolDispatcher:
-    """Generates LangGraph tools from KnowledgeBaseConfig.operations at graph-build time."""
+    """Generates LangGraph tools and dispatches operations to knowledge-base services.
 
-    def __init__(self, knowledge_bases: list[KnowledgeBaseConfig]) -> None:
+    Parallel-dispatch operations (like KNOWLEDGE_SEARCH) are delegated to
+    BaseOperation subclasses for request building and result processing.
+    Single-KB operations (LIST_DIR, GLOB, READ_FILE) use the built-in simple path.
+    """
+
+    def __init__(
+        self,
+        knowledge_bases: list[KnowledgeBaseConfig],
+        operations: list[BaseOperation] | None = None,
+    ) -> None:
         self._knowledge_bases = knowledge_bases
+
+        # Register parallel-dispatch operations
+        self._parallel_ops: dict[OperationType, BaseOperation] = {}
+        if operations:
+            for op in operations:
+                self._parallel_ops[op.operation_type] = op
+
+        # Discover supported ops from KB configs
         self._supported_ops: set[OperationType] = set()
         for kb in knowledge_bases:
             for op_key in kb.operations:
@@ -145,20 +111,38 @@ class ServiceToolDispatcher:
                     except ValueError:
                         pass
 
+        # Auto-register default KnowledgeSearchOperation if supported
+        if (
+            OperationType.KNOWLEDGE_SEARCH in self._supported_ops
+            and OperationType.KNOWLEDGE_SEARCH not in self._parallel_ops
+        ):
+            self._parallel_ops[OperationType.KNOWLEDGE_SEARCH] = (
+                KnowledgeSearchOperation()
+            )
+
     def build_tools(self) -> list[Any]:
         return [self._make_tool(OPERATION_REGISTRY[op]) for op in self._supported_ops]
 
-    async def search_knowledge(
+    async def dispatch(
         self,
-        query: str,
+        operation_type: OperationType,
+        payload: dict[str, Any],
         runtime_context: QARuntimeContext,
-        kn_code_list: list[str] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Search configured knowledge bases without constructing a LangChain tool."""
-        return await self._dispatch_search(
-            {"query": query, "knCodeList": kn_code_list},
-            runtime_context,
+    ) -> Any:
+        """Dispatch an operation.
+
+        Uses a registered BaseOperation for parallel dispatch, or falls back
+        to the simple single-KB path.
+        """
+        logger.info(
+            "[dispatcher] dispatch: operation_type=%s payload=%s",
+            operation_type,
+            payload,
         )
+        parallel_op = self._parallel_ops.get(operation_type)
+        if parallel_op is not None:
+            return await self._dispatch_parallel(parallel_op, payload, runtime_context)
+        return await self._dispatch_single_kb(operation_type, payload, runtime_context)
 
     def _make_tool(self, spec: OperationSpec) -> Any:
         dispatcher = self
@@ -177,7 +161,7 @@ class ServiceToolDispatcher:
             camel_payload = spec.input_schema.model_validate(kwargs).model_dump(
                 by_alias=True, exclude_none=True
             )
-            results = await dispatcher._dispatch(
+            results = await dispatcher.dispatch(
                 spec.operation_type, camel_payload, runtime.context
             )
             return json.dumps(results, ensure_ascii=False)
@@ -186,145 +170,52 @@ class ServiceToolDispatcher:
         _fn.__doc__ = spec.description
         return tool(_fn, args_schema=extended_schema)
 
-    async def _dispatch(
+    async def _execute_request(self, request: DispatchRequest) -> dict[str, Any]:
+        """Execute a single HTTP request (direct URL or service discovery)."""
+        if request.base_url:
+            return await _post_direct_json(
+                base_url=request.base_url,
+                path=request.path,
+                json_body=request.body,
+                headers=request.headers,
+            )
+        kwargs: dict[str, Any] = {
+            "service_name": request.service_name,
+            "path": request.path,
+            "json": request.body,
+        }
+        if request.headers:
+            kwargs["headers"] = request.headers
+        return await post_discovered_json(**kwargs)
+
+    async def _dispatch_parallel(
         self,
-        operation_type: OperationType,
+        op: BaseOperation,
         payload: dict[str, Any],
         runtime_context: QARuntimeContext,
     ) -> Any:
-        logger.info(
-            "[dispatcher] dispatch: operation_type=%s payload=%s",
-            operation_type,
-            payload,
-        )
-        if operation_type == OperationType.KNOWLEDGE_SEARCH:
-            return await self._dispatch_search(payload, runtime_context)
-        return await self._dispatch_single_kb(operation_type, payload, runtime_context)
-
-    async def _dispatch_search(
-        self,
-        payload: dict[str, Any],
-        runtime_context: QARuntimeContext,
-    ) -> list[dict[str, Any]]:
+        """Dispatch a BaseOperation across multiple KBs in parallel."""
         kbs = runtime_context.retrieval.knowledge_bases
-        authorized_codes = {kb.kb_code for kb in kbs}
-        kn_code_list: list[str] | None = payload.get("kn_code_list") or payload.get(
-            "knCodeList"
-        )
+        requests, pre_dispatch_errors = op.build_requests(payload, kbs, runtime_context)
 
-        error_results: list[dict[str, Any]] = []
-        if kn_code_list:
-            unauthorized = [
-                code for code in kn_code_list if code not in authorized_codes
-            ]
-            for code in unauthorized:
-                exc = KnowledgeBaseNotFoundOrForbiddenError(
-                    f"Knowledge base '{code}' not found or access not permitted."
-                )
-                error("[dispatcher] search: %s", exc)
-                error_results.append(
-                    _format_search_error(service_name="", path="", exc=exc)
-                )
-            kbs = [kb for kb in kbs if kb.kb_code in kn_code_list]
+        if not requests:
+            return op.aggregate(pre_dispatch_errors)
 
-        grouped: dict[tuple[str, str, str | None], list[str]] = {}
-        service_headers: dict[str, dict[str, str]] = {}
-        for kb in kbs:
-            path = kb.operations.get(OperationType.KNOWLEDGE_SEARCH)
-            if not path:
-                continue
-            normalized_headers = _normalize_headers(kb.headers)
-            if normalized_headers:
-                service_headers.setdefault(kb.service_name, {}).update(
-                    normalized_headers
-                )
-            key = (kb.service_name, path, kb.base_url)
-            grouped.setdefault(key, [])
-            if kb.kb_code not in grouped[key]:
-                grouped[key].append(kb.kb_code)
-
-        if not grouped:
-            return error_results
-
-        top_k = runtime_context.retrieval.top_k
-        requests = [
-            (
-                service_name,
-                path,
-                base_url,
-                service_headers.get(service_name),
-                {
-                    "query": payload["query"],
-                    "knCodeList": kb_codes,
-                    "topK": top_k,
-                    "searchMode": "mixedRecall",
-                },
-            )
-            for (service_name, path, base_url), kb_codes in grouped.items()
-        ]
-
-        for sn, p, bu, h, body in requests:
-            if bu:
-                info(
-                    "[dispatcher] search: direct mode url=%s%s",
-                    bu.rstrip("/"),
-                    "/" + p.lstrip("/"),
-                )
-            else:
-                info("[dispatcher] search: discovery mode service=%s path=%s", sn, p)
-        info("[dispatcher] search: dispatching %s requests", len(requests))
         responses = await asyncio.gather(
-            *[
-                _post_direct_json(
-                    base_url=bu,
-                    path=p,
-                    json_body=body,
-                    headers=h,
-                )
-                if bu
-                else post_discovered_json(
-                    service_name=sn,
-                    path=p,
-                    json=body,
-                    **({} if not h else {"headers": h}),
-                )
-                for sn, p, bu, h, body in requests
-            ],
+            *[self._execute_request(r) for r in requests],
             return_exceptions=True,
         )
 
-        results: list[dict[str, Any]] = []
-        for (sn, p, bu, h, body), resp in zip(requests, responses):
+        all_parts: list[Any] = list(pre_dispatch_errors)
+        for req, resp in zip(requests, responses):
             if isinstance(resp, Exception):
-                error(
-                    "[dispatcher] search failed: service=%s base_url=%s path=%s error=%s",
-                    sn,
-                    bu,
-                    p,
-                    resp,
-                )
-                results.append(_format_search_error(service_name=sn, path=p, exc=resp))
-                continue
-            if resp.get("resultCode") != "0":
-                result_msg = resp.get("resultMsg", "unknown error")
-                error(
-                    "[dispatcher] search API error: service=%s base_url=%s path=%s resultMsg=%s",
-                    sn,
-                    bu,
-                    p,
-                    result_msg,
-                )
-                results.append(
-                    _format_search_api_error(
-                        service_name=sn, path=p, result_msg=result_msg
-                    )
-                )
-                continue
-            for item in resp.get("resultObject", {}).get("data", []):
-                results.append(_format_search_result(item))
+                all_parts.append(op.process_error(resp, req))
+            elif resp.get("resultCode") != "0":
+                all_parts.append(op.process_api_error(resp, req))
+            else:
+                all_parts.append(op.process_response(resp, req))
 
-        results.sort(key=lambda r: r.get("score", 0.0), reverse=True)
-        return error_results + results
+        return op.aggregate(all_parts)
 
     async def _dispatch_single_kb(
         self,
@@ -403,7 +294,7 @@ class ServiceToolDispatcher:
                 if headers:
                     kwargs["headers"] = headers
                 resp = await post_discovered_json(**kwargs)
-        except Exception as exc:  # pragma: no cover - exercised by unit tests
+        except Exception as exc:
             error(
                 "[dispatcher] %s failed: service=%s base_url=%s path=%s error=%s",
                 operation_type.value,
@@ -450,7 +341,7 @@ class DispatcherToolMiddleware(AgentMiddleware):
     async def abefore_model(
         self,
         state: StateT,
-        runtime: Runtime[ContextT],  # pylint: disable=unused-argument
+        _: Runtime[ContextT],
     ) -> dict[str, Any] | None:
         """Inject follow-up prompt if the last tool call was a knowledge search."""
         messages = state.get("messages", [])

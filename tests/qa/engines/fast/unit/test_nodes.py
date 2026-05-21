@@ -23,8 +23,10 @@ async def test_retrieve_node_calls_public_search_once(monkeypatch):
         def __init__(self, knowledge_bases):
             self.knowledge_bases = knowledge_bases
 
-        async def search_knowledge(self, query, runtime_context):
-            return await search(query, runtime_context)
+        async def dispatch(  # pylint: disable=unused-argument
+            self, operation_type, payload, runtime_context
+        ):
+            return await search(payload["query"], runtime_context)
 
     monkeypatch.setattr(
         "by_qa.qa.engines.fast.nodes.retrieve.ServiceToolDispatcher", FakeDispatcher
@@ -76,9 +78,16 @@ async def test_retrieve_node_calls_search_for_each_sub_query(monkeypatch):
         def __init__(self, knowledge_bases):
             self.knowledge_bases = knowledge_bases
 
-        async def search_knowledge(self, query, runtime_context):  # pylint: disable=unused-argument
-            call_log.append(query)
-            return [{"content": f"result for {query}", "chunk_id": query}]
+        async def dispatch(  # pylint: disable=unused-argument
+            self, operation_type, payload, runtime_context
+        ):
+            call_log.append(payload["query"])
+            return [
+                {
+                    "content": f"result for {payload['query']}",
+                    "chunk_id": payload["query"],
+                }
+            ]
 
     monkeypatch.setattr(
         "by_qa.qa.engines.fast.nodes.retrieve.ServiceToolDispatcher", FakeDispatcher
@@ -114,7 +123,9 @@ async def test_retrieve_node_deduplicates_by_chunk_id(monkeypatch):
         def __init__(self, knowledge_bases):
             pass
 
-        async def search_knowledge(self, query, runtime_context):  # pylint: disable=unused-argument
+        async def dispatch(  # pylint: disable=unused-argument
+            self, operation_type, payload, runtime_context
+        ):
             return [{"content": "共同结果", "chunk_id": "dup_chunk"}]
 
     monkeypatch.setattr(

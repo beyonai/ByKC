@@ -191,22 +191,25 @@ class KnowledgeItemSearchService:
                 request.where, property_map=property_map
             )
 
-            text_hits = await self.search_repository.search_text(
-                cursor,
-                query=request.query,
-                kb_codes=kb_codes,
-                where_sql=where_sql,
-                where_params=where_params,
-                limit=request.top_k * 50,
-            )
-            vector_hits = await self.search_repository.search_vector(
-                cursor,
-                query_embedding=query_embedding,
-                kb_codes=kb_codes,
-                where_sql=where_sql,
-                where_params=where_params,
-                limit=request.top_k * 50,
-            )
+            text_hits, vector_hits = [], []
+            if request.search_mode in ["fullTextRecall", "mixedRecall"]:
+                text_hits = await self.search_repository.search_text(
+                    cursor,
+                    query=request.query,
+                    kb_codes=kb_codes,
+                    where_sql=where_sql,
+                    where_params=where_params,
+                    limit=request.top_k * 50,
+                )
+            if request.search_mode in ["embedding", "mixedRecall"]:
+                vector_hits = await self.search_repository.search_vector(
+                    cursor,
+                    query_embedding=query_embedding,
+                    kb_codes=kb_codes,
+                    where_sql=where_sql,
+                    where_params=where_params,
+                    limit=request.top_k * 50,
+                )
 
             merged = self._merge_hits(text_hits=text_hits, vector_hits=vector_hits)
 

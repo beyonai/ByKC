@@ -6,6 +6,7 @@ from typing import Any
 
 from by_qa.core.logger import info
 from by_qa.qa.common.context import QARuntimeContext
+from by_qa.qa.common.operation_registry import OperationType
 from by_qa.qa.engines.fast.state import FastQAState
 from by_qa.qa.tools.knowledge_tools import ServiceToolDispatcher
 
@@ -32,7 +33,11 @@ async def retrieve_node(
     dispatcher = ServiceToolDispatcher(runtime.context.retrieval.knowledge_bases)
     raw_results = await asyncio.gather(
         *[
-            dispatcher.search_knowledge(sq["query_text"], runtime.context)
+            dispatcher.dispatch(
+                OperationType.KNOWLEDGE_SEARCH,
+                {"query": sq["query_text"]},
+                runtime.context,
+            )
             for sq in sub_queries
         ],
         return_exceptions=True,

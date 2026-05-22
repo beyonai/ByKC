@@ -36,23 +36,39 @@ def test_build_tools_returns_one_tool_per_supported_op():
     assert tool_names == {
         OPERATION_REGISTRY[OperationType.KNOWLEDGE_SEARCH].tool_name,
         OPERATION_REGISTRY[OperationType.LIST_DIR].tool_name,
-        OPERATION_REGISTRY[OperationType.DSL_GUIDE].tool_name,
     }
 
 
 def test_build_tools_empty_when_no_kbs():
     dispatcher = ServiceToolDispatcher([])
     tools = dispatcher.build_tools()
-    assert len(tools) == 1
-    assert tools[0].name == OPERATION_REGISTRY[OperationType.DSL_GUIDE].tool_name
+    assert len(tools) == 0
 
 
 def test_build_tools_ignores_unknown_operation_types():
     kb = _kb("kb1", "svc-a", {"unknownOp": "/api/v1/unknown"})
     dispatcher = ServiceToolDispatcher([kb])
     tools = dispatcher.build_tools()
-    assert len(tools) == 1
-    assert tools[0].name == OPERATION_REGISTRY[OperationType.DSL_GUIDE].tool_name
+    assert len(tools) == 0
+
+
+def test_build_tools_includes_dsl_guide_when_metadata_fields_supported():
+    kb = _kb(
+        "kb1",
+        "svc-a",
+        {
+            OperationType.KNOWLEDGE_SEARCH: "/api/v1/knowledgeItems/search",
+            OperationType.METADATA_FIELDS_LIST: "/api/v1/metadataFields/list",
+        },
+    )
+    dispatcher = ServiceToolDispatcher([kb])
+    tools = dispatcher.build_tools()
+    tool_names = {t.name for t in tools}
+    assert tool_names == {
+        OPERATION_REGISTRY[OperationType.KNOWLEDGE_SEARCH].tool_name,
+        OPERATION_REGISTRY[OperationType.METADATA_FIELDS_LIST].tool_name,
+        OPERATION_REGISTRY[OperationType.DSL_GUIDE].tool_name,
+    }
 
 
 @pytest.mark.asyncio

@@ -64,6 +64,18 @@ class SearchInput(BaseModel):
             return [v]
         return v
 
+    @field_validator("where", mode="before")
+    @classmethod
+    def coerce_where(cls, v: object) -> object:
+        if isinstance(v, str):
+            import json
+
+            try:
+                return json.loads(v)
+            except (json.JSONDecodeError, ValueError):
+                pass
+        return v
+
 
 class MetadataFieldsListInput(BaseModel):
     model_config = ConfigDict(populate_by_name=True)

@@ -29,7 +29,7 @@ from by_qa.qa.common.operation_registry import (
     OperationSpec,
     OperationType,
 )
-from by_qa.qa.tools.dsl_guide import DSL_GUIDE_CONTENT
+from by_qa.qa.tools.dsl_guide import get_dsl_guide
 from by_qa.qa.tools.operations.base import (
     BaseOperation,
     DispatchRequest,
@@ -91,9 +91,6 @@ class ServiceToolDispatcher:
         OperationType.METADATA_FIELDS_LIST: MetadataFieldsListOperation,
     }
 
-    # Built-in operation types that don't require KB config and don't make HTTP calls.
-    _BUILTIN_OPS: set[OperationType] = {OperationType.DSL_GUIDE}
-
     def __init__(
         self,
         knowledge_bases: list[KnowledgeBaseConfig],
@@ -124,8 +121,8 @@ class ServiceToolDispatcher:
 
     def build_tools(self) -> list[Any]:
         tools = [self._make_tool(OPERATION_REGISTRY[op]) for op in self._supported_ops]
-        for op_type in self._BUILTIN_OPS:
-            tools.append(self._make_tool(OPERATION_REGISTRY[op_type]))
+        if OperationType.METADATA_FIELDS_LIST in self._supported_ops:
+            tools.append(get_dsl_guide)
         return tools
 
     async def dispatch(
@@ -136,38 +133,22 @@ class ServiceToolDispatcher:
     ) -> Any:
         """Dispatch an operation.
 
-        Uses a registered BaseOperation for parallel dispatch, returns local
-        content for built-in tools, or falls back to the simple single-KB path.
+        Uses a registered BaseOperation for parallel dispatch, or falls back
+        to the simple single-KB path.
         """
         logger.info(
             "[dispatcher] dispatch: operation_type=%s payload=%s",
             operation_type,
             payload,
         )
-        if operation_type in self._BUILTIN_OPS:
-            return self._dispatch_builtin(operation_type, payload)
         parallel_op = self._parallel_ops.get(operation_type)
         if parallel_op is not None:
             return await self._dispatch_parallel(parallel_op, payload, runtime_context)
         return await self._dispatch_single_kb(operation_type, payload, runtime_context)
 
-    def _dispatch_builtin(
-        self,
-        operation_type: OperationType,
-        payload: dict[str, Any],
-    ) -> Any:
-        if operation_type == OperationType.DSL_GUIDE:
-            return DSL_GUIDE_CONTENT
-        return {
-            "error": f"Unknown builtin operation: {operation_type.value}",
-            "payload": payload,
-        }
-
     def _make_tool(self, spec: OperationSpec) -> Any:
         dispatcher = self
 
-        # Extend the input schema with extra='allow' so that ToolRuntime injected
-        # by LangGraph's ToolNode passes through _parse_input to the function.
         extended_schema = type(
             spec.input_schema.__name__,
             (spec.input_schema,),
@@ -175,8 +156,6 @@ class ServiceToolDispatcher:
         )
 
         async def _fn(runtime: ToolRuntime[QARuntimeContext], **kwargs: Any) -> str:
-            # kwargs keys are snake_case (Pydantic field names after validation).
-            # Re-serialize to camelCase so the API receives the expected field names.
             camel_payload = spec.input_schema.model_validate(kwargs).model_dump(
                 by_alias=True, exclude_none=True
             )
@@ -363,7 +342,32 @@ class DispatcherToolMiddleware(AgentMiddleware):
         self._counter_lock = asyncio.Lock()
         self._result_counters: dict[tuple[str, int, int], int] = {}
 
-    def _check_dsl_prerequisites(self, state: dict) -> list[str]:
+    @staticmethod
+    def _parse_where(raw: Any) -> Any:
+        """Parse a JSON-string 'where' argument into a dict, if needed."""
+        if isinstance(raw, str):
+            try:
+                return json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
+                pass
+        return raw
+
+    @staticmethod
+    def _metadata_fields_available(runtime_context: Any) -> bool:
+        """Check whether any KB supports METADATA_FIELDS_LIST."""
+        if runtime_context is None:
+            raise RuntimeError(
+                "DispatcherToolMiddleware requires a non-null runtime context"
+            )
+        kbs = runtime_context.retrieval.knowledge_bases
+        return any(
+            OperationType.METADATA_FIELDS_LIST in getattr(kb, "operations", {})
+            for kb in kbs
+        )
+
+    def _check_dsl_prerequisites(
+        self, state: dict, runtime_context: Any = None
+    ) -> list[str]:
         messages = state.get("messages", [])
         found_metadata_fields = False
         found_dsl_guide = False
@@ -378,6 +382,12 @@ class DispatcherToolMiddleware(AgentMiddleware):
             missing.append(self._metadata_fields_tool_name)
         if not found_dsl_guide:
             missing.append(self._dsl_guide_tool_name)
+        if not self._metadata_fields_available(runtime_context):
+            missing = [
+                t
+                for t in missing
+                if t not in {self._metadata_fields_tool_name, self._dsl_guide_tool_name}
+            ]
         return missing
 
     async def abefore_model(
@@ -409,9 +419,27 @@ class DispatcherToolMiddleware(AgentMiddleware):
         self, request: ToolCallRequest, handler: Callable
     ) -> ToolMessage | Command:
         tool_args = request.tool_call.get("args", {})
-        where = tool_args.get("where")
+        where = self._parse_where(tool_args.get("where"))
         if where is not None and where != {}:
-            missing = self._check_dsl_prerequisites(request.state)
+            runtime_context = request.runtime.context
+            if not self._metadata_fields_available(runtime_context):
+                return ToolMessage(
+                    content=json.dumps(
+                        {
+                            "error": True,
+                            "error_type": "WhereNotSupported",
+                            "message": (
+                                "The 'where' parameter is not supported because no "
+                                "knowledge base provides metadata field listing. "
+                                "Remove the 'where' parameter and retry your search."
+                            ),
+                        },
+                        ensure_ascii=False,
+                    ),
+                    name=request.tool_call["name"],
+                    tool_call_id=request.tool_call["id"],
+                )
+            missing = self._check_dsl_prerequisites(request.state, runtime_context)
             if missing:
                 return ToolMessage(
                     content=json.dumps(

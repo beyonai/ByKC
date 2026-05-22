@@ -1,6 +1,8 @@
-"""DSL guide content — used by ServiceToolDispatcher._dispatch_builtin."""
+"""DSL guide content and tool — used when METADATA_FIELDS_LIST is supported."""
 
 from __future__ import annotations
+
+from langchain.tools import tool
 
 DSL_GUIDE_CONTENT = (
     "## Agent DSL Syntax Reference\n\n"
@@ -65,4 +67,13 @@ DSL_GUIDE_CONTENT = (
     "  ]}\n"
 )
 
-__all__ = ["DSL_GUIDE_CONTENT"]
+
+@tool
+def get_dsl_guide() -> str:
+    """Get the Agent DSL syntax reference, including available operators,
+    type constraints, nesting rules, and usage examples. Must be called before
+    using the 'where' parameter on any search tool."""
+    return DSL_GUIDE_CONTENT
+
+
+__all__ = ["DSL_GUIDE_CONTENT", "get_dsl_guide"]

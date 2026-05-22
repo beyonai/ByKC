@@ -122,10 +122,16 @@ class KnowledgeSearchOperation(BaseOperation):
                 base_url=base_url,
                 headers=service_headers.get(service_name),
                 body={
-                    "query": payload["query"],
-                    "knCodeList": kb_codes,
-                    "topK": top_k,
-                    "searchMode": "mixedRecall",
+                    k: v
+                    for k, v in {
+                        "query": payload["query"],
+                        "knCodeList": kb_codes,
+                        "topK": top_k,
+                        "searchMode": "mixedRecall",
+                        "where": payload.get("where"),
+                        "metadataFieldList": payload.get("metadataFieldList"),
+                    }.items()
+                    if v is not None
                 },
             )
             for (service_name, path, base_url), kb_codes in grouped.items()

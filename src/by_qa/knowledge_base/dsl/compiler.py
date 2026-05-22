@@ -27,7 +27,7 @@ def compile_where_to_sql(
     *,
     property_map: dict[str, dict[str, Any]],
 ) -> tuple[str, dict[str, Any]]:
-    if where is None:
+    if not where:
         return "", {}
     ctx = _CompilerContext()
     sql = _compile_node(where, property_map, ctx)

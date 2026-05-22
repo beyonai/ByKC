@@ -128,7 +128,9 @@ class KnowledgeSearchOperation(BaseOperation):
                         "knCodeList": kb_codes,
                         "topK": top_k,
                         "searchMode": "mixedRecall",
-                        "where": payload.get("where"),
+                        "where": payload.get("where", {})
+                        if payload.get("where", {})
+                        else None,
                         "metadataFieldList": payload.get("metadataFieldList"),
                     }.items()
                     if v is not None

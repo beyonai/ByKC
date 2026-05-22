@@ -181,7 +181,7 @@ class KnowledgeItemSearchService:
             kb_codes = request.kb_code_list or []
             property_map = await self._build_property_map(cursor, request.where)
 
-            if request.where is not None:
+            if request.where:
                 validate_where_clause(
                     request.where,
                     known_fields=_build_known_fields(property_map),
@@ -267,7 +267,7 @@ class KnowledgeItemSearchService:
     async def _build_property_map(
         self, cursor: Any, where: dict[str, Any] | None
     ) -> dict[str, dict[str, Any]]:
-        if where is None or self.metadata_property_repository is None:
+        if not where or self.metadata_property_repository is None:
             return {}
         field_names = _collect_field_names(where)
         if not field_names:

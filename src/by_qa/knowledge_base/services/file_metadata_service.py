@@ -13,6 +13,10 @@ from by_qa.knowledge_base.api.metadata_schemas import (
     MetadataPropertyResponse,
     UpdateFileMetadataRequest,
 )
+from by_qa.knowledge_base.metadata_types import (
+    SYSTEM_FIELD_DESCRIPTIONS,
+    SYSTEM_FIELD_VALUE_TYPES,
+)
 from by_qa.knowledge_base.repositories.file_metadata_value_repository import (
     FileMetadataValueRepository,
 )
@@ -57,6 +61,40 @@ def _extract_value(row: dict[str, Any]) -> Any:
     return None
 
 
+def _extract_system_fields(
+    entry: dict[str, Any],
+    property_names: list[str] | None = None,
+) -> dict[str, Any]:
+    name = entry.get("name") or ""
+    if "." in name:
+        file_type = name.rsplit(".", 1)[-1].lower()
+    else:
+        file_type = ""
+
+    created_at = entry.get("created_at")
+    updated_at = entry.get("updated_at")
+
+    all_fields: dict[str, dict[str, Any]] = {
+        "fileName": {"valueType": "string", "value": name},
+        "fileType": {"valueType": "string", "value": file_type},
+        "fileSize": {"valueType": "number", "value": entry.get("file_size")},
+        "mimeType": {"valueType": "string", "value": entry.get("mime_type")},
+        "createdAt": {
+            "valueType": "datetime",
+            "value": created_at.isoformat() if created_at else None,
+        },
+        "updatedAt": {
+            "valueType": "datetime",
+            "value": updated_at.isoformat() if updated_at else None,
+        },
+        "filePath": {"valueType": "string", "value": entry.get("virtual_path")},
+    }
+
+    if property_names is not None:
+        return {k: v for k, v in all_fields.items() if k in property_names}
+    return all_fields
+
+
 @dataclass
 class FileMetadataService:
     """Manages file-level metadata values."""
@@ -69,7 +107,7 @@ class FileMetadataService:
 
     async def _resolve_file(
         self, cursor: Any, kb_code: str, file_path: str
-    ) -> tuple[int, int]:
+    ) -> tuple[int, int, dict[str, Any]]:
         kb = await self.knowledge_base_repository.get_by_code(cursor, kb_code)
         if kb is None:
             raise KnowledgeBaseValidationError(f"knowledge base not found: {kb_code}")
@@ -79,7 +117,7 @@ class FileMetadataService:
         )
         if entry is None:
             raise KnowledgeBaseValidationError(f"file not found: {file_path}")
-        return kb_id, entry["kid"]
+        return kb_id, entry["kid"], entry
 
     async def update_metadata(
         self, request: UpdateFileMetadataRequest
@@ -93,7 +131,7 @@ class FileMetadataService:
         connection = await self.connection_factory()
         try:
             cursor = connection.cursor()
-            kb_id, fs_entry_id = await self._resolve_file(
+            kb_id, fs_entry_id, _ = await self._resolve_file(
                 cursor, request.kb_code, request.file_path
             )
 
@@ -197,15 +235,15 @@ class FileMetadataService:
         connection = await self.connection_factory()
         try:
             cursor = connection.cursor()
-            _, fs_entry_id = await self._resolve_file(
+            _, fs_entry_id, entry = await self._resolve_file(
                 cursor, request.kb_code, request.file_path
             )
+            metadata = _extract_system_fields(entry, request.metadata_field_list)
             rows = await self.file_metadata_value_repository.get_file_metadata(
                 cursor,
                 fs_entry_id=fs_entry_id,
                 property_names=request.metadata_field_list,
             )
-            metadata: dict[str, Any] = {}
             for row in rows:
                 metadata[row["property_name"]] = {
                     "valueType": row["value_type"],
@@ -240,6 +278,21 @@ class FileMetadataService:
                     description=row["description"],
                 )
                 for row in rows
+            ] + [
+                MetadataPropertyResponse(
+                    property_name=name,
+                    value_type=SYSTEM_FIELD_VALUE_TYPES[name],
+                    description=SYSTEM_FIELD_DESCRIPTIONS[name],
+                )
+                for name in [
+                    "fileName",
+                    "fileType",
+                    "fileSize",
+                    "mimeType",
+                    "createdAt",
+                    "updatedAt",
+                    "filePath",
+                ]
             ]
         finally:
             await connection.close()

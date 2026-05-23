@@ -557,6 +557,59 @@ def test_metadata_get_unknown_file_rejected(monkeypatch):
         assert "file not found" in resp.json()["resultMsg"]
 
 
+@pytest.mark.integration
+def test_metadata_get_returns_system_fields(monkeypatch):
+    """M4.i: metadata/get returns system field values alongside user metadata."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client, file_path="/system_test.md")
+
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={"knCode": kb_code, "filePath": file_path},
+        )
+        assert resp.json()["resultCode"] == "0"
+        metadata = resp.json()["resultObject"]["metadata"]
+
+        assert metadata["fileName"] == {
+            "valueType": "string",
+            "value": "system_test.md",
+        }
+        assert metadata["fileType"] == {"valueType": "string", "value": "md"}
+        assert metadata["fileSize"]["valueType"] == "number"
+        assert isinstance(metadata["fileSize"]["value"], int)
+        assert metadata["mimeType"] == {"valueType": "string", "value": "text/markdown"}
+        assert metadata["filePath"] == {
+            "valueType": "string",
+            "value": "/system_test.md",
+        }
+        assert metadata["createdAt"]["valueType"] == "datetime"
+        assert metadata["updatedAt"]["valueType"] == "datetime"
+        assert len(metadata) == 7
+
+
+@pytest.mark.integration
+def test_metadata_get_field_list_filters_system_fields(monkeypatch):
+    """M4.j: metadata/get with metadataFieldList filters system and user fields."""
+    with runtime(monkeypatch) as client:
+        kb_code, file_path = new_kb_with_file(client, file_path="/filtered.md")
+
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={
+                "knCode": kb_code,
+                "filePath": file_path,
+                "metadataFieldList": ["fileName", "fileSize"],
+            },
+        )
+        assert resp.json()["resultCode"] == "0"
+        metadata = resp.json()["resultObject"]["metadata"]
+
+        assert len(metadata) == 2
+        assert "fileName" in metadata
+        assert "fileSize" in metadata
+        assert "fileType" not in metadata
+
+
 # ===================================================================
 # Section 5: stringList operations  (M5.a-M5.e)
 # ===================================================================
@@ -807,7 +860,15 @@ def test_front_matter_absent_imports_clean(monkeypatch):
             "/api/v1/knowledgeItems/metadata/get",
             json={"knCode": kb_code, "filePath": path},
         ).json()["resultObject"]["metadata"]
-        assert got == {}
+        assert set(got.keys()) == {
+            "fileName",
+            "fileType",
+            "fileSize",
+            "mimeType",
+            "createdAt",
+            "updatedAt",
+            "filePath",
+        }
 
 
 @pytest.mark.integration
@@ -857,7 +918,15 @@ def test_front_matter_malformed_imports_clean(monkeypatch, label, body):
             "/api/v1/knowledgeItems/metadata/get",
             json={"knCode": kb_code, "filePath": path},
         ).json()["resultObject"]["metadata"]
-        assert got == {}
+        assert set(got.keys()) == {
+            "fileName",
+            "fileType",
+            "fileSize",
+            "mimeType",
+            "createdAt",
+            "updatedAt",
+            "filePath",
+        }
 
 
 @pytest.mark.integration
@@ -1085,6 +1154,36 @@ def test_metadata_fields_list_kb_scope_isolation(monkeypatch):
         names_a = {f["propertyName"] for f in listed_a}
         assert prop_x in names_a
         assert prop_y not in names_a
+
+
+@pytest.mark.integration
+def test_metadata_fields_list_always_returns_system_fields(monkeypatch):
+    """M7.g: metadataFields/list always appends 7 system field definitions."""
+    with runtime(monkeypatch) as client:
+        kb_code = new_kb(client)
+
+        resp = client.post(
+            "/api/v1/knowledgeItems/metadataFields/list",
+            json={"knCodeList": [kb_code]},
+        )
+        assert resp.json()["resultCode"] == "0"
+        data = resp.json()["resultObject"]["data"]
+
+        system_names = [
+            "fileName",
+            "fileType",
+            "fileSize",
+            "mimeType",
+            "createdAt",
+            "updatedAt",
+            "filePath",
+        ]
+        for i, name in enumerate(system_names):
+            field = data[-(7 - i)]
+            assert field["propertyName"] == name
+            assert field["valueType"] in {"string", "number", "datetime"}
+            assert isinstance(field.get("description"), str)
+            assert field.get("extParams") is None
 
 
 # ===================================================================

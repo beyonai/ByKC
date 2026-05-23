@@ -59,3 +59,13 @@ SYSTEM_FIELD_TO_FE_EXPR: Final[dict[str, tuple[str, str]]] = {
 SYSTEM_FIELD_VALUE_TYPES: Final[dict[str, str]] = {
     name: value_type for name, (_, value_type) in SYSTEM_FIELD_TO_FE_EXPR.items()
 }
+
+SYSTEM_FIELD_DESCRIPTIONS: Final[dict[str, str]] = {
+    "fileName": "File name",
+    "fileType": "File extension",
+    "fileSize": "File size in bytes",
+    "mimeType": "MIME type",
+    "createdAt": "Creation time",
+    "updatedAt": "Last update time",
+    "filePath": "Full file path within the knowledge base",
+}

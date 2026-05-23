@@ -442,7 +442,9 @@ class KnowledgeFsEntryRepository:
                 file_size,
                 mime_type,
                 checksum,
-                virtual_path
+                virtual_path,
+                created_at,
+                updated_at
             FROM knowledge_fs_entry
             WHERE kid = %(entry_id)s
               AND is_deleted = FALSE

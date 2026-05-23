@@ -80,6 +80,7 @@
 
 - 这一组场景覆盖元数据属性定义、文件元数据增量更新、纯元数据检索、DSL 升级版 chunk/file 检索的端到端调用链。
 - 系统字段（`fileName`/`fileType`/`fileSize`/`mimeType`/`filePath`/`createdAt`/`updatedAt`）不需要 `metadataProperties/create`，但其余自定义属性必须先注册再使用。
+- `metadata/get` 返回自定义元数据 + 系统字段值；`metadataFields/list` 返回已使用的自定义属性 + 7 个系统字段定义。
 - 错误响应统一使用文档化信封：HTTP 200 + `resultCode="-1"` + `resultMsg="..."`（包括 Pydantic 校验失败）。
 - 编号与 `tests/knowledge_base/integration/test_metadata_api_integration.py` 的测试函数 1:1 对应。
 
@@ -116,6 +117,8 @@
 | M4.f | 内容管理员 | 错误 KB / 文件路径 | 未知 knCode / filePath | `resultCode=-1` `"knowledge base not found"` / `"file not found"` | 已写 |
 | M4.g | 内容管理员 | metadata/get 未知 KB | `metadata/get knCode=ghost` | `resultCode=-1` `"knowledge base not found"` | 已写 |
 | M4.h | 内容管理员 | metadata/get 未知文件 | `metadata/get filePath=/never.md` | `resultCode=-1` `"file not found"` | 已写 |
+| M4.i | 内容管理员 | metadata/get 返回系统字段值 | `import file -> metadata/get` | `metadata` 包含 `fileName`/`fileType`/`fileSize`/`mimeType`/`createdAt`/`updatedAt`/`filePath` 七个系统字段，`valueType` 与 `value` 正确 | 已写 |
+| M4.j | 内容管理员 | metadata/get metadataFieldList 过滤系统字段 | `import file -> metadata/get metadataFieldList=[fileName,fileSize]` | 仅返回命中的系统字段 | 已写 |
 | M5.a | 内容管理员 | append 去重 | `set [a,b] -> append [b,c]` | `[a,b,c]` | 已写 |
 | M5.b | 内容管理员 | remove 容忍不存在元素 | `set [a] -> remove [x,y]` | `[a]`，不报错 | 已写 |
 | M5.c | 内容管理员 | set 整值覆盖列表 | `set [a,b] -> set [x]` | `[x]` | 已写 |
@@ -138,6 +141,7 @@
 | M7.d | 知识库管理员 | metadataFields/list knCodeList 必填非空 | 不传 / `knCodeList=[]` | 文档化信封 | 已写 |
 | M7.e | 知识库管理员 | metadataFields/list 多 KB 合并 | `knCodeList=[A,B]`,各自用过 prop_x/prop_y | 返回 prop_x 与 prop_y 的并集 | 已写 |
 | M7.f | 知识库管理员 | metadataFields/list 单 KB scope 隔离 | `knCodeList=[A]`,A 用过 prop_x、B 用过 prop_y | 仅返 prop_x | 已写 |
+| M7.g | 知识库管理员 | metadataFields/list 始终返回系统字段定义 | `knowledgeBases/create -> metadataFields/list` | 7 个系统字段（`fileName`/`fileType`/`fileSize`/`mimeType`/`createdAt`/`updatedAt`/`filePath`）始终出现在结果末尾，含 `propertyName`/`valueType`/`description`，即使 KB 无任何用户自定义属性 | 已写 |
 
 ### metadataSearch 接口约束
 

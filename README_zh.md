@@ -84,6 +84,22 @@ graph TD
 
 ---
 
+## 技术栈
+
+| 层次 | 技术 |
+|------|------|
+| **API 框架** | [FastAPI](https://fastapi.tiangolo.com/) 0.115+ · Pydantic v2 |
+| **AI 编排** | [LangGraph](https://github.com/langchain-ai/langgraph) 0.2+ · LangChain |
+| **LLM 接入 / 向量化** | OpenAI-compatible API（支持任意兼容接口） |
+| **数据库** | [OpenGauss](https://opengauss.org/)（PostgreSQL 兼容，内置向量检索） |
+| **文档解析** | PyMuPDF（PDF）· python-docx（Word）· python-pptx（PPT）· openpyxl（Excel）|
+| **全文检索** | OpenGauss FTS · Jieba 中文分词 |
+| **对象存储** | [MinIO](https://min.io/)（S3 兼容） |
+| **缓存 / 服务发现** | Redis |
+| **运行时** | Python 3.12+ · [uv](https://github.com/astral-sh/uv) |
+
+---
+
 ## 核心特性
 
 - **双模式 QA 引擎** — Fast Engine应对简单问题；Instant Engine处理多跳复杂问题。同一套代码，按场景切换。

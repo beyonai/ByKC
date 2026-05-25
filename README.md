@@ -84,6 +84,22 @@ RAG / Vector DB / Doc System"]
 
 ---
 
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| **API Framework** | [FastAPI](https://fastapi.tiangolo.com/) 0.115+ · Pydantic v2 |
+| **AI Orchestration** | [LangGraph](https://github.com/langchain-ai/langgraph) 0.2+ · LangChain |
+| **LLM / Embedding** | OpenAI-compatible API (any compatible endpoint) |
+| **Document Parsing** | PyMuPDF (PDF) · python-docx (Word) · python-pptx (PPT) · openpyxl (Excel) |
+| **Database** | [OpenGauss](https://opengauss.org/) (PostgreSQL-compatible, with vector search) |
+| **Full-text Search** | OpenGauss FTS · Jieba (Chinese tokenization) |
+| **Object Storage** | [MinIO](https://min.io/) (S3-compatible) |
+| **Cache / Service Registry** | Redis |
+| **Runtime** | Python 3.12+ · [uv](https://github.com/astral-sh/uv) |
+
+---
+
 ## Core Features
 
 - **Dual-mode QA engines** — Fast Engine handles simple questions; Instant Engine handles multi-hop complex questions. One codebase, switch by scenario.

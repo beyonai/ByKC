@@ -17,6 +17,7 @@ Modules are dynamically registered at startup — only modules whose dependencie
 - Prefer repository-relative paths in prose, links, commands, and configuration examples.
 - Do not couple `knowledge_build` back into `knowledge_base` — they share only neutral models in `knowledge_common`.
 - Prefer targeted changes over broad refactors.
+- **Feature branches required**: All new features and bug fixes must be developed on a feature branch created from `main`. The branch stays separate until development and self-testing are complete, and the user has verified the changes — only then merge back to `main`.
 
 ## Common Commands
 

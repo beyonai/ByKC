@@ -215,7 +215,7 @@ async def build_knowledge_base_service(
         knowledge_build_task_repository=KnowledgeBuildTaskRepository(),
         retrieval_projection_repository=RetrievalProjectionRepository(),
         knowledge_fetch_cache_repository=KnowledgeFetchCacheRepository(),
-        object_storage=await build_object_storage(
+        storage_provider=await build_storage_provider(
             settings, embedding_config=embedding_config
         ),
         cache_root=settings.kb_cache_path,

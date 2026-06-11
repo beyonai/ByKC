@@ -16,6 +16,7 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemGlobRequest,
     KnowledgeItemListDirRequest,
     KnowledgeItemUploadRequest,
+    ReadFileRequest,
     UpdateDirectoryRequest,
     UpdateKnowledgeBaseRequest,
 )
@@ -2127,7 +2128,7 @@ async def test_download_file_returns_original_bytes(tmp_path):
         ),
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
         knowledge_fetch_cache_repository=cache_repository,
-        object_storage=storage,
+        storage_provider=storage,
         cache_root=tmp_path,
         cache_ttl_seconds=24 * 60 * 60,
     )
@@ -2163,7 +2164,10 @@ async def test_download_file_returns_original_bytes(tmp_path):
             {"knowledge_base_id": 7, "full_path": "dir1/doc.pdf"},
         )
     ]
-    assert storage.downloaded == [("kb/7/fs-entry/71/original.pdf", "knowledge-base")]
+    assert len(storage.reads) == 1
+    assert storage.reads[0] == StorageLocation(
+        namespace="knowledge-base", key="kb/7/fs-entry/71/original.pdf"
+    )
     assert cache_repository.calls == []
 
 
@@ -2787,3 +2791,94 @@ async def test_delete_knowledge_item_deletes_storage_when_path_bound():
         "kb/7/fs-entry/71/markdown.md",
         "knowledge-base-markdown",
     ) in storage_provider.deleted
+
+
+async def test_download_file_reads_via_provider():
+    """download_file should call storage_provider.read() with the correct StorageLocation."""
+    connection = FakeConnection()
+    storage = FakeStorageProvider()
+    storage.object_payloads[("my-bucket", "kb/7/fs-entry/71/original.md")] = (
+        b"# Test content"
+    )
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    knowledge_fs_entry_repository.file_entry_by_path["dir1/doc.md"] = {
+        "kid": 71,
+        "knowledge_base_id": 7,
+        "parent_entry_id": 80,
+        "entry_type": "FILE",
+        "name": "doc.md",
+        "path_ltree": "d1_a.f2_doc",
+        "depth": 2,
+        "file_bucket_name": "my-bucket",
+        "file_object_key": "kb/7/fs-entry/71/original.md",
+        "mime_type": "text/markdown",
+        "file_size": 128,
+    }
+    service = KnowledgeBaseService(
+        connection_factory=lambda: _async_return(connection),
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={"kid": 7, "kb_name": "人力制度知识库"}
+        ),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        storage_provider=storage,
+    )
+
+    response = await service.download_file(
+        KnowledgeItemDownloadRequest(
+            kb_code="hr-policy",
+            file_path="/dir1/doc.md",
+        )
+    )
+
+    assert response["content"] == b"# Test content"
+    assert response["filename"] == "doc.md"
+    assert response["media_type"] == "text/markdown"
+    assert len(storage.reads) == 1
+    assert storage.reads[0] == StorageLocation(
+        namespace="my-bucket", key="kb/7/fs-entry/71/original.md"
+    )
+
+
+async def test_read_file_reads_markdown_via_provider():
+    """read_file should call storage_provider.read() with the correct markdown StorageLocation."""
+    connection = FakeConnection()
+    storage = FakeStorageProvider()
+    storage.object_payloads[
+        ("knowledge-base-markdown", "kb/7/fs-entry/71/markdown.md")
+    ] = b"# Built Markdown\n\nSome processed content."
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    knowledge_fs_entry_repository.file_entry_by_path["dir1/doc.md"] = {
+        "kid": 71,
+        "knowledge_base_id": 7,
+        "parent_entry_id": 80,
+        "entry_type": "FILE",
+        "name": "doc.md",
+        "path_ltree": "d1_a.f2_doc",
+        "depth": 2,
+        "markdown_bucket_name": "knowledge-base-markdown",
+        "markdown_object_key": "kb/7/fs-entry/71/markdown.md",
+    }
+    service = KnowledgeBaseService(
+        connection_factory=lambda: _async_return(connection),
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={"kid": 7, "kb_name": "人力制度知识库"}
+        ),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        storage_provider=storage,
+    )
+
+    response = await service.read_file(
+        ReadFileRequest(
+            kb_code="hr-policy",
+            file_path="/dir1/doc.md",
+        )
+    )
+
+    assert response["data"] == "# Built Markdown\n\nSome processed content."
+    assert response["knCode"] == "hr-policy"
+    assert response["filePath"] == "/dir1/doc.md"
+    assert response["reachedEof"] is True
+    assert len(storage.reads) == 1
+    assert storage.reads[0] == StorageLocation(
+        namespace="knowledge-base-markdown", key="kb/7/fs-entry/71/markdown.md"
+    )

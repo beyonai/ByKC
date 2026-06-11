@@ -24,6 +24,7 @@ from by_qa.knowledge_base.api.schemas import (
     UpdateKnowledgeBaseRequest,
 )
 from by_qa.knowledge_base.build_status import STATUS_DICT, STEP_DICT
+from by_qa.knowledge_base.infrastructure.storage import StorageLocation
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
 
 
@@ -37,7 +38,7 @@ class KnowledgeBaseService:
     knowledge_build_task_repository: Any | None = None
     retrieval_projection_repository: Any | None = None
     knowledge_fetch_cache_repository: Any | None = None
-    object_storage: Any | None = None
+    storage_provider: Any | None = None
     cache_root: Path | None = None
     cache_ttl_seconds: int = 24 * 60 * 60
 
@@ -543,7 +544,7 @@ class KnowledgeBaseService:
             request.kb_code,
             request.file_path,
         )
-        if self.object_storage is None:
+        if self.storage_provider is None:
             raise KnowledgeBaseValidationError("download runtime is not configured")
 
         normalized_file_path = request.file_path.strip()
@@ -573,12 +574,11 @@ class KnowledgeBaseService:
         finally:
             await connection.close()
 
-        payload = await self.object_storage.download_object(
-            str(file_row["file_object_key"]),
-            bucket_name=str(
-                file_row.get("file_bucket_name") or self.object_storage.bucket_name
-            ),
+        location = StorageLocation(
+            namespace=str(file_row.get("file_bucket_name") or ""),
+            key=str(file_row["file_object_key"]),
         )
+        payload = await self.storage_provider.read(location)
         filename = PurePosixPath(normalized_file_path).name or "download"
         media_type = str(file_row.get("mime_type") or self._guess_media_type(filename))
         logger.info(
@@ -609,7 +609,7 @@ class KnowledgeBaseService:
                 raise KnowledgeBaseValidationError(
                     "endLine must be greater than or equal to startLine"
                 )
-        if self.object_storage is None:
+        if self.storage_provider is None:
             raise KnowledgeBaseValidationError("read file runtime is not configured")
 
         normalized_file_path = request.file_path.strip()
@@ -640,14 +640,14 @@ class KnowledgeBaseService:
             await connection.close()
 
         markdown_object_key = file_row.get("markdown_object_key")
-        markdown_bucket_name = file_row.get("markdown_bucket_name")
         if not markdown_object_key:
             raise KnowledgeBaseValidationError(f"file not built: {request.file_path}")
 
-        payload = await self.object_storage.download_object(
-            str(markdown_object_key),
-            bucket_name=str(markdown_bucket_name or self.object_storage.bucket_name),
+        location = StorageLocation(
+            namespace=str(file_row.get("markdown_bucket_name") or ""),
+            key=str(markdown_object_key),
         )
+        payload = await self.storage_provider.read(location)
         markdown_text = payload.decode("utf-8")
 
         if request.start_line is None:

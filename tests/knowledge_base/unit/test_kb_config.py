@@ -357,3 +357,30 @@ def test_settings_fallback_to_loopback_when_only_loopback_is_available():
         settings = Settings()
 
     assert settings.host_machine == "127.0.0.1"
+
+
+def test_validate_knowledge_base_settings_skips_minio_checks_for_custom_provider(
+    monkeypatch,
+):
+    """When BY_QA_STORAGE_PROVIDER is set, MinIO fields must not be required."""
+    from by_qa.knowledge_base.infrastructure.runtime import (
+        validate_knowledge_base_settings,
+    )
+
+    monkeypatch.setenv(
+        "BY_QA_STORAGE_PROVIDER", "tests_custom_kb_storage_provider:FakeProvider"
+    )
+
+    settings = Settings(
+        DB_HOST="db",
+        DB_USER="u",
+        DB_PASS="p",
+        MINIO_ENDPOINT="",
+        MINIO_ACCESS_KEY="",
+        MINIO_SECRET_KEY="",
+        KB_MINIO_BUCKET="",
+        KB_MINIO_MARKDOWN_BUCKET="",
+        EMBEDDING_MODEL_NAME="m",
+        EMBEDDING_DIMENSION=8,
+    )
+    validate_knowledge_base_settings(settings)

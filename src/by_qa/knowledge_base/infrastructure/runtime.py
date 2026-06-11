@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from os import getenv
 from typing import Any
 
 from by_qa.config import Settings
@@ -10,6 +11,11 @@ from by_qa.knowledge_base.infrastructure.database import build_connection_factor
 from by_qa.knowledge_base.infrastructure.object_storage import (
     KnowledgeBaseObjectStorage,
 )
+from by_qa.knowledge_base.infrastructure.storage import (
+    KnowledgeStorageProvider,
+    load_storage_provider,
+)
+from by_qa.knowledge_base.infrastructure.storage_s3 import S3KnowledgeStorageProvider
 from by_qa.knowledge_base.repositories.file_metadata_value_repository import (
     FileMetadataValueRepository,
 )
@@ -71,16 +77,19 @@ def validate_knowledge_base_settings(
     missing_fields: list[str] = []
     if not settings.resolved_kb_opengauss_dsn:
         missing_fields.append("DB_HOST/DB_USER/DB_PASS")
-    if not settings.kb_minio_endpoint:
-        missing_fields.append("MINIO_ENDPOINT")
-    if not settings.kb_minio_access_key:
-        missing_fields.append("MINIO_ACCESS_KEY")
-    if not settings.kb_minio_secret_key:
-        missing_fields.append("MINIO_SECRET_KEY")
-    if not settings.kb_minio_bucket:
-        missing_fields.append("KB_MINIO_BUCKET")
-    if not settings.kb_minio_markdown_bucket:
-        missing_fields.append("KB_MINIO_MARKDOWN_BUCKET")
+
+    using_custom_provider = bool(getenv("BY_QA_STORAGE_PROVIDER", "").strip())
+    if not using_custom_provider:
+        if not settings.kb_minio_endpoint:
+            missing_fields.append("MINIO_ENDPOINT")
+        if not settings.kb_minio_access_key:
+            missing_fields.append("MINIO_ACCESS_KEY")
+        if not settings.kb_minio_secret_key:
+            missing_fields.append("MINIO_SECRET_KEY")
+        if not settings.kb_minio_bucket:
+            missing_fields.append("KB_MINIO_BUCKET")
+        if not settings.kb_minio_markdown_bucket:
+            missing_fields.append("KB_MINIO_MARKDOWN_BUCKET")
     if require_embedding:
         embedding_model_name = (
             embedding_config.model_name
@@ -104,10 +113,48 @@ def validate_knowledge_base_settings(
         )
 
 
+def build_default_s3_storage_provider(settings: Settings) -> S3KnowledgeStorageProvider:
+    """Build the default MinIO/S3 storage provider without ensure_ready()."""
+    import aioboto3
+
+    scheme = "https" if settings.kb_minio_secure else "http"
+    endpoint = settings.kb_minio_endpoint.removeprefix("http://").removeprefix(
+        "https://"
+    )
+    endpoint_url = f"{scheme}://{endpoint}"
+
+    storage = KnowledgeBaseObjectStorage(
+        session=aioboto3.Session(),
+        endpoint_url=endpoint_url,
+        access_key=settings.kb_minio_access_key,
+        secret_key=settings.kb_minio_secret_key,
+        secure=settings.kb_minio_secure,
+        bucket_name=settings.kb_minio_bucket,
+        markdown_bucket_name=settings.kb_minio_markdown_bucket,
+    )
+    return S3KnowledgeStorageProvider(storage=storage)
+
+
+async def build_storage_provider(
+    settings: Settings,
+    *,
+    embedding_config: ModelConfig | None = None,
+) -> KnowledgeStorageProvider:
+    """Build the storage provider, performing ensure_ready() on the resolved instance."""
+    validate_knowledge_base_settings(settings, embedding_config=embedding_config)
+    provider = load_storage_provider()
+    await provider.ensure_ready()
+    return provider
+
+
 async def build_object_storage(
     settings: Settings, *, embedding_config: ModelConfig | None = None
 ) -> KnowledgeBaseObjectStorage:
-    """Build the async S3-compatible object storage service."""
+    """Build the async S3-compatible object storage service.
+
+    Deprecated: prefer build_storage_provider() for new code.
+    This remains for backward compatibility during migration.
+    """
     validate_knowledge_base_settings(settings, embedding_config=embedding_config)
     import aioboto3
 

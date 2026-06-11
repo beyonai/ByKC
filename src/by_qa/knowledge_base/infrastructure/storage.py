@@ -93,6 +93,36 @@ class KnowledgeStorageProvider(Protocol):
     ) -> None: ...
 
 
+def load_storage_provider() -> "KnowledgeStorageProvider":
+    """Load the configured storage provider, falling back to default S3 implementation."""
+    from importlib import import_module
+    from os import getenv
+
+    provider_path = getenv("BY_QA_STORAGE_PROVIDER", "").strip()
+    if not provider_path:
+        from by_qa.config import get_settings
+        from by_qa.knowledge_base.infrastructure.runtime import (
+            build_default_s3_storage_provider,
+        )
+
+        return build_default_s3_storage_provider(get_settings())
+
+    module_name, separator, attribute_name = provider_path.partition(":")
+    if not separator or not module_name or not attribute_name:
+        raise ValueError(
+            "BY_QA_STORAGE_PROVIDER must use the 'module:attribute' format."
+        )
+
+    module = import_module(module_name)
+    provider_factory = getattr(module, attribute_name)
+    provider = provider_factory() if callable(provider_factory) else provider_factory
+    if not isinstance(provider, KnowledgeStorageProvider):
+        raise TypeError(
+            "BY_QA_STORAGE_PROVIDER must resolve to a KnowledgeStorageProvider."
+        )
+    return provider
+
+
 __all__ = [
     "KnowledgeStorageProvider",
     "StorageAuthenticationError",
@@ -103,4 +133,5 @@ __all__ = [
     "StorageNotFoundError",
     "StorageOperationError",
     "StoredObject",
+    "load_storage_provider",
 ]

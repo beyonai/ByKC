@@ -24,6 +24,7 @@ from by_qa.knowledge_base.build_status import (
     BUILD_STEP_MARKDOWN,
     BUILD_STEP_VECTORIZING,
 )
+from by_qa.knowledge_base.infrastructure.storage import StorageLocation
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
 
 
@@ -321,7 +322,7 @@ class KnowledgeItemIngestionService:
             raise KnowledgeBaseValidationError("file_path must not be empty")
 
         connection = await self.connection_factory()
-        markdown_temp_object_key: str | None = None
+        markdown_location: StorageLocation | None = None
         try:
             cursor = connection.cursor()
 
@@ -344,19 +345,15 @@ class KnowledgeItemIngestionService:
                     f"file not found: {request.file_path}"
                 )
             fs_entry_id = self._row_id(file_row)
-            file_object_key = file_row.get("file_object_key")
-            if not file_object_key:
+            original_location = StorageLocation(
+                namespace=str(file_row.get("file_bucket_name") or ""),
+                key=str(file_row.get("file_object_key") or ""),
+            )
+            if not original_location.namespace or not original_location.key:
                 raise KnowledgeBaseValidationError(
                     f"file has not been uploaded yet: {request.file_path}"
                 )
-            file_bucket_name = (
-                file_row.get("file_bucket_name")
-                or self.storage_provider.storage.bucket_name
-            )
-
-            file_bytes = await self.storage_provider.storage.download_object(
-                file_object_key, bucket_name=file_bucket_name
-            )
+            file_bytes = await self.storage_provider.read(original_location)
 
             file_type = self._derive_file_type(file_row, normalized_file_path)
 
@@ -408,16 +405,16 @@ class KnowledgeItemIngestionService:
 
             self._validate_chunk_embedding_dimensions(chunks)
 
-            markdown_object_key = (
-                f"kb/{knowledge_base_id}/fs-entry/{fs_entry_id}/markdown.md"
+            markdown_location = self.storage_provider.build_markdown_location(
+                kb_code=request.kb_code,
+                knowledge_base_id=knowledge_base_id,
+                fs_entry_id=fs_entry_id,
+                file_path=normalized_file_path,
             )
-            markdown_temp_object_key = (
-                await self.storage_provider.storage.upload_temp_object(
-                    f"ftmi-{knowledge_base_id}-{fs_entry_id}",
-                    markdown_bytes,
-                    content_type="text/markdown; charset=utf-8",
-                    bucket_name=self.storage_provider.storage.markdown_bucket_name,
-                )
+            stored_markdown = await self.storage_provider.write(
+                markdown_location,
+                markdown_bytes,
+                content_type="text/markdown; charset=utf-8",
             )
 
             chunk_rows = (
@@ -443,8 +440,8 @@ class KnowledgeItemIngestionService:
             await self.knowledge_fs_entry_repository.update_markdown_metadata(
                 cursor,
                 fs_entry_id=fs_entry_id,
-                markdown_bucket_name=self.storage_provider.storage.markdown_bucket_name,
-                markdown_object_key=markdown_object_key,
+                markdown_bucket_name=stored_markdown.location.namespace,
+                markdown_object_key=stored_markdown.location.key,
                 line_count=line_count,
             )
 
@@ -465,12 +462,6 @@ class KnowledgeItemIngestionService:
 
             await connection.commit()
 
-            await self.storage_provider.storage.promote_temp_object(
-                markdown_temp_object_key,
-                markdown_object_key,
-                bucket_name=self.storage_provider.storage.markdown_bucket_name,
-            )
-
             logger.info(
                 "knowledge_item_ingestion_service.file_to_markdown_index finished: kb_code=%s, file_path=%s, chunk_count=%s",
                 request.kb_code,
@@ -479,11 +470,8 @@ class KnowledgeItemIngestionService:
             )
         except Exception as exc:
             await connection.rollback()
-            if markdown_temp_object_key is not None:
-                await self.storage_provider.storage.delete_object_quietly(
-                    markdown_temp_object_key,
-                    bucket_name=self.storage_provider.storage.markdown_bucket_name,
-                )
+            if markdown_location is not None:
+                await self.storage_provider.delete_quietly(markdown_location)
             if build_task_id is not None:
                 retry_cursor = connection.cursor()
                 await self._update_build_task(

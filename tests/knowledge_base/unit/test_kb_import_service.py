@@ -708,6 +708,7 @@ class FakeStorageProvider:
         self.storage = self
         # Protocol tracking
         self.written: list[tuple[StorageLocation, bytes, str]] = []
+        self.reads: list[StorageLocation] = []
         self.moved: list[tuple[StorageLocation, StorageLocation]] = []
         # Backward compat attributes (old FakeStorageProvider)
         self.bucket_name = "knowledge-base"
@@ -769,6 +770,7 @@ class FakeStorageProvider:
         )
 
     async def read(self, location: StorageLocation) -> bytes:
+        self.reads.append(location)
         key = (location.namespace, location.key)
         return self.object_payloads.get(key, b"")
 
@@ -2501,6 +2503,69 @@ async def test_file_to_markdown_index_success():
             },
         ),
     ]
+
+
+async def test_execute_file_to_markdown_index_reads_and_writes_via_provider():
+    """fileToMarkdownIndex reads original and writes markdown via provider protocol."""
+    kb_repo = FakeKnowledgeBaseRepository(
+        default_lookup_result={
+            "kid": 7,
+            "kb_code": "1",
+            "kb_name": "TestKB",
+            "status": "ACTIVE",
+        }
+    )
+    fs_repo = FakeKnowledgeFsEntryRepository()
+    fs_repo.file_entry_by_path = {
+        "doc.md": {
+            "kid": 71,
+            "entry_type": "FILE",
+            "name": "doc.md",
+            "file_bucket_name": "my-bucket",
+            "file_object_key": "kb/7/fs-entry/71/original.md",
+            "mime_type": "text/markdown",
+        }
+    }
+    build_task_repo = FakeKnowledgeBuildTaskRepository()
+    obj_storage = FakeStorageProvider()
+    obj_storage.object_payloads[("my-bucket", "kb/7/fs-entry/71/original.md")] = (
+        b"# Hello\n\nWorld"
+    )
+    chunking_service = FakeDocumentChunkingService()
+    service = KnowledgeItemIngestionService(
+        connection_factory=lambda: _async_return(FakeConnection()),
+        knowledge_base_repository=kb_repo,
+        knowledge_fs_entry_repository=fs_repo,
+        knowledge_build_task_repository=build_task_repo,
+        knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        storage_provider=obj_storage,
+        embedding_dimension=3,
+    )
+    request = FileToMarkdownIndexRequest.model_validate(
+        {"knCode": "1", "filePath": "/doc.md"}
+    )
+    await service.file_to_markdown_index(
+        request, document_chunking_service=chunking_service
+    )
+
+    # Provider.read was called for the original file
+    assert len(obj_storage.reads) == 1
+    read_loc = obj_storage.reads[0]
+    assert read_loc.namespace == "my-bucket"
+    assert read_loc.key == "kb/7/fs-entry/71/original.md"
+
+    # Provider.write was called for the markdown
+    write_calls = [w for w in obj_storage.written if w[0].key.endswith("markdown.md")]
+    assert len(write_calls) == 1
+    write_loc, _, write_ct = write_calls[0]
+    assert write_loc.namespace == "knowledge-base-markdown"
+    assert write_loc.key == "kb/7/fs-entry/71/markdown.md"
+    assert write_ct == "text/markdown; charset=utf-8"
+
+    # No backward-compat temp upload or promote should have happened
+    assert len(obj_storage.uploaded) == 0
+    assert len(obj_storage.promoted) == 0
 
 
 async def test_file_to_markdown_index_offloads_sync_work_to_threads(monkeypatch):

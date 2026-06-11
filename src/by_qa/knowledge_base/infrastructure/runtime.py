@@ -257,7 +257,7 @@ async def build_knowledge_item_ingestion_service(
             bootstrap.embedding_table_name
         ),
         retrieval_projection_repository=RetrievalProjectionRepository(),
-        object_storage=await build_object_storage(
+        storage_provider=await build_storage_provider(
             settings, embedding_config=embedding_config
         ),
         embedding_dimension=dimension,

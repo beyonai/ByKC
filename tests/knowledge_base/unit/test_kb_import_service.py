@@ -1,6 +1,7 @@
 """Tests for knowledge-base services transactional behavior."""
 
 from datetime import datetime, timezone
+from pathlib import PurePosixPath
 
 from by_qa.core import logger
 from by_qa.knowledge_base.api.schemas import (
@@ -18,6 +19,7 @@ from by_qa.knowledge_base.api.schemas import (
     UpdateDirectoryRequest,
     UpdateKnowledgeBaseRequest,
 )
+from by_qa.knowledge_base.infrastructure.storage import StorageLocation, StoredObject
 from by_qa.knowledge_base.services import (
     knowledge_item_ingestion_service as ingestion_service_module,
 )
@@ -696,22 +698,93 @@ class FakeRetrievalProjectionRepository:
         )
 
 
-class FakeObjectStorage:
-    """Object storage double tracking promotion and cleanup."""
+class FakeStorageProvider:
+    """Storage provider double implementing KnowledgeStorageProvider with backward compat."""
 
     def __init__(self):
+        self.provider_name = "fake"
+        self.storage_path_bound_to_logical_path = False
+        # Self-reference for backward compat via .storage access
+        self.storage = self
+        # Protocol tracking
+        self.written: list[tuple[StorageLocation, bytes, str]] = []
+        self.moved: list[tuple[StorageLocation, StorageLocation]] = []
+        # Backward compat attributes (old FakeStorageProvider)
         self.bucket_name = "knowledge-base"
         self.markdown_bucket_name = "knowledge-base-markdown"
-        self.uploaded = []
-        self.promoted = []
-        self.deleted = []
-        self.downloaded = []
+        self.uploaded: list = []
+        self.promoted: list = []
+        self.deleted: list = []
+        self.downloaded: list = []
         self.object_payloads = {
             (
                 "knowledge-base-markdown",
                 "kb/7/item/10/version/v1/markdown",
             ): b"line1\nline2\nline3\n",
         }
+
+    # ── Protocol methods (KnowledgeStorageProvider) ──────────────────────
+    # pylint: disable=unused-argument
+
+    def build_original_location(
+        self,
+        *,
+        kb_code: str,
+        knowledge_base_id: int,
+        fs_entry_id: int,
+        file_path: str,
+        mime_type: str,
+    ) -> StorageLocation:
+        suffix = PurePosixPath(file_path.strip("/")).suffix
+        return StorageLocation(
+            namespace=self.bucket_name,
+            key=f"kb/{knowledge_base_id}/fs-entry/{fs_entry_id}/original{suffix}",
+        )
+
+    def build_markdown_location(
+        self,
+        *,
+        kb_code: str,
+        knowledge_base_id: int,
+        fs_entry_id: int,
+        file_path: str,
+    ) -> StorageLocation:
+        return StorageLocation(
+            namespace=self.markdown_bucket_name,
+            key=f"kb/{knowledge_base_id}/fs-entry/{fs_entry_id}/markdown.md",
+        )
+
+    async def write(
+        self,
+        location: StorageLocation,
+        content: bytes,
+        *,
+        content_type: str,
+    ) -> StoredObject:
+        self.written.append((location, content, content_type))
+        return StoredObject(
+            location=location,
+            size=len(content),
+            content_type=content_type,
+        )
+
+    async def read(self, location: StorageLocation) -> bytes:
+        key = (location.namespace, location.key)
+        return self.object_payloads.get(key, b"")
+
+    async def delete_quietly(self, location: StorageLocation) -> None:
+        self.deleted.append((location.key, location.namespace))
+
+    async def move(
+        self,
+        source: StorageLocation,
+        target: StorageLocation,
+        *,
+        overwrite: bool = False,
+    ) -> None:
+        self.moved.append((source, target))
+
+    # ── Backward compat methods (old FakeStorageProvider API) ──────────────
 
     async def upload_temp_object(
         self, import_request_id, content, *, content_type, bucket_name=None
@@ -1484,7 +1557,7 @@ async def test_update_directory_rejects_sibling_name_conflict():
 async def test_delete_knowledge_item_marks_file_entry_deleted_and_clears_artifacts():
     """Deleting one file should logically delete the file entry and clear derived artifacts."""
     connection = FakeConnection()
-    object_storage = FakeObjectStorage()
+    storage_provider = FakeStorageProvider()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     knowledge_fs_entry_repository.file_entry_by_path["Policies/delete.md"] = {
         "kid": 71,
@@ -1513,7 +1586,7 @@ async def test_delete_knowledge_item_marks_file_entry_deleted_and_clears_artifac
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
         knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
         retrieval_projection_repository=FakeRetrievalProjectionRepository(),
-        object_storage=object_storage,
+        storage_provider=storage_provider,
         embedding_dimension=2,
     )
 
@@ -1547,11 +1620,14 @@ async def test_delete_knowledge_item_marks_file_entry_deleted_and_clears_artifac
         and params == {"knowledge_base_id": 7, "fs_entry_id": 71}
         for sql, params in connection.cursor_obj.executed
     )
-    assert ("kb/7/fs-entry/71/original.md", "knowledge-base") in object_storage.deleted
+    assert (
+        "kb/7/fs-entry/71/original.md",
+        "knowledge-base",
+    ) in storage_provider.deleted
     assert (
         "kb/7/fs-entry/71/markdown.md",
         "knowledge-base-markdown",
-    ) in object_storage.deleted
+    ) in storage_provider.deleted
 
 
 async def test_create_knowledge_base_emits_internal_key_node_logs(monkeypatch):
@@ -1592,7 +1668,7 @@ async def test_create_knowledge_base_emits_internal_key_node_logs(monkeypatch):
 async def test_upload_file_commits_object_and_updates_fs_entry_storage():
     """Multipart upload should only persist original file metadata on the fs entry."""
     connection = FakeConnection()
-    storage = FakeObjectStorage()
+    storage = FakeStorageProvider()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeItemIngestionService(
         connection_factory=lambda: _async_return(connection),
@@ -1606,7 +1682,7 @@ async def test_upload_file_commits_object_and_updates_fs_entry_storage():
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
         knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
         retrieval_projection_repository=FakeRetrievalProjectionRepository(),
-        object_storage=storage,
+        storage_provider=storage,
         embedding_dimension=2,
     )
 
@@ -1636,21 +1712,21 @@ async def test_upload_file_commits_object_and_updates_fs_entry_storage():
     ][0]
     assert storage_call[1]["fs_entry_id"] == 71
     assert storage_call[1]["file_bucket_name"] == "knowledge-base"
+    assert storage_call[1]["file_object_key"] == "kb/7/fs-entry/71/original.pdf"
     assert storage_call[1]["file_size"] == len(b"pdf-bytes")
     assert storage_call[1]["mime_type"] == "application/pdf"
-    assert storage.promoted == [
-        (
-            "tmp/upload-7-71/content.md",
-            "kb/7/fs-entry/71/original.pdf",
-            "knowledge-base",
-        )
-    ]
+    assert len(storage.written) == 1
+    loc, content, ct = storage.written[0]
+    assert loc.namespace == "knowledge-base"
+    assert loc.key == "kb/7/fs-entry/71/original.pdf"
+    assert content == b"pdf-bytes"
+    assert ct == "application/pdf"
 
 
 async def test_upload_file_recursively_creates_missing_parent_directories():
     """Multipart upload should recursively create missing parent directories."""
     connection = FakeConnection()
-    storage = FakeObjectStorage()
+    storage = FakeStorageProvider()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     service = KnowledgeItemIngestionService(
         connection_factory=lambda: _async_return(connection),
@@ -1664,7 +1740,7 @@ async def test_upload_file_recursively_creates_missing_parent_directories():
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
         knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
         retrieval_projection_repository=FakeRetrievalProjectionRepository(),
-        object_storage=storage,
+        storage_provider=storage,
         embedding_dimension=2,
     )
 
@@ -1686,13 +1762,61 @@ async def test_upload_file_recursively_creates_missing_parent_directories():
             "file_description": None,
         },
     ) in knowledge_fs_entry_repository.calls
-    assert storage.promoted == [
-        (
-            "tmp/upload-7-71/content.md",
-            "kb/7/fs-entry/71/original.pdf",
-            "knowledge-base",
+    assert len(storage.written) == 1
+    loc, content, ct = storage.written[0]
+    assert loc.namespace == "knowledge-base"
+    assert loc.key == "kb/7/fs-entry/71/original.pdf"
+    assert content == b"pdf-bytes"
+    assert ct == "application/pdf"
+
+
+async def test_upload_file_writes_via_provider_and_persists_locator():
+    """upload_file should write via the provider and persist namespace/key on the fs entry."""
+    connection = FakeConnection()
+    storage = FakeStorageProvider()
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    service = KnowledgeItemIngestionService(
+        connection_factory=lambda: _async_return(connection),
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={
+                "id": 7,
+                "kb_code": "hr-policy",
+                "kb_name": "人力制度知识库",
+            }
+        ),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        storage_provider=storage,
+        embedding_dimension=2,
+    )
+
+    await service.upload_file(
+        KnowledgeItemUploadRequest(
+            knCode="hr-policy",
+            filePath="/doc.md",
+            fileContent=b"# Hello",
         )
-    ]
+    )
+
+    # Provider was called with correct location
+    assert len(storage.written) == 1
+    loc, content, ct = storage.written[0]
+    assert loc.namespace == "knowledge-base"
+    assert loc.key == "kb/7/fs-entry/71/original.md"
+    assert content == b"# Hello"
+    assert ct == "text/markdown"
+
+    # Repository persisted the namespace/key from the stored location
+    storage_call = [
+        call
+        for call in knowledge_fs_entry_repository.calls
+        if call[0] == "update_file_entry_storage"
+    ][0]
+    assert storage_call[1]["file_bucket_name"] == "knowledge-base"
+    assert storage_call[1]["file_object_key"] == "kb/7/fs-entry/71/original.md"
+    assert storage_call[1]["file_size"] == len(b"# Hello")
+    assert storage_call[1]["mime_type"] == "text/markdown"
 
 
 async def test_list_dir_root_returns_top_level_entries():
@@ -1988,7 +2112,7 @@ async def test_download_file_returns_original_bytes(tmp_path):
     """Download-file should fetch the current original object bytes."""
     connection = FakeConnection()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
-    storage = FakeObjectStorage()
+    storage = FakeStorageProvider()
     storage.object_payloads[("knowledge-base", "kb/7/fs-entry/71/original.pdf")] = (
         b"%PDF-1.4 binary payload"
     )
@@ -2083,7 +2207,7 @@ async def test_file_to_markdown_index_kb_not_found():
         knowledge_fs_entry_repository=fs_repo,
         knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
         retrieval_projection_repository=FakeRetrievalProjectionRepository(),
-        object_storage=FakeObjectStorage(),
+        storage_provider=FakeStorageProvider(),
         embedding_dimension=3,
     )
     request = FileToMarkdownIndexRequest.model_validate(
@@ -2115,7 +2239,7 @@ async def test_file_to_markdown_index_file_not_found():
         knowledge_fs_entry_repository=fs_repo,
         knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
         retrieval_projection_repository=FakeRetrievalProjectionRepository(),
-        object_storage=FakeObjectStorage(),
+        storage_provider=FakeStorageProvider(),
         embedding_dimension=3,
     )
     request = FileToMarkdownIndexRequest.model_validate(
@@ -2156,7 +2280,7 @@ async def test_file_to_markdown_index_file_not_uploaded():
         knowledge_fs_entry_repository=fs_repo,
         knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
         retrieval_projection_repository=FakeRetrievalProjectionRepository(),
-        object_storage=FakeObjectStorage(),
+        storage_provider=FakeStorageProvider(),
         embedding_dimension=3,
     )
     request = FileToMarkdownIndexRequest.model_validate(
@@ -2202,7 +2326,7 @@ async def test_file_to_markdown_index_maps_create_task_race_to_running_task_erro
         knowledge_build_task_repository=build_task_repo,
         knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
         retrieval_projection_repository=FakeRetrievalProjectionRepository(),
-        object_storage=FakeObjectStorage(),
+        storage_provider=FakeStorageProvider(),
         embedding_dimension=3,
     )
     request = FileToMarkdownIndexRequest.model_validate(
@@ -2252,7 +2376,7 @@ async def test_file_to_markdown_index_rejects_running_task():
         knowledge_build_task_repository=build_task_repo,
         knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
         retrieval_projection_repository=FakeRetrievalProjectionRepository(),
-        object_storage=FakeObjectStorage(),
+        storage_provider=FakeStorageProvider(),
         embedding_dimension=3,
     )
     request = FileToMarkdownIndexRequest.model_validate(
@@ -2292,7 +2416,7 @@ async def test_file_to_markdown_index_success():
     chunk_repo = FakeKnowledgeItemChunkRepository()
     retrieval_repo = FakeRetrievalProjectionRepository()
     build_task_repo = FakeKnowledgeBuildTaskRepository()
-    obj_storage = FakeObjectStorage()
+    obj_storage = FakeStorageProvider()
     obj_storage.object_payloads[("test-bucket", "kb/7/fs-entry/71/original.pdf")] = (
         b"fake-pdf-bytes"
     )
@@ -2304,7 +2428,7 @@ async def test_file_to_markdown_index_success():
         knowledge_build_task_repository=build_task_repo,
         knowledge_item_chunk_repository=chunk_repo,
         retrieval_projection_repository=retrieval_repo,
-        object_storage=obj_storage,
+        storage_provider=obj_storage,
         embedding_dimension=3,
     )
     request = FileToMarkdownIndexRequest.model_validate(
@@ -2401,7 +2525,7 @@ async def test_file_to_markdown_index_offloads_sync_work_to_threads(monkeypatch)
         }
     }
     build_task_repo = FakeKnowledgeBuildTaskRepository()
-    obj_storage = FakeObjectStorage()
+    obj_storage = FakeStorageProvider()
     obj_storage.object_payloads[("test-bucket", "kb/7/fs-entry/71/original.pdf")] = (
         b"fake-pdf-bytes"
     )
@@ -2413,7 +2537,7 @@ async def test_file_to_markdown_index_offloads_sync_work_to_threads(monkeypatch)
         knowledge_build_task_repository=build_task_repo,
         knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
         retrieval_projection_repository=FakeRetrievalProjectionRepository(),
-        object_storage=obj_storage,
+        storage_provider=obj_storage,
         embedding_dimension=3,
     )
     calls = []
@@ -2464,7 +2588,7 @@ async def test_file_to_markdown_index_rebuilds_after_failed_task():
         "status": "failed",
         "current_step": "vectorizing",
     }
-    obj_storage = FakeObjectStorage()
+    obj_storage = FakeStorageProvider()
     obj_storage.object_payloads[("test-bucket", "kb/7/fs-entry/71/original.pdf")] = (
         b"fake-pdf-bytes"
     )
@@ -2475,7 +2599,7 @@ async def test_file_to_markdown_index_rebuilds_after_failed_task():
         knowledge_build_task_repository=build_task_repo,
         knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
         retrieval_projection_repository=FakeRetrievalProjectionRepository(),
-        object_storage=obj_storage,
+        storage_provider=obj_storage,
         embedding_dimension=3,
     )
 

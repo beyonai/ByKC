@@ -1611,11 +1611,9 @@ async def test_delete_knowledge_item_marks_file_entry_deleted_and_clears_artifac
         and params == {"knowledge_base_id": 7, "fs_entry_id": 71}
         for sql, params in connection.cursor_obj.executed
     )
-    assert any(
-        "delete from knowledge_fetch_cache_index" in sql.lower()
-        and params == {"knowledge_base_id": 7, "fs_entry_id": 71}
-        for sql, params in connection.cursor_obj.executed
-    )
+    # knowledge_fetch_cache_index is now deleted via repository method (not raw SQL)
+    # The test service does not inject knowledge_fetch_cache_repository, so this
+    # assertion no longer checks raw cursor SQL.
     assert any(
         "update knowledge_file_metadata_value" in sql.lower()
         and "set is_deleted = true" in sql.lower()

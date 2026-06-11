@@ -83,6 +83,7 @@ class KnowledgeItemIngestionService:
     storage_provider: Any
     embedding_dimension: int
     knowledge_build_task_repository: Any | None = None
+    knowledge_fetch_cache_repository: Any | None = None
     metadata_property_repository: Any | None = None
     file_metadata_value_repository: Any | None = None
 
@@ -538,17 +539,11 @@ class KnowledgeItemIngestionService:
                     "fs_entry_id": fs_entry_id,
                 },
             )
-            await cursor.execute(
-                """
-                DELETE FROM knowledge_fetch_cache_index
-                WHERE knowledge_base_id = %(knowledge_base_id)s
-                  AND fs_entry_id = %(fs_entry_id)s
-                """,
-                {
-                    "knowledge_base_id": knowledge_base_id,
-                    "fs_entry_id": fs_entry_id,
-                },
-            )
+            if self.knowledge_fetch_cache_repository is not None:
+                await self.knowledge_fetch_cache_repository.delete_cache_entries_for_fs_entry_ids(
+                    cursor,
+                    fs_entry_ids=[fs_entry_id],
+                )
             await cursor.execute(
                 """
                 UPDATE knowledge_file_metadata_value

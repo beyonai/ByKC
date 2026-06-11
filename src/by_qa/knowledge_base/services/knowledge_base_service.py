@@ -28,6 +28,14 @@ from by_qa.knowledge_base.infrastructure.storage import StorageLocation
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
 
 
+def _optional_location(row, namespace_key, key_key):
+    namespace = row.get(namespace_key)
+    key = row.get(key_key)
+    if not namespace or not key:
+        return None
+    return StorageLocation(namespace=str(namespace), key=str(key))
+
+
 @dataclass
 class KnowledgeBaseService:
     """Create or update knowledge base records."""
@@ -262,6 +270,16 @@ class KnowledgeBaseService:
                     root_fs_entry_id=root_fs_entry_id,
                 )
             )
+            file_locator_rows = []
+            if (
+                self.storage_provider is not None
+                and self.storage_provider.storage_path_bound_to_logical_path
+            ):
+                file_locator_rows = await self.knowledge_fs_entry_repository.list_file_entries_in_subtree(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    root_fs_entry_id=root_fs_entry_id,
+                )
             await self.knowledge_fs_entry_repository.soft_delete_subtree(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
@@ -291,7 +309,24 @@ class KnowledgeBaseService:
                     "fs_entry_ids": fs_entry_ids,
                 },
             )
+            if self.knowledge_fetch_cache_repository is not None:
+                await self.knowledge_fetch_cache_repository.delete_cache_entries_for_fs_entry_ids(
+                    cursor,
+                    fs_entry_ids=fs_entry_ids,
+                )
             await connection.commit()
+            if file_locator_rows:
+                for row in file_locator_rows:
+                    original = _optional_location(
+                        row, "file_bucket_name", "file_object_key"
+                    )
+                    markdown = _optional_location(
+                        row, "markdown_bucket_name", "markdown_object_key"
+                    )
+                    if original is not None:
+                        await self.storage_provider.delete_quietly(original)
+                    if markdown is not None:
+                        await self.storage_provider.delete_quietly(markdown)
         except Exception:
             await connection.rollback()
             raise
@@ -331,6 +366,8 @@ class KnowledgeBaseService:
                     f"directory not found: {request.directory_path}"
                 )
             fs_entry_id = int(fs_entry_row["kid"])
+            moved: list = []
+            locator_updates: list = []
 
             sibling = await self.knowledge_fs_entry_repository.get_child_entry(
                 cursor,
@@ -342,15 +379,82 @@ class KnowledgeBaseService:
                 raise KnowledgeBaseValidationError(
                     f"directory name already exists under parent: {request.directory_name}"
                 )
+            path_bound = (
+                self.storage_provider is not None
+                and self.storage_provider.storage_path_bound_to_logical_path
+            )
+            if path_bound:
+                old_dir = "/" + normalized_directory_path
+                new_dir = old_dir.rsplit("/", 1)[0] + "/" + request.directory_name
+                files = await self.knowledge_fs_entry_repository.list_file_entries_in_subtree(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    root_fs_entry_id=fs_entry_id,
+                )
+                for row in files:
+                    old_path = str(row["virtual_path"])
+                    new_path = new_dir + old_path[len(old_dir) :]
+                    new_original = self.storage_provider.build_original_location(
+                        kb_code=request.kb_code,
+                        knowledge_base_id=knowledge_base_id,
+                        fs_entry_id=int(row["kid"]),
+                        file_path=new_path,
+                        mime_type=str(
+                            row.get("mime_type") or "application/octet-stream"
+                        ),
+                    )
+                    new_markdown = self.storage_provider.build_markdown_location(
+                        kb_code=request.kb_code,
+                        knowledge_base_id=knowledge_base_id,
+                        fs_entry_id=int(row["kid"]),
+                        file_path=new_path,
+                    )
+                    old_original = _optional_location(
+                        row, "file_bucket_name", "file_object_key"
+                    )
+                    old_markdown = _optional_location(
+                        row, "markdown_bucket_name", "markdown_object_key"
+                    )
+                    if old_original is not None:
+                        await self.storage_provider.move(old_original, new_original)
+                        moved.append((old_original, new_original))
+                    if old_markdown is not None:
+                        await self.storage_provider.move(old_markdown, new_markdown)
+                        moved.append((old_markdown, new_markdown))
+                    locator_updates.append(
+                        dict(
+                            fs_entry_id=int(row["kid"]),
+                            original_location=new_original if old_original else None,
+                            markdown_location=new_markdown if old_markdown else None,
+                        )
+                    )
             await self.knowledge_fs_entry_repository.rename_entry(
                 cursor,
                 entry_id=fs_entry_id,
                 new_name=request.directory_name,
             )
+            for upd in locator_updates:
+                await self.knowledge_fs_entry_repository.update_file_entry_locations(
+                    cursor, **upd
+                )
+            if (
+                path_bound
+                and self.knowledge_fetch_cache_repository is not None
+                and locator_updates
+            ):
+                await self.knowledge_fetch_cache_repository.delete_cache_entries_for_fs_entry_ids(
+                    cursor,
+                    fs_entry_ids=[u["fs_entry_id"] for u in locator_updates],
+                )
 
             await connection.commit()
         except Exception:
             await connection.rollback()
+            for old, new in reversed(moved):
+                try:
+                    await self.storage_provider.move(new, old, overwrite=True)
+                except Exception:
+                    pass
             raise
         finally:
             await connection.close()

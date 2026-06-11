@@ -117,6 +117,20 @@ class KnowledgeBaseService:
                     f"knowledge base not found: {request.kb_code}"
                 )
             knowledge_base_id = self._row_id(kb_row)
+            file_locator_rows = []
+            if (
+                self.storage_provider is not None
+                and self.storage_provider.storage_path_bound_to_logical_path
+            ):
+                file_locator_rows = await self.knowledge_fs_entry_repository.list_file_entries_by_knowledge_base_id(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                )
+            if self.knowledge_fetch_cache_repository is not None and file_locator_rows:
+                await self.knowledge_fetch_cache_repository.delete_cache_entries_for_fs_entry_ids(
+                    cursor,
+                    fs_entry_ids=[int(r["kid"]) for r in file_locator_rows],
+                )
             await self.knowledge_base_repository.soft_delete_by_code(
                 cursor, kb_code=request.kb_code
             )
@@ -141,6 +155,18 @@ class KnowledgeBaseService:
                 {"knowledge_base_id": knowledge_base_id},
             )
             await connection.commit()
+            if file_locator_rows:
+                for row in file_locator_rows:
+                    original = _optional_location(
+                        row, "file_bucket_name", "file_object_key"
+                    )
+                    markdown = _optional_location(
+                        row, "markdown_bucket_name", "markdown_object_key"
+                    )
+                    if original is not None:
+                        await self.storage_provider.delete_quietly(original)
+                    if markdown is not None:
+                        await self.storage_provider.delete_quietly(markdown)
         except Exception:
             await connection.rollback()
             raise

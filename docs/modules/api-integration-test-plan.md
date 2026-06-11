@@ -12,7 +12,7 @@
 
 说明：
 
-- `状态` 分为 `已写`、`已写部分`、`待补`、`已弃用`
+- `状态` 分为 `已写`、`已写部分`、`已写`、`已弃用`
 - `已写` 表示当前仓库已经有对应集成测试代码
 - `已写部分` 表示该用户场景只覆盖了其中一部分链路
 - `已弃用` 表示对应路由已移除，场景不再适用
@@ -272,6 +272,76 @@
 | D | 构建调用方 | ~~组合接口失败时正确短路~~ | ~~`file-to-markdown-index`~~ | ~~路由已移除~~ | 已弃用 |
 | E | 构建调用方 | ~~构建链路异常可预测~~ | ~~覆盖不支持文件类型、非法 base64、空 markdown、未配置、embedding 异常~~ | ~~路由已移除~~ | 已弃用 |
 
+## UserFS 本地文件系统存储场景总表
+
+> **背景：** 当 `BY_QA_STORAGE_PROVIDER` 配置为路径耦合型 provider（`storage_path_bound_to_logical_path=True`，如 UserFS），外部存储路径与知识库逻辑路径绑定。目录改名/删除需同步移动或清理远端文件。原始文件和 Markdown 的存储定位规则由 provider 的 `build_original_location` / `build_markdown_location` 决定。
+>
+> **本组场景的 provider 路径约定（示例）：**
+> - 原始文件：`{root}/{kb_code}/raw/{file_path}`
+> - Markdown 文件：`{root}/{kb_code}/md/{file_path}.md`
+> - 其中 `{root}` 为 provider 配置的存储根目录，`{file_path}` 为知识库内逻辑路径（含前导 `/`）。
+>
+> **验证方式：** 每个场景的操作完成后，除校验 API 返回结果外，还需直接检查本地文件系统（`os.path.exists`、`os.listdir`、文件内容比对等），确认存储路径与文件内容符合预期。
+>
+> 编号前缀 `U` 代表 UserFS。
+
+### 基础写入与读取路径验证
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| U1 | 内容管理员 | 导入文件后验证原始文件落盘路径 | `knowledgeBases/create -> knowledgeItems/import(/docs/readme.md)` | 文件系统存在 `{root}/{kb_code}/raw/docs/readme.md`；文件内容与上传一致；`listDir` 可见该文件 | 已写 |
+| U2 | 内容管理员 | 构建索引后验证 Markdown 落盘路径 | `knowledgeBases/create -> knowledgeItems/import(/docs/readme.md) -> fileToMarkdownIndex` | 文件系统存在 `{root}/{kb_code}/md/docs/readme.md.md`；内容为解析后的 Markdown 文本；`readFile` 可读取 | 已写 |
+| U3 | 内容管理员 | 非 ASCII 文件名落盘路径 | `knowledgeBases/create -> knowledgeItems/import(/docs/中文文件.md) -> fileToMarkdownIndex` | 原始文件与 Markdown 文件名保留中文；路径可被 `os.path.exists` 正确识别；`listDir` / `readFile` 正常 | 已写 |
+| U4 | 内容管理员 | 无扩展名文件落盘路径 | `knowledgeBases/create -> knowledgeItems/import(/docs/README)` | 原始文件路径无 suffix，存储 key 不含多余 `.`；`listDir` 可见 | 已写 |
+| U5 | 普通使用者 | 下载原始文件从正确路径读取 | `knowledgeBases/create -> knowledgeItems/import -> downloadFile` | 返回字节流与 `{root}/{kb_code}/raw/{file_path}` 内容一致 | 已写 |
+| U6 | 普通使用者 | 读取 Markdown 从正确路径读取 | `knowledgeBases/create -> knowledgeItems/import -> fileToMarkdownIndex -> readFile` | 返回文本与 `{root}/{kb_code}/md/{file_path}.md` 内容一致；行窗口截取正确 | 已写 |
+
+### 多级目录路径验证
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| U7 | 目录管理员 | 多级目录导入后验证深层路径 | `create /A/B/C -> knowledgeItems/import(/A/B/C/file.md) -> fileToMarkdownIndex` | 原始文件位于 `{root}/{kb_code}/raw/A/B/C/file.md`；Markdown 位于 `{root}/{kb_code}/md/A/B/C/file.md.md`；中间目录在文件系统中存在（如有目录创建语义） | 已写 |
+| U8 | 目录管理员 | 同文件名不同目录路径隔离 | `create /dir1 -> /dir2 -> knowledgeItems/import(/dir1/readme.md) -> knowledgeItems/import(/dir2/readme.md)` | 两个原始文件分别位于 `raw/dir1/readme.md` 和 `raw/dir2/readme.md`；内容各自独立；`listDir` 各自可见 | 已写 |
+| U9 | 目录管理员 | 不同 KB 同名文件路径隔离 | `knowledgeBases/create KB1 -> knowledgeBases/create KB2 -> import /readme.md 到 KB1 -> import /readme.md 到 KB2` | KB1 文件在 `{root}/KB1/raw/readme.md`；KB2 文件在 `{root}/KB2/raw/readme.md`；互不干扰 | 已写 |
+
+### 删除联动路径验证
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| U10 | 内容管理员 | 删除单文件后存储文件被移除 | `knowledgeBases/create -> knowledgeItems/import(/docs/a.md) -> fileToMarkdownIndex -> knowledgeItems/delete` | `{root}/{kb_code}/raw/docs/a.md` 不存在；`{root}/{kb_code}/md/docs/a.md.md` 不存在；API 返回软删成功 | 已写 |
+| U11 | 目录管理员 | 删除目录后子树存储文件全部移除 | `create /A/B -> knowledgeItems/import(/A/B/file.md) -> fileToMarkdownIndex -> directories/delete(/A/B)` | `{root}/{kb_code}/raw/A/B/` 下所有文件不存在；`{root}/{kb_code}/md/A/B/` 下所有文件不存在；API 各接口不可见 | 已写 |
+| U12 | 目录管理员 | 删除非空目录仅移除子树文件不误删兄弟 | `create /A/B -> create /A/C -> 各 import 文件 -> directories/delete(/A/B)` | `raw/A/B/` 下文件删除；`raw/A/C/` 下文件完好；`listDir(/A/C)` 仍可见 | 已写 |
+| U13 | 知识库管理员 | 删除知识库后存储文件全部移除 | `knowledgeBases/create -> import 多文件 -> knowledgeBases/delete` | `{root}/{kb_code}/` 下所有 raw 和 md 文件不存在 | 已写 |
+
+### 目录改名路径迁移验证
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| U14 | 目录管理员 | 改名后原始文件路径迁移 | `create /old -> knowledgeItems/import(/old/file.md) -> fileToMarkdownIndex -> directories/update(/old -> /new)` | `{root}/{kb_code}/raw/old/file.md` 不存在；`{root}/{kb_code}/raw/new/file.md` 存在且内容不变；`downloadFile(/new/file.md)` 正常 | 已写 |
+| U15 | 目录管理员 | 改名后 Markdown 文件路径迁移 | 同 U14 | `{root}/{kb_code}/md/old/file.md.md` 不存在；`{root}/{kb_code}/md/new/file.md.md` 存在；`readFile(/new/file.md)` 返回原 Markdown 内容 | 已写 |
+| U16 | 目录管理员 | 中间层改名联动深层文件路径迁移 | `create /A/B/C -> knowledgeItems/import(/A/B/C/file.md) -> fileToMarkdownIndex -> directories/update(/A/B -> /A/X)` | raw 与 md 下 `A/B/C/` → `A/X/C/`；`A/B/` 路径不存在；`A/X/C/file.md` 存在 | 已写 |
+| U17 | 目录管理员 | 改名后旧路径不可读新路径可读 | 同 U16 | `downloadFile(/A/B/C/file.md)` 报 not found；`downloadFile(/A/X/C/file.md)` 返回文件内容 | 已写 |
+| U18 | 目录管理员 | 连续两次改名路径链式迁移 | `create /A -> import -> rename A→B -> rename B→C` | `raw/A/` 和 `raw/B/` 不存在；`raw/C/` 存在 | 已写 |
+| U19 | 目录管理员 | 改名后 API 浏览路径同步 | `create /old -> import -> rename old→new -> listDir` | `listDir` 中显示 `/new`，不显示 `/old`；子文件路径前缀正确 | 已写 |
+
+### 存储状态与 API 一致性验证
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| U20 | 跨接口一致性 | 存储路径与 `downloadFile` 内容一致 | `knowledgeItems/import(/x.txt, content="hello") -> downloadFile` | `downloadFile` 返回 `b"hello"`；直接读 `{root}/{kb_code}/raw/x.txt` 也是 `b"hello"` | 已写 |
+| U21 | 跨接口一致性 | 存储路径与 `readFile` Markdown 内容一致 | `import(/x.md, content="# hi") -> fileToMarkdownIndex -> readFile` | `readFile` 返回的 markdown 与 `{root}/{kb_code}/md/x.md.md` 文件内容一致 | 已写 |
+| U22 | 跨接口一致性 | 删除后存储、浏览、检索三方一致 | `import -> fileToMarkdownIndex -> knowledgeItems/delete -> listDir -> knowledgeItems/search -> 文件系统检查` | API 不可见 + 存储文件不存在 + 检索不命中 | 已写 |
+
+### 异常与边界
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| U23 | 存储运维 | 存储写入失败时 DB 不残留 | `knowledgeItems/import`（模拟 UserFS 写盘失败） | DB 中无该文件记录；文件系统中无残留文件；API 返回错误 | 已写 |
+| U24 | 存储运维 | DB 提交失败时存储补偿清理 | `knowledgeItems/import`（模拟 commit 失败） | 已写入文件系统的原始文件被清理；文件系统无残留 | 已写 |
+| U25 | 存储运维 | 目录改名时部分 move 失败后回滚 | `directories/update`（模拟第二个文件 move 失败） | 已移动的第一个文件被反向 move 回原路径；DB 不变；旧路径文件可读 | 已写 |
+| U26 | 存储运维 | 并发导入同路径文件 | 两个请求同时 `import /same/path/file.md` | 仅一个成功；文件系统只有一个文件；DB 只有一条记录 | 已写 |
+| U27 | 存储运维 | 存储根目录不存在时 `ensure_ready` 自动创建 | 启动服务（UserFS provider，`{root}` 不存在） | provider 自动创建根目录；后续 import 正常 | 已写 |
+
 ## 当前已落测试文件
 
 | 文件 | 覆盖重点 | 状态 |
@@ -279,6 +349,9 @@
 | `tests/knowledge_build/integration/test_api_integration.py` | ~~`knowledge_build` 三接口正常/异常与组合链路等价性~~ | 已弃用（`knowledge_build` 独立路由已移除） |
 | `tests/knowledge_base/integration/test_kb_api_stateful_integration.py` | 混合导入构建（`knowledgeItems/import` + `fileToMarkdownIndex`）、知识库改名、单文件/目录删除、多级目录改名删除、读取窗口校验、`downloadFile` 的中文文件名/二进制文件下载、真实搜索链路与失败保护 | 有效 |
 | `tests/knowledge_base/integration/test_metadata_api_integration.py` | M1–M17 全场景:属性 CRUD/批量原子性/引用计数;文件元数据五类型 set/list 操作矩阵;`metadata/get` 错路径(unknown KB/file);YAML front matter(auto/拒绝/缺失/格式错容错);删除三档级联;`metadataFields/list`(KB 必填/多 KB 合并/单 KB 隔离);metadataSearch 接口约束(where 必填/topK 边界/KB scope/字段裁剪/knCodeList 必填);DSL 算子矩阵 + 三层布尔嵌套 + 德摩根;DSL 类型/结构/复杂度错误矩阵;系统字段(metadataSearch 单系统/混合 + chunk + searchFile 单系统/混合);search 升级版(三 mode/metadataFieldList/where 短路/前过滤证明);fileTypeList 兼容;searchFile(多 chunk 去重/where/系统字段/knCodeList 必填);跨接口一致;软删保护 | 有效 |
+| `tests/knowledge_base/integration/test_userfs_batch1.py` | U1–U9:基础读写路径、多级目录隔离、跨 KB 隔离 | 有效 |
+| `tests/knowledge_base/integration/test_userfs_batch2.py` | U10–U18:删除联动、目录改名路径迁移 | 有效 |
+| `tests/knowledge_base/integration/test_userfs_batch3.py` | U19–U27:跨接口一致性、异常补偿与边界（含 U24 commit 失败清理） | 有效 |
 
 ## 下一轮优先补充建议
 

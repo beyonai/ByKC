@@ -815,6 +815,22 @@ class KnowledgeFsEntryRepository:
         )
         return [dict(row) for row in await self._fetchall(cursor)]
 
+    async def list_file_entries_by_knowledge_base_id(
+        self, cursor, *, knowledge_base_id: int
+    ) -> list[dict[str, Any]]:
+        """List all non-deleted file entries (with storage locators) for one knowledge base."""
+        await cursor.execute(
+            """SELECT fs.kid, fs.virtual_path, fs.file_bucket_name, fs.file_object_key,
+                      fs.markdown_bucket_name, fs.markdown_object_key, fs.mime_type
+            FROM knowledge_fs_entry fs
+            WHERE fs.knowledge_base_id = %(knowledge_base_id)s
+              AND fs.is_deleted = FALSE
+              AND fs.entry_type = 'FILE'
+            ORDER BY fs.kid""",
+            {"knowledge_base_id": knowledge_base_id},
+        )
+        return [dict(row) for row in await self._fetchall(cursor)]
+
     async def update_file_entry_locations(
         self,
         cursor,

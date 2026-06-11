@@ -1560,6 +1560,7 @@ async def test_delete_knowledge_item_marks_file_entry_deleted_and_clears_artifac
     """Deleting one file should logically delete the file entry and clear derived artifacts."""
     connection = FakeConnection()
     storage_provider = FakeStorageProvider()
+    storage_provider.storage_path_bound_to_logical_path = True
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
     knowledge_fs_entry_repository.file_entry_by_path["Policies/delete.md"] = {
         "kid": 71,
@@ -2685,3 +2686,104 @@ async def test_file_to_markdown_index_rebuilds_after_failed_task():
             "current_step": "markdown",
         },
     ) in build_task_repo.calls
+
+
+async def test_delete_knowledge_item_skips_storage_when_path_not_bound():
+    """When storage_path_bound_to_logical_path=False, storage objects are NOT deleted."""
+    connection = FakeConnection()
+    storage_provider = FakeStorageProvider()
+    storage_provider.storage_path_bound_to_logical_path = False
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    knowledge_fs_entry_repository.file_entry_by_path["Policies/delete.md"] = {
+        "kid": 71,
+        "knowledge_base_id": 7,
+        "parent_entry_id": None,
+        "entry_type": "FILE",
+        "name": "delete.md",
+        "path_ltree": "d1_a.f2_b",
+        "depth": 2,
+        "file_bucket_name": "knowledge-base",
+        "file_object_key": "kb/7/fs-entry/71/original.md",
+        "markdown_bucket_name": "knowledge-base-markdown",
+        "markdown_object_key": "kb/7/fs-entry/71/markdown.md",
+    }
+    service = KnowledgeItemIngestionService(
+        connection_factory=lambda: _async_return(connection),
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={
+                "id": 7,
+                "kb_code": "hr-policy",
+                "kb_name": "人力制度知识库",
+                "status": "ACTIVE",
+                "is_deleted": False,
+            }
+        ),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        storage_provider=storage_provider,
+        embedding_dimension=2,
+    )
+
+    response = await service.delete_knowledge_item(
+        DeleteKnowledgeItemRequest(kb_code="hr-policy", file_path="/Policies/delete.md")
+    )
+
+    assert response is None
+    assert connection.committed is True
+    # When path is not bound, no storage objects should be deleted
+    assert storage_provider.deleted == []
+
+
+async def test_delete_knowledge_item_deletes_storage_when_path_bound():
+    """When storage_path_bound_to_logical_path=True, storage objects are deleted."""
+    connection = FakeConnection()
+    storage_provider = FakeStorageProvider()
+    storage_provider.storage_path_bound_to_logical_path = True
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    knowledge_fs_entry_repository.file_entry_by_path["Policies/delete.md"] = {
+        "kid": 71,
+        "knowledge_base_id": 7,
+        "parent_entry_id": None,
+        "entry_type": "FILE",
+        "name": "delete.md",
+        "path_ltree": "d1_a.f2_b",
+        "depth": 2,
+        "file_bucket_name": "knowledge-base",
+        "file_object_key": "kb/7/fs-entry/71/original.md",
+        "markdown_bucket_name": "knowledge-base-markdown",
+        "markdown_object_key": "kb/7/fs-entry/71/markdown.md",
+    }
+    service = KnowledgeItemIngestionService(
+        connection_factory=lambda: _async_return(connection),
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={
+                "id": 7,
+                "kb_code": "hr-policy",
+                "kb_name": "人力制度知识库",
+                "status": "ACTIVE",
+                "is_deleted": False,
+            }
+        ),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        storage_provider=storage_provider,
+        embedding_dimension=2,
+    )
+
+    response = await service.delete_knowledge_item(
+        DeleteKnowledgeItemRequest(kb_code="hr-policy", file_path="/Policies/delete.md")
+    )
+
+    assert response is None
+    assert connection.committed is True
+    # Both original and markdown storage locations should be deleted
+    assert (
+        "kb/7/fs-entry/71/original.md",
+        "knowledge-base",
+    ) in storage_provider.deleted
+    assert (
+        "kb/7/fs-entry/71/markdown.md",
+        "knowledge-base-markdown",
+    ) in storage_provider.deleted

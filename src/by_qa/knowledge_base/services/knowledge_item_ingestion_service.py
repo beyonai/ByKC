@@ -61,6 +61,16 @@ def _parse_front_matter(content: bytes) -> dict[str, Any]:
     return parsed
 
 
+def _build_optional_location(
+    row: dict, *, namespace_key: str, key_key: str
+) -> StorageLocation | None:
+    namespace = row.get(namespace_key)
+    key = row.get(key_key)
+    if not namespace or not key:
+        return None
+    return StorageLocation(namespace=str(namespace), key=str(key))
+
+
 @dataclass
 class KnowledgeItemIngestionService:
     """Import markdown documents, chunks, and embeddings transactionally."""
@@ -555,22 +565,21 @@ class KnowledgeItemIngestionService:
                 },
             )
             await connection.commit()
-            file_bucket_name = file_row.get("file_bucket_name")
-            file_object_key = file_row.get("file_object_key")
-            markdown_bucket_name = file_row.get("markdown_bucket_name")
-            markdown_object_key = file_row.get("markdown_object_key")
-            if file_object_key:
-                await self.storage_provider.storage.delete_object_quietly(
-                    file_object_key,
-                    bucket_name=file_bucket_name
-                    or self.storage_provider.storage.bucket_name,
+            if self.storage_provider.storage_path_bound_to_logical_path:
+                original_location = _build_optional_location(
+                    file_row,
+                    namespace_key="file_bucket_name",
+                    key_key="file_object_key",
                 )
-            if markdown_object_key:
-                await self.storage_provider.storage.delete_object_quietly(
-                    markdown_object_key,
-                    bucket_name=markdown_bucket_name
-                    or self.storage_provider.storage.markdown_bucket_name,
+                if original_location is not None:
+                    await self.storage_provider.delete_quietly(original_location)
+                markdown_location = _build_optional_location(
+                    file_row,
+                    namespace_key="markdown_bucket_name",
+                    key_key="markdown_object_key",
                 )
+                if markdown_location is not None:
+                    await self.storage_provider.delete_quietly(markdown_location)
         except Exception:
             await connection.rollback()
             raise

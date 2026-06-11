@@ -2,6 +2,8 @@
 
 from typing import Any
 
+from by_qa.knowledge_base.infrastructure.storage import StorageLocation
+
 
 class KnowledgeFetchCacheRepository:
     """Repository for cache index rows backing fetched local files."""
@@ -13,8 +15,7 @@ class KnowledgeFetchCacheRepository:
         knowledge_base_id: int,
         fs_entry_id: int,
         full_path: str,
-        bucket_name: str,
-        object_key: str,
+        source_location: StorageLocation,
         checksum: str | None,
         cache_file_path: str,
         file_size: int | None,
@@ -31,8 +32,8 @@ class KnowledgeFetchCacheRepository:
                 "knowledge_base_id": knowledge_base_id,
                 "fs_entry_id": fs_entry_id,
                 "full_path": full_path,
-                "bucket_name": bucket_name,
-                "object_key": object_key,
+                "bucket_name": source_location.namespace,
+                "object_key": source_location.key,
                 "checksum": checksum,
                 "cache_file_path": cache_file_path,
                 "file_size": file_size,
@@ -86,8 +87,8 @@ class KnowledgeFetchCacheRepository:
                 "knowledge_base_id": knowledge_base_id,
                 "fs_entry_id": fs_entry_id,
                 "full_path": full_path,
-                "bucket_name": bucket_name,
-                "object_key": object_key,
+                "bucket_name": source_location.namespace,
+                "object_key": source_location.key,
                 "checksum": checksum,
                 "cache_file_path": cache_file_path,
                 "file_size": file_size,
@@ -196,4 +197,14 @@ class KnowledgeFetchCacheRepository:
             WHERE kid = %(cache_entry_id)s
             """,
             {"cache_entry_id": cache_entry_id, "error": error},
+        )
+
+    async def delete_cache_entries_for_fs_entry_ids(
+        self, cursor, *, fs_entry_ids: list[int]
+    ) -> None:
+        if not fs_entry_ids:
+            return
+        await cursor.execute(
+            "DELETE FROM knowledge_fetch_cache_index WHERE fs_entry_id = ANY(%(fs_entry_ids)s)",
+            {"fs_entry_ids": list(fs_entry_ids)},
         )

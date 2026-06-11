@@ -1,5 +1,6 @@
 """Tests for KB repository SQL execution."""
 
+from by_qa.knowledge_base.infrastructure.storage import StorageLocation
 from by_qa.knowledge_base.repositories.knowledge_base_repository import (
     KnowledgeBaseRepository,
 )
@@ -440,8 +441,9 @@ async def test_update_file_entry_storage_updates_new_storage_columns():
         cursor,
         fs_entry_id=81,
         file_description="原始文件",
-        file_bucket_name="knowledge-base",
-        file_object_key="kb/7/fs-entry/81/original.pdf",
+        original_location=StorageLocation(
+            namespace="knowledge-base", key="kb/7/fs-entry/81/original.pdf"
+        ),
         file_size=128,
         mime_type="application/pdf",
         checksum="abc123",
@@ -569,8 +571,9 @@ async def test_upsert_fetch_cache_entry_persists_cache_identity_and_expiry():
         knowledge_base_id=7,
         fs_entry_id=71,
         full_path="dir1/doc.md",
-        bucket_name="knowledge-base",
-        object_key="7/dir1/doc.md/v1/content.md",
+        source_location=StorageLocation(
+            namespace="knowledge-base", key="7/dir1/doc.md/v1/content.md"
+        ),
         checksum="abc123",
         cache_file_path="/tmp/kb_cache/人力制度知识库/dir1/doc.md",
         file_size=128,

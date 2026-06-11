@@ -150,8 +150,7 @@ class KnowledgeItemIngestionService:
                 cursor,
                 fs_entry_id=fs_entry_id,
                 file_description=request.file_description,
-                file_bucket_name=stored.location.namespace,
-                file_object_key=stored.location.key,
+                original_location=stored.location,
                 file_size=len(request.file_content),
                 mime_type=mime_type,
                 checksum=checksum,
@@ -450,8 +449,7 @@ class KnowledgeItemIngestionService:
             await self.knowledge_fs_entry_repository.update_markdown_metadata(
                 cursor,
                 fs_entry_id=fs_entry_id,
-                markdown_bucket_name=stored_markdown.location.namespace,
-                markdown_object_key=stored_markdown.location.key,
+                markdown_location=stored_markdown.location,
                 line_count=line_count,
             )
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
+from by_qa.knowledge_base.infrastructure.storage import StorageLocation
+
 
 class KnowledgeFsEntryRepository:
     """Repository for filesystem entries backing knowledge items."""
@@ -211,8 +213,7 @@ class KnowledgeFsEntryRepository:
         *,
         fs_entry_id: int,
         file_description: str | None,
-        file_bucket_name: str,
-        file_object_key: str,
+        original_location: StorageLocation,
         file_size: int,
         mime_type: str,
         checksum: str,
@@ -235,8 +236,8 @@ class KnowledgeFsEntryRepository:
             {
                 "fs_entry_id": fs_entry_id,
                 "description": file_description,
-                "file_bucket_name": file_bucket_name,
-                "file_object_key": file_object_key,
+                "file_bucket_name": original_location.namespace,
+                "file_object_key": original_location.key,
                 "file_size": file_size,
                 "mime_type": mime_type,
                 "checksum": checksum,
@@ -762,8 +763,7 @@ class KnowledgeFsEntryRepository:
         cursor: Any,
         *,
         fs_entry_id: int,
-        markdown_bucket_name: str,
-        markdown_object_key: str,
+        markdown_location: StorageLocation,
         line_count: int,
     ) -> None:
         """Update the markdown sidecar metadata on a file entry."""
@@ -778,8 +778,8 @@ class KnowledgeFsEntryRepository:
             """,
             {
                 "fs_entry_id": fs_entry_id,
-                "markdown_bucket_name": markdown_bucket_name,
-                "markdown_object_key": markdown_object_key,
+                "markdown_bucket_name": markdown_location.namespace,
+                "markdown_object_key": markdown_location.key,
                 "line_count": line_count,
             },
         )
@@ -798,3 +798,59 @@ class KnowledgeFsEntryRepository:
             if key == "kid" and "id" in row:
                 return row["id"]
         raise KeyError(key)
+
+    async def list_file_entries_in_subtree(
+        self, cursor, *, knowledge_base_id: int, root_fs_entry_id: int
+    ) -> list[dict[str, Any]]:
+        """List all file entries (with storage locators) in one directory subtree."""
+        await cursor.execute(
+            """SELECT fs.kid, fs.virtual_path, fs.file_bucket_name, fs.file_object_key, fs.markdown_bucket_name, fs.markdown_object_key
+            FROM knowledge_fs_entry fs JOIN knowledge_fs_entry root ON root.kid = %(root_fs_entry_id)s
+            WHERE fs.knowledge_base_id = %(knowledge_base_id)s AND fs.is_deleted = FALSE
+            AND fs.entry_type = 'FILE' AND fs.path_ltree <@ root.path_ltree ORDER BY fs.kid""",
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "root_fs_entry_id": root_fs_entry_id,
+            },
+        )
+        return [dict(row) for row in await self._fetchall(cursor)]
+
+    async def update_file_entry_locations(
+        self,
+        cursor,
+        *,
+        fs_entry_id: int,
+        original_location: StorageLocation | None,
+        markdown_location: StorageLocation | None,
+    ) -> None:
+        set_clauses = []
+        params = {"fs_entry_id": fs_entry_id}
+        if original_location is not None:
+            set_clauses.extend(
+                [
+                    "file_bucket_name = %(file_bucket_name)s",
+                    "file_object_key = %(file_object_key)s",
+                ]
+            )
+            params.update(
+                file_bucket_name=original_location.namespace,
+                file_object_key=original_location.key,
+            )
+        if markdown_location is not None:
+            set_clauses.extend(
+                [
+                    "markdown_bucket_name = %(markdown_bucket_name)s",
+                    "markdown_object_key = %(markdown_object_key)s",
+                ]
+            )
+            params.update(
+                markdown_bucket_name=markdown_location.namespace,
+                markdown_object_key=markdown_location.key,
+            )
+        if not set_clauses:
+            return
+        set_clauses.append("updated_at = NOW()")
+        await cursor.execute(
+            f"UPDATE knowledge_fs_entry SET {', '.join(set_clauses)} WHERE kid = %(fs_entry_id)s AND is_deleted = FALSE",
+            params,
+        )

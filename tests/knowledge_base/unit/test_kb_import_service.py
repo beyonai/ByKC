@@ -619,8 +619,7 @@ class FakeKnowledgeFsEntryRepository:
         cursor,
         *,
         fs_entry_id,
-        markdown_bucket_name,
-        markdown_object_key,
+        markdown_location,
         line_count,
     ):
         self.calls.append(
@@ -628,8 +627,7 @@ class FakeKnowledgeFsEntryRepository:
                 "update_markdown_metadata",
                 {
                     "fs_entry_id": fs_entry_id,
-                    "markdown_bucket_name": markdown_bucket_name,
-                    "markdown_object_key": markdown_object_key,
+                    "markdown_location": markdown_location,
                     "line_count": line_count,
                 },
             )
@@ -1715,8 +1713,8 @@ async def test_upload_file_commits_object_and_updates_fs_entry_storage():
         if call[0] == "update_file_entry_storage"
     ][0]
     assert storage_call[1]["fs_entry_id"] == 71
-    assert storage_call[1]["file_bucket_name"] == "knowledge-base"
-    assert storage_call[1]["file_object_key"] == "kb/7/fs-entry/71/original.pdf"
+    assert storage_call[1]["original_location"].namespace == "knowledge-base"
+    assert storage_call[1]["original_location"].key == "kb/7/fs-entry/71/original.pdf"
     assert storage_call[1]["file_size"] == len(b"pdf-bytes")
     assert storage_call[1]["mime_type"] == "application/pdf"
     assert len(storage.written) == 1
@@ -1817,8 +1815,8 @@ async def test_upload_file_writes_via_provider_and_persists_locator():
         for call in knowledge_fs_entry_repository.calls
         if call[0] == "update_file_entry_storage"
     ][0]
-    assert storage_call[1]["file_bucket_name"] == "knowledge-base"
-    assert storage_call[1]["file_object_key"] == "kb/7/fs-entry/71/original.md"
+    assert storage_call[1]["original_location"].namespace == "knowledge-base"
+    assert storage_call[1]["original_location"].key == "kb/7/fs-entry/71/original.md"
     assert storage_call[1]["file_size"] == len(b"# Hello")
     assert storage_call[1]["mime_type"] == "text/markdown"
 

@@ -1,5 +1,7 @@
 """Unit tests for storage protocol value objects and errors."""
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from by_qa.knowledge_base.infrastructure.storage import (
@@ -19,7 +21,7 @@ def test_storage_location_is_frozen_dataclass():
 
     assert location.namespace == "bucket-a"
     assert location.key == "path/to/object"
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         location.namespace = "other"  # frozen
 
 

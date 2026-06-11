@@ -20,7 +20,8 @@ from by_qa.knowledge_base.infrastructure.storage import (
     StoredObject,
 )
 
-_NOT_FOUND_CODES = {"NoSuchKey", "NoSuchBucket", "404", "NotFound"}
+_NOT_FOUND_CODES = {"NoSuchKey", "404", "NotFound"}
+_MISSING_BUCKET_CODES = {"NoSuchBucket"}
 _AUTH_CODES = {"AccessDenied", "InvalidAccessKeyId", "SignatureDoesNotMatch"}
 _CONFLICT_CODES = {"PreconditionFailed", "BucketAlreadyOwnedByYou"}
 
@@ -30,7 +31,7 @@ class S3KnowledgeStorageProvider:
     """Wrap KnowledgeBaseObjectStorage and expose the standard storage protocol."""
 
     storage: KnowledgeBaseObjectStorage
-    provider_name: str = "s3"
+    provider_name: str = "minio"
     storage_path_bound_to_logical_path: bool = False
 
     async def ensure_ready(self) -> None:
@@ -106,7 +107,9 @@ class S3KnowledgeStorageProvider:
         except ClientError as exc:
             err = self._translate(exc, "delete")
             if isinstance(err, StorageNotFoundError):
-                return  # delete is idempotent
+                if self._is_missing_bucket(exc):
+                    raise err from exc
+                return  # delete is idempotent for missing key
             raise err from exc
 
     async def delete_quietly(self, location: StorageLocation) -> None:
@@ -150,6 +153,8 @@ class S3KnowledgeStorageProvider:
         message = f"s3.{op}: {error_code or status}"
         if error_code in _NOT_FOUND_CODES or status == 404:
             return StorageNotFoundError(message)
+        if error_code in _MISSING_BUCKET_CODES:
+            return StorageNotFoundError(message)
         if error_code in _AUTH_CODES or status in {401, 403}:
             return StorageAuthenticationError(message)
         if error_code in _CONFLICT_CODES or status == 412:
@@ -161,3 +166,8 @@ class S3KnowledgeStorageProvider:
         error_code = exc.response.get("Error", {}).get("Code") or ""
         status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
         return error_code in _NOT_FOUND_CODES or status == 404
+
+    @staticmethod
+    def _is_missing_bucket(exc: ClientError) -> bool:
+        error_code = exc.response.get("Error", {}).get("Code") or ""
+        return error_code in _MISSING_BUCKET_CODES

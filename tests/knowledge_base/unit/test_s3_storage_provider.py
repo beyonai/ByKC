@@ -115,7 +115,7 @@ def provider():
 
 def test_provider_satisfies_protocol(provider):
     assert isinstance(provider, KnowledgeStorageProvider)
-    assert provider.provider_name == "s3"
+    assert provider.provider_name == "minio"
     assert provider.storage_path_bound_to_logical_path is False
 
 

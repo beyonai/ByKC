@@ -15,12 +15,12 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from _userfs_provider import UserFSProvider
 from fastapi.testclient import TestClient
 
 import by_qa.main as main_module
 from by_qa.config import Settings
 from by_qa.knowledge_base.infrastructure import runtime as runtime_module
-from tests.knowledge_base.integration._userfs_provider import UserFSProvider
 
 # ── Test fixtures & helpers ───────────────────────────────────────────
 

@@ -26,6 +26,7 @@ from types import ModuleType
 from uuid import uuid4
 
 import pytest
+from _userfs_provider import UserFSProvider
 from fastapi.testclient import TestClient
 
 import by_qa.main as main_module
@@ -35,7 +36,6 @@ from by_qa.knowledge_base.infrastructure.runtime import (
     build_knowledge_item_search_service,
 )
 from by_qa.knowledge_common.schemas import KnowledgeItemChunkPayload
-from tests.knowledge_base.integration._userfs_provider import UserFSProvider
 
 # ---------------------------------------------------------------------------
 # Default database settings (same as existing stateful integration tests)

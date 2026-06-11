@@ -14,13 +14,13 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from _userfs_provider import UserFSProvider
 from fastapi.testclient import TestClient
 
 import by_qa.main as main_module
 from by_qa.config import Settings
 from by_qa.core.model_config import ModelConfig  # noqa: E402
 from by_qa.knowledge_base.infrastructure import runtime as runtime_module
-from tests.knowledge_base.integration._userfs_provider import UserFSProvider
 
 # Per-test root set by _wire_userfs; helpers reference this instead of a global.
 _current_userfs_root: Path | None = None

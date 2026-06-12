@@ -60,7 +60,8 @@ class _OpenGaussMixin:
         return """
             SELECT 1
             FROM information_schema.columns
-            WHERE table_name = 'checkpoint_writes'
+            WHERE table_schema = CURRENT_SCHEMA()
+              AND table_name = 'checkpoint_writes'
               AND column_name = 'task_path'
             LIMIT 1
         """

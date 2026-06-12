@@ -85,7 +85,7 @@ class BaseQAEngine(ABC):
             json.dumps(input_data.model_dump(), ensure_ascii=False),
         )
         config = RunnableConfig(
-            callbacks=[],
+            callbacks=self._get_config_value("callbacks"),
             metadata={"session_id": session_id, "message_id": message_id},
             recursion_limit=recursion_limit,
             run_id=message_id,

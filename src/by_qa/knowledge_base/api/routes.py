@@ -451,6 +451,7 @@ def register_routes(
         file_path: str | None = Form(None, alias="filePath"),
         file_description: str | None = Form(None, alias="fileDescription"),
         file_content: UploadFile | None = File(None, alias="fileContent"),
+        process_front_matter: bool = Form(True, alias="processFrontMatter"),
     ):
         try:
             payload = await file_content.read() if file_content is not None else None
@@ -460,6 +461,7 @@ def register_routes(
                     "filePath": file_path,
                     "fileDescription": file_description,
                     "fileContent": payload,
+                    "processFrontMatter": process_front_matter,
                 }
             )
         except ValidationError as exc:

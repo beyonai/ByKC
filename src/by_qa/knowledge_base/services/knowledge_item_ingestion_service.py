@@ -157,13 +157,14 @@ class KnowledgeItemIngestionService:
                 checksum=checksum,
             )
 
-            await self._apply_front_matter_metadata(
-                cursor,
-                fs_entry_id=fs_entry_id,
-                knowledge_base_id=knowledge_base_id,
-                content=request.file_content,
-                file_path=normalized_file_path,
-            )
+            if request.process_front_matter:
+                await self._apply_front_matter_metadata(
+                    cursor,
+                    fs_entry_id=fs_entry_id,
+                    knowledge_base_id=knowledge_base_id,
+                    content=request.file_content,
+                    file_path=normalized_file_path,
+                )
 
             await connection.commit()
         except Exception:

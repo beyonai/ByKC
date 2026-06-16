@@ -319,10 +319,11 @@
 
 行为描述：
 
-- 当上传文件为 Markdown 时，服务端可以额外解析文档开头的 YAML front matter header。
+- 当上传文件为 Markdown 且 `processFrontMatter` 为 `true` 时，服务端会额外解析文档开头的 YAML front matter header。
 - 若解析到合法的 YAML front matter header，则会将其中字段按同名 `propertyName` 自动录入为该文件的元数据。
 - 该行为适用于类似 Obsidian 文档头的结构化元数据写法。
 - 如果已有属性不存在于知识库系统，则文件上传失败
+- 当 `processFrontMatter` 为 `false` 时，跳过 YAML front matter 解析，不做元数据自动录入
 
 YAML front matter header 示例：
 
@@ -355,6 +356,7 @@ module: karpathy
 | `filePath` | string | 是 | 上传到知识库后的文件全路径，以 `/` 开头，不包括知识库名称 |
 | `fileDescription` | string | 否 | 文件描述 |
 | `fileContent` | file | 是 | 文件二进制内容 |
+| `processFrontMatter` | boolean | 否 | 是否解析 YAML front matter 并自动录入元数据，默认 `true` |
 
 表单示例：
 
@@ -363,7 +365,8 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
   -F "knCode=1" \
   -F "filePath=/制度/人事/考勤制度.pdf" \
   -F "fileDescription=考勤制度原文" \
-  -F "fileContent=@./考勤制度.pdf"
+  -F "fileContent=@./考勤制度.pdf" \
+  -F "processFrontMatter=true"
 ```
 
 成功响应示例：

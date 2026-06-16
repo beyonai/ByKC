@@ -471,10 +471,11 @@ def register_routes(
                 status_code=422,
             )
         logger.info(
-            "upload_file request received: kb_code=%s, file_path=%s, has_description=%s",
+            "upload_file request received: kb_code=%s, file_path=%s, has_description=%s, process_front_matter=%s",
             request.kb_code,
             request.file_path,
             request.file_description is not None,
+            request.process_front_matter,
         )
         try:
             service = await get_knowledge_item_ingestion_service()

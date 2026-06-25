@@ -34,6 +34,14 @@ class MetadataPropertyService:
                 f"property name conflicts with system field: {property_name}"
             )
 
+    def _response_from_row(self, row: dict[str, Any]) -> MetadataPropertyResponse:
+        return MetadataPropertyResponse(
+            property_name=row["property_name"],
+            value_type=row["value_type"],
+            description=row["description"],
+            ext_params=row["ext_params"],
+        )
+
     async def create_property(
         self, request: CreateMetadataPropertyRequest
     ) -> MetadataPropertyResponse:
@@ -45,6 +53,7 @@ class MetadataPropertyService:
         connection = await self.connection_factory()
         try:
             cursor = connection.cursor()
+            await self.metadata_property_repository.lock_definitions_for_write(cursor)
             existing = await self.metadata_property_repository.get_by_name(
                 cursor, request.property_name
             )
@@ -66,12 +75,7 @@ class MetadataPropertyService:
                 "metadata_property_service.create committed: kid=%s",
                 created["kid"],
             )
-            return MetadataPropertyResponse(
-                property_name=created["property_name"],
-                value_type=created["value_type"],
-                description=created["description"],
-                ext_params=created["ext_params"],
-            )
+            return self._response_from_row(created)
         except Exception:
             await connection.rollback()
             raise
@@ -90,6 +94,7 @@ class MetadataPropertyService:
         connection = await self.connection_factory()
         try:
             cursor = connection.cursor()
+            await self.metadata_property_repository.lock_definitions_for_write(cursor)
             results: list[MetadataPropertyResponse] = []
             for item in request.property_list:
                 existing = await self.metadata_property_repository.get_by_name(
@@ -110,14 +115,7 @@ class MetadataPropertyService:
                     raise KnowledgeBaseValidationError(
                         f"failed to create metadata property: {item.property_name}"
                     )
-                results.append(
-                    MetadataPropertyResponse(
-                        property_name=created["property_name"],
-                        value_type=created["value_type"],
-                        description=created["description"],
-                        ext_params=created["ext_params"],
-                    )
-                )
+                results.append(self._response_from_row(created))
             await connection.commit()
             logger.info(
                 "metadata_property_service.batch_create committed: count=%s",

@@ -62,6 +62,21 @@ async def test_create_property_executes_insert():
 
 
 @pytest.mark.asyncio
+async def test_lock_definitions_for_write_locks_metadata_property_table():
+    repo = MetadataPropertyRepository()
+    cursor = FakeCursor()
+
+    await repo.lock_definitions_for_write(cursor)
+
+    assert cursor.executed == [
+        (
+            "LOCK TABLE knowledge_metadata_property_def IN SHARE ROW EXCLUSIVE MODE",
+            None,
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_get_by_name_filters_deleted():
     repo = MetadataPropertyRepository()
     cursor = FakeCursor(

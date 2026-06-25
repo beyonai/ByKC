@@ -20,6 +20,11 @@ SYSTEM_FIELD_NAMES: frozenset[str] = frozenset(
 class MetadataPropertyRepository:
     """CRUD operations on knowledge_metadata_property_def."""
 
+    async def lock_definitions_for_write(self, cursor: Any) -> None:
+        await cursor.execute(
+            "LOCK TABLE knowledge_metadata_property_def IN SHARE ROW EXCLUSIVE MODE"
+        )
+
     async def create(
         self,
         cursor: Any,

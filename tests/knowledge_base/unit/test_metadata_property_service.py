@@ -93,6 +93,10 @@ async def test_create_property_success():
 
     assert result.property_name == "status"
     assert result.value_type == "string"
+    assert (
+        cursor.executed[0][0]
+        == "LOCK TABLE knowledge_metadata_property_def IN SHARE ROW EXCLUSIVE MODE"
+    )
     assert conn.committed
 
 
@@ -133,6 +137,67 @@ async def test_create_property_duplicate_raises():
 
     with pytest.raises(KnowledgeBaseValidationError, match="already exists"):
         await service.create_property(request)
+
+    assert conn.rolled_back
+
+
+@pytest.mark.asyncio
+async def test_batch_create_property_duplicate_rolls_back():
+    cursor = FakeCursor(
+        fetchone_results=[
+            None,
+            {
+                "kid": 2,
+                "property_name": "new_status",
+                "value_type": "string",
+                "description": None,
+                "ext_params": None,
+            },
+            {
+                "kid": 1,
+                "property_name": "status",
+                "value_type": "string",
+                "description": None,
+                "ext_params": None,
+            },
+        ]
+    )
+    conn = FakeConnection(cursor)
+
+    from by_qa.knowledge_base.repositories.metadata_property_repository import (
+        MetadataPropertyRepository,
+    )
+    from by_qa.knowledge_base.services.metadata_property_service import (
+        MetadataPropertyService,
+    )
+
+    async def factory():
+        return conn
+
+    service = MetadataPropertyService(
+        connection_factory=factory,
+        metadata_property_repository=MetadataPropertyRepository(),
+    )
+
+    from by_qa.knowledge_base.api.metadata_schemas import (
+        BatchCreateMetadataPropertyRequest,
+    )
+
+    with pytest.raises(KnowledgeBaseValidationError, match="already exists"):
+        await service.batch_create(
+            BatchCreateMetadataPropertyRequest(
+                propertyList=[
+                    CreateMetadataPropertyRequest(
+                        propertyName="new_status",
+                        valueType="string",
+                    ),
+                    CreateMetadataPropertyRequest(
+                        propertyName="status",
+                        valueType="string",
+                    ),
+                ]
+            )
+        )
 
     assert conn.rolled_back
 

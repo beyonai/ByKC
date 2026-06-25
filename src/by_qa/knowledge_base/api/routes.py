@@ -992,6 +992,7 @@ def register_routes(
 
     @app.post("/api/v1/metadataProperties/create")
     async def create_metadata_property(body: dict[str, Any] = Body(...)):
+        # Service serializes definition creation to keep duplicate-name conflicts deterministic.
         try:
             request = CreateMetadataPropertyRequest.model_validate(body)
         except ValidationError as exc:
@@ -1016,6 +1017,7 @@ def register_routes(
 
     @app.post("/api/v1/metadataProperties/batchCreate")
     async def batch_create_metadata_properties(body: dict[str, Any] = Body(...)):
+        # Shares the same serialized creation path so a batch remains all-or-nothing.
         try:
             request = BatchCreateMetadataPropertyRequest.model_validate(body)
         except ValidationError as exc:

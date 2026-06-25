@@ -85,6 +85,22 @@ def test_build_schema_statements_make_top_level_sibling_names_unique():
     assert "AND is_deleted = false;" in ddl
 
 
+def test_build_schema_statements_make_metadata_property_names_unique():
+    """Incremental DDL should add uniqueness for active metadata property names."""
+    service = KnowledgeBaseSchemaBootstrapService(
+        embedding_model_name="bge-m3",
+        embedding_dimension=1024,
+    )
+
+    ddl = "\n".join(service.build_schema_statements())
+
+    assert (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_metadata_property_def_name_active" in ddl
+    )
+    assert "ON knowledge_metadata_property_def (property_name)" in ddl
+    assert "WHERE is_deleted = false;" in ddl
+
+
 def test_build_schema_statements_loads_external_sql_files(tmp_path: Path):
     """Bootstrap should load static SQL files and render the dynamic embedding template."""
     (tmp_path / "001_base.sql").write_text(

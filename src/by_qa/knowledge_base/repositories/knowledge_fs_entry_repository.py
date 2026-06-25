@@ -28,6 +28,7 @@ class KnowledgeFsEntryRepository:
         current_path_ltree: str | None = None
         current_virtual_path: str = "/"
         path_segments = normalized_path.split("/")
+        await self._lock_entry_tree_for_write(cursor)
 
         for index, segment in enumerate(path_segments[:-1], start=1):
             existing = await self._get_child_entry(
@@ -68,6 +69,8 @@ class KnowledgeFsEntryRepository:
             name=path_segments[-1],
         )
         if existing_directory is not None:
+            if existing_directory.get("entry_type") == "DIRECTORY":
+                return existing_directory
             raise ValueError(f"directory path already exists: {normalized_path}")
 
         return await self._insert_directory_entry(
@@ -98,6 +101,7 @@ class KnowledgeFsEntryRepository:
         current_path_ltree: str | None = None
         current_virtual_path: str = "/"
         path_segments = normalized_path.split("/")
+        await self._lock_entry_tree_for_write(cursor)
 
         for index, segment in enumerate(path_segments[:-1], start=1):
             existing = await self._get_child_entry(
@@ -266,47 +270,106 @@ class KnowledgeFsEntryRepository:
             if parent_virtual_path != "/"
             else f"/{name}"
         )
-        await cursor.execute(
-            """
-            INSERT INTO knowledge_fs_entry (
-                knowledge_base_id,
-                parent_entry_id,
-                entry_type,
-                is_root,
-                name,
-                path_ltree,
-                depth,
-                description,
-                virtual_path,
-                created_at,
-                updated_at
+        savepoint_name = "knowledge_fs_entry_directory_insert"
+        params = {
+            "knowledge_base_id": knowledge_base_id,
+            "parent_entry_id": parent_entry_id,
+            "name": name,
+            "path_ltree": path_ltree,
+            "depth": depth,
+            "description": description,
+            "virtual_path": virtual_path,
+        }
+        await cursor.execute(f"SAVEPOINT {savepoint_name}")
+        try:
+            await cursor.execute(
+                """
+                INSERT INTO knowledge_fs_entry (
+                    knowledge_base_id,
+                    parent_entry_id,
+                    entry_type,
+                    is_root,
+                    name,
+                    path_ltree,
+                    depth,
+                    description,
+                    virtual_path,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    %(knowledge_base_id)s,
+                    %(parent_entry_id)s,
+                    'DIRECTORY',
+                    FALSE,
+                    %(name)s,
+                    %(path_ltree)s::ltree,
+                    %(depth)s,
+                    %(description)s,
+                    %(virtual_path)s,
+                    NOW(),
+                    NOW()
+                )
+                RETURNING kid, knowledge_base_id, parent_entry_id, path_ltree, name, entry_type, is_root, depth, virtual_path
+                """,
+                params,
             )
-            VALUES (
-                %(knowledge_base_id)s,
-                %(parent_entry_id)s,
-                'DIRECTORY',
-                FALSE,
-                %(name)s,
-                %(path_ltree)s::ltree,
-                %(depth)s,
-                %(description)s,
-                %(virtual_path)s,
-                NOW(),
-                NOW()
+        except Exception as exc:
+            await cursor.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+            await cursor.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+            if not self._is_unique_violation(exc):
+                raise
+            return await self._get_existing_directory_after_conflict(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                parent_entry_id=parent_entry_id,
+                name=name,
+                virtual_path=virtual_path,
             )
-            RETURNING kid, knowledge_base_id, parent_entry_id, path_ltree, name, entry_type, is_root, depth, virtual_path
-            """,
-            {
-                "knowledge_base_id": knowledge_base_id,
-                "parent_entry_id": parent_entry_id,
-                "name": name,
-                "path_ltree": path_ltree,
-                "depth": depth,
-                "description": description,
-                "virtual_path": virtual_path,
-            },
+
+        created = await cursor.fetchone()
+        await cursor.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+        if created is not None:
+            return created
+
+        return await self._get_existing_directory_after_conflict(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            parent_entry_id=parent_entry_id,
+            name=name,
+            virtual_path=virtual_path,
         )
-        return await cursor.fetchone()
+
+    async def _get_existing_directory_after_conflict(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        parent_entry_id: int | None,
+        name: str,
+        virtual_path: str,
+    ) -> dict[str, Any] | None:
+        existing = await self._get_child_entry(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            parent_entry_id=parent_entry_id,
+            name=name,
+        )
+        if existing is not None and existing.get("entry_type") == "DIRECTORY":
+            return existing
+        raise ValueError(f"directory path already exists: {virtual_path.lstrip('/')}")
+
+    @staticmethod
+    def _is_unique_violation(exc: Exception) -> bool:
+        return (
+            getattr(exc, "sqlstate", None) == "23505"
+            or getattr(exc, "pgcode", None) == "23505"
+        )
+
+    async def _lock_entry_tree_for_write(self, cursor: Any) -> None:
+        await cursor.execute(
+            "LOCK TABLE knowledge_fs_entry IN SHARE ROW EXCLUSIVE MODE"
+        )
 
     async def get_directory_by_path(
         self, cursor: Any, *, knowledge_base_id: int, full_path: str

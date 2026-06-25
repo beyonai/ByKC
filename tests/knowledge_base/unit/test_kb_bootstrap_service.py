@@ -66,6 +66,25 @@ def test_build_schema_statements_make_fs_entry_uniqueness_apply_only_to_active_r
     assert "WHERE is_deleted = false;" in ddl
 
 
+def test_build_schema_statements_make_top_level_sibling_names_unique():
+    """Incremental DDL should add uniqueness for top-level entries with NULL parent ids."""
+    service = KnowledgeBaseSchemaBootstrapService(
+        embedding_model_name="bge-m3",
+        embedding_dimension=1024,
+    )
+
+    ddl = "\n".join(service.build_schema_statements())
+
+    assert (
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_knowledge_fs_entry_top_level_sibling_name_active"
+        in ddl
+    )
+    assert "ON knowledge_fs_entry (knowledge_base_id, name)" in ddl
+    assert "WHERE parent_entry_id IS NULL" in ddl
+    assert "AND is_root = false" in ddl
+    assert "AND is_deleted = false;" in ddl
+
+
 def test_build_schema_statements_loads_external_sql_files(tmp_path: Path):
     """Bootstrap should load static SQL files and render the dynamic embedding template."""
     (tmp_path / "001_base.sql").write_text(

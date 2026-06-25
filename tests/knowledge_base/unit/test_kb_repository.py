@@ -40,6 +40,30 @@ class FakeCursor:
         return []
 
 
+class FakeUniqueViolation(Exception):
+    """Database unique-violation test double."""
+
+    sqlstate = "23505"
+
+
+class UniqueViolationOnDirectoryInsertCursor(FakeCursor):
+    """Cursor that raises one unique violation on directory insert."""
+
+    def __init__(self, fetchone_results=None, fetchall_results=None):
+        super().__init__(fetchone_results, fetchall_results)
+        self._raise_unique_violation = True
+
+    async def execute(self, sql, params=None):
+        self.executed.append((sql, params))
+        if (
+            self._raise_unique_violation
+            and "insert into knowledge_fs_entry" in sql.lower()
+            and "'directory'" in sql.lower()
+        ):
+            self._raise_unique_violation = False
+            raise FakeUniqueViolation()
+
+
 async def test_create_knowledge_base_executes_insert_sql():
     """Knowledge base creation should emit a plain insert statement."""
     repo = KnowledgeBaseRepository()
@@ -166,7 +190,15 @@ async def test_create_directory_entry_executes_insert_sql():
         directory_description=None,
     )
 
-    insert_sql, params = cursor.executed[-1]
+    assert (
+        cursor.executed[0][0]
+        == "LOCK TABLE knowledge_fs_entry IN SHARE ROW EXCLUSIVE MODE"
+    )
+    insert_sql, params = next(
+        (sql, params)
+        for sql, params in cursor.executed
+        if "insert into knowledge_fs_entry" in sql.lower()
+    )
     lowered = insert_sql.lower()
     assert "insert into knowledge_fs_entry" in lowered
     assert "'directory'" in lowered
@@ -228,6 +260,91 @@ async def test_create_directory_entry_recursively_creates_missing_parents():
     assert insert_statements[0][1]["path_ltree"].startswith("d1_")
     assert insert_statements[1][1]["name"] == "归档"
     assert insert_statements[1][1]["parent_entry_id"] == 80
+
+
+async def test_create_directory_entry_returns_existing_directory_for_duplicate_path():
+    """Directory creation should be idempotent when the target directory exists."""
+    repo = KnowledgeFsEntryRepository()
+    cursor = FakeCursor(
+        fetchone_results=[
+            {
+                "kid": 80,
+                "knowledge_base_id": 7,
+                "parent_entry_id": None,
+                "path_ltree": "d1_5f95f5aa",
+                "name": "考勤制度",
+                "entry_type": "DIRECTORY",
+                "is_root": False,
+                "depth": 1,
+                "virtual_path": "/考勤制度",
+            },
+            {
+                "kid": 81,
+                "knowledge_base_id": 7,
+                "parent_entry_id": 80,
+                "path_ltree": "d1_5f95f5aa.d2_4100c4d4",
+                "name": "归档",
+                "entry_type": "DIRECTORY",
+                "is_root": False,
+                "depth": 2,
+                "virtual_path": "/考勤制度/归档",
+            },
+        ]
+    )
+
+    row = await repo.create_directory_entry(
+        cursor,
+        knowledge_base_id=7,
+        full_path="考勤制度/归档",
+        directory_description="ignored on duplicate",
+    )
+
+    assert row["kid"] == 81
+    insert_statements = [
+        sql
+        for sql, _ in cursor.executed
+        if "insert into knowledge_fs_entry" in sql.lower()
+    ]
+    assert insert_statements == []
+
+
+async def test_create_directory_entry_rereads_directory_after_insert_conflict():
+    """Directory insert conflicts should be treated as idempotent success."""
+    repo = KnowledgeFsEntryRepository()
+    cursor = UniqueViolationOnDirectoryInsertCursor(
+        fetchone_results=[
+            None,
+            {
+                "kid": 80,
+                "knowledge_base_id": 7,
+                "parent_entry_id": None,
+                "path_ltree": "d1_5f95f5aa",
+                "name": "考勤制度",
+                "entry_type": "DIRECTORY",
+                "is_root": False,
+                "depth": 1,
+                "virtual_path": "/考勤制度",
+            },
+        ]
+    )
+
+    row = await repo.create_directory_entry(
+        cursor,
+        knowledge_base_id=7,
+        full_path="考勤制度",
+        directory_description="concurrent create",
+    )
+
+    assert row["kid"] == 80
+    executed_sql = [sql for sql, _ in cursor.executed]
+    assert any(
+        sql == "ROLLBACK TO SAVEPOINT knowledge_fs_entry_directory_insert"
+        for sql in executed_sql
+    )
+    assert any(
+        sql == "RELEASE SAVEPOINT knowledge_fs_entry_directory_insert"
+        for sql in executed_sql
+    )
 
 
 async def test_create_file_entry_inserts_file_row_without_old_status_columns():

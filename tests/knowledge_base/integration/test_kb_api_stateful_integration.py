@@ -286,8 +286,8 @@ def _file_build_status(
 
 
 @pytest.mark.integration
-def test_create_directory_returns_success_then_duplicate_path_conflict(monkeypatch):
-    """Directory admin can create a folder once and gets a conflict on duplicate path reuse."""
+def test_create_directory_returns_success_for_duplicate_path(monkeypatch):
+    """Directory creation should be idempotent for duplicate path reuse."""
     settings = _kb_settings()
     _reset_runtime(monkeypatch, settings)
 
@@ -315,8 +315,8 @@ def test_create_directory_returns_success_then_duplicate_path_conflict(monkeypat
 
     assert first.status_code == 200
     assert duplicate_path.status_code == 200
-    assert duplicate_path.json()["resultCode"] == "-1"
-    assert "already exists" in duplicate_path.json()["resultMsg"]
+    assert first.json()["resultCode"] == "0"
+    assert duplicate_path.json()["resultCode"] == "0"
 
 
 @pytest.mark.integration

@@ -671,12 +671,8 @@ def create_app():
 
     @application.get("/health")
     async def health() -> dict[str, Any]:
-        """Basic health probe with module-loading diagnostics."""
-        return {
-            "status": "ok",
-            "enabled_modules": loaded_modules,
-            "skipped_modules": skipped_modules,
-        }
+        """Liveness probe."""
+        return {"status": "ok"}
 
     return application
 

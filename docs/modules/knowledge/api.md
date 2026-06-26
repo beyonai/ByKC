@@ -68,6 +68,7 @@
 | `POST` | `/api/v1/fileToMarkdownIndex` | 异步触发知识构建 |
 | `POST` | `/api/v1/fileBuildStatus` | 查询文档构建状态 |
 | `POST` | `/api/v1/knowledgeItems/search` | 知识检索 |
+| `GET` | `/health` | 探活 |
 
 ## 知识库管理
 
@@ -852,5 +853,19 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
   "resultCode": "-1",
   "resultMsg": "topK must be greater than 0",
   "resultObject": {}
+}
+```
+
+## 探活
+
+### `GET /health`
+
+服务探活接口，用于检测服务进程是否正常运行。
+
+成功响应示例：
+
+```json
+{
+  "status": "ok"
 }
 ```

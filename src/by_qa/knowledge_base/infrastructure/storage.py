@@ -100,12 +100,11 @@ def load_storage_provider() -> "KnowledgeStorageProvider":
 
     provider_path = getenv("BY_QA_STORAGE_PROVIDER", "").strip()
     if not provider_path:
-        from by_qa.config import get_settings
-        from by_qa.knowledge_base.infrastructure.runtime import (
-            build_default_s3_storage_provider,
+        from by_qa.knowledge_base.infrastructure.storage_s3 import (
+            build_s3_storage_provider,
         )
 
-        return build_default_s3_storage_provider(get_settings())
+        return build_s3_storage_provider()
 
     module_name, separator, attribute_name = provider_path.partition(":")
     if not separator or not module_name or not attribute_name:

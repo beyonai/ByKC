@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import PurePosixPath
+from typing import Any
 
 from botocore.exceptions import ClientError
 
@@ -171,3 +172,30 @@ class S3KnowledgeStorageProvider:
     def _is_missing_bucket(exc: ClientError) -> bool:
         error_code = exc.response.get("Error", {}).get("Code") or ""
         return error_code in _MISSING_BUCKET_CODES
+
+
+def build_s3_storage_provider(
+    settings: Any | None = None,
+) -> S3KnowledgeStorageProvider:
+    """Build the default MinIO/S3 provider for load_storage_provider()."""
+    import aioboto3
+
+    from by_qa.config import get_settings
+
+    resolved_settings = settings or get_settings()
+    scheme = "https" if resolved_settings.kb_minio_secure else "http"
+    endpoint = resolved_settings.kb_minio_endpoint.removeprefix("http://").removeprefix(
+        "https://"
+    )
+    endpoint_url = f"{scheme}://{endpoint}"
+
+    storage = KnowledgeBaseObjectStorage(
+        session=aioboto3.Session(),
+        endpoint_url=endpoint_url,
+        access_key=resolved_settings.kb_minio_access_key,
+        secret_key=resolved_settings.kb_minio_secret_key,
+        secure=resolved_settings.kb_minio_secure,
+        bucket_name=resolved_settings.kb_minio_bucket,
+        markdown_bucket_name=resolved_settings.kb_minio_markdown_bucket,
+    )
+    return S3KnowledgeStorageProvider(storage=storage)

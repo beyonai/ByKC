@@ -69,6 +69,33 @@ def test_load_storage_provider_defaults_to_s3(monkeypatch):
     assert isinstance(provider, S3KnowledgeStorageProvider)
 
 
+def test_load_storage_provider_imports_s3_factory(monkeypatch):
+    """S3 should also be loadable through the standard provider factory path."""
+    from by_qa.knowledge_base.infrastructure.storage_s3 import (
+        S3KnowledgeStorageProvider,
+    )
+
+    fake_settings = SimpleNamespace(
+        kb_minio_endpoint="localhost:9000",
+        kb_minio_access_key="ak",
+        kb_minio_secret_key="sk",
+        kb_minio_secure=False,
+        kb_minio_bucket="kb-original",
+        kb_minio_markdown_bucket="kb-markdown",
+    )
+    monkeypatch.setattr("by_qa.config.get_settings", lambda: fake_settings)
+    monkeypatch.setenv(
+        "BY_QA_STORAGE_PROVIDER",
+        "by_qa.knowledge_base.infrastructure.storage_s3:build_s3_storage_provider",
+    )
+
+    from by_qa.knowledge_base.infrastructure.storage import load_storage_provider
+
+    provider = load_storage_provider()
+
+    assert isinstance(provider, S3KnowledgeStorageProvider)
+
+
 def test_load_storage_provider_imports_custom_provider(monkeypatch):
     """A custom provider should be loadable through module:attribute path."""
     module = ModuleType("tests_custom_kb_storage_provider")

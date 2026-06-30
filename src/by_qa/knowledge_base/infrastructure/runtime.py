@@ -115,24 +115,9 @@ def validate_knowledge_base_settings(
 
 def build_default_s3_storage_provider(settings: Settings) -> S3KnowledgeStorageProvider:
     """Build the default MinIO/S3 storage provider without ensure_ready()."""
-    import aioboto3
+    from by_qa.knowledge_base.infrastructure.storage_s3 import build_s3_storage_provider
 
-    scheme = "https" if settings.kb_minio_secure else "http"
-    endpoint = settings.kb_minio_endpoint.removeprefix("http://").removeprefix(
-        "https://"
-    )
-    endpoint_url = f"{scheme}://{endpoint}"
-
-    storage = KnowledgeBaseObjectStorage(
-        session=aioboto3.Session(),
-        endpoint_url=endpoint_url,
-        access_key=settings.kb_minio_access_key,
-        secret_key=settings.kb_minio_secret_key,
-        secure=settings.kb_minio_secure,
-        bucket_name=settings.kb_minio_bucket,
-        markdown_bucket_name=settings.kb_minio_markdown_bucket,
-    )
-    return S3KnowledgeStorageProvider(storage=storage)
+    return build_s3_storage_provider(settings)
 
 
 async def build_storage_provider(

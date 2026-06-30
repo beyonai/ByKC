@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from by_qa.core import logger as core_logger
+from by_qa.knowledge_build.services import document_chunking_service as chunking_module
 from by_qa.knowledge_build.services.document_chunking_service import (
     DocumentChunkingService,
 )
@@ -59,6 +60,189 @@ def test_extract_text_from_docx_includes_table_cells():
     assert "正文段落" in text
     assert "措施 | 内容" in text
     assert "一 | 放宽准入" in text
+
+
+def test_extract_text_from_pptx_includes_slide_text():
+    """PPTX text boxes should be included in extracted text."""
+    pptx = pytest.importorskip("pptx")
+    service = _make_service()
+    buffer = io.BytesIO()
+    presentation = pptx.Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    text_box = slide.shapes.add_textbox(0, 0, 1000000, 1000000)
+    text_box.text_frame.text = "季度汇报"
+    paragraph = text_box.text_frame.add_paragraph()
+    paragraph.text = "关键进展"
+    presentation.save(buffer)
+
+    text = service.extract_text_from_file(buffer.getvalue(), "pptx")
+
+    assert "季度汇报" in text
+    assert "关键进展" in text
+
+
+def test_extract_text_from_xlsx_includes_sheet_rows():
+    """XLSX sheets should be extracted as readable row text."""
+    openpyxl = pytest.importorskip("openpyxl")
+    service = _make_service()
+    buffer = io.BytesIO()
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "预算"
+    sheet.append(["部门", "金额"])
+    sheet.append(["研发", 1200])
+    workbook.save(buffer)
+
+    text = service.extract_text_from_file(buffer.getvalue(), "xlsx")
+
+    assert "## 预算" in text
+    assert "部门 | 金额" in text
+    assert "研发 | 1200" in text
+
+
+def test_extract_text_from_legacy_doc_uses_converter_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    """Legacy DOC files should use document converters instead of raw bytes."""
+    service = _make_service()
+    soffice = tmp_path / "soffice"
+    soffice.write_text(
+        "#!/bin/sh\n"
+        "outdir=$5\n"
+        "input=$6\n"
+        'base=$(basename "$input" .doc)\n'
+        "printf '\\357\\273\\277你好\\n' > \"$outdir/$base.txt\"\n",
+        encoding="utf-8",
+    )
+    soffice.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:/bin:/usr/bin")
+
+    text = service.extract_text_from_file(b"not plain text", "doc")
+
+    assert text == "你好"
+
+
+def test_extract_text_from_legacy_ppt_uses_converter_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    """Legacy PPT files should use document converters instead of raw bytes."""
+    service = _make_service()
+    soffice = tmp_path / "soffice"
+    soffice.write_text(
+        "#!/bin/sh\n"
+        "outdir=$5\n"
+        "input=$6\n"
+        'base=$(basename "$input" .ppt)\n'
+        "printf '旧版PPT标题\\n项目进展汇报\\n' > \"$outdir/$base.txt\"\n",
+        encoding="utf-8",
+    )
+    soffice.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:/bin:/usr/bin")
+
+    text = service.extract_text_from_file(b"not plain text", "ppt")
+
+    assert "旧版PPT标题" in text
+    assert "项目进展汇报" in text
+
+
+def test_extract_text_from_legacy_ppt_falls_back_to_pptx_conversion(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    """Legacy PPT should use PPTX conversion when direct text export is empty."""
+    pptx = pytest.importorskip("pptx")
+    service = _make_service()
+    converted = tmp_path / "converted.pptx"
+    presentation = pptx.Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    text_box = slide.shapes.add_textbox(0, 0, 1000000, 1000000)
+    text_box.text_frame.text = "111"
+    text_box.text_frame.add_paragraph().text = "目录"
+    presentation.save(converted)
+
+    soffice = tmp_path / "soffice"
+    soffice.write_text(
+        "#!/bin/sh\n"
+        "target=$3\n"
+        "outdir=$5\n"
+        "input=$6\n"
+        'base=$(basename "$input" .ppt)\n'
+        "if [ \"$target\" = 'txt:Text' ]; then\n"
+        "  exit 0\n"
+        "fi\n"
+        'cp "' + str(converted) + '" "$outdir/$base.pptx"\n',
+        encoding="utf-8",
+    )
+    soffice.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:/bin:/usr/bin")
+
+    text = service.extract_text_from_file(b"legacy ppt bytes", "ppt")
+
+    assert "111" in text
+    assert "目录" in text
+
+
+def test_extract_text_from_legacy_doc_falls_back_to_docx_conversion_on_linux(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+):
+    """Legacy DOC should use DOCX conversion when text export fails on Linux."""
+    docx = pytest.importorskip("docx")
+    service = _make_service()
+    converted = tmp_path / "converted.docx"
+    document = docx.Document()
+    document.add_paragraph("Linux DOC fallback")
+    document.save(converted)
+
+    soffice = tmp_path / "soffice"
+    soffice.write_text(
+        "#!/bin/sh\n"
+        "target=$3\n"
+        "outdir=$5\n"
+        "input=$6\n"
+        'base=$(basename "$input" .doc)\n'
+        "if [ \"$target\" = 'txt:Text' ]; then\n"
+        "  exit 0\n"
+        "fi\n"
+        'cp "' + str(converted) + '" "$outdir/$base.docx"\n',
+        encoding="utf-8",
+    )
+    soffice.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:/bin:/usr/bin")
+    monkeypatch.setattr(chunking_module.sys, "platform", "linux")
+
+    text = service.extract_text_from_file(b"legacy doc bytes", "doc")
+
+    assert text == "Linux DOC fallback"
+
+
+def test_extract_text_from_legacy_doc_requires_converter(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Legacy DOC extraction should fail loudly instead of indexing container bytes."""
+    service = _make_service()
+    monkeypatch.setenv("PATH", "")
+
+    with pytest.raises(KnowledgeConfigurationError, match="LibreOffice"):
+        service.extract_text_from_file(b"Root Entry WordDocument", "doc")
+
+
+def test_extract_text_from_xls_includes_sheet_rows():
+    """Legacy XLS sheets should be extracted with the same row format as XLSX."""
+    xlwt = pytest.importorskip("xlwt")
+    service = _make_service()
+    buffer = io.BytesIO()
+    workbook = xlwt.Workbook()
+    sheet = workbook.add_sheet("预算")
+    sheet.write(0, 0, "部门")
+    sheet.write(0, 1, "金额")
+    sheet.write(1, 0, "研发")
+    sheet.write(1, 1, 1200)
+    workbook.save(buffer)
+
+    text = service.extract_text_from_file(buffer.getvalue(), "xls")
+
+    assert "## 预算" in text
+    assert "部门 | 金额" in text
+    assert "研发 | 1200" in text
 
 
 def test_chunk_and_embed_preserves_body_line_numbers_when_prepending_headings(

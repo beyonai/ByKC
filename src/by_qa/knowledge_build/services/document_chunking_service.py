@@ -3,9 +3,13 @@
 import csv
 import io
 import re
+import shutil
+import subprocess
+import sys
+import tempfile
 import unicodedata
 from dataclasses import dataclass, field
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 import httpx
 import yaml
@@ -24,8 +28,11 @@ SUPPORTED_EXTENSIONS = {
     ".txt",
     ".pdf",
     ".docx",
+    ".doc",
     ".pptx",
+    ".ppt",
     ".xlsx",
+    ".xls",
     ".csv",
 }
 
@@ -101,8 +108,11 @@ class DocumentChunkingService:
         "csv": ".csv",
         "pdf": ".pdf",
         "docx": ".docx",
+        "doc": ".doc",
         "pptx": ".pptx",
+        "ppt": ".ppt",
         "xlsx": ".xlsx",
+        "xls": ".xls",
     }
 
     def extract_text_from_file(self, file_bytes: bytes, file_type: str) -> str:
@@ -156,17 +166,23 @@ class DocumentChunkingService:
     def _extract_text(self, file_bytes: bytes, ext: str) -> str:
         if ext in (".md", ".markdown"):
             return _strip_front_matter(file_bytes.decode("utf-8"))
-        if ext == ".txt":
+        elif ext == ".txt":
             return file_bytes.decode("utf-8")
-        if ext == ".pdf":
+        elif ext == ".pdf":
             return self._extract_pdf(file_bytes)
-        if ext == ".docx":
+        elif ext == ".docx":
             return self._extract_docx(file_bytes)
-        if ext == ".pptx":
+        elif ext == ".doc":
+            return self._extract_legacy_office_text(file_bytes, ext)
+        elif ext == ".pptx":
             return self._extract_pptx(file_bytes)
-        if ext == ".xlsx":
+        elif ext == ".ppt":
+            return self._extract_legacy_office_text(file_bytes, ext)
+        elif ext == ".xlsx":
             return self._extract_xlsx(file_bytes)
-        if ext == ".csv":
+        elif ext == ".xls":
+            return self._extract_xls(file_bytes)
+        elif ext == ".csv":
             return self._extract_csv(file_bytes)
         raise ValueError(
             f"unsupported file type: {ext}. "
@@ -249,6 +265,190 @@ class DocumentChunkingService:
                 parts.append(f"## {sheet_name}\n\n" + "\n".join(rows))
         wb.close()
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _extract_xls(file_bytes: bytes) -> str:
+        try:
+            import xlrd
+        except ImportError as exc:
+            raise KnowledgeConfigurationError(
+                "xlrd is required for XLS support: pip install xlrd"
+            ) from exc
+        wb = xlrd.open_workbook(file_contents=file_bytes)
+        parts = []
+        for sheet in wb.sheets():
+            rows = []
+            for row_index in range(sheet.nrows):
+                values = [
+                    DocumentChunkingService._stringify_spreadsheet_value(
+                        sheet.cell_value(row_index, col_index)
+                    )
+                    for col_index in range(sheet.ncols)
+                ]
+                if any(values):
+                    rows.append(" | ".join(values))
+            if rows:
+                parts.append(f"## {sheet.name}\n\n" + "\n".join(rows))
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _stringify_spreadsheet_value(value: object) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
+        return str(value)
+
+    @staticmethod
+    def _extract_legacy_office_text(file_bytes: bytes, ext: str) -> str:
+        if ext == ".ppt":
+            errors: list[str] = []
+            try:
+                text = DocumentChunkingService._convert_legacy_office_with_soffice(
+                    file_bytes, ext
+                )
+                if text:
+                    return text
+            except (FileNotFoundError, RuntimeError) as exc:
+                errors.append(str(exc))
+            try:
+                return DocumentChunkingService._convert_legacy_ppt_with_soffice(
+                    file_bytes
+                )
+            except (FileNotFoundError, RuntimeError) as exc:
+                errors.append(str(exc))
+            raise DocumentChunkingService._legacy_office_configuration_error(errors)
+
+        if ext == ".doc":
+            errors: list[str] = []
+            try:
+                text = DocumentChunkingService._convert_legacy_office_with_soffice(
+                    file_bytes, ext
+                )
+                if text:
+                    return text
+            except (FileNotFoundError, RuntimeError) as exc:
+                errors.append(str(exc))
+            try:
+                return DocumentChunkingService._convert_legacy_doc_with_soffice(
+                    file_bytes
+                )
+            except (FileNotFoundError, RuntimeError) as exc:
+                errors.append(str(exc))
+            raise DocumentChunkingService._legacy_office_configuration_error(errors)
+
+        errors: list[str] = []
+        for converter in (
+            DocumentChunkingService._convert_legacy_office_with_soffice,
+            DocumentChunkingService._convert_legacy_office_with_textutil,
+        ):
+            try:
+                return converter(file_bytes, ext)
+            except FileNotFoundError:
+                continue
+            except RuntimeError as exc:
+                errors.append(str(exc))
+
+        raise DocumentChunkingService._legacy_office_configuration_error(errors)
+
+    @staticmethod
+    def _legacy_office_configuration_error(
+        errors: list[str],
+    ) -> KnowledgeConfigurationError:
+        detail = f" Last converter error: {errors[-1]}" if errors else ""
+        return KnowledgeConfigurationError(
+            f"LibreOffice/soffice is required for legacy DOC/PPT support.{detail}"
+        )
+
+    @staticmethod
+    def _convert_legacy_ppt_with_soffice(file_bytes: bytes) -> str:
+        output_bytes = DocumentChunkingService._convert_legacy_office_with_soffice_file(
+            file_bytes, ".ppt", "pptx"
+        )
+        return DocumentChunkingService._extract_pptx(output_bytes)
+
+    @staticmethod
+    def _convert_legacy_doc_with_soffice(file_bytes: bytes) -> str:
+        output_bytes = DocumentChunkingService._convert_legacy_office_with_soffice_file(
+            file_bytes, ".doc", "docx"
+        )
+        return DocumentChunkingService._extract_docx(output_bytes)
+
+    @staticmethod
+    def _convert_legacy_office_with_soffice(file_bytes: bytes, ext: str) -> str:
+        output_bytes = DocumentChunkingService._convert_legacy_office_with_soffice_file(
+            file_bytes, ext, "txt:Text"
+        )
+        return DocumentChunkingService._normalize_converted_text(
+            output_bytes.decode("utf-8", errors="replace")
+        )
+
+    @staticmethod
+    def _convert_legacy_office_with_soffice_file(
+        file_bytes: bytes, ext: str, target: str
+    ) -> bytes:
+        executable = shutil.which("soffice") or shutil.which("libreoffice")
+        if executable is None:
+            raise FileNotFoundError("soffice")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            input_path = temp_path / f"input{ext}"
+            input_path.write_bytes(file_bytes)
+            result = subprocess.run(
+                [
+                    executable,
+                    "--headless",
+                    "--convert-to",
+                    target,
+                    "--outdir",
+                    str(temp_path),
+                    str(input_path),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode != 0:
+                raise RuntimeError((result.stderr or result.stdout).strip())
+            output_ext = target.split(":", 1)[0]
+            output_path = input_path.with_suffix(f".{output_ext}")
+            if not output_path.exists():
+                output_files = list(temp_path.glob(f"*.{output_ext}"))
+                if not output_files:
+                    raise RuntimeError(f"soffice did not produce a {output_ext} file")
+                output_path = output_files[0]
+            return output_path.read_bytes()
+
+    @staticmethod
+    def _convert_legacy_office_with_textutil(file_bytes: bytes, ext: str) -> str:
+        if sys.platform != "darwin":
+            raise FileNotFoundError("textutil")
+        executable = shutil.which("textutil")
+        if executable is None:
+            raise FileNotFoundError("textutil")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            input_path = Path(temp_dir) / f"input{ext}"
+            input_path.write_bytes(file_bytes)
+            result = subprocess.run(
+                [executable, "-convert", "txt", "-stdout", str(input_path)],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr.strip())
+            return DocumentChunkingService._normalize_converted_text(result.stdout)
+
+    @staticmethod
+    def _normalize_converted_text(text: str) -> str:
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        text = text.replace("\x00", "")
+        text = text.lstrip("\ufeff")
+        return "\n".join(line.rstrip() for line in text.splitlines()).strip()
 
     @staticmethod
     def _extract_csv(file_bytes: bytes) -> str:

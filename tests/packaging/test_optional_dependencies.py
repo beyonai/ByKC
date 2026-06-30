@@ -61,3 +61,4 @@ def test_knowledge_group_includes_document_parsing_dependencies():
     assert any(dep.startswith("aioboto3") for dep in knowledge)
     assert any(dep.startswith("langchain-text-splitters") for dep in knowledge)
     assert any(dep.startswith("python-pptx") for dep in knowledge)
+    assert any(dep.startswith("xlrd") for dep in knowledge)

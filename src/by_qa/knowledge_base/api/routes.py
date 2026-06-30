@@ -46,6 +46,9 @@ from by_qa.knowledge_base.services.errors import (
     KnowledgeBaseConfigurationError,
     KnowledgeBaseValidationError,
 )
+from by_qa.knowledge_base.services.knowledge_item_ingestion_service import (
+    convert_uploaded_file_to_markdown,
+)
 
 
 def _documented_success_response(
@@ -145,6 +148,72 @@ def register_routes(
             request,
             document_chunking_service=chunking_service,
             build_task_id=build_task_id,
+        )
+
+    @app.post("/api/v1/fileToMarkdown")
+    async def file_to_markdown(
+        file_content: UploadFile | None = File(None, alias="fileContent"),
+    ):
+        if file_content is None:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                status_code=422,
+            )
+        filename = file_content.filename or ""
+        logger.info(
+            "file_to_markdown request received: filename=%s",
+            filename,
+        )
+        try:
+            chunking_service = await _resolve_maybe_async(get_document_chunking_service)
+            file_bytes = await file_content.read()
+            result = await convert_uploaded_file_to_markdown(
+                file_bytes=file_bytes,
+                filename=filename,
+                document_chunking_service=chunking_service,
+            )
+        except KnowledgeBaseConfigurationError as exc:
+            logger.warning("file_to_markdown configuration failed: error=%s", exc)
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=503,
+            )
+        except KnowledgeBaseValidationError as exc:
+            logger.warning(
+                "file_to_markdown validation failed: filename=%s, error=%s",
+                filename,
+                exc,
+            )
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=422,
+            )
+        except Exception as exc:
+            logger.exception(
+                "file_to_markdown unexpected error: filename=%s, error=%s",
+                filename,
+                exc,
+            )
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error",
+                result_object={},
+                status_code=500,
+            )
+
+        quoted_filename = PurePosixPath(result["filename"]).name.replace('"', "")
+        logger.info(
+            "file_to_markdown response ready: code=200, filename=%s, returned_bytes=%s",
+            quoted_filename,
+            len(result["content"]),
+        )
+        return Response(
+            content=result["content"],
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": _build_content_disposition(quoted_filename)
+            },
         )
 
     @app.post("/api/v1/knowledgeBases/create")

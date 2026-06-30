@@ -2198,6 +2198,59 @@ class FakeDocumentChunkingService:
         return self.chunks_result
 
 
+async def test_convert_uploaded_file_to_markdown_returns_markdown_download_payload():
+    """Uploaded file conversion should validate type and return md bytes."""
+    chunking_service = FakeDocumentChunkingService()
+    service = KnowledgeItemIngestionService(
+        connection_factory=lambda: _async_return(FakeConnection()),
+        knowledge_base_repository=None,
+        knowledge_fs_entry_repository=None,
+        knowledge_item_chunk_repository=None,
+        retrieval_projection_repository=None,
+        storage_provider=None,
+        embedding_dimension=3,
+    )
+
+    result = await service.convert_uploaded_file_to_markdown(
+        file_bytes=b"plain text",
+        filename="policy.txt",
+        document_chunking_service=chunking_service,
+    )
+
+    assert result == {
+        "filename": "policy.md",
+        "content": b"# Test Document\n\nThis is test content.",
+    }
+    assert chunking_service.extract_calls == [{"file_type": "txt", "size": 10}]
+
+
+async def test_convert_uploaded_file_to_markdown_rejects_unsupported_file_type():
+    """Uploaded file conversion should reject unsupported filename extensions early."""
+    import pytest
+
+    chunking_service = FakeDocumentChunkingService()
+    service = KnowledgeItemIngestionService(
+        connection_factory=lambda: _async_return(FakeConnection()),
+        knowledge_base_repository=None,
+        knowledge_fs_entry_repository=None,
+        knowledge_item_chunk_repository=None,
+        retrieval_projection_repository=None,
+        storage_provider=None,
+        embedding_dimension=3,
+    )
+
+    with pytest.raises(
+        KnowledgeBaseValidationError, match="unsupported file type: exe"
+    ):
+        await service.convert_uploaded_file_to_markdown(
+            file_bytes=b"not a document",
+            filename="installer.exe",
+            document_chunking_service=chunking_service,
+        )
+
+    assert chunking_service.extract_calls == []
+
+
 async def test_file_to_markdown_index_kb_not_found():
     """fileToMarkdownIndex returns error when knowledge base does not exist."""
     import pytest

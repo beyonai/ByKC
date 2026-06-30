@@ -40,9 +40,16 @@ class FakeDocumentChunkingService:
     def __init__(self, *, markdown_text: str, embedding: list[float] | None = None):
         self.markdown_text = markdown_text
         self.embedding = embedding or _default_embedding_vector()
+        self.extract_calls: list[dict[str, object]] = []
 
     def extract_text_from_file(self, file_bytes: bytes, file_type: str) -> str:  # pylint: disable=unused-argument
         assert isinstance(file_bytes, bytes)
+        self.extract_calls.append(
+            {
+                "file_bytes": file_bytes,
+                "file_type": file_type,
+            }
+        )
         return self.markdown_text
 
     def chunk_and_embed(
@@ -283,6 +290,70 @@ def _file_build_status(
     )
     assert response.status_code == 200, response.text
     return response
+
+
+@pytest.mark.integration
+def test_file_to_markdown_converts_uploaded_file_to_markdown_stream(monkeypatch):
+    """fileToMarkdown should synchronously convert an uploaded file into an md download."""
+    settings = _kb_settings()
+    _reset_runtime(monkeypatch, settings)
+    _disable_kb_lifecycle(monkeypatch)
+    fake_chunking = FakeDocumentChunkingService(
+        markdown_text="# Converted Policy\n\nPlain text body.\n"
+    )
+    _set_document_chunking_service(monkeypatch, fake_chunking)
+
+    with TestClient(main_module.app) as client:
+        response = client.post(
+            "/api/v1/fileToMarkdown",
+            files={
+                "fileContent": (
+                    "policy.txt",
+                    b"Plain text body.",
+                    "text/plain",
+                )
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.content == b"# Converted Policy\n\nPlain text body.\n"
+    assert response.headers["content-type"] == "application/octet-stream"
+    assert response.headers["content-disposition"] == 'attachment; filename="policy.md"'
+    assert fake_chunking.extract_calls == [
+        {
+            "file_bytes": b"Plain text body.",
+            "file_type": "txt",
+        }
+    ]
+
+
+@pytest.mark.integration
+def test_file_to_markdown_rejects_unsupported_uploaded_file_type(monkeypatch):
+    """fileToMarkdown should validate the upload filename extension before parsing."""
+    settings = _kb_settings()
+    _reset_runtime(monkeypatch, settings)
+    _disable_kb_lifecycle(monkeypatch)
+    fake_chunking = FakeDocumentChunkingService(markdown_text="unused")
+    _set_document_chunking_service(monkeypatch, fake_chunking)
+
+    with TestClient(main_module.app) as client:
+        response = client.post(
+            "/api/v1/fileToMarkdown",
+            files={
+                "fileContent": (
+                    "installer.exe",
+                    b"not a supported document",
+                    "application/octet-stream",
+                )
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["resultCode"] == "-1"
+    assert payload["resultMsg"].startswith("unsupported file type: exe")
+    assert payload["resultObject"] == {}
+    assert fake_chunking.extract_calls == []
 
 
 @pytest.mark.integration

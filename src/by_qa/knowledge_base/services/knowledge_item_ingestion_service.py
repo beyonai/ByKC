@@ -26,6 +26,9 @@ from by_qa.knowledge_base.build_status import (
 )
 from by_qa.knowledge_base.infrastructure.storage import StorageLocation
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
+from by_qa.knowledge_build.services.document_chunking_service import (
+    SUPPORTED_EXTENSIONS,
+)
 
 
 def _guess_mime_type(path: str) -> str:
@@ -71,6 +74,58 @@ def _build_optional_location(
     return StorageLocation(namespace=str(namespace), key=str(key))
 
 
+def _supported_file_to_markdown_types_text() -> str:
+    return ", ".join(sorted(ext.removeprefix(".") for ext in SUPPORTED_EXTENSIONS))
+
+
+async def convert_uploaded_file_to_markdown(
+    *,
+    file_bytes: bytes,
+    filename: str,
+    document_chunking_service: Any,
+) -> dict[str, Any]:
+    """Convert an uploaded file directly to a Markdown download payload."""
+    original_name = PurePosixPath(filename or "").name
+    if not original_name:
+        raise KnowledgeBaseValidationError("file name is required")
+    if not file_bytes:
+        raise KnowledgeBaseValidationError("fileContent must not be empty")
+
+    suffix = PurePosixPath(original_name).suffix.lower()
+    if not suffix:
+        raise KnowledgeBaseValidationError("file type is required")
+    file_type = suffix[1:]
+    if suffix not in SUPPORTED_EXTENSIONS:
+        raise KnowledgeBaseValidationError(
+            f"unsupported file type: {file_type}. Supported types: "
+            f"{_supported_file_to_markdown_types_text()}"
+        )
+
+    logger.info(
+        "knowledge_item_ingestion_service.convert_uploaded_file_to_markdown started: filename=%s, file_type=%s, file_size=%s",
+        original_name,
+        file_type,
+        len(file_bytes),
+    )
+    markdown_content = await asyncio.to_thread(
+        document_chunking_service.extract_text_from_file,
+        file_bytes,
+        file_type,
+    )
+    markdown_filename = f"{PurePosixPath(original_name).stem}.md"
+    markdown_bytes = markdown_content.encode("utf-8")
+    logger.info(
+        "knowledge_item_ingestion_service.convert_uploaded_file_to_markdown finished: filename=%s, markdown_filename=%s, markdown_size=%s",
+        original_name,
+        markdown_filename,
+        len(markdown_bytes),
+    )
+    return {
+        "filename": markdown_filename,
+        "content": markdown_bytes,
+    }
+
+
 @dataclass
 class KnowledgeItemIngestionService:
     """Import markdown documents, chunks, and embeddings transactionally."""
@@ -86,6 +141,20 @@ class KnowledgeItemIngestionService:
     knowledge_fetch_cache_repository: Any | None = None
     metadata_property_repository: Any | None = None
     file_metadata_value_repository: Any | None = None
+
+    async def convert_uploaded_file_to_markdown(
+        self,
+        *,
+        file_bytes: bytes,
+        filename: str,
+        document_chunking_service: Any,
+    ) -> dict[str, Any]:
+        """Convert an uploaded file directly to a Markdown download payload."""
+        return await convert_uploaded_file_to_markdown(
+            file_bytes=file_bytes,
+            filename=filename,
+            document_chunking_service=document_chunking_service,
+        )
 
     async def upload_file(self, request: KnowledgeItemUploadRequest) -> None:
         """Upload one original file and register its storage metadata on the file entry."""

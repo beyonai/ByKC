@@ -65,6 +65,7 @@
 | `POST` | `/api/v1/glob` | 按路径模式匹配 |
 | `POST` | `/api/v1/readFile` | 读取文件内容 |
 | `POST` | `/api/v1/downloadFile` | 下载原始文件 |
+| `POST` | `/api/v1/fileToMarkdown` | 上传文件并同步转换为 Markdown 文件流 |
 | `POST` | `/api/v1/fileToMarkdownIndex` | 异步触发知识构建 |
 | `POST` | `/api/v1/fileBuildStatus` | 查询文档构建状态 |
 | `POST` | `/api/v1/knowledgeItems/search` | 知识检索 |
@@ -627,6 +628,60 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
 ```
 
 ## 知识构建
+
+### `POST /api/v1/fileToMarkdown`
+
+上传一个原始文件，同步执行原始文件转 Markdown 流程，并以 Markdown 文件流形式返回转换结果。
+
+该接口只执行文件转 Markdown，不会创建知识库文件、不创建构建任务、不执行文档切片、不执行向量化，也不会写入知识库索引。
+
+请求体：`multipart/form-data`
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `fileContent` | file | 是 | 需转换的原始文件二进制内容 |
+
+文件类型检查规则：
+
+- 服务端根据上传文件名的扩展名识别文件类型。
+- 文件名为空、缺少扩展名或扩展名不受支持时，返回失败响应。
+- 当前支持的文件类型：`txt`、`md`、`markdown`、`csv`、`pdf`、`docx`、`doc`、`pptx`、`ppt`、`xlsx`、`xls`。
+
+表单示例：
+
+```bash
+curl -X POST http://localhost:8000/api/v1/fileToMarkdown \
+  -F "fileContent=@./考勤制度.pdf" \
+  -o 考勤制度.md
+```
+
+成功响应：
+
+- 响应体为 Markdown 文件流
+- `Content-Type`：`application/octet-stream`
+- `Content-Disposition`：`attachment; filename="<原文件名去扩展名>.md"`
+
+成功响应示例：
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="考勤制度.md"
+
+# 考勤制度
+
+...
+```
+
+失败响应示例：
+
+```json
+{
+  "resultCode": "-1",
+  "resultMsg": "unsupported file type: exe. Supported types: csv, doc, docx, markdown, md, pdf, ppt, pptx, txt, xls, xlsx",
+  "resultObject": {}
+}
+```
 
 ### `POST /api/v1/fileToMarkdownIndex`
 

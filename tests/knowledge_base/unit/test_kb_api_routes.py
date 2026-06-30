@@ -26,6 +26,7 @@ class FakeKBService:
         self.created_requests = []
         self.created_directory_requests = []
         self.import_calls = []
+        self.file_to_markdown_calls = []
         self.file_build_task_requests = []
         self.file_build_task_runs = []
 
@@ -59,6 +60,21 @@ class FakeKBService:
     async def upload_file(self, request):
         self.import_calls.append(request)
         return None
+
+    async def convert_uploaded_file_to_markdown(
+        self, *, file_bytes, filename, document_chunking_service
+    ):
+        self.file_to_markdown_calls.append(
+            {
+                "file_bytes": file_bytes,
+                "filename": filename,
+                "document_chunking_service": document_chunking_service,
+            }
+        )
+        return {
+            "filename": "policy.md",
+            "content": b"# Converted Policy\n",
+        }
 
     async def create_file_to_markdown_index_task(self, request):
         self.file_build_task_requests.append(request)
@@ -172,6 +188,17 @@ class FakeKBService:
         }
 
 
+class FakeRouteDocumentChunkingService:
+    """Document conversion double used by route tests."""
+
+    def __init__(self):
+        self.extract_calls = []
+
+    def extract_text_from_file(self, file_bytes, file_type):
+        self.extract_calls.append({"file_bytes": file_bytes, "file_type": file_type})
+        return "# Converted Policy\n"
+
+
 def make_test_client(monkeypatch, service):
     """Create a TestClient with unrelated startup dependencies stubbed out."""
 
@@ -186,8 +213,10 @@ def make_test_client(monkeypatch, service):
         "by_qa.main._get_or_build_knowledge_item_search_service", get_service
     )
 
+    chunking_service = FakeRouteDocumentChunkingService()
+
     async def get_document_chunking_service():
-        return object()
+        return chunking_service
 
     monkeypatch.setattr(
         "by_qa.main._get_or_build_document_chunking_service",
@@ -195,7 +224,9 @@ def make_test_client(monkeypatch, service):
     )
     monkeypatch.setattr("by_qa.main.get_adapter", lambda: object())
     monkeypatch.setattr("by_qa.main.get_instant_search_engine", lambda: object())
-    return TestClient(app)
+    client = TestClient(app)
+    client.fake_document_chunking_service = chunking_service
+    return client
 
 
 def test_create_knowledge_base_route_returns_business_response(monkeypatch):
@@ -932,6 +963,62 @@ def test_download_file_route_maps_validation_error_to_documented_error(monkeypat
         "resultMsg": "file not found: /missing.pdf",
         "resultObject": {},
     }
+
+
+# ---------------------------------------------------------------------------
+# fileToMarkdown route tests
+# ---------------------------------------------------------------------------
+
+
+def test_file_to_markdown_route_returns_markdown_stream(monkeypatch):
+    """POST /api/v1/fileToMarkdown should convert an uploaded file into an md download."""
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/fileToMarkdown",
+        files={"fileContent": ("policy.txt", b"source text", "text/plain")},
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"# Converted Policy\n"
+    assert response.headers["content-type"] == "application/octet-stream"
+    assert response.headers["content-disposition"] == 'attachment; filename="policy.md"'
+    assert client.fake_document_chunking_service.extract_calls == [
+        {"file_bytes": b"source text", "file_type": "txt"}
+    ]
+
+
+def test_file_to_markdown_route_maps_unsupported_type_to_documented_error(monkeypatch):
+    """POST /api/v1/fileToMarkdown should reject unsupported upload file types."""
+
+    class RejectingKBService(FakeKBService):
+        async def convert_uploaded_file_to_markdown(
+            self, *, file_bytes, filename, document_chunking_service
+        ):
+            raise KnowledgeBaseValidationError(
+                "unsupported file type: exe. Supported types: csv, doc, docx, "
+                "markdown, md, pdf, ppt, pptx, txt, xls, xlsx"
+            )
+
+    client = make_test_client(monkeypatch, RejectingKBService())
+
+    response = client.post(
+        "/api/v1/fileToMarkdown",
+        files={
+            "fileContent": (
+                "installer.exe",
+                b"not a document",
+                "application/octet-stream",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["resultCode"] == "-1"
+    assert body["resultMsg"].startswith("unsupported file type: exe")
+    assert body["resultObject"] == {}
 
 
 def test_read_file_route_requires_kn_code(monkeypatch):

@@ -183,6 +183,25 @@ tools = dispatcher.build_tools()
 - [uv](https://github.com/astral-sh/uv)（推荐）或 pip
 - Docker（知识库模块需要）
 
+### 可选系统依赖
+
+knowledge build 模块会使用 Python 库解析新版 Office 文件（`.docx`、`.pptx`、`.xlsx`）。
+旧版二进制 Office 文件（`.doc`、`.ppt`、`.xls`）在 Linux 上需要系统提供
+LibreOffice 的 `soffice` 可执行程序作为兜底转换器。
+
+Debian/Ubuntu 系统可以安装以下 LibreOffice 组件和中文字体：
+
+```bash
+apt-get update
+apt-get install -y --no-install-recommends \
+    libreoffice-writer-nogui \
+    libreoffice-impress-nogui \
+    fonts-wqy-microhei
+```
+
+如果当前发行版没有 `-nogui` 包，可以使用对应的 LibreOffice 包，
+例如 `libreoffice-writer` 和 `libreoffice-impress`。
+
 ### 安装
 
 ```bash

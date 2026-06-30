@@ -183,6 +183,26 @@ tools = dispatcher.build_tools()
 - [uv](https://github.com/astral-sh/uv) (recommended) or pip
 - Docker (required by the knowledge base module)
 
+### Optional System Packages
+
+The knowledge build module parses modern Office files (`.docx`, `.pptx`, `.xlsx`)
+with Python libraries. Legacy binary Office files (`.doc`, `.ppt`, `.xls`) require a
+LibreOffice `soffice` executable as the Linux fallback converter.
+
+For Debian/Ubuntu-based systems, install the required LibreOffice components and
+a Chinese font package:
+
+```bash
+apt-get update
+apt-get install -y --no-install-recommends \
+    libreoffice-writer-nogui \
+    libreoffice-impress-nogui \
+    fonts-wqy-microhei
+```
+
+If `-nogui` packages are not available in your distribution, use the corresponding
+LibreOffice packages such as `libreoffice-writer` and `libreoffice-impress`.
+
 ### Install
 
 ```bash

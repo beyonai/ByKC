@@ -29,7 +29,15 @@ from by_qa.qa.common.operation_registry import (
     OperationSpec,
     OperationType,
 )
-from by_qa.qa.tools.dsl_guide import get_dsl_guide
+
+# Temporarily do not expose the DSL guide tool to Agents.
+#
+# Metadata field ownership has moved out of this project, and the runtime
+# field-catalog handoff has not been finalized. Keep the previous import here
+# as a comment so the Agent-facing DSL tooling can be restored together with
+# SearchInput.where once that integration is ready.
+#
+# from by_qa.qa.tools.dsl_guide import get_dsl_guide
 from by_qa.qa.tools.operations.base import (
     BaseOperation,
     DispatchRequest,
@@ -118,10 +126,18 @@ class ServiceToolDispatcher:
                 self._parallel_ops[op_type] = op_cls()
 
     def build_tools(self) -> list[Any]:
-        tools = [self._make_tool(OPERATION_REGISTRY[op]) for op in self._supported_ops]
-        if OperationType.KNOWLEDGE_SEARCH in self._supported_ops:
-            tools.append(get_dsl_guide)
-        return tools
+        # Temporarily return only KB operations advertised by runtime config.
+        # Previously, search support also appended `get_dsl_guide`, which made
+        # the Agent aware of DSL filtering even though it no longer has a
+        # reliable metadata-field catalog source.
+        #
+        # tools = [
+        #     self._make_tool(OPERATION_REGISTRY[op]) for op in self._supported_ops
+        # ]
+        # if OperationType.KNOWLEDGE_SEARCH in self._supported_ops:
+        #     tools.append(get_dsl_guide)
+        # return tools
+        return [self._make_tool(OPERATION_REGISTRY[op]) for op in self._supported_ops]
 
     async def dispatch(
         self,
@@ -157,6 +173,15 @@ class ServiceToolDispatcher:
             camel_payload = spec.input_schema.model_validate(kwargs).model_dump(
                 by_alias=True, exclude_none=True
             )
+            # Temporary Agent-facing DSL shutdown. `SearchInput.where` is
+            # commented out in the schema, but keep this guard so manually
+            # supplied extra args cannot leak into the remote search payload
+            # before metadata-field catalog integration is redesigned.
+            #
+            # Remove this together with the SearchInput.where comment block
+            # when DSL filtering is re-enabled for Agents.
+            if spec.operation_type == OperationType.KNOWLEDGE_SEARCH:
+                camel_payload.pop("where", None)
             results = await dispatcher.dispatch(
                 spec.operation_type, camel_payload, runtime.context
             )

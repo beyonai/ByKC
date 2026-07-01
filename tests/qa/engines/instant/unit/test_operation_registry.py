@@ -83,7 +83,7 @@ def test_dsl_guide_input_basic_construction():
     assert inp.model_dump() == {}
 
 
-def test_search_input_accepts_where_and_metadata_field_list():
+def test_search_input_hides_where_and_accepts_metadata_field_list():
     inp = SearchInput.model_validate(
         {
             "query": "test",
@@ -92,11 +92,11 @@ def test_search_input_accepts_where_and_metadata_field_list():
         }
     )
     assert inp.query == "test"
-    assert inp.where == {"eq": {"fieldName": "status", "value": "active"}}
+    assert "where" not in SearchInput.model_fields
+    assert "where" not in inp.model_dump()
     assert inp.metadata_field_list == ["status", "tags"]
 
 
-def test_search_input_where_defaults_to_none():
+def test_search_input_metadata_field_list_defaults_to_none():
     inp = SearchInput.model_validate({"query": "test"})
-    assert inp.where is None
     assert inp.metadata_field_list is None

@@ -1,4 +1,4 @@
-"""Tests for DSL guide content and SearchInput where support."""
+"""Tests for DSL guide content and Agent-facing SearchInput metadata fields."""
 
 from by_qa.qa.common.operation_registry import (
     OPERATION_REGISTRY,
@@ -34,16 +34,12 @@ def test_dsl_guide_input_is_no_arg():
     assert inp.model_dump() == {}
 
 
-def test_search_input_accepts_where():
+def test_search_input_does_not_expose_where():
     inp = SearchInput.model_validate(
         {"query": "test", "where": {"eq": {"fieldName": "status", "value": "active"}}}
     )
-    assert inp.where == {"eq": {"fieldName": "status", "value": "active"}}
-
-
-def test_search_input_where_defaults_to_none():
-    inp = SearchInput.model_validate({"query": "test"})
-    assert inp.where is None
+    assert "where" not in SearchInput.model_fields
+    assert "where" not in inp.model_dump()
 
 
 def test_search_input_accepts_metadata_field_list():

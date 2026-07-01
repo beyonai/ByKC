@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# Previous DSL-enabled SearchInput used `Any` for `where: dict[str, Any]`.
+# from typing import Any, Literal
 
 
 class OperationType(str, Enum):
@@ -33,15 +36,25 @@ class SearchInput(BaseModel):
         serialization_alias="knCodeList",
         description="List of knowledge base codes to search; searches all configured KBs when omitted",
     )
-    where: dict[str, Any] | None = Field(
-        default=None,
-        description=(
-            "Agent DSL filter AST (optional). "
-            "MUST call get_dsl_guide first to learn DSL syntax before using "
-            "this parameter. Custom metadata field ownership lives outside "
-            "this service."
-        ),
-    )
+    # Temporarily hidden from the Agent-facing tool schema.
+    #
+    # Metadata property ownership has moved out of this project, and the QA
+    # runtime does not yet have a stable way to receive the external metadata
+    # field catalog. Until that integration is designed, exposing `where` would
+    # encourage the Agent to invent field names or rely on unavailable
+    # metadata-field discovery. Keep the previous schema here as a commented
+    # block so DSL filtering can be restored deliberately once the catalog
+    # handoff is defined.
+    #
+    # where: dict[str, Any] | None = Field(
+    #     default=None,
+    #     description=(
+    #         "Agent DSL filter AST (optional). "
+    #         "MUST call get_dsl_guide first to learn DSL syntax before using "
+    #         "this parameter. Custom metadata field ownership lives outside "
+    #         "this service."
+    #     ),
+    # )
     metadata_field_list: list[str] | None = Field(
         default=None,
         alias="metadataFieldList",
@@ -64,17 +77,19 @@ class SearchInput(BaseModel):
             return [v]
         return v
 
-    @field_validator("where", mode="before")
-    @classmethod
-    def coerce_where(cls, v: object) -> object:
-        if isinstance(v, str):
-            import json
-
-            try:
-                return json.loads(v)
-            except (json.JSONDecodeError, ValueError):
-                pass
-        return v
+    # See the commented-out `where` field above.
+    #
+    # @field_validator("where", mode="before")
+    # @classmethod
+    # def coerce_where(cls, v: object) -> object:
+    #     if isinstance(v, str):
+    #         import json
+    #
+    #         try:
+    #             return json.loads(v)
+    #         except (json.JSONDecodeError, ValueError):
+    #             pass
+    #     return v
 
 
 class DslGuideInput(BaseModel):
@@ -162,10 +177,17 @@ OPERATION_REGISTRY: dict[OperationType, OperationSpec] = {
     OperationType.KNOWLEDGE_SEARCH: OperationSpec(
         operation_type=OperationType.KNOWLEDGE_SEARCH,
         tool_name="search_knowledge",
-        description="Search knowledge bases for relevant content with optional DSL filtering; "
-        "supports parallel search across multiple KBs. "
-        "Before using the 'where' parameter, MUST call get_dsl_guide "
-        "to learn DSL syntax.",
+        description="Search knowledge bases for relevant content; "
+        "supports parallel search across multiple KBs.",
+        # Previous DSL-enabled wording is intentionally kept here for the same
+        # reason as the commented-out SearchInput.where field above.
+        #
+        # description=(
+        #     "Search knowledge bases for relevant content with optional DSL "
+        #     "filtering; supports parallel search across multiple KBs. "
+        #     "Before using the 'where' parameter, MUST call get_dsl_guide "
+        #     "to learn DSL syntax."
+        # ),
         input_schema=SearchInput,
     ),
     OperationType.DSL_GUIDE: OperationSpec(

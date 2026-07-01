@@ -922,6 +922,17 @@ class FakeKnowledgeBuildTaskRepository:
         )
 
 
+class FakeFileMetadataValueRepository:
+    """Repository double for auto metadata writes."""
+
+    def __init__(self):
+        self.upserts = []
+
+    async def upsert_value(self, cursor, **kwargs):
+        self.upserts.append(kwargs)
+        return {"kid": len(self.upserts)}
+
+
 async def test_create_knowledge_base_commits_and_returns_business_fields():
     """Knowledge base creation should generate kb_code from the persisted row id."""
     connection = FakeConnection()
@@ -1817,6 +1828,63 @@ async def test_upload_file_writes_via_provider_and_persists_locator():
     assert storage_call[1]["original_location"].key == "kb/7/fs-entry/71/original.md"
     assert storage_call[1]["file_size"] == len(b"# Hello")
     assert storage_call[1]["mime_type"] == "text/markdown"
+
+
+async def test_upload_file_imports_front_matter_without_registered_properties():
+    """Markdown front matter should be stored as free-form metadata."""
+    connection = FakeConnection()
+    storage = FakeStorageProvider()
+    knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    file_metadata_value_repository = FakeFileMetadataValueRepository()
+    service = KnowledgeItemIngestionService(
+        connection_factory=lambda: _async_return(connection),
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={
+                "id": 7,
+                "kb_code": "hr-policy",
+                "kb_name": "人力制度知识库",
+            }
+        ),
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        storage_provider=storage,
+        embedding_dimension=2,
+        file_metadata_value_repository=file_metadata_value_repository,
+    )
+
+    await service.upload_file(
+        KnowledgeItemUploadRequest(
+            knCode="hr-policy",
+            filePath="/doc.md",
+            fileContent=(
+                b"---\n"
+                b"status: active\n"
+                b"priority: 3\n"
+                b"published: true\n"
+                b"tags:\n"
+                b"  - hr\n"
+                b"---\n"
+                b"# Hello"
+            ),
+            processFrontMatter=True,
+        )
+    )
+
+    assert [
+        {
+            "property_name": item["property_name"],
+            "value_type": item["value_type"],
+            "value": item["value"],
+        }
+        for item in file_metadata_value_repository.upserts
+    ] == [
+        {"property_name": "status", "value_type": "string", "value": "active"},
+        {"property_name": "priority", "value_type": "number", "value": 3},
+        {"property_name": "published", "value_type": "boolean", "value": True},
+        {"property_name": "tags", "value_type": "stringList", "value": ["hr"]},
+    ]
+    assert connection.committed is True
 
 
 async def test_list_dir_root_returns_top_level_entries():

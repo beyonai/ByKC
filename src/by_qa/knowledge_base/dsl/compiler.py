@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any
 
 from by_qa.knowledge_base.metadata_types import (
     SYSTEM_FIELD_TO_FE_EXPR,
     VALUE_TYPE_TO_COLUMN,
+    infer_metadata_value_type,
 )
 
 COMPARISON_OPS = {
@@ -18,6 +20,7 @@ COMPARISON_OPS = {
     "lt": "<",
     "lte": "<=",
 }
+ORDER_OPS = {"gt", "gte", "lt", "lte"}
 
 LIKE_ESCAPE_CHAR = "!"
 
@@ -48,6 +51,51 @@ class _CompilerContext:
 
 def _value_column(value_type: str) -> str:
     return VALUE_TYPE_TO_COLUMN[value_type]
+
+
+def _custom_field_filter(
+    ctx: _CompilerContext,
+    *,
+    field_name: str,
+    value_type: str | None = None,
+) -> str:
+    field_key = ctx.next_param(field_name)
+    parts = [
+        "mv.fs_entry_id = fe.kid",
+        f"mv.property_name = %({field_key})s",
+        "mv.is_deleted = false",
+    ]
+    if value_type is not None:
+        type_key = ctx.next_param(value_type)
+        parts.append(f"mv.value_type = %({type_key})s")
+    return " AND ".join(parts)
+
+
+def _query_value_type(operator: str, value: Any) -> str:
+    if operator in ("prefix", "wildcard"):
+        return "string"
+    if operator == "contains":
+        return "stringList"
+    if operator in ORDER_OPS and isinstance(value, str):
+        if _parse_datetime_literal(value) is not None:
+            return "datetime"
+    return infer_metadata_value_type(value)
+
+
+def _parse_datetime_literal(value: str) -> datetime | None:
+    normalized = value.replace("Z", "+00:00") if value.endswith("Z") else value
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+
+def _normalize_query_value(value: Any, value_type: str) -> Any:
+    if value_type == "datetime" and isinstance(value, str):
+        parsed = _parse_datetime_literal(value)
+        if parsed is not None:
+            return parsed
+    return value
 
 
 def _escape_like_literal(value: str) -> str:
@@ -85,14 +133,17 @@ def _compile_node(
             expr, _ = SYSTEM_FIELD_TO_FE_EXPR[field_name]
             return f"({expr} IS NOT NULL)"
         prop = property_map[field_name]
-        def_id_key = ctx.next_param(prop["def_id"])
-        col = _value_column(prop["value_type"])
+        value_type = prop.get("value_type")
+        value_columns = " OR ".join(
+            f"mv.{col} IS NOT NULL" for col in VALUE_TYPE_TO_COLUMN.values()
+        )
+        filters = _custom_field_filter(
+            ctx, field_name=field_name, value_type=value_type
+        )
         return (
             f"EXISTS (SELECT 1 FROM knowledge_file_metadata_value mv "
-            f"WHERE mv.fs_entry_id = fe.kid "
-            f"AND mv.property_def_id = %({def_id_key})s "
-            f"AND mv.is_deleted = false "
-            f"AND mv.{col} IS NOT NULL)"
+            f"WHERE {filters} "
+            f"AND ({value_columns}))"
         )
 
     if operator == "prefix":
@@ -105,14 +156,15 @@ def _compile_node(
             val_key = ctx.next_param(escaped + "%")
             return f"({expr} LIKE %({val_key})s ESCAPE '{LIKE_ESCAPE_CHAR}')"
         prop = property_map[field_name]
-        def_id_key = ctx.next_param(prop["def_id"])
+        value_type = prop.get("value_type") or _query_value_type(operator, value)
+        col = _value_column(value_type)
+        filters = _custom_field_filter(
+            ctx, field_name=field_name, value_type=value_type
+        )
         val_key = ctx.next_param(escaped + "%")
-        col = _value_column(prop["value_type"])
         return (
             f"EXISTS (SELECT 1 FROM knowledge_file_metadata_value mv "
-            f"WHERE mv.fs_entry_id = fe.kid "
-            f"AND mv.property_def_id = %({def_id_key})s "
-            f"AND mv.is_deleted = false "
+            f"WHERE {filters} "
             f"AND mv.{col} LIKE %({val_key})s ESCAPE '{LIKE_ESCAPE_CHAR}')"
         )
 
@@ -131,14 +183,15 @@ def _compile_node(
             val_key = ctx.next_param(like_value)
             return f"({expr} LIKE %({val_key})s ESCAPE '{LIKE_ESCAPE_CHAR}')"
         prop = property_map[field_name]
-        def_id_key = ctx.next_param(prop["def_id"])
+        value_type = prop.get("value_type") or _query_value_type(operator, value)
+        col = _value_column(value_type)
+        filters = _custom_field_filter(
+            ctx, field_name=field_name, value_type=value_type
+        )
         val_key = ctx.next_param(like_value)
-        col = _value_column(prop["value_type"])
         return (
             f"EXISTS (SELECT 1 FROM knowledge_file_metadata_value mv "
-            f"WHERE mv.fs_entry_id = fe.kid "
-            f"AND mv.property_def_id = %({def_id_key})s "
-            f"AND mv.is_deleted = false "
+            f"WHERE {filters} "
             f"AND mv.{col} LIKE %({val_key})s ESCAPE '{LIKE_ESCAPE_CHAR}')"
         )
 
@@ -149,13 +202,14 @@ def _compile_node(
         field_name = body["fieldName"]
         value = body["value"]
         prop = property_map[field_name]
-        def_id_key = ctx.next_param(prop["def_id"])
+        value_type = prop.get("value_type") or _query_value_type(operator, value)
+        filters = _custom_field_filter(
+            ctx, field_name=field_name, value_type=value_type
+        )
         val_key = ctx.next_param(json.dumps([value]))
         return (
             f"EXISTS (SELECT 1 FROM knowledge_file_metadata_value mv "
-            f"WHERE mv.fs_entry_id = fe.kid "
-            f"AND mv.property_def_id = %({def_id_key})s "
-            f"AND mv.is_deleted = false "
+            f"WHERE {filters} "
             f"AND mv.value_string_list @> %({val_key})s::jsonb)"
         )
 
@@ -168,14 +222,17 @@ def _compile_node(
             val_key = ctx.next_param(value_list)
             return f"({expr} = ANY(%({val_key})s))"
         prop = property_map[field_name]
-        def_id_key = ctx.next_param(prop["def_id"])
+        value_type = prop.get("value_type") or _query_value_type(
+            operator, value_list[0]
+        )
+        col = _value_column(value_type)
+        filters = _custom_field_filter(
+            ctx, field_name=field_name, value_type=value_type
+        )
         val_key = ctx.next_param(value_list)
-        col = _value_column(prop["value_type"])
         return (
             f"EXISTS (SELECT 1 FROM knowledge_file_metadata_value mv "
-            f"WHERE mv.fs_entry_id = fe.kid "
-            f"AND mv.property_def_id = %({def_id_key})s "
-            f"AND mv.is_deleted = false "
+            f"WHERE {filters} "
             f"AND mv.{col} = ANY(%({val_key})s))"
         )
 
@@ -189,14 +246,42 @@ def _compile_node(
             val_key = ctx.next_param(value)
             return f"({expr} {sql_op} %({val_key})s)"
         prop = property_map[field_name]
-        def_id_key = ctx.next_param(prop["def_id"])
-        val_key = ctx.next_param(value)
-        col = _value_column(prop["value_type"])
+        configured_value_type = prop.get("value_type")
+        if (
+            configured_value_type is None
+            and operator in ORDER_OPS
+            and isinstance(value, str)
+            and (parsed_datetime := _parse_datetime_literal(value)) is not None
+        ):
+            datetime_filters = _custom_field_filter(
+                ctx,
+                field_name=field_name,
+                value_type="datetime",
+            )
+            datetime_key = ctx.next_param(parsed_datetime)
+            string_filters = _custom_field_filter(
+                ctx,
+                field_name=field_name,
+                value_type="string",
+            )
+            string_key = ctx.next_param(value)
+            return (
+                "(EXISTS (SELECT 1 FROM knowledge_file_metadata_value mv "
+                f"WHERE {datetime_filters} "
+                f"AND mv.value_datetime {sql_op} %({datetime_key})s) "
+                "OR EXISTS (SELECT 1 FROM knowledge_file_metadata_value mv "
+                f"WHERE {string_filters} "
+                f"AND mv.value_string {sql_op} %({string_key})s))"
+            )
+        value_type = configured_value_type or _query_value_type(operator, value)
+        col = _value_column(value_type)
+        filters = _custom_field_filter(
+            ctx, field_name=field_name, value_type=value_type
+        )
+        val_key = ctx.next_param(_normalize_query_value(value, value_type))
         return (
             f"EXISTS (SELECT 1 FROM knowledge_file_metadata_value mv "
-            f"WHERE mv.fs_entry_id = fe.kid "
-            f"AND mv.property_def_id = %({def_id_key})s "
-            f"AND mv.is_deleted = false "
+            f"WHERE {filters} "
             f"AND mv.{col} {sql_op} %({val_key})s)"
         )
 

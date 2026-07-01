@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 class OperationType(str, Enum):
     KNOWLEDGE_SEARCH = "knowledgeSearch"
-    METADATA_FIELDS_LIST = "metadataFieldsList"
     DSL_GUIDE = "dslGuide"
     LIST_DIR = "listDir"
     GLOB = "glob"
@@ -38,8 +37,9 @@ class SearchInput(BaseModel):
         default=None,
         description=(
             "Agent DSL filter AST (optional). "
-            "MUST call list_metadata_fields and get_dsl_guide first to learn "
-            "available field names and DSL syntax before using this parameter."
+            "MUST call get_dsl_guide first to learn DSL syntax before using "
+            "this parameter. Custom metadata field ownership lives outside "
+            "this service."
         ),
     )
     metadata_field_list: list[str] | None = Field(
@@ -74,31 +74,6 @@ class SearchInput(BaseModel):
                 return json.loads(v)
             except (json.JSONDecodeError, ValueError):
                 pass
-        return v
-
-
-class MetadataFieldsListInput(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-    kn_code_list: list[str] | None = Field(
-        default=None,
-        alias="knCodeList",
-        serialization_alias="knCodeList",
-        description="List of knowledge base codes; queries all authorized KBs when omitted",
-    )
-
-    @field_validator("kn_code_list", mode="before")
-    @classmethod
-    def coerce_kn_code_list(cls, v: object) -> object:
-        if isinstance(v, str):
-            import json
-
-            try:
-                parsed = json.loads(v)
-                if isinstance(parsed, list):
-                    return parsed
-            except (json.JSONDecodeError, ValueError):
-                pass
-            return [v]
         return v
 
 
@@ -189,18 +164,9 @@ OPERATION_REGISTRY: dict[OperationType, OperationSpec] = {
         tool_name="search_knowledge",
         description="Search knowledge bases for relevant content with optional DSL filtering; "
         "supports parallel search across multiple KBs. "
-        "Before using the 'where' parameter, MUST call list_metadata_fields "
-        "(to discover available field names) and get_dsl_guide (to learn DSL syntax).",
+        "Before using the 'where' parameter, MUST call get_dsl_guide "
+        "to learn DSL syntax.",
         input_schema=SearchInput,
-    ),
-    OperationType.METADATA_FIELDS_LIST: OperationSpec(
-        operation_type=OperationType.METADATA_FIELDS_LIST,
-        tool_name="list_metadata_fields",
-        description="List metadata fields actually used in the specified knowledge bases; "
-        "queries all authorized KBs when knCodeList is omitted. "
-        "MUST call this tool first to discover available field names before using "
-        "'where' DSL filtering on any search tool.",
-        input_schema=MetadataFieldsListInput,
     ),
     OperationType.DSL_GUIDE: OperationSpec(
         operation_type=OperationType.DSL_GUIDE,
@@ -240,7 +206,6 @@ __all__ = [
     "GlobInput",
     "ListDirInput",
     "ListDirItem",
-    "MetadataFieldsListInput",
     "OperationSpec",
     "OperationType",
     "ReadFileInput",

@@ -78,18 +78,16 @@ class MetadataSearchRepository:
         name_filter = ""
         params: dict[str, Any] = {"entry_ids": fs_entry_ids}
         if property_names:
-            name_filter = "AND p.property_name = ANY(%(prop_names)s)"
+            name_filter = "AND v.property_name = ANY(%(prop_names)s)"
             params["prop_names"] = property_names
 
         sql = f"""
-            SELECT v.fs_entry_id, p.property_name, p.value_type,
+            SELECT v.fs_entry_id, v.property_name, v.value_type,
                    v.value_string, v.value_number, v.value_boolean,
                    v.value_datetime, v.value_string_list
             FROM knowledge_file_metadata_value v
-            JOIN knowledge_metadata_property_def p ON p.kid = v.property_def_id
             WHERE v.fs_entry_id = ANY(%(entry_ids)s)
               AND v.is_deleted = false
-              AND p.is_deleted = false
               {name_filter}
         """
         await cursor.execute(sql, params)

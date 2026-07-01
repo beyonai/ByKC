@@ -37,9 +37,6 @@ from by_qa.knowledge_base.repositories.knowledge_item_chunk_repository import (
 from by_qa.knowledge_base.repositories.knowledge_item_search_repository import (
     KnowledgeItemSearchRepository,
 )
-from by_qa.knowledge_base.repositories.metadata_property_repository import (
-    MetadataPropertyRepository,
-)
 from by_qa.knowledge_base.repositories.metadata_search_repository import (
     MetadataSearchRepository,
 )
@@ -51,7 +48,6 @@ from by_qa.knowledge_base.services.bootstrap_service import (
 )
 from by_qa.knowledge_base.services.embedding_query_service import EmbeddingQueryService
 from by_qa.knowledge_base.services.errors import KnowledgeBaseConfigurationError
-from by_qa.knowledge_base.services.file_metadata_service import FileMetadataService
 from by_qa.knowledge_base.services.knowledge_base_service import KnowledgeBaseService
 from by_qa.knowledge_base.services.knowledge_fetch_cache_cleanup_service import (
     KnowledgeFetchCacheCleanupService,
@@ -61,9 +57,6 @@ from by_qa.knowledge_base.services.knowledge_item_ingestion_service import (
 )
 from by_qa.knowledge_base.services.knowledge_item_search_service import (
     KnowledgeItemSearchService,
-)
-from by_qa.knowledge_base.services.metadata_property_service import (
-    MetadataPropertyService,
 )
 
 
@@ -247,7 +240,6 @@ async def build_knowledge_item_ingestion_service(
         ),
         embedding_dimension=dimension,
         knowledge_fetch_cache_repository=KnowledgeFetchCacheRepository(),
-        metadata_property_repository=MetadataPropertyRepository(),
         file_metadata_value_repository=FileMetadataValueRepository(),
     )
 
@@ -268,33 +260,7 @@ async def build_knowledge_item_search_service(
         connection_factory=build_connection_factory(settings),
         search_repository=KnowledgeItemSearchRepository(bootstrap.embedding_table_name),
         embedding_query_service=EmbeddingQueryService(provider=provider),
-        metadata_property_repository=MetadataPropertyRepository(),
         metadata_search_repository=MetadataSearchRepository(),
-    )
-
-
-async def build_metadata_property_service(
-    settings: Settings,
-) -> MetadataPropertyService:
-    """Build the metadata property definition service."""
-    validate_knowledge_base_settings(settings, require_embedding=False)
-    return MetadataPropertyService(
-        connection_factory=build_connection_factory(settings),
-        metadata_property_repository=MetadataPropertyRepository(),
-    )
-
-
-async def build_file_metadata_service(
-    settings: Settings,
-) -> FileMetadataService:
-    """Build the file metadata value service."""
-    validate_knowledge_base_settings(settings, require_embedding=False)
-    return FileMetadataService(
-        connection_factory=build_connection_factory(settings),
-        knowledge_base_repository=KnowledgeBaseRepository(),
-        knowledge_fs_entry_repository=KnowledgeFsEntryRepository(),
-        metadata_property_repository=MetadataPropertyRepository(),
-        file_metadata_value_repository=FileMetadataValueRepository(),
     )
 
 
@@ -310,6 +276,5 @@ async def build_metadata_search_service(
     return MetadataSearchService(
         connection_factory=build_connection_factory(settings),
         knowledge_base_repository=KnowledgeBaseRepository(),
-        metadata_property_repository=MetadataPropertyRepository(),
         metadata_search_repository=MetadataSearchRepository(),
     )

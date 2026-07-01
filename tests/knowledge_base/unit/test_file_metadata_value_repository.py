@@ -40,14 +40,17 @@ async def test_upsert_string_value():
         cursor,
         fs_entry_id=10,
         knowledge_base_id=2,
-        property_def_id=5,
+        property_name="status",
         value_type="string",
         value="active",
     )
 
     sql = cursor.executed[0][0].lower()
     assert "knowledge_file_metadata_value" in sql
+    assert "property_name" in sql
+    assert "value_type" in sql
     assert "value_string" in sql
+    assert sql.count("value_string =") == 1
 
 
 @pytest.mark.asyncio
@@ -59,7 +62,7 @@ async def test_upsert_string_list_value():
         cursor,
         fs_entry_id=10,
         knowledge_base_id=2,
-        property_def_id=6,
+        property_name="tags",
         value_type="stringList",
         value=["hr", "contract"],
     )
@@ -77,7 +80,7 @@ async def test_upsert_string_list_none_uses_sql_null():
         cursor,
         fs_entry_id=10,
         knowledge_base_id=2,
-        property_def_id=6,
+        property_name="tags",
         value_type="stringList",
         value=None,
     )
@@ -91,10 +94,11 @@ async def test_soft_delete_value():
     repo = FileMetadataValueRepository()
     cursor = FakeCursor(fetchone_results=[{"kid": 1}])
 
-    await repo.soft_delete_value(cursor, fs_entry_id=10, property_def_id=5)
+    await repo.soft_delete_value(cursor, fs_entry_id=10, property_name="status")
 
     sql = cursor.executed[0][0].lower()
     assert "is_deleted = true" in sql
+    assert "property_name" in sql
 
 
 @pytest.mark.asyncio
@@ -130,7 +134,7 @@ async def test_get_file_metadata_returns_all():
     assert len(result) == 2
     sql = cursor.executed[0][0].lower()
     assert "is_deleted = false" in sql
-    assert "join" in sql
+    assert "join" not in sql
 
 
 @pytest.mark.asyncio
@@ -153,3 +157,4 @@ async def test_list_used_properties():
     assert len(result) == 1
     sql = cursor.executed[0][0].lower()
     assert "distinct" in sql or "group by" in sql
+    assert "join" not in sql

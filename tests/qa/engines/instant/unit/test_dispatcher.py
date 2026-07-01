@@ -36,6 +36,7 @@ def test_build_tools_returns_one_tool_per_supported_op():
     assert tool_names == {
         OPERATION_REGISTRY[OperationType.KNOWLEDGE_SEARCH].tool_name,
         OPERATION_REGISTRY[OperationType.LIST_DIR].tool_name,
+        OPERATION_REGISTRY[OperationType.DSL_GUIDE].tool_name,
     }
 
 
@@ -52,13 +53,12 @@ def test_build_tools_ignores_unknown_operation_types():
     assert len(tools) == 0
 
 
-def test_build_tools_includes_dsl_guide_when_metadata_fields_supported():
+def test_build_tools_includes_dsl_guide_when_search_supported():
     kb = _kb(
         "kb1",
         "svc-a",
         {
             OperationType.KNOWLEDGE_SEARCH: "/api/v1/knowledgeItems/search",
-            OperationType.METADATA_FIELDS_LIST: "/api/v1/metadataFields/list",
         },
     )
     dispatcher = ServiceToolDispatcher([kb])
@@ -66,7 +66,6 @@ def test_build_tools_includes_dsl_guide_when_metadata_fields_supported():
     tool_names = {t.name for t in tools}
     assert tool_names == {
         OPERATION_REGISTRY[OperationType.KNOWLEDGE_SEARCH].tool_name,
-        OPERATION_REGISTRY[OperationType.METADATA_FIELDS_LIST].tool_name,
         OPERATION_REGISTRY[OperationType.DSL_GUIDE].tool_name,
     }
 

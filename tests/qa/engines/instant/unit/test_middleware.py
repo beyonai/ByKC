@@ -76,7 +76,6 @@ def _make_tool_call_request_with_args(
     return FakeRequest(), FakeToolMessage()
 
 
-@pytest.mark.asyncio
 async def test_dispatcher_middleware_passes_through_non_search_tools():
     middleware = DispatcherToolMiddleware(
         index_id_fn=lambda sub_query_idx, step, item_id: (
@@ -90,7 +89,6 @@ async def test_dispatcher_middleware_passes_through_non_search_tools():
     assert result is fake_result
 
 
-@pytest.mark.asyncio
 async def test_dispatcher_middleware_injects_index_ids_for_search():
     search_tool_name = OPERATION_REGISTRY[OperationType.KNOWLEDGE_SEARCH].tool_name
     raw = [{"content": "doc-a", "score": 0.9}, {"content": "doc-b", "score": 0.8}]
@@ -119,7 +117,6 @@ async def test_dispatcher_middleware_injects_index_ids_for_search():
     assert llm_content[0] == {"index_id": "3-0-1", "content": "doc-a"}
 
 
-@pytest.mark.asyncio
 async def test_dispatcher_middleware_multi_hop_index_ids():
     search_tool_name = OPERATION_REGISTRY[OperationType.KNOWLEDGE_SEARCH].tool_name
     raw = [{"content": "doc-a", "score": 0.9}]
@@ -154,11 +151,8 @@ async def test_dsl_guard_passes_through_when_no_where():
     assert result is fake_result
 
 
-@pytest.mark.asyncio
 async def test_dsl_guard_blocks_when_where_present_without_prerequisites():
-    ctx = _make_runtime_context(
-        {OperationType.KNOWLEDGE_SEARCH, OperationType.METADATA_FIELDS_LIST}
-    )
+    ctx = _make_runtime_context({OperationType.KNOWLEDGE_SEARCH})
     middleware = DispatcherToolMiddleware(
         index_id_fn=lambda s, st, i: f"{s}-{st}-{i}",
         follow_up_prompt="继续",
@@ -175,46 +169,13 @@ async def test_dsl_guard_blocks_when_where_present_without_prerequisites():
     error = json.loads(result.content)
     assert error["error"] is True
     assert error["error_type"] == "DslPrerequisiteNotMet"
-    assert "list_metadata_fields" in error["missing_tools"]
-    assert "get_dsl_guide" in error["missing_tools"]
-    handler.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_dsl_guard_blocks_when_only_metadata_fields_called():
-    ctx = _make_runtime_context(
-        {OperationType.KNOWLEDGE_SEARCH, OperationType.METADATA_FIELDS_LIST}
-    )
-    middleware = DispatcherToolMiddleware(
-        index_id_fn=lambda s, st, i: f"{s}-{st}-{i}",
-        follow_up_prompt="继续",
-    )
-    request, fake_result = _make_tool_call_request_with_args(
-        "some_tool",
-        {
-            "messages": [
-                ToolMessage(
-                    content="[{}]", name="list_metadata_fields", tool_call_id="tc-old"
-                )
-            ]
-        },
-        {"where": {"eq": {"fieldName": "status", "value": "active"}}, "query": "test"},
-        runtime_context=ctx,
-    )
-    handler = AsyncMock(return_value=fake_result)
-    result = await middleware.awrap_tool_call(request, handler)
-    assert isinstance(result, ToolMessage)
-    error = json.loads(result.content)
-    assert error["error"] is True
     assert error["missing_tools"] == ["get_dsl_guide"]
     handler.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_dsl_guard_allows_when_both_prerequisites_met():
-    ctx = _make_runtime_context(
-        {OperationType.KNOWLEDGE_SEARCH, OperationType.METADATA_FIELDS_LIST}
-    )
+async def test_dsl_guard_allows_when_dsl_guide_prerequisite_met():
+    ctx = _make_runtime_context({OperationType.KNOWLEDGE_SEARCH})
     middleware = DispatcherToolMiddleware(
         index_id_fn=lambda s, st, i: f"{s}-{st}-{i}",
         follow_up_prompt="继续",
@@ -223,9 +184,6 @@ async def test_dsl_guard_allows_when_both_prerequisites_met():
         "some_tool",
         {
             "messages": [
-                ToolMessage(
-                    content="[{}]", name="list_metadata_fields", tool_call_id="tc-1"
-                ),
                 ToolMessage(content="{}", name="get_dsl_guide", tool_call_id="tc-2"),
             ]
         },
@@ -247,81 +205,6 @@ async def test_dsl_guard_passes_through_when_where_is_empty_dict():
         "some_tool",
         {"messages": []},
         {"where": {}, "query": "test"},
-    )
-    handler = AsyncMock(return_value=fake_result)
-    result = await middleware.awrap_tool_call(request, handler)
-    assert result is fake_result
-
-
-@pytest.mark.asyncio
-async def test_dsl_guard_where_not_supported_without_metadata_fields_tool():
-    """When list_metadata_fields is not available, 'where' should be rejected."""
-    ctx = _make_runtime_context({OperationType.KNOWLEDGE_SEARCH})
-    middleware = DispatcherToolMiddleware(
-        index_id_fn=lambda s, st, i: f"{s}-{st}-{i}",
-        follow_up_prompt="继续",
-    )
-    request, fake_result = _make_tool_call_request_with_args(
-        "search_knowledge",
-        {"messages": []},
-        {"where": {"eq": {"fieldName": "status", "value": "active"}}, "query": "test"},
-        runtime_context=ctx,
-    )
-    handler = AsyncMock(return_value=fake_result)
-    result = await middleware.awrap_tool_call(request, handler)
-    assert isinstance(result, ToolMessage)
-    error = json.loads(result.content)
-    assert error["error"] is True
-    assert error["error_type"] == "WhereNotSupported"
-    handler.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_dsl_guard_filters_unavailable_from_prerequisites():
-    """When list_metadata_fields is unavailable but where is used, WhereNotSupported
-    is returned before the prerequisite check."""
-    ctx = _make_runtime_context({OperationType.KNOWLEDGE_SEARCH})
-    middleware = DispatcherToolMiddleware(
-        index_id_fn=lambda s, st, i: f"{s}-{st}-{i}",
-        follow_up_prompt="继续",
-    )
-    request, fake_result = _make_tool_call_request_with_args(
-        "search_knowledge",
-        {"messages": []},
-        {"where": {"eq": {"fieldName": "status", "value": "active"}}, "query": "test"},
-        runtime_context=ctx,
-    )
-    handler = AsyncMock(return_value=fake_result)
-    result = await middleware.awrap_tool_call(request, handler)
-    assert isinstance(result, ToolMessage)
-    error = json.loads(result.content)
-    assert error["error"] is True
-    assert error["error_type"] == "WhereNotSupported"
-
-
-@pytest.mark.asyncio
-async def test_dsl_guard_allows_where_when_available_tools_are_called():
-    """When METADATA_FIELDS_LIST is available and its prerequisites are met,
-    'where' should be allowed."""
-    ctx = _make_runtime_context(
-        {OperationType.KNOWLEDGE_SEARCH, OperationType.METADATA_FIELDS_LIST}
-    )
-    middleware = DispatcherToolMiddleware(
-        index_id_fn=lambda s, st, i: f"{s}-{st}-{i}",
-        follow_up_prompt="继续",
-    )
-    request, fake_result = _make_tool_call_request_with_args(
-        "some_tool",
-        {
-            "messages": [
-                ToolMessage(
-                    content="[{}]", name="list_metadata_fields", tool_call_id="tc-1"
-                ),
-                ToolMessage(content="{}", name="get_dsl_guide", tool_call_id="tc-2"),
-            ]
-        },
-        {"where": {"eq": {"fieldName": "status", "value": "active"}}, "query": "test"},
-        runtime_context=ctx,
     )
     handler = AsyncMock(return_value=fake_result)
     result = await middleware.awrap_tool_call(request, handler)

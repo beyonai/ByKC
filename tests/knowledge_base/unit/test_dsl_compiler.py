@@ -5,10 +5,10 @@ from __future__ import annotations
 from by_qa.knowledge_base.dsl.compiler import compile_where_to_sql
 
 PROPERTY_MAP = {
-    "status": {"def_id": 1, "value_type": "string"},
-    "tags": {"def_id": 2, "value_type": "stringList"},
-    "priority": {"def_id": 3, "value_type": "number"},
-    "archived": {"def_id": 4, "value_type": "boolean"},
+    "status": {"value_type": "string"},
+    "tags": {"value_type": "stringList"},
+    "priority": {"value_type": "number"},
+    "archived": {"value_type": "boolean"},
 }
 
 
@@ -21,7 +21,8 @@ def test_none_where_returns_empty():
 def test_simple_eq_string():
     where = {"eq": {"fieldName": "status", "value": "active"}}
     sql, params = compile_where_to_sql(where, property_map=PROPERTY_MAP)
-    assert "property_def_id" in sql
+    assert "property_name" in sql
+    assert "property_def_id" not in sql
     assert "value_string" in sql
     assert "active" in params.values()
 
@@ -49,7 +50,7 @@ def test_and_combination():
     }
     sql, params = compile_where_to_sql(where, property_map=PROPERTY_MAP)
     assert " AND " in sql
-    assert len(params) == 4  # 2 def_ids + 2 values
+    assert len(params) == 6  # 2 field names + 2 value types + 2 values
 
 
 def test_or_combination():

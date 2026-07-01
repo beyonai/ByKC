@@ -17,9 +17,6 @@ from by_qa.knowledge_base.metadata_types import SYSTEM_FIELD_VALUE_TYPES
 from by_qa.knowledge_base.repositories.knowledge_base_repository import (
     KnowledgeBaseRepository,
 )
-from by_qa.knowledge_base.repositories.metadata_property_repository import (
-    MetadataPropertyRepository,
-)
 from by_qa.knowledge_base.repositories.metadata_search_repository import (
     MetadataSearchRepository,
 )
@@ -32,7 +29,6 @@ class MetadataSearchService:
 
     connection_factory: Callable[[], Any]
     knowledge_base_repository: KnowledgeBaseRepository
-    metadata_property_repository: MetadataPropertyRepository
     metadata_search_repository: MetadataSearchRepository
 
     async def search(self, request: MetadataSearchRequest) -> list[MetadataSearchHit]:
@@ -118,22 +114,13 @@ class MetadataSearchService:
         custom_names = [n for n in field_names if n not in SYSTEM_FIELD_VALUE_TYPES]
         if not custom_names:
             return {}
-        rows = await self.metadata_property_repository.list_properties(
-            cursor, property_names=custom_names
-        )
-        return {
-            row["property_name"]: {
-                "def_id": row["kid"],
-                "value_type": row["value_type"],
-            }
-            for row in rows
-        }
+        return {name: {} for name in custom_names}
 
 
 def _build_known_fields(property_map: dict[str, dict[str, Any]]) -> dict[str, str]:
     known: dict[str, str] = dict(SYSTEM_FIELD_VALUE_TYPES)
     for name, info in property_map.items():
-        known[name] = info["value_type"]
+        known[name] = info.get("value_type", "any")
     return known
 
 

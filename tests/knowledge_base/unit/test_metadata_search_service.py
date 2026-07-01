@@ -74,9 +74,6 @@ async def test_metadata_search_no_where():
     from by_qa.knowledge_base.repositories.knowledge_base_repository import (
         KnowledgeBaseRepository,
     )
-    from by_qa.knowledge_base.repositories.metadata_property_repository import (
-        MetadataPropertyRepository,
-    )
     from by_qa.knowledge_base.repositories.metadata_search_repository import (
         MetadataSearchRepository,
     )
@@ -87,7 +84,6 @@ async def test_metadata_search_no_where():
     service = MetadataSearchService(
         connection_factory=_get_conn,
         knowledge_base_repository=KnowledgeBaseRepository(),
-        metadata_property_repository=MetadataPropertyRepository(),
         metadata_search_repository=MetadataSearchRepository(),
     )
 

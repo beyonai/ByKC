@@ -184,6 +184,20 @@ def _validate_leaf(
     has_value_key = "value" in body
     value = body.get("value")
 
+    if value_type == "any" and operator == "exists":
+        if has_value_key:
+            errors.append(
+                DslValidationDetail(
+                    path=f"{path}.exists.value",
+                    code="INVALID_FIELD_VALUE_TYPE",
+                    message="'exists' must not carry a value",
+                )
+            )
+        return
+
+    if value_type == "any" and has_value_key:
+        value_type = _infer_query_value_type(operator, value)
+
     if operator in ("prefix", "wildcard"):
         if value_type != "string":
             errors.append(
@@ -347,3 +361,24 @@ def _value_matches_type(value: Any, value_type: str) -> bool:
             return False
         return True
     return False
+
+
+def _infer_query_value_type(operator: str, value: Any) -> str:
+    if operator in ("prefix", "wildcard"):
+        return "string"
+    if operator == "contains":
+        return "stringList"
+    if operator == "in" and isinstance(value, list) and value:
+        return _infer_query_value_type("eq", value[0])
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return "number"
+    if operator in ORDER_OPERATORS and isinstance(value, str):
+        normalized = value.replace("Z", "+00:00") if value.endswith("Z") else value
+        try:
+            datetime.fromisoformat(normalized)
+        except ValueError:
+            return "string"
+        return "datetime"
+    return "string"

@@ -25,6 +25,10 @@ from by_qa.knowledge_base.build_status import (
     BUILD_STEP_VECTORIZING,
 )
 from by_qa.knowledge_base.infrastructure.storage import StorageLocation
+from by_qa.knowledge_base.metadata_types import (
+    infer_metadata_value_type,
+    normalize_metadata_value,
+)
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
 from by_qa.knowledge_build.services.document_chunking_service import (
     SUPPORTED_EXTENSIONS,
@@ -139,7 +143,6 @@ class KnowledgeItemIngestionService:
     embedding_dimension: int
     knowledge_build_task_repository: Any | None = None
     knowledge_fetch_cache_repository: Any | None = None
-    metadata_property_repository: Any | None = None
     file_metadata_value_repository: Any | None = None
 
     async def convert_uploaded_file_to_markdown(
@@ -254,8 +257,6 @@ class KnowledgeItemIngestionService:
         file_path: str,
     ) -> None:
         """Parse front matter and auto-set metadata if repos are available."""
-        if self.metadata_property_repository is None:
-            return
         if self.file_metadata_value_repository is None:
             return
 
@@ -267,27 +268,15 @@ class KnowledgeItemIngestionService:
         if not front_matter:
             return
 
-        for field_name in front_matter:
-            prop = await self.metadata_property_repository.get_by_name(
-                cursor, field_name
-            )
-            if prop is None:
-                raise KnowledgeBaseValidationError(
-                    f"front matter field '{field_name}' is not a defined "
-                    f"metadata property"
-                )
-
         for field_name, value in front_matter.items():
-            prop = await self.metadata_property_repository.get_by_name(
-                cursor, field_name
-            )
+            value_type = infer_metadata_value_type(value)
             await self.file_metadata_value_repository.upsert_value(
                 cursor,
                 fs_entry_id=fs_entry_id,
                 knowledge_base_id=knowledge_base_id,
-                property_def_id=prop["kid"],
-                value_type=prop["value_type"],
-                value=value,
+                property_name=str(field_name),
+                value_type=value_type,
+                value=normalize_metadata_value(value, value_type),
             )
 
     async def file_to_markdown_index(

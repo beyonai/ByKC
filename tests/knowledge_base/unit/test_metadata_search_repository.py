@@ -66,8 +66,8 @@ async def test_search_with_where_clause():
     results = await repo.search_files(
         cursor,
         kb_ids=[2],
-        where_sql="EXISTS (SELECT 1 FROM knowledge_file_metadata_value mv WHERE mv.fs_entry_id = fe.kid AND mv.property_def_id = %(dsl_p1)s AND mv.is_deleted = false AND mv.value_string = %(dsl_p2)s)",
-        where_params={"dsl_p1": 1, "dsl_p2": "active"},
+        where_sql="EXISTS (SELECT 1 FROM knowledge_file_metadata_value mv WHERE mv.fs_entry_id = fe.kid AND mv.property_name = %(dsl_p1)s AND mv.value_type = %(dsl_p2)s AND mv.is_deleted = false AND mv.value_string = %(dsl_p3)s)",
+        where_params={"dsl_p1": "status", "dsl_p2": "string", "dsl_p3": "active"},
         limit=20,
     )
 

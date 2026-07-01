@@ -1,4 +1,4 @@
-"""DSL guide content and tool — used when METADATA_FIELDS_LIST is supported."""
+"""DSL guide content and tool for Agent metadata filters."""
 
 from __future__ import annotations
 

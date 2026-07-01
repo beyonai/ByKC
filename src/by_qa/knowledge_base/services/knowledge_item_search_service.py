@@ -25,7 +25,6 @@ class KnowledgeItemSearchService:
     connection_factory: Callable[[], Any]
     search_repository: Any
     embedding_query_service: Any
-    metadata_property_repository: Any = None
     metadata_search_repository: Any = None
 
     def _merge_hits(
@@ -267,7 +266,7 @@ class KnowledgeItemSearchService:
     async def _build_property_map(
         self, cursor: Any, where: dict[str, Any] | None
     ) -> dict[str, dict[str, Any]]:
-        if not where or self.metadata_property_repository is None:
+        if not where:
             return {}
         field_names = _collect_field_names(where)
         if not field_names:
@@ -275,16 +274,7 @@ class KnowledgeItemSearchService:
         custom_names = [n for n in field_names if n not in SYSTEM_FIELD_VALUE_TYPES]
         if not custom_names:
             return {}
-        rows = await self.metadata_property_repository.list_properties(
-            cursor, property_names=custom_names
-        )
-        return {
-            row["property_name"]: {
-                "def_id": row["kid"],
-                "value_type": row["value_type"],
-            }
-            for row in rows
-        }
+        return {name: {} for name in custom_names}
 
 
 def _merge_file_type_into_where(

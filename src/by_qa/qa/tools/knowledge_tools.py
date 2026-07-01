@@ -36,7 +36,6 @@ from by_qa.qa.tools.operations.base import (
     _normalize_headers,
 )
 from by_qa.qa.tools.operations.knowledge_search import KnowledgeSearchOperation
-from by_qa.qa.tools.operations.metadata_fields_list import MetadataFieldsListOperation
 
 
 def _format_operation_error(
@@ -88,7 +87,6 @@ class ServiceToolDispatcher:
     # Mapping from OperationType to BaseOperation subclass for parallel dispatch.
     _PARALLEL_OP_CLASSES: dict[OperationType, type[BaseOperation]] = {
         OperationType.KNOWLEDGE_SEARCH: KnowledgeSearchOperation,
-        OperationType.METADATA_FIELDS_LIST: MetadataFieldsListOperation,
     }
 
     def __init__(
@@ -121,7 +119,7 @@ class ServiceToolDispatcher:
 
     def build_tools(self) -> list[Any]:
         tools = [self._make_tool(OPERATION_REGISTRY[op]) for op in self._supported_ops]
-        if OperationType.METADATA_FIELDS_LIST in self._supported_ops:
+        if OperationType.KNOWLEDGE_SEARCH in self._supported_ops:
             tools.append(get_dsl_guide)
         return tools
 
@@ -333,9 +331,6 @@ class DispatcherToolMiddleware(AgentMiddleware):
         self._search_tool_name = OPERATION_REGISTRY[
             OperationType.KNOWLEDGE_SEARCH
         ].tool_name
-        self._metadata_fields_tool_name = OPERATION_REGISTRY[
-            OperationType.METADATA_FIELDS_LIST
-        ].tool_name
         self._dsl_guide_tool_name = OPERATION_REGISTRY[
             OperationType.DSL_GUIDE
         ].tool_name
@@ -352,42 +347,19 @@ class DispatcherToolMiddleware(AgentMiddleware):
                 pass
         return raw
 
-    @staticmethod
-    def _metadata_fields_available(runtime_context: Any) -> bool:
-        """Check whether any KB supports METADATA_FIELDS_LIST."""
-        if runtime_context is None:
-            raise RuntimeError(
-                "DispatcherToolMiddleware requires a non-null runtime context"
-            )
-        kbs = runtime_context.retrieval.knowledge_bases
-        return any(
-            OperationType.METADATA_FIELDS_LIST in getattr(kb, "operations", {})
-            for kb in kbs
-        )
-
     def _check_dsl_prerequisites(
         self, state: dict, runtime_context: Any = None
     ) -> list[str]:
+        _ = runtime_context
         messages = state.get("messages", [])
-        found_metadata_fields = False
         found_dsl_guide = False
         for msg in messages:
             if isinstance(msg, ToolMessage):
-                if msg.name == self._metadata_fields_tool_name:
-                    found_metadata_fields = True
-                elif msg.name == self._dsl_guide_tool_name:
+                if msg.name == self._dsl_guide_tool_name:
                     found_dsl_guide = True
         missing = []
-        if not found_metadata_fields:
-            missing.append(self._metadata_fields_tool_name)
         if not found_dsl_guide:
             missing.append(self._dsl_guide_tool_name)
-        if not self._metadata_fields_available(runtime_context):
-            missing = [
-                t
-                for t in missing
-                if t not in {self._metadata_fields_tool_name, self._dsl_guide_tool_name}
-            ]
         return missing
 
     async def abefore_model(
@@ -422,23 +394,6 @@ class DispatcherToolMiddleware(AgentMiddleware):
         where = self._parse_where(tool_args.get("where"))
         if where is not None and where != {}:
             runtime_context = request.runtime.context
-            if not self._metadata_fields_available(runtime_context):
-                return ToolMessage(
-                    content=json.dumps(
-                        {
-                            "error": True,
-                            "error_type": "WhereNotSupported",
-                            "message": (
-                                "The 'where' parameter is not supported because no "
-                                "knowledge base provides metadata field listing. "
-                                "Remove the 'where' parameter and retry your search."
-                            ),
-                        },
-                        ensure_ascii=False,
-                    ),
-                    name=request.tool_call["name"],
-                    tool_call_id=request.tool_call["id"],
-                )
             missing = self._check_dsl_prerequisites(request.state, runtime_context)
             if missing:
                 return ToolMessage(
@@ -449,7 +404,7 @@ class DispatcherToolMiddleware(AgentMiddleware):
                             "message": (
                                 "Before using 'where', you must call "
                                 f"{', '.join(missing)} first to understand "
-                                "available fields and DSL syntax."
+                                "DSL syntax."
                             ),
                             "missing_tools": missing,
                         },

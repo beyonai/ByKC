@@ -7,7 +7,9 @@ sync.
 
 from __future__ import annotations
 
-from typing import Final
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Any, Final
 
 METADATA_VALUE_TYPES: Final[frozenset[str]] = frozenset(
     {
@@ -69,3 +71,27 @@ SYSTEM_FIELD_DESCRIPTIONS: Final[dict[str, str]] = {
     "updatedAt": "Last update time",
     "filePath": "Full file path within the knowledge base",
 }
+
+
+def infer_metadata_value_type(value: Any) -> str:
+    """Infer the storage value type for free-form metadata values."""
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float, Decimal)) and not isinstance(value, bool):
+        return "number"
+    if isinstance(value, datetime | date):
+        return "datetime"
+    if isinstance(value, list):
+        return "stringList"
+    return "string"
+
+
+def normalize_metadata_value(value: Any, value_type: str) -> Any:
+    """Normalize YAML values into shapes accepted by metadata value columns."""
+    if value_type == "stringList":
+        if isinstance(value, list):
+            return [str(item) for item in value]
+        return [str(value)]
+    if value_type == "string" and not isinstance(value, str):
+        return str(value)
+    return value

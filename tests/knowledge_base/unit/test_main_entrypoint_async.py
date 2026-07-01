@@ -125,16 +125,6 @@ async def test_knowledge_item_services_receive_model_config_provider(monkeypatch
     ("resolver_name", "runtime_builder_name", "expected_service"),
     [
         (
-            "_get_or_build_metadata_property_service",
-            "build_metadata_property_service",
-            "metadata-property-service",
-        ),
-        (
-            "_get_or_build_file_metadata_service",
-            "build_file_metadata_service",
-            "file-metadata-service",
-        ),
-        (
             "_get_or_build_metadata_search_service",
             "build_metadata_search_service",
             "metadata-search-service",
@@ -176,52 +166,6 @@ async def test_metadata_services_also_ensure_schema_initialized_for_direct_calls
     assert service == expected_service
     assert recorded["builder_settings"] is main_module.settings
     assert recorded["ensured"] == [None]
-
-
-def test_metadata_api_requests_ensure_schema_with_request_provider(monkeypatch):
-    """Metadata API requests should pass the request-scoped provider into bootstrap."""
-    providers = []
-    ensured_providers = []
-
-    def fake_load_model_config_provider():
-        provider = SimpleNamespace(sequence=len(providers))
-        providers.append(provider)
-        return provider
-
-    async def fake_build_file_metadata_service(settings):
-        return SimpleNamespace(settings=settings, provider_sequence="unused")
-
-    async def fake_ensure_schema(provider=None):
-        ensured_providers.append(provider)
-
-    monkeypatch.setattr(
-        main_module, "load_model_config_provider", fake_load_model_config_provider
-    )
-    monkeypatch.setattr(
-        "by_qa.knowledge_base.infrastructure.runtime.build_file_metadata_service",
-        fake_build_file_metadata_service,
-    )
-    monkeypatch.setattr(
-        main_module,
-        "_ensure_knowledge_base_schema_initialized",
-        fake_ensure_schema,
-    )
-    monkeypatch.setattr(
-        main_module, "_register_api_modules", lambda application: ([], {})
-    )
-
-    application = main_module.create_app()
-
-    @application.get("/api/v1/metadata-provider-sequence")
-    async def metadata_provider_sequence():
-        await main_module.resolve_file_metadata_service()
-        return {"provider_sequence": providers[0].sequence}
-
-    client = TestClient(application)
-    response = client.get("/api/v1/metadata-provider-sequence")
-
-    assert response.json() == {"provider_sequence": 0}
-    assert ensured_providers == [providers[0]]
 
 
 @pytest.mark.asyncio

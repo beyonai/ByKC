@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from by_qa.core import logger
 from by_qa.knowledge_base.api.metadata_schemas import (
+    GetFileMetadataRequest,
     MetadataSearchRequest,
     SearchFileRequest,
 )
@@ -129,6 +130,7 @@ def register_routes(
     get_knowledge_item_search_service,
     get_document_chunking_service,
     get_metadata_search_service,
+    get_file_metadata_query_service,
 ):
     """Register knowledge base API routes on the FastAPI app."""
 
@@ -1084,6 +1086,34 @@ def register_routes(
         return _documented_success_response(
             result_object={"data": [r.model_dump(by_alias=True) for r in results]}
         )
+
+    @app.post("/api/v1/knowledgeItems/metadata/get")
+    async def get_file_metadata(body: dict[str, Any] = Body(...)):
+        try:
+            request = GetFileMetadataRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        logger.info(
+            "get_file_metadata request received: kb_code=%s, file_path=%s, field_count=%s",
+            request.kb_code,
+            request.file_path,
+            len(request.metadata_field_list) if request.metadata_field_list else 0,
+        )
+        try:
+            service = await get_file_metadata_query_service()
+            metadata = await service.get_metadata(request)
+        except KnowledgeBaseValidationError as exc:
+            return _documented_error_response(result_msg=str(exc), result_object={})
+        except Exception as exc:
+            logger.exception("get_file_metadata error: %s", exc)
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error", result_object={}
+            )
+        return _documented_success_response(result_object={"metadata": metadata})
 
     @app.post("/api/v1/knowledgeItems/searchFile")
     async def search_file(body: dict[str, Any] = Body(...)):

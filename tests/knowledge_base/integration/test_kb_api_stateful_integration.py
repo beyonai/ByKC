@@ -152,6 +152,7 @@ def _reset_runtime(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
     monkeypatch.setattr(main_module, "_knowledge_item_search_service", None)
     monkeypatch.setattr(main_module, "_knowledge_fetch_cache_cleanup_service", None)
     monkeypatch.setattr(main_module, "_document_chunking_service", None)
+    monkeypatch.setattr(main_module, "_file_metadata_query_service", None)
     monkeypatch.setattr(main_module, "_knowledge_base_schema_initialized", False)
     monkeypatch.setattr(main_module, "_knowledge_base_schema_lock", asyncio.Lock())
 
@@ -290,6 +291,63 @@ def _file_build_status(
     )
     assert response.status_code == 200, response.text
     return response
+
+
+@pytest.mark.integration
+def test_metadata_get_returns_imported_front_matter(monkeypatch):
+    """metadata/get should read YAML front matter persisted by import."""
+    settings = _kb_settings()
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch,
+        FakeDocumentChunkingService(markdown_text="# meeting\n"),
+    )
+
+    kb_name = f"Integration KB {uuid4().hex[:12]}"
+    markdown = b"""---
+\xe4\xbc\x9a\xe8\xae\xae\xe4\xb8\xbb\xe9\xa2\x98: DataCloud\xe5\xb9\xb3\xe5\x8f\xb0\xe9\x9c\x80\xe6\xb1\x82\xe7\xa1\xae\xe8\xae\xa4\xe4\xbc\x9a
+\xe4\xbc\x9a\xe8\xae\xae\xe6\x97\xa5\xe6\x9c\x9f: 2026-05-25
+\xe5\x8f\x82\xe4\xbc\x9a\xe4\xba\xba\xe5\x91\x98:
+  - Alice
+  - Bob
+---
+
+# \xe4\xbc\x9a\xe8\xae\xae\xe7\xba\xaa\xe8\xa6\x81
+DataCloud\xe5\xb9\xb3\xe5\x8f\xb0\xe9\x9c\x80\xe6\xb1\x82\xe7\xa1\xae\xe8\xae\xa4\xe4\xbc\x9a
+"""
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, kb_name)
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/meeting.md",
+            file_content=markdown,
+        )
+
+        response = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={
+                "knCode": kb_code,
+                "filePath": "/meeting.md",
+                "metadataFieldList": ["会议主题", "会议日期", "参会人员"],
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["resultCode"] == "0", payload
+    metadata = payload["resultObject"]["metadata"]
+    assert metadata["会议主题"] == {
+        "valueType": "string",
+        "value": "DataCloud平台需求确认会",
+    }
+    assert metadata["会议日期"]["valueType"] == "datetime"
+    assert metadata["会议日期"]["value"].startswith("2026-05-25")
+    assert metadata["参会人员"] == {
+        "valueType": "stringList",
+        "value": ["Alice", "Bob"],
+    }
 
 
 @pytest.mark.integration

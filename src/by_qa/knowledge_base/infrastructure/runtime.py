@@ -48,6 +48,9 @@ from by_qa.knowledge_base.services.bootstrap_service import (
 )
 from by_qa.knowledge_base.services.embedding_query_service import EmbeddingQueryService
 from by_qa.knowledge_base.services.errors import KnowledgeBaseConfigurationError
+from by_qa.knowledge_base.services.file_metadata_query_service import (
+    FileMetadataQueryService,
+)
 from by_qa.knowledge_base.services.knowledge_base_service import KnowledgeBaseService
 from by_qa.knowledge_base.services.knowledge_fetch_cache_cleanup_service import (
     KnowledgeFetchCacheCleanupService,
@@ -277,4 +280,17 @@ async def build_metadata_search_service(
         connection_factory=build_connection_factory(settings),
         knowledge_base_repository=KnowledgeBaseRepository(),
         metadata_search_repository=MetadataSearchRepository(),
+    )
+
+
+async def build_file_metadata_query_service(
+    settings: Settings,
+) -> FileMetadataQueryService:
+    """Build the read-only file metadata query service."""
+    validate_knowledge_base_settings(settings, require_embedding=False)
+    return FileMetadataQueryService(
+        connection_factory=build_connection_factory(settings),
+        knowledge_base_repository=KnowledgeBaseRepository(),
+        knowledge_fs_entry_repository=KnowledgeFsEntryRepository(),
+        file_metadata_value_repository=FileMetadataValueRepository(),
     )

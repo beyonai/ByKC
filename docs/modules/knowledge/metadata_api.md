@@ -369,15 +369,61 @@ DSL 校验失败时，优先根据以下字段修正请求：
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
+| `POST` | `/api/v1/knowledgeItems/metadata/get` | 查看文件元数据 |
 | `POST` | `/api/v1/knowledgeItems/metadataSearch` | Agent DSL 版纯元数据检索 |
 | `POST` | `/api/v1/knowledgeItems/search` | 基于原检索接口升级的 Agent DSL 版 chunk 级语义检索 |
 | `POST` | `/api/v1/knowledgeItems/searchFile` | Agent DSL 版文件级语义检索 |
 
 ## 已移出的元数据管理能力
 
-元数据属性定义管理、文件元数据更新、文件元数据查看、元数据字段列表接口已移出本项目，由外部元数据管理项目承担。本项目仅保留检索侧 DSL 能力，以及 `/api/v1/knowledgeItems/import` 对 Markdown YAML front matter 的自动入库能力。
+元数据属性定义管理、文件元数据更新、元数据字段列表接口已移出本项目，由外部元数据管理项目承担。本项目保留文件元数据查看能力、检索侧 DSL 能力，以及 `/api/v1/knowledgeItems/import` 对 Markdown YAML front matter 的自动入库能力。
 
 `/api/v1/knowledgeItems/import` 解析 front matter 时不再依赖预注册属性定义，也不做强类型校验。系统会按单个 YAML 值推断存储类型；同一个 key 在不同文档中出现不同类型时允许并存，检索时按查询条件对应的类型列匹配，不会因为同名字段存在其他类型值而报错。
+
+## 文件元数据查看
+
+### `POST /api/v1/knowledgeItems/metadata/get`
+
+查看指定文件当前已入库的元数据值。该接口只读，不提供元数据属性定义管理或文件元数据更新能力。
+
+请求体：`application/json`
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `knCode` | string | 是 | 知识库编码 |
+| `filePath` | string | 是 | 知识库内文件路径 |
+| `metadataFieldList` | array[string] | 否 | 需要返回的元数据字段；省略时返回该文件全部元数据 |
+
+请求示例：
+
+```json
+{
+  "knCode": "2",
+  "filePath": "/会议纪要/DataCloud平台需求确认会.md",
+  "metadataFieldList": ["会议主题", "会议日期"]
+}
+```
+
+成功响应示例：
+
+```json
+{
+  "resultCode": "0",
+  "resultMsg": "success",
+  "resultObject": {
+    "metadata": {
+      "会议主题": {
+        "valueType": "string",
+        "value": "DataCloud平台需求确认会"
+      },
+      "会议日期": {
+        "valueType": "datetime",
+        "value": "2026-05-25T00:00:00"
+      }
+    }
+  }
+}
+```
 
 ## 纯元数据检索
 

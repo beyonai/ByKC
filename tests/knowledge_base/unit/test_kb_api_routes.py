@@ -26,6 +26,7 @@ class FakeKBService:
         self.created_requests = []
         self.created_directory_requests = []
         self.import_calls = []
+        self.metadata_get_requests = []
         self.file_to_markdown_calls = []
         self.file_build_task_requests = []
         self.file_build_task_runs = []
@@ -187,6 +188,19 @@ class FakeKBService:
             "content": b"%PDF-1.4 test payload",
         }
 
+    async def get_metadata(self, request):
+        self.metadata_get_requests.append(request)
+        return {
+            "会议主题": {
+                "valueType": "string",
+                "value": "DataCloud平台需求确认会",
+            },
+            "会议日期": {
+                "valueType": "datetime",
+                "value": "2026-05-25",
+            },
+        }
+
 
 class FakeRouteDocumentChunkingService:
     """Document conversion double used by route tests."""
@@ -212,6 +226,9 @@ def make_test_client(monkeypatch, service):
     monkeypatch.setattr(
         "by_qa.main._get_or_build_knowledge_item_search_service", get_service
     )
+    monkeypatch.setattr(
+        "by_qa.main._get_or_build_file_metadata_query_service", get_service
+    )
 
     chunking_service = FakeRouteDocumentChunkingService()
 
@@ -227,6 +244,41 @@ def make_test_client(monkeypatch, service):
     client = TestClient(app)
     client.fake_document_chunking_service = chunking_service
     return client
+
+
+def test_metadata_get_route_returns_file_metadata(monkeypatch):
+    """POST /knowledgeItems/metadata/get should query file metadata only."""
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/knowledgeItems/metadata/get",
+        json={
+            "knCode": "1",
+            "filePath": "/1.md",
+            "metadataFieldList": ["会议主题", "会议日期"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "resultCode": "0",
+        "resultMsg": "success",
+        "resultObject": {
+            "metadata": {
+                "会议主题": {
+                    "valueType": "string",
+                    "value": "DataCloud平台需求确认会",
+                },
+                "会议日期": {
+                    "valueType": "datetime",
+                    "value": "2026-05-25",
+                },
+            }
+        },
+    }
+    assert service.metadata_get_requests[0].kb_code == "1"
+    assert service.metadata_get_requests[0].file_path == "/1.md"
 
 
 def test_create_knowledge_base_route_returns_business_response(monkeypatch):

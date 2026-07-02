@@ -129,6 +129,11 @@ async def test_knowledge_item_services_receive_model_config_provider(monkeypatch
             "build_metadata_search_service",
             "metadata-search-service",
         ),
+        (
+            "_get_or_build_file_metadata_query_service",
+            "build_file_metadata_query_service",
+            "file-metadata-query-service",
+        ),
     ],
 )
 async def test_metadata_services_also_ensure_schema_initialized_for_direct_calls(

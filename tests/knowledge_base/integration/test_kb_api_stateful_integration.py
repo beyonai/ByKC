@@ -17,6 +17,7 @@ from by_qa.knowledge_base.infrastructure.runtime import (
     build_knowledge_item_search_service,
 )
 from by_qa.knowledge_base.services.errors import KnowledgeBaseConfigurationError
+from by_qa.knowledge_common.exceptions import UnsupportedFileTypeError
 from by_qa.knowledge_common.schemas import KnowledgeItemChunkPayload
 
 DEFAULT_DB_HOST = "127.0.0.1"
@@ -80,6 +81,15 @@ class FailingOnceDocumentChunkingService(FakeDocumentChunkingService):
         if self._should_fail:
             self._should_fail = False
             raise ValueError("simulated extract failure")
+        return super().extract_text_from_file(file_bytes, file_type)
+
+
+class _UnsupportedPngChunking(FakeDocumentChunkingService):
+    """Raises UnsupportedFileTypeError for png; otherwise behaves like the fake."""
+
+    def extract_text_from_file(self, file_bytes: bytes, file_type: str) -> str:
+        if file_type == "png":
+            raise UnsupportedFileTypeError("unsupported file type: png")
         return super().extract_text_from_file(file_bytes, file_type)
 
 
@@ -2351,3 +2361,102 @@ def test_upload_single_md_returns_data_list(monkeypatch, tmp_path):
     assert data[0]["success"] is True
     assert data[0]["error"] is None
     assert payload["resultObject"]["summary"]["total"] == 1
+
+
+@pytest.mark.integration
+def test_import_zip_rewrites_markdown_references(monkeypatch, tmp_path):
+    """zip upload: png uploaded, md reference rewritten to KB-absolute path."""
+    import io
+    import zipfile
+
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch, FakeDocumentChunkingService(markdown_text="# t\n")
+    )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("images/x.png", b"\x89PNG\r\n\x1a\n fake png")
+        zf.writestr("doc.md", "# t\n![alt](images/x.png)\n")
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+        response = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/target"},
+            files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
+        )
+        download = client.post(
+            "/api/v1/downloadFile",
+            json={"knCode": kb_code, "filePath": "/target/doc.md"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["resultCode"] == "0"
+    data = payload["resultObject"]["data"]
+    assert {d["filePath"] for d in data} == {"/target/images/x.png", "/target/doc.md"}
+    assert all(d["success"] for d in data)
+    assert payload["resultObject"]["summary"]["succeeded"] == 2
+    # stored original md carries the rewritten KB-absolute reference
+    assert b"![alt](/target/images/x.png)" in download.content
+
+
+@pytest.mark.integration
+def test_import_single_md_rewrites_reference(monkeypatch, tmp_path):
+    """Single md upload rewrites references against the KB."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch, FakeDocumentChunkingService(markdown_text="# t\n")
+    )
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+        # pre-upload the image so the md reference can resolve
+        client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/p/images/x.png"},
+            files={"fileContent": ("x.png", b"\x89PNG fake", "image/png")},
+        )
+        resp = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/p/doc.md"},
+            files={"fileContent": ("doc.md", b"![a](images/x.png)\n", "text/markdown")},
+        )
+        download = client.post(
+            "/api/v1/downloadFile",
+            json={"knCode": kb_code, "filePath": "/p/doc.md"},
+        )
+
+    assert resp.status_code == 200
+    item = resp.json()["resultObject"]["data"][0]
+    assert item["success"] is True
+    assert b"![a](/p/images/x.png)" in download.content
+
+
+@pytest.mark.integration
+def test_build_unsupported_file_type_sets_unsupported_status(monkeypatch, tmp_path):
+    """Building a .png sets build status to 'unsupported', not failure."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch, _UnsupportedPngChunking(markdown_text="# t\n")
+    )
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+        client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/img/x.png"},
+            files={"fileContent": ("x.png", b"\x89PNG fake", "image/png")},
+        )
+        build = client.post(
+            "/api/v1/fileToMarkdownIndex",
+            json={"knCode": kb_code, "filePath": "/img/x.png"},
+        )
+        status_response = _file_build_status(
+            client, kb_code=kb_code, file_path="/img/x.png"
+        )
+
+    assert build.status_code == 200
+    assert status_response.status_code == 200
+    assert status_response.json()["resultObject"]["status"] == "unsupported"

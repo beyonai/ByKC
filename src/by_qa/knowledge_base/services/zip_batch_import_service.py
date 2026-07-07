@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 _MD_SUFFIXES = (".md", ".markdown")
 _MAX_TOTAL_UNCOMPRESSED = 1024 * 1024 * 1024  # 1 GiB
 _MAX_ENTRIES = 10000
+_CHUNK = 64 * 1024
 
 
 class ImportItem(BaseModel):
@@ -163,10 +164,22 @@ class ZipBatchImportService:
             segments = name.split("/")
             if any(_is_junk_segment(seg) for seg in segments):
                 continue
-            total += info.file_size
-            if total > _MAX_TOTAL_UNCOMPRESSED or len(out) >= _MAX_ENTRIES:
+            if len(out) >= _MAX_ENTRIES:
                 raise ValueError("zip too large")
-            out.append((name, zf.read(name)))
+            # Stream-decompress and cap ACTUAL uncompressed bytes, not the
+            # (spoofable) header-declared file_size, to defend against zip
+            # bombs that declare small sizes but decompress to gigabytes.
+            buf = bytearray()
+            with zf.open(name) as fh:
+                while True:
+                    chunk = fh.read(_CHUNK)
+                    if not chunk:
+                        break
+                    buf.extend(chunk)
+                    total += len(chunk)
+                    if total > _MAX_TOTAL_UNCOMPRESSED:
+                        raise ValueError("zip too large")
+            out.append((name, bytes(buf)))
         return out
 
     async def _import_one(

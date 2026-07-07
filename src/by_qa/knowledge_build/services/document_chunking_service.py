@@ -1152,6 +1152,13 @@ class DocumentChunkingService:
                         cursor += 1
                     part_end = cursor + 1
                     break
+            # spec §5.2: an oversized reference span becomes its own chunk;
+            # log it once per oversized part so it's surfaced, not silent.
+            if part_end - start_char > max_body_size:
+                logger.warning(
+                    "reference span exceeds max chunk size: size=%s",
+                    part_end - start_char,
+                )
             part_text = text[start_char:part_end]
             if part_text.strip():
                 parts.append(

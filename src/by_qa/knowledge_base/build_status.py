@@ -7,6 +7,7 @@ from typing import Final
 BUILD_STATUS_COMPLETE: Final[str] = "complete"
 BUILD_STATUS_FAILED: Final[str] = "failed"
 BUILD_STATUS_RUNNING: Final[str] = "running"
+BUILD_STATUS_UNSUPPORTED: Final[str] = "unsupported"
 
 BUILD_STEP_MARKDOWN: Final[str] = "markdown"
 BUILD_STEP_CHUNKING: Final[str] = "chunking"
@@ -28,6 +29,11 @@ STATUS_DICT: Final[list[dict[str, str]]] = [
         "standCode": BUILD_STATUS_RUNNING,
         "standDisplayValue": "构建中",
         "standDisplayValueEn": BUILD_STATUS_RUNNING,
+    },
+    {
+        "standCode": BUILD_STATUS_UNSUPPORTED,
+        "standDisplayValue": "不支持构建",
+        "standDisplayValueEn": BUILD_STATUS_UNSUPPORTED,
     },
 ]
 

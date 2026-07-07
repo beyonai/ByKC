@@ -2115,6 +2115,11 @@ async def test_file_build_status_returns_latest_task_for_file():
                 "standDisplayValue": "构建中",
                 "standDisplayValueEn": "running",
             },
+            {
+                "standCode": "unsupported",
+                "standDisplayValue": "不支持构建",
+                "standDisplayValueEn": "unsupported",
+            },
         ],
         "stepDict": [
             {
@@ -2999,3 +3004,61 @@ async def test_read_file_reads_markdown_via_provider():
     assert storage.reads[0] == StorageLocation(
         namespace="knowledge-base-markdown", key="kb/7/fs-entry/71/markdown.md"
     )
+
+
+async def test_execute_build_task_marks_unsupported_for_unsupported_type():
+    """Building an unsupported file type sets BUILD_STATUS_UNSUPPORTED, not failed."""
+    from by_qa.knowledge_base.build_status import BUILD_STATUS_UNSUPPORTED
+    from by_qa.knowledge_common.exceptions import UnsupportedFileTypeError
+
+    kb_repo = FakeKnowledgeBaseRepository(
+        default_lookup_result={
+            "kid": 7,
+            "kb_code": "1",
+            "kb_name": "TestKB",
+            "status": "ACTIVE",
+        }
+    )
+    fs_repo = FakeKnowledgeFsEntryRepository()
+    fs_repo.file_entry_by_path = {
+        "x.exe": {
+            "kid": 71,
+            "entry_type": "FILE",
+            "name": "x.exe",
+            "file_bucket_name": "test-bucket",
+            "file_object_key": "kb/7/fs-entry/71/original.exe",
+            "mime_type": "application/octet-stream",
+        }
+    }
+    build_task_repo = FakeKnowledgeBuildTaskRepository()
+    obj_storage = FakeStorageProvider()
+    obj_storage.object_payloads[("test-bucket", "kb/7/fs-entry/71/original.exe")] = (
+        b"raw"
+    )
+
+    class _UnsupportedChunking(FakeDocumentChunkingService):
+        def extract_text_from_file(self, file_bytes, file_type):
+            raise UnsupportedFileTypeError("unsupported file type: exe")
+
+    service = KnowledgeItemIngestionService(
+        connection_factory=lambda: _async_return(FakeConnection()),
+        knowledge_base_repository=kb_repo,
+        knowledge_fs_entry_repository=fs_repo,
+        knowledge_build_task_repository=build_task_repo,
+        knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        storage_provider=obj_storage,
+        embedding_dimension=3,
+    )
+    request = FileToMarkdownIndexRequest.model_validate(
+        {"knCode": "1", "filePath": "/x.exe"}
+    )
+
+    # must not raise
+    await service.execute_file_to_markdown_index_task(
+        request, document_chunking_service=_UnsupportedChunking(), build_task_id=9901
+    )
+    update_calls = [c for c in build_task_repo.calls if c[0] == "update_task"]
+    statuses = [c[1]["status"] for c in update_calls]
+    assert BUILD_STATUS_UNSUPPORTED in statuses
+    assert "failed" not in statuses

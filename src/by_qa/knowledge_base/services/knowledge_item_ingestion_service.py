@@ -19,6 +19,7 @@ from by_qa.knowledge_base.build_status import (
     BUILD_STATUS_COMPLETE,
     BUILD_STATUS_FAILED,
     BUILD_STATUS_RUNNING,
+    BUILD_STATUS_UNSUPPORTED,
     BUILD_STEP_CHUNKING,
     BUILD_STEP_COMPLETE,
     BUILD_STEP_MARKDOWN,
@@ -33,6 +34,7 @@ from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
 from by_qa.knowledge_build.services.document_chunking_service import (
     SUPPORTED_EXTENSIONS,
 )
+from by_qa.knowledge_common.exceptions import UnsupportedFileTypeError
 
 
 def _guess_mime_type(path: str) -> str:
@@ -431,11 +433,29 @@ class KnowledgeItemIngestionService:
                 file_type,
                 len(file_bytes),
             )
-            markdown_content = await asyncio.to_thread(
-                document_chunking_service.extract_text_from_file,
-                file_bytes,
-                file_type,
-            )
+            try:
+                markdown_content = await asyncio.to_thread(
+                    document_chunking_service.extract_text_from_file,
+                    file_bytes,
+                    file_type,
+                )
+            except UnsupportedFileTypeError as exc:
+                logger.info(
+                    "file_to_markdown_index unsupported file type: kb_code=%s, file_path=%s, error=%s",
+                    request.kb_code,
+                    normalized_file_path,
+                    exc,
+                )
+                await self._update_build_task(
+                    cursor,
+                    task_id=build_task_id,
+                    status=BUILD_STATUS_UNSUPPORTED,
+                    current_step=BUILD_STEP_MARKDOWN,
+                    error_message=str(exc) or "unsupported file type",
+                    finished=True,
+                )
+                await connection.commit()
+                return
             logger.info(
                 "file_to_markdown_index stage completed: stage=extract_text, md_length=%s",
                 len(markdown_content),

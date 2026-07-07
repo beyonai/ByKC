@@ -19,7 +19,10 @@ from by_qa.knowledge_build.services.heading_patterns import (
     DEFAULT_HEADING_PATTERNS,
     HeadingPattern,
 )
-from by_qa.knowledge_common.exceptions import KnowledgeConfigurationError
+from by_qa.knowledge_common.exceptions import (
+    KnowledgeConfigurationError,
+    UnsupportedFileTypeError,
+)
 from by_qa.knowledge_common.schemas import KnowledgeItemChunkPayload
 
 SUPPORTED_EXTENSIONS = {
@@ -123,7 +126,7 @@ class DocumentChunkingService:
         ext = self.FILE_TYPE_TO_EXT.get(normalized_file_type)
         if ext is None:
             supported = ", ".join(sorted(self.FILE_TYPE_TO_EXT))
-            raise ValueError(
+            raise UnsupportedFileTypeError(
                 f"unsupported file type: {file_type}. Supported types: {supported}"
             )
         return self._extract_text(file_bytes, ext)
@@ -184,7 +187,7 @@ class DocumentChunkingService:
             return self._extract_xls(file_bytes)
         elif ext == ".csv":
             return self._extract_csv(file_bytes)
-        raise ValueError(
+        raise UnsupportedFileTypeError(
             f"unsupported file type: {ext}. "
             f"Supported types: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
         )

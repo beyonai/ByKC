@@ -1242,3 +1242,12 @@ def test_extract_text_keeps_text_when_front_matter_block_is_empty():
 
     md = "---\n---\n# heading"
     assert service.extract_text_from_file(md.encode("utf-8"), "md") == md
+
+
+def test_extract_text_from_file_raises_unsupported_file_type_error():
+    """Unsupported types raise UnsupportedFileTypeError (subclass of ValueError)."""
+    from by_qa.knowledge_common.exceptions import UnsupportedFileTypeError
+
+    service = _make_service()
+    with pytest.raises(UnsupportedFileTypeError, match="unsupported file type"):
+        service.extract_text_from_file(b"\x00\x01\x02", "exe")

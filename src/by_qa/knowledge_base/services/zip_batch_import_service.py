@@ -21,6 +21,9 @@ from by_qa.knowledge_base.api.schemas import (
     DeleteKnowledgeItemRequest,
     KnowledgeItemUploadRequest,
 )
+from by_qa.knowledge_base.services.markdown_reference_rewriter import (
+    MarkdownReferenceRewriter,
+)
 from by_qa.knowledge_common.kb_path_utils import normalize_kb_path
 
 logger = logging.getLogger(__name__)
@@ -78,13 +81,6 @@ class ZipBatchImportService:
     ingestion_service: object
     max_concurrency: int = 8
 
-    def __post_init__(self) -> None:
-        from by_qa.knowledge_base.services.markdown_reference_rewriter import (
-            MarkdownReferenceRewriter,
-        )
-
-        self._rewriter_factory = MarkdownReferenceRewriter
-
     async def import_zip(
         self,
         *,
@@ -118,7 +114,7 @@ class ZipBatchImportService:
                 return True
             return await self.ingestion_service.file_exists(kb_code_, full_path)
 
-        self._rewriter = self._rewriter_factory(exists_check=exists_check)
+        rewriter = MarkdownReferenceRewriter(exists_check=exists_check)
 
         limit = max(1, max_concurrency or self.max_concurrency)
         sem = asyncio.Semaphore(limit)
@@ -133,6 +129,7 @@ class ZipBatchImportService:
                         data=data,
                         process_front_matter=process_front_matter,
                         file_description=file_description,
+                        rewriter=rewriter,
                     )
 
             return await asyncio.gather(*(one(n, d) for n, d in group))
@@ -181,6 +178,7 @@ class ZipBatchImportService:
         data: bytes,
         process_front_matter: bool,
         file_description: str | None,
+        rewriter: MarkdownReferenceRewriter,
     ) -> ImportItem:
         resolved = _resolve_within_target(target_dir, name)
         if resolved is None:
@@ -197,7 +195,7 @@ class ZipBatchImportService:
             content = data
             if name.lower().endswith(_MD_SUFFIXES):
                 current_dir = "/".join(resolved.split("/")[:-1]) or "/"
-                rewritten = await self._rewriter.rewrite(
+                rewritten = await rewriter.rewrite(
                     data.decode("utf-8"), current_dir, kb_code
                 )
                 content = rewritten.encode("utf-8")

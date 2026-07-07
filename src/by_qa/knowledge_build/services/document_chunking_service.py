@@ -23,6 +23,7 @@ from by_qa.knowledge_common.exceptions import (
     KnowledgeConfigurationError,
     UnsupportedFileTypeError,
 )
+from by_qa.knowledge_common.markdown_reference import detect_reference_spans
 from by_qa.knowledge_common.schemas import KnowledgeItemChunkPayload
 
 SUPPORTED_EXTENSIONS = {
@@ -1057,10 +1058,27 @@ class DocumentChunkingService:
                 return parts
         return None
 
+    @staticmethod
+    def _reference_spans_overlapping(
+        text: str, start_char: int, end_char: int
+    ) -> list[tuple[int, int]]:
+        spans: list[tuple[int, int]] = []
+        for s, e, _, _, _ in detect_reference_spans(text):
+            if s < end_char and e > start_char:
+                spans.append((s, e))
+        return spans
+
+    @staticmethod
+    def _inside_any_span(spans: list[tuple[int, int]], pos: int) -> bool:
+        return any(s < pos < e for s, e in spans)
+
     def _split_block_on_sentences(
         self, block: _TextBlock, text: str
     ) -> list[_TextBlock]:
         sentence_breaks = "。！？!?"
+        ref_spans = self._reference_spans_overlapping(
+            text, block.start_char, block.end_char
+        )
         pieces: list[_TextBlock] = []
         piece_start = block.start_char
         piece_start_line = block.start_line
@@ -1068,7 +1086,9 @@ class DocumentChunkingService:
         cursor = block.start_char
         while cursor < block.end_char:
             char = text[cursor]
-            if char in sentence_breaks:
+            if char in sentence_breaks and not self._inside_any_span(
+                ref_spans, cursor + 1
+            ):
                 piece_end = cursor + 1
                 piece_text = text[piece_start:piece_end]
                 if piece_text.strip():
@@ -1108,16 +1128,30 @@ class DocumentChunkingService:
     def _split_block_hard(
         self, block: _TextBlock, text: str, max_body_size: int
     ) -> list[_TextBlock]:
+        ref_spans = self._reference_spans_overlapping(
+            text, block.start_char, block.end_char
+        )
         parts: list[_TextBlock] = []
         start_char = block.start_char
         start_line = block.start_line
         line_no = block.start_line
-        for cursor in range(block.start_char, block.end_char):
+        cursor = block.start_char
+        while cursor < block.end_char:
             if text[cursor] == "\n":
                 line_no += 1
             if cursor - start_char + 1 < max_body_size and cursor + 1 < block.end_char:
+                cursor += 1
                 continue
             part_end = cursor + 1
+            # don't cut inside a reference span: extend to its end
+            for s, e in ref_spans:
+                if s < part_end < e:
+                    while cursor + 1 < e and cursor + 1 < block.end_char:
+                        if text[cursor + 1] == "\n":
+                            line_no += 1
+                        cursor += 1
+                    part_end = cursor + 1
+                    break
             part_text = text[start_char:part_end]
             if part_text.strip():
                 parts.append(
@@ -1132,6 +1166,7 @@ class DocumentChunkingService:
                 )
             start_char = part_end
             start_line = line_no
+            cursor = part_end
         if start_char < block.end_char:
             parts.append(
                 _TextBlock(

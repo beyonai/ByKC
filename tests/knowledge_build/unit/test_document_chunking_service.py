@@ -1251,3 +1251,36 @@ def test_extract_text_from_file_raises_unsupported_file_type_error():
     service = _make_service()
     with pytest.raises(UnsupportedFileTypeError, match="unsupported file type"):
         service.extract_text_from_file(b"\x00\x01\x02", "exe")
+
+
+def test_chunking_does_not_split_reference_span():
+    """A markdown reference span must stay within a single chunk.
+
+    A sentence break char inside a reference span must not become a chunk
+    boundary; the span stays whole in exactly one chunk. (The brief's exact
+    text ``![alt](images/x.png)`` has no sentence break inside the span, so
+    it never triggers the splitter; we use a span with an internal ``。`` to
+    exercise the atomic-span guard. The prefix-substring assertion from the
+    brief is also tightened to only flag a fragment that lacks the full span,
+    since the prefix is a substring of the whole span.)
+    """
+    service = _make_service()
+    service.chunk_size = 30
+    service.chunk_overlap = 0
+    # Long enough to trigger oversized splitting; the natural sentence-break
+    # cut at the internal 。 would land inside the image span and split it
+    # across two chunks without the atomic-span guard.
+    text = "句。" * 72 + "句![al。t](images/x.png)句。" + "句。" * 15
+    chunks = service._split_text(text, ".md")
+    # no chunk boundary splits the span: the span text appears whole in exactly one chunk
+    full_span = "![al。t](images/x.png)"
+    containing = [c for c in chunks if full_span in c["chunk_text"]]
+    assert len(containing) == 1
+    # and it is never split across two chunks
+    assert not any(
+        "![al。" in c["chunk_text"] and full_span not in c["chunk_text"] for c in chunks
+    )
+    assert not any(
+        "t](images/x.png)" in c["chunk_text"] and full_span not in c["chunk_text"]
+        for c in chunks
+    )

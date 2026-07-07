@@ -1,7 +1,9 @@
 """Route registration for knowledge base APIs."""
 
+import io
 import json
 import mimetypes
+import zipfile
 from inspect import isawaitable
 from pathlib import PurePosixPath
 from typing import Any, Optional
@@ -43,6 +45,10 @@ from by_qa.knowledge_base.services.errors import (
 from by_qa.knowledge_base.services.knowledge_item_ingestion_service import (
     convert_uploaded_file_to_markdown,
 )
+from by_qa.knowledge_base.services.markdown_reference_rewriter import (
+    MarkdownReferenceRewriter,
+)
+from by_qa.knowledge_base.services.zip_batch_import_service import ZipBatchImportService
 
 
 def _documented_success_response(
@@ -539,9 +545,56 @@ def register_routes(
             request.file_description is not None,
             request.process_front_matter,
         )
+        filename = (file_content.filename or "") if file_content is not None else ""
         try:
             service = await get_knowledge_item_ingestion_service()
-            await service.upload_file(request)
+            if filename.lower().endswith(".zip"):
+                if not zipfile.is_zipfile(io.BytesIO(payload or b"")):
+                    return _documented_error_response(
+                        result_msg="invalid zip file",
+                        result_object={},
+                        status_code=422,
+                    )
+                batch_service = ZipBatchImportService(ingestion_service=service)
+                result = await batch_service.import_zip(
+                    kb_code=request.kb_code,
+                    target_dir=request.file_path,
+                    zip_bytes=payload,
+                    process_front_matter=request.process_front_matter,
+                    file_description=request.file_description,
+                )
+                return _documented_success_response(
+                    result_object={
+                        "data": [
+                            item.model_dump(by_alias=True) for item in result.data
+                        ],
+                        "summary": result.summary.model_dump(by_alias=True),
+                    }
+                )
+            # single file
+            file_path_norm = "/" + request.file_path.strip("/")
+            content = request.file_content
+            if file_path_norm.lower().endswith((".md", ".markdown")):
+                rewriter = MarkdownReferenceRewriter(exists_check=service.file_exists)
+                current_dir = "/".join(file_path_norm.split("/")[:-1]) or "/"
+                rewritten = await rewriter.rewrite(
+                    content.decode("utf-8"), current_dir, request.kb_code
+                )
+                content = rewritten.encode("utf-8")
+            single_request = request.model_copy(update={"file_content": content})
+            await service.upload_file(single_request)
+            return _documented_success_response(
+                result_object={
+                    "data": [
+                        {
+                            "filePath": file_path_norm,
+                            "success": True,
+                            "error": None,
+                        }
+                    ],
+                    "summary": {"total": 1, "succeeded": 1, "failed": 0},
+                }
+            )
         except KnowledgeBaseConfigurationError as exc:
             return _documented_error_response(
                 result_msg=str(exc),
@@ -566,7 +619,6 @@ def register_routes(
                 result_object={},
                 status_code=500,
             )
-        return _documented_success_response(result_object={})
 
     @app.post("/api/v1/knowledgeItems/delete")
     @app.post("/api/v1/knowledge-items/delete")

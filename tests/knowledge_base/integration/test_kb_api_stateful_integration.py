@@ -2323,3 +2323,31 @@ def test_create_kb_returns_configuration_error_when_runtime_settings_are_incompl
 
     assert response.status_code == 200
     assert response.json()["resultCode"] == "-1"
+
+
+@pytest.mark.integration
+def test_upload_single_md_returns_data_list(monkeypatch, tmp_path):
+    """Single-file import returns resultObject.data with one success item."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch, FakeDocumentChunkingService(markdown_text="# title\n")
+    )
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+        response = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/docs/intro.md"},
+            files={"fileContent": ("intro.md", b"# title\nbody", "text/markdown")},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["resultCode"] == "0"
+    data = payload["resultObject"]["data"]
+    assert isinstance(data, list) and len(data) == 1
+    assert data[0]["filePath"] == "/docs/intro.md"
+    assert data[0]["success"] is True
+    assert data[0]["error"] is None
+    assert payload["resultObject"]["summary"]["total"] == 1

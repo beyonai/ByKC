@@ -249,6 +249,27 @@ class KnowledgeItemIngestionService:
         finally:
             await connection.close()
 
+    async def file_exists(self, kb_code: str, full_path: str) -> bool:
+        """Return True if an uploaded file exists at `full_path` in the KB."""
+        normalized = (full_path or "").strip("/")
+        if not normalized:
+            return False
+        connection = await self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            kb_row = await self.knowledge_base_repository.get_by_code(cursor, kb_code)
+            if not kb_row:
+                return False
+            knowledge_base_id = self._row_id(kb_row)
+            file_row = await self.knowledge_fs_entry_repository.get_file_by_path(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                full_path=normalized,
+            )
+            return file_row is not None
+        finally:
+            await connection.close()
+
     async def _apply_front_matter_metadata(
         self,
         cursor: Any,

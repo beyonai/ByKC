@@ -2917,3 +2917,88 @@ def test_import_zip_concurrent_many_files_all_succeed(monkeypatch, tmp_path):
     assert b"![a](/target/img/0.png)" in md0_download.content
     # spot-check: png 0 bytes intact
     assert png0_download.content == png_bytes
+
+
+@pytest.mark.integration
+def test_import_zip_rewrites_references_when_target_exists(monkeypatch, tmp_path):
+    """References resolve to existing KB targets (in same zip) and are rewritten to KB-absolute paths.
+
+    Variants: a `../` relative image (stays within KB root), a link (non-image) form to a
+    sibling md, and an anchor-suffixed image (anchor preserved).
+    """
+    import io
+    import zipfile
+
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch, FakeDocumentChunkingService(markdown_text="# t\n")
+    )
+
+    png_bytes = b"\x89PNG\r\n\x1a\nimg payload"
+    doc = b"![a](../img/x.png)\n[link](../other.md)\n![frag](../img/x.png#section)\n"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("img/x.png", png_bytes)
+        zf.writestr("other.md", b"# other\n")
+        zf.writestr("sub/doc.md", doc)
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+        resp = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/t"},
+            files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
+        )
+        download = client.post(
+            "/api/v1/downloadFile",
+            json={"knCode": kb_code, "filePath": "/t/sub/doc.md"},
+        )
+
+    assert resp.status_code == 200
+    assert all(d["success"] for d in resp.json()["resultObject"]["data"])
+    content = download.content
+    assert b"![a](/t/img/x.png)" in content
+    assert b"[link](/t/other.md)" in content
+    assert b"![frag](/t/img/x.png#section)" in content
+
+
+@pytest.mark.integration
+def test_import_zip_leaves_references_unchanged_when_unresolvable(
+    monkeypatch, tmp_path
+):
+    """References that cannot be resolved are left unchanged: missing target, external URL,
+    anchor-only link, and a `..` path escaping the KB root."""
+    import io
+    import zipfile
+
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch, FakeDocumentChunkingService(markdown_text="# t\n")
+    )
+
+    doc = (
+        b"![miss](missing.png)\n"
+        b"![ext](https://host/x.png)\n"
+        b"[anchor](#section)\n"
+        b"![esc](../../../x.png)\n"
+    )
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("doc.md", doc)
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+        resp = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/t"},
+            files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
+        )
+        download = client.post(
+            "/api/v1/downloadFile",
+            json={"knCode": kb_code, "filePath": "/t/doc.md"},
+        )
+
+    assert resp.status_code == 200
+    assert all(d["success"] for d in resp.json()["resultObject"]["data"])
+    # every reference is left exactly as written
+    assert download.content == doc

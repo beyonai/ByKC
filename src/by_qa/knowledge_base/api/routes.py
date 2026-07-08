@@ -573,6 +573,11 @@ def register_routes(
                 )
             # single file
             file_path_norm = "/" + request.file_path.strip("/")
+            segments = [s for s in file_path_norm.split("/") if s]
+            if any(s == ".." for s in segments):
+                return _documented_error_response(
+                    result_msg="unsafe path", result_object={}, status_code=422
+                )
             content = request.file_content
             if file_path_norm.lower().endswith((".md", ".markdown")):
                 rewriter = MarkdownReferenceRewriter(exists_check=service.files_exist)

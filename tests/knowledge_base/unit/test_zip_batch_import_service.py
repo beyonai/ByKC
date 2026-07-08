@@ -14,11 +14,14 @@ from by_qa.knowledge_base.services.zip_batch_import_service import ZipBatchImpor
 class FakeIngestion:
     """Records upload/delete order with a monotonic sequence number."""
 
-    def __init__(self):
+    def __init__(self, *, fail_upload_for: str | None = None):
         self.uploads: list[tuple[int, KnowledgeItemUploadRequest]] = []
         self.deletes: list[tuple[int, str]] = []
         self.files: set[str] = set()
         self._seq = 0
+        self.fail_upload_for = (
+            "/" + fail_upload_for.strip("/") if fail_upload_for else None
+        )
 
     def _next(self) -> int:
         self._seq += 1
@@ -27,10 +30,18 @@ class FakeIngestion:
     async def upload_file(self, request: KnowledgeItemUploadRequest) -> None:
         seq = self._next()
         self.uploads.append((seq, request))
-        self.files.add("/" + request.file_path.strip("/"))
+        normalized = "/" + request.file_path.strip("/")
+        if self.fail_upload_for is not None and normalized == self.fail_upload_for:
+            raise RuntimeError(f"forced upload failure for {normalized}")
+        self.files.add(normalized)
 
     async def file_exists(self, kb_code: str, full_path: str) -> bool:  # pylint: disable=unused-argument
         return full_path in self.files
+
+    async def files_exist(  # pylint: disable=unused-argument
+        self, kb_code: str, paths: frozenset[str]
+    ) -> set[str]:
+        return {p for p in paths if p in self.files}
 
     async def delete_knowledge_item(self, request: DeleteKnowledgeItemRequest) -> None:
         seq = self._next()
@@ -143,3 +154,54 @@ async def test_import_zip_rejects_non_zip():
         await svc.import_zip(
             kb_code="kb1", target_dir="/target", zip_bytes=b"not a zip"
         )
+
+
+async def test_import_zip_duplicate_paths_recorded_as_failure():
+    """Two zip entries resolving to the same KB path: first wins, second is a
+    recorded failure with an error mentioning 'duplicate'."""
+    ingestion = FakeIngestion()
+    zip_bytes = _make_zip({"a.md": b"# a\n", "sub/../a.md": b"# dup\n"})
+    svc = ZipBatchImportService(ingestion_service=ingestion)
+    result = await svc.import_zip(kb_code="kb1", target_dir="/t", zip_bytes=zip_bytes)
+    assert result.summary.total == 2
+    assert result.summary.succeeded == 1
+    assert result.summary.failed == 1
+    # both report the same resolved path
+    assert {item.file_path for item in result.data} == {"/t/a.md"}
+    dup_items = [item for item in result.data if not item.success]
+    assert len(dup_items) == 1
+    assert "duplicate" in (dup_items[0].error or "")
+    # only one upload actually happened
+    assert len(ingestion.uploads) == 1
+
+
+async def test_import_zip_malformed_md_preserves_existing():
+    """A malformed md (invalid UTF-8) must NOT delete the pre-existing file:
+    decode happens before delete (H1 reorder)."""
+    ingestion = FakeIngestion()
+    ingestion.files.add("/t/a.md")  # pre-existing original
+    zip_bytes = _make_zip({"a.md": b"\xff\xfe not utf8"})
+    svc = ZipBatchImportService(ingestion_service=ingestion)
+    result = await svc.import_zip(kb_code="kb1", target_dir="/t", zip_bytes=zip_bytes)
+    assert result.summary.total == 1 and result.summary.failed == 1
+    item = result.data[0]
+    assert item.success is False
+    # original preserved: delete was NOT called and file is still present
+    assert ingestion.deletes == []
+    assert "/t/a.md" in ingestion.files
+
+
+async def test_import_zip_drops_failed_phase1_from_batch_paths():
+    """A non-md that fails to upload is removed from batch_paths, so an md
+    referencing it is NOT rewritten to a dangling KB-absolute path."""
+    ingestion = FakeIngestion(fail_upload_for="/t/images/x.png")
+    md = "# t\n![alt](images/x.png)\n"
+    zip_bytes = _make_zip({"images/x.png": b"\x89PNG fake", "doc.md": md.encode()})
+    svc = ZipBatchImportService(ingestion_service=ingestion, max_concurrency=2)
+    await svc.import_zip(kb_code="kb1", target_dir="/t", zip_bytes=zip_bytes)
+    # the png failed; the md uploaded but its reference was left relative
+    md_uploads = [req for _, req in ingestion.uploads if req.file_path == "/t/doc.md"]
+    assert len(md_uploads) == 1
+    # reference NOT rewritten to /t/images/x.png (failed sibling dropped)
+    assert b"![alt](images/x.png)" in md_uploads[0].file_content
+    assert b"![alt](/t/images/x.png)" not in md_uploads[0].file_content

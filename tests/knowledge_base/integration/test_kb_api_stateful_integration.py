@@ -2460,3 +2460,35 @@ def test_build_unsupported_file_type_sets_unsupported_status(monkeypatch, tmp_pa
     assert build.status_code == 200
     assert status_response.status_code == 200
     assert status_response.json()["resultObject"]["status"] == "unsupported"
+
+
+@pytest.mark.integration
+def test_import_single_file_rejects_dotdot_path(monkeypatch, tmp_path):
+    """Single-file upload with a `..` segment in filePath is rejected as an
+    unsafe path and no file is created."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch, FakeDocumentChunkingService(markdown_text="# t\n")
+    )
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+        response = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/../escape.md"},
+            files={"fileContent": ("escape.md", b"# escape\n", "text/markdown")},
+        )
+        # confirm no file was created at the escaped path
+        download = client.post(
+            "/api/v1/downloadFile",
+            json={"knCode": kb_code, "filePath": "/escape.md"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["resultCode"] == "-1"
+    assert payload["resultMsg"] == "unsafe path"
+    # no file was created: download reports not-found
+    download_payload = download.json()
+    assert download_payload["resultCode"] == "-1"
+    assert "file not found" in download_payload["resultMsg"]

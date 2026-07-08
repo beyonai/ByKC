@@ -2492,3 +2492,70 @@ def test_import_single_file_rejects_dotdot_path(monkeypatch, tmp_path):
     download_payload = download.json()
     assert download_payload["resultCode"] == "-1"
     assert "file not found" in download_payload["resultMsg"]
+
+
+@pytest.mark.integration
+def test_import_zip_malformed_md_preserves_existing_file(monkeypatch, tmp_path):
+    """A malformed-md zip overwrite must NOT delete the pre-existing valid file.
+
+    The zip import service decodes/rewrites md content BEFORE deleting the
+    existing file (H1 rewrite-before-delete), so a UnicodeDecodeError on the
+    malformed zip entry is caught per-file and the original valid md survives.
+    """
+    import io
+    import zipfile
+
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch, FakeDocumentChunkingService(markdown_text="# t\n")
+    )
+
+    valid_body = b"# valid title\n\nvalid body line\n"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("a.md", b"\xff\xfe\xfd not valid utf8")
+    zip_bytes = buf.getvalue()
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+        # Step 1: upload a VALID md at /t/a.md (single-file), assert success.
+        first = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/t/a.md"},
+            files={"fileContent": ("a.md", valid_body, "text/markdown")},
+        )
+        valid_download = client.post(
+            "/api/v1/downloadFile",
+            json={"knCode": kb_code, "filePath": "/t/a.md"},
+        )
+        # Step 2: zip overwrite with malformed md at the same path.
+        zip_resp = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/t"},
+            files={"fileContent": ("batch.zip", zip_bytes, "application/zip")},
+        )
+        # The original valid md must still be present and downloadable.
+        after_download = client.post(
+            "/api/v1/downloadFile",
+            json={"knCode": kb_code, "filePath": "/t/a.md"},
+        )
+
+    # Step 1 assertions: valid upload succeeded and is downloadable.
+    assert first.status_code == 200
+    first_data = first.json()["resultObject"]["data"]
+    assert len(first_data) == 1 and first_data[0]["success"] is True
+    assert valid_download.status_code == 200
+    assert valid_body in valid_download.content
+
+    # Step 2 assertions: zip response reports the malformed entry as a failure.
+    assert zip_resp.status_code == 200
+    zip_payload = zip_resp.json()
+    assert zip_payload["resultCode"] == "0"
+    zip_data = zip_payload["resultObject"]["data"]
+    assert len(zip_data) == 1
+    assert zip_data[0]["filePath"] == "/t/a.md"
+    assert zip_data[0]["success"] is False
+    # H1: the original valid md is preserved (rewrite-before-delete).
+    assert after_download.status_code == 200
+    assert valid_body in after_download.content

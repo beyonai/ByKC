@@ -1284,3 +1284,51 @@ def test_chunking_does_not_split_reference_span():
         "t](images/x.png)" in c["chunk_text"] and full_span not in c["chunk_text"]
         for c in chunks
     )
+
+
+def test_chunking_hard_split_keeps_reference_span_whole():
+    """`_split_block_hard`'s span-extend guard must keep a reference span whole
+    when the natural hard-cut point lands strictly inside the span.
+
+    A long run of a non-sentence-break char (``字``) has NO sentence-break char
+    near the cut, so ``_split_block_on_sentences`` cannot break there and the
+    ``_split_block_hard`` span-extend path is the only thing protecting the
+    span. The prefix length (13) is tuned so the 30-char hard cut lands at
+    span offset 17 (inside ``![alt](images/x.png)``), which would split the
+    span into ``![alt](images/x.p`` + ``ng)`` without the guard.
+
+    ``_split_block_hard`` is exercised directly because the public
+    ``_split_text`` path never reaches it: ``_split_block_on_sentences`` always
+    returns at least one piece (the trailing remainder), so the empty-pieces
+    fallback that calls ``_split_block_hard`` is otherwise dead code.
+    """
+    from by_qa.knowledge_build.services.document_chunking_service import _TextBlock
+
+    service = _make_service()
+    service.chunk_size = 30
+    service.chunk_overlap = 0
+
+    full_span = "![alt](images/x.png)"
+    # prefix=13 -> first 30-char cut lands at span offset 17 (inside the span).
+    text = "字" * 13 + full_span + "字" * 55
+    block = _TextBlock(
+        text=text,
+        start_char=0,
+        end_char=len(text),
+        start_line=0,
+        end_line=0,
+        kind="paragraph",
+    )
+
+    parts = service._split_block_hard(block, text, service.chunk_size)
+
+    # the full span appears whole in exactly one part
+    containing = [part for part in parts if full_span in part.text]
+    assert len(containing) == 1
+    # never split: no part carries a strict prefix of the span without the
+    # full span, and no part carries the span's tail without the full span
+    assert not any(
+        "![alt](images/x.p" in part.text and full_span not in part.text
+        for part in parts
+    )
+    assert not any("ng)" in part.text and full_span not in part.text for part in parts)

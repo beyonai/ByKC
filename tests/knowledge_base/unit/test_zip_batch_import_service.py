@@ -8,6 +8,7 @@ from by_qa.knowledge_base.api.schemas import (
     DeleteKnowledgeItemRequest,
     KnowledgeItemUploadRequest,
 )
+from by_qa.knowledge_base.services import zip_batch_import_service as zbmod
 from by_qa.knowledge_base.services.zip_batch_import_service import ZipBatchImportService
 
 
@@ -205,3 +206,17 @@ async def test_import_zip_drops_failed_phase1_from_batch_paths():
     # reference NOT rewritten to /t/images/x.png (failed sibling dropped)
     assert b"![alt](images/x.png)" in md_uploads[0].file_content
     assert b"![alt](/t/images/x.png)" not in md_uploads[0].file_content
+
+
+async def test_import_zip_rejects_oversized_entry(monkeypatch: pytest.MonkeyPatch):
+    """The per-entry cap rejects a single entry whose ACTUAL decompressed bytes
+    exceed the limit (not the spoofable header-declared file_size)."""
+    ingestion = FakeIngestion()
+    # Lower the per-entry cap to a small value so the test is fast and does not
+    # allocate megabytes. Restore is automatic via monkeypatch.
+    monkeypatch.setattr(zbmod, "_MAX_ENTRY_UNCOMPRESSED", 256)
+    # One entry whose decompressed content (1000 bytes) exceeds the 256 cap.
+    zip_bytes = _make_zip({"big.md": b"x" * 1000})
+    svc = ZipBatchImportService(ingestion_service=ingestion)
+    with pytest.raises(ValueError, match="zip too large"):
+        await svc.import_zip(kb_code="kb1", target_dir="/t", zip_bytes=zip_bytes)

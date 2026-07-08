@@ -29,7 +29,11 @@ from by_qa.knowledge_common.kb_path_utils import normalize_kb_path
 logger = logging.getLogger(__name__)
 
 _MD_SUFFIXES = (".md", ".markdown")
-_MAX_TOTAL_UNCOMPRESSED = 1024 * 1024 * 1024  # 1 GiB
+# Bounds resident memory: entries are still held in `out` (decompressed in
+# full) before upload. Full streaming (extract-one-upload-one via tempdir) is a
+# future improvement, but these caps bound the worst case.
+_MAX_TOTAL_UNCOMPRESSED = 256 * 1024 * 1024  # 256 MiB across all entries
+_MAX_ENTRY_UNCOMPRESSED = 64 * 1024 * 1024  # 64 MiB per single entry
 _MAX_ENTRIES = 10000
 _CHUNK = 64 * 1024
 
@@ -238,6 +242,10 @@ class ZipBatchImportService:
                         break
                     buf.extend(chunk)
                     total += len(chunk)
+                    # Per-entry cap on ACTUAL decompressed bytes (not the
+                    # spoofable header file_size) bounds a single bomb entry.
+                    if len(buf) > _MAX_ENTRY_UNCOMPRESSED:
+                        raise ValueError("zip too large")
                     if total > _MAX_TOTAL_UNCOMPRESSED:
                         raise ValueError("zip too large")
             out.append((name, bytes(buf)))

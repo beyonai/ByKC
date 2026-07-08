@@ -2559,3 +2559,231 @@ def test_import_zip_malformed_md_preserves_existing_file(monkeypatch, tmp_path):
     # H1: the original valid md is preserved (rewrite-before-delete).
     assert after_download.status_code == 200
     assert valid_body in after_download.content
+
+
+@pytest.mark.integration
+def test_import_zip_overwrite_replaces_existing_file_content(monkeypatch, tmp_path):
+    """Overwrite happy path: an existing file is soft-deleted and replaced with the zip's new content."""
+    import io
+    import zipfile
+
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch, FakeDocumentChunkingService(markdown_text="# t\n")
+    )
+
+    old_body = b"# old title\nold body\n"
+    new_body = b"# new title\nnew body\n"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("a.md", new_body)
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+        client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/t/a.md"},
+            files={"fileContent": ("a.md", old_body, "text/markdown")},
+        )
+        old_download = client.post(
+            "/api/v1/downloadFile", json={"knCode": kb_code, "filePath": "/t/a.md"}
+        )
+        resp = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/t"},
+            files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
+        )
+        new_download = client.post(
+            "/api/v1/downloadFile", json={"knCode": kb_code, "filePath": "/t/a.md"}
+        )
+
+    assert resp.status_code == 200
+    item = [
+        d for d in resp.json()["resultObject"]["data"] if d["filePath"] == "/t/a.md"
+    ][0]
+    assert item["success"] is True
+    assert old_body in old_download.content
+    assert new_body in new_download.content
+    assert old_body not in new_download.content
+
+
+@pytest.mark.integration
+def test_import_zip_preserves_non_md_binary_bytes(monkeypatch, tmp_path):
+    """A non-markdown binary resource (png) is stored intact and downloadable byte-for-byte."""
+    import io
+    import zipfile
+
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch, FakeDocumentChunkingService(markdown_text="# t\n")
+    )
+
+    png_bytes = b"\x89PNG\r\n\x1a\n" + b"binary payload \x00\x01\x02 XYZ"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("images/x.png", png_bytes)
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+        resp = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/target"},
+            files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
+        )
+        download = client.post(
+            "/api/v1/downloadFile",
+            json={"knCode": kb_code, "filePath": "/target/images/x.png"},
+        )
+
+    assert resp.status_code == 200
+    item = [
+        d
+        for d in resp.json()["resultObject"]["data"]
+        if d["filePath"] == "/target/images/x.png"
+    ][0]
+    assert item["success"] is True
+    assert download.status_code == 200
+    assert download.content == png_bytes
+
+
+@pytest.mark.integration
+def test_import_zip_uploads_non_md_before_md(monkeypatch, tmp_path):
+    """End-to-end two-phase ordering: every non-md file precedes every md file in the result list."""
+    import io
+    import zipfile
+
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch, FakeDocumentChunkingService(markdown_text="# t\n")
+    )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("a.png", b"\x89PNG fake")
+        zf.writestr("b.pdf", b"%PDF-1.4 fake")
+        zf.writestr("one.md", b"# one\n")
+        zf.writestr("two.md", b"# two\n")
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+        resp = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/target"},
+            files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()["resultObject"]["data"]
+    paths = [d["filePath"] for d in data]
+    non_md_idx = [i for i, p in enumerate(paths) if not p.endswith(".md")]
+    md_idx = [i for i, p in enumerate(paths) if p.endswith(".md")]
+    assert non_md_idx and md_idx
+    assert max(non_md_idx) < min(md_idx)
+    assert all(d["success"] for d in data)
+
+
+@pytest.mark.integration
+def test_import_zip_rejects_unsafe_path_entry(monkeypatch, tmp_path):
+    """A zip entry escaping the target dir (../) is recorded as a failure and never stored."""
+    import io
+    import zipfile
+
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch, FakeDocumentChunkingService(markdown_text="# t\n")
+    )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("../escape.md", b"# escape\n")
+        zf.writestr("real.md", b"# real\n")
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+        resp = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/target"},
+            files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
+        )
+        escape_download = client.post(
+            "/api/v1/downloadFile",
+            json={"knCode": kb_code, "filePath": "/escape.md"},
+        )
+        real_download = client.post(
+            "/api/v1/downloadFile",
+            json={"knCode": kb_code, "filePath": "/target/real.md"},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()["resultObject"]["data"]
+    unsafe = [d for d in data if not d["success"]]
+    assert len(unsafe) == 1
+    assert "unsafe" in (unsafe[0]["error"] or "").lower()
+    real = [d for d in data if d["filePath"] == "/target/real.md"][0]
+    assert real["success"] is True
+    # no file created at the escaped path
+    assert escape_download.json()["resultCode"] == "-1"
+    # the legit file is present
+    assert real_download.status_code == 200
+
+
+@pytest.mark.integration
+def test_import_zip_rejects_invalid_zip(monkeypatch, tmp_path):
+    """A file named .zip whose content is not a valid zip is rejected with 'invalid zip file'."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch, FakeDocumentChunkingService(markdown_text="# t\n")
+    )
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+        resp = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/target"},
+            files={"fileContent": ("batch.zip", b"not a zip file", "application/zip")},
+        )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["resultCode"] == "-1"
+    assert payload["resultMsg"] == "invalid zip file"
+
+
+@pytest.mark.integration
+def test_import_zip_auto_creates_nested_directories(monkeypatch, tmp_path):
+    """A zip entry with a deep relative path auto-creates intermediate directories."""
+    import io
+    import zipfile
+
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch, FakeDocumentChunkingService(markdown_text="# t\n")
+    )
+
+    body = b"# deep\n"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("a/b/c.md", body)
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+        resp = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/target"},
+            files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
+        )
+        download = client.post(
+            "/api/v1/downloadFile",
+            json={"knCode": kb_code, "filePath": "/target/a/b/c.md"},
+        )
+
+    assert resp.status_code == 200
+    item = [
+        d
+        for d in resp.json()["resultObject"]["data"]
+        if d["filePath"] == "/target/a/b/c.md"
+    ][0]
+    assert item["success"] is True
+    assert download.status_code == 200
+    assert download.content == body

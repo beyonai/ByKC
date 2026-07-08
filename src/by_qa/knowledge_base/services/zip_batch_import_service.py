@@ -68,6 +68,31 @@ def _is_junk_segment(seg: str) -> bool:
     return seg == "__MACOSX" or seg.startswith(".")
 
 
+def _decode_zip_name(info: zipfile.ZipInfo) -> str:
+    """Decode a zip entry filename, recovering GBK names without the UTF-8 flag.
+
+    Python's ``zipfile`` decodes entry names as UTF-8 when flag bit 0x800 is set
+    (which ``zipfile`` itself sets when writing), and as CP437 otherwise. Zips
+    produced by Windows Explorer / WinRAR / 好压 on Chinese Windows encode
+    filenames as GBK *without* setting the flag, so ``info.filename`` is CP437
+    mojibake (e.g. ``中文文档`` → ``╓╨╬─╬─╡╡``). Re-encode the CP437 string back
+    to bytes and decode as GBK to recover the real name. Pure-ASCII names are
+    left untouched (no high-bit bytes → no mojibake).
+    """
+    name = info.filename
+    if info.flag_bits & 0x800:
+        return name  # UTF-8; zipfile already decoded it correctly.
+    if name.isascii():
+        return name  # all bytes were 0x00-0x7F; cp437 == ascii here.
+    try:
+        return name.encode("cp437").decode("gbk")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        try:
+            return name.encode("cp437").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            return name  # give up; keep the cp437 decode
+
+
 def _resolve_within_target(target_dir: str, name: str) -> str | None:
     """Resolve `name` under `target_dir`; None if it escapes the target dir or KB root."""
     resolved = normalize_kb_path("/" + target_dir, name)
@@ -225,7 +250,7 @@ class ZipBatchImportService:
         for info in zf.infolist():
             if info.is_dir():
                 continue
-            name = info.filename
+            name = _decode_zip_name(info)
             segments = name.split("/")
             if any(_is_junk_segment(seg) for seg in segments):
                 continue
@@ -234,8 +259,11 @@ class ZipBatchImportService:
             # Stream-decompress and cap ACTUAL uncompressed bytes, not the
             # (spoofable) header-declared file_size, to defend against zip
             # bombs that declare small sizes but decompress to gigabytes.
+            # Open by ZipInfo object (not the decoded name string) so zipfile
+            # does not try to match the (possibly re-decoded) name against the
+            # raw entry name.
             buf = bytearray()
-            with zf.open(name) as fh:
+            with zf.open(info) as fh:
                 while True:
                     chunk = fh.read(_CHUNK)
                     if not chunk:

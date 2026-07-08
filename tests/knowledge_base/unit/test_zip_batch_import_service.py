@@ -58,6 +58,74 @@ def _make_zip(entries: dict[str, bytes]) -> bytes:
     return buf.getvalue()
 
 
+def _make_nonutf8_zip(entries: list[tuple[bytes, bytes]]) -> bytes:
+    """Build a zip whose filenames are the given raw bytes with NO UTF-8 flag.
+
+    Mimics zips from Windows Explorer / WinRAR on Chinese Windows: GBK-encoded
+    names without flag bit 0x800, which Python's zipfile would otherwise decode
+    as CP437 mojibake.
+    """
+    import struct
+    import zlib
+
+    local = b""
+    central = b""
+    offset = 0
+    for fname_bytes, data in entries:
+        crc = zlib.crc32(data) & 0xFFFFFFFF
+        mod_time, mod_date = 0, 0x21
+        lh = struct.pack(
+            "<IHHHHHIIIHH",
+            0x04034B50,
+            20,
+            0,
+            0,
+            mod_time,
+            mod_date,
+            crc,
+            len(data),
+            len(data),
+            len(fname_bytes),
+            0,
+        )
+        local_body = fname_bytes + data
+        local += lh + local_body
+        ch = struct.pack(
+            "<IHHHHHHIIIHHHHHII",
+            0x02014B50,
+            20,
+            20,
+            0,
+            0,
+            mod_time,
+            mod_date,
+            crc,
+            len(data),
+            len(data),
+            len(fname_bytes),
+            0,
+            0,
+            0,
+            0,
+            0,
+            offset,
+        )
+        central += ch + fname_bytes
+        offset += len(lh) + len(local_body)
+    eocd = struct.pack(
+        "<IHHHHIIH",
+        0x06054B50,
+        0,
+        0,
+        len(entries),
+        len(entries),
+        len(central),
+        len(local),
+        0,
+    )
+    return local + central + eocd
+
+
 async def test_import_zip_uploads_non_md_first_then_md_and_rewrites():
     ingestion = FakeIngestion()
     md = "# t\n![alt](images/x.png)\n"
@@ -220,3 +288,54 @@ async def test_import_zip_rejects_oversized_entry(monkeypatch: pytest.MonkeyPatc
     svc = ZipBatchImportService(ingestion_service=ingestion)
     with pytest.raises(ValueError, match="zip too large"):
         await svc.import_zip(kb_code="kb1", target_dir="/t", zip_bytes=zip_bytes)
+
+
+async def test_import_zip_decodes_gbk_chinese_filenames():
+    """Zips with GBK names and no UTF-8 flag must be stored under the real name."""
+    ingestion = FakeIngestion()
+    entries = [
+        ("中文文档.md", b"# title\n"),
+        ("图片/中文图.png", b"\x89PNG fake"),
+    ]
+    zip_bytes = _make_nonutf8_zip([(n.encode("gbk"), d) for n, d in entries])
+    svc = ZipBatchImportService(ingestion_service=ingestion, max_concurrency=2)
+    result = await svc.import_zip(
+        kb_code="kb1", target_dir="/target", zip_bytes=zip_bytes
+    )
+    uploaded = {req.file_path for _, req in ingestion.uploads}
+    assert "/target/中文文档.md" in uploaded
+    assert "/target/图片/中文图.png" in uploaded
+    assert all(item.success for item in result.data)
+    reported = {item.file_path for item in result.data}
+    assert "/target/中文文档.md" in reported
+    assert "/target/图片/中文图.png" in reported
+
+
+async def test_import_zip_keeps_utf8_flagged_chinese_filenames():
+    """Zips written by zipfile (UTF-8 flag set) must stay correct after the fix."""
+    ingestion = FakeIngestion()
+    md = "# t\n![alt](图片/中文图.png)\n"
+    zip_bytes = _make_zip(
+        {"图片/中文图.png": b"\x89PNG fake", "中文文档.md": md.encode()}
+    )
+    svc = ZipBatchImportService(ingestion_service=ingestion, max_concurrency=2)
+    result = await svc.import_zip(
+        kb_code="kb1", target_dir="/target", zip_bytes=zip_bytes
+    )
+    uploaded = {req.file_path for _, req in ingestion.uploads}
+    assert "/target/图片/中文图.png" in uploaded
+    assert "/target/中文文档.md" in uploaded
+    # md reference rewritten using the real (decoded) sibling path
+    md_req = next(
+        req for _, req in ingestion.uploads if req.file_path == "/target/中文文档.md"
+    )
+    assert "![alt](/target/图片/中文图.png)".encode() in md_req.file_content
+    assert all(item.success for item in result.data)
+
+
+async def test_decode_zip_name_helper_handles_ascii_and_gbk():
+    info_ascii = zipfile.ZipInfo("plain.txt")
+    assert zbmod._decode_zip_name(info_ascii) == "plain.txt"
+    info_gbk = zipfile.ZipInfo("中文.txt".encode("gbk").decode("cp437"))
+    info_gbk.flag_bits = 0  # no UTF-8 flag
+    assert zbmod._decode_zip_name(info_gbk) == "中文.txt"

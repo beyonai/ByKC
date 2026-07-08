@@ -6,8 +6,10 @@ from by_qa.knowledge_base.services.markdown_reference_rewriter import (
 
 
 async def _exists(found: set[str]):
-    async def _check(kb_code: str, resolved: str) -> bool:  # pylint: disable=unused-argument
-        return resolved in found
+    async def _check(  # pylint: disable=unused-argument
+        kb_code: str, paths: frozenset[str]
+    ) -> frozenset[str]:
+        return frozenset(p for p in paths if p in found)
 
     return _check
 
@@ -77,3 +79,22 @@ async def test_rewrite_link_not_image_form():
     rewriter = MarkdownReferenceRewriter(exists_check=await _exists({"/docs/p/b.md"}))
     out = await rewriter.rewrite("[t](b.md)", current_dir="/docs/p", kb_code="kb1")
     assert out == "[t](/docs/p/b.md)"
+
+
+async def test_rewrite_skips_when_reference_count_exceeds_cap():
+    src = "".join(
+        f"![a](x{i}.png)\n" for i in range(MarkdownReferenceRewriter.MAX_REFERENCES + 1)
+    )
+    rewriter = MarkdownReferenceRewriter(exists_check=await _exists(set()))
+    out = await rewriter.rewrite(src, current_dir="/docs/p", kb_code="kb1")
+    assert out == src
+
+
+async def test_rewrite_percent_decodes_target():
+    rewriter = MarkdownReferenceRewriter(
+        exists_check=await _exists({"/docs/p/b c.png"})
+    )
+    out = await rewriter.rewrite(
+        "![a](b%20c.png)", current_dir="/docs/p", kb_code="kb1"
+    )
+    assert out == "![a](/docs/p/b c.png)"

@@ -3088,3 +3088,29 @@ async def test_file_exists_true_and_false():
     )
     assert (await service.file_exists("1", "/docs/p/a.md")) is True
     assert (await service.file_exists("1", "/docs/p/missing.md")) is False
+
+
+async def test_files_exist_returns_subset_in_one_connection():
+    kb_repo = FakeKnowledgeBaseRepository(
+        default_lookup_result={
+            "kid": 7,
+            "kb_code": "1",
+            "kb_name": "TestKB",
+            "status": "ACTIVE",
+        }
+    )
+    fs_repo = FakeKnowledgeFsEntryRepository()
+    fs_repo.file_entry_by_path = {
+        "docs/p/a.md": {"kid": 71, "entry_type": "FILE", "name": "a.md"},
+    }
+    service = KnowledgeItemIngestionService(
+        connection_factory=lambda: _async_return(FakeConnection()),
+        knowledge_base_repository=kb_repo,
+        knowledge_fs_entry_repository=fs_repo,
+        knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        storage_provider=FakeStorageProvider(),
+        embedding_dimension=3,
+    )
+    result = await service.files_exist("1", {"/docs/p/a.md", "/docs/p/missing.md"})
+    assert result == {"/docs/p/a.md"}

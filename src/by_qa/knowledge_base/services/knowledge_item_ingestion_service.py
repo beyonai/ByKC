@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import mimetypes
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, Callable
@@ -267,6 +268,33 @@ class KnowledgeItemIngestionService:
                 full_path=normalized,
             )
             return file_row is not None
+        finally:
+            await connection.close()
+
+    async def files_exist(self, kb_code: str, paths: Iterable[str]) -> set[str]:
+        """Return the subset of KB-absolute paths (leading '/') that exist as
+        uploaded files. One connection for all paths.
+        """
+        normalized = {p.strip("/") for p in paths if (p or "").strip("/")}
+        if not normalized:
+            return set()
+        connection = await self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            kb_row = await self.knowledge_base_repository.get_by_code(cursor, kb_code)
+            if not kb_row:
+                return set()
+            knowledge_base_id = self._row_id(kb_row)
+            existing: set[str] = set()
+            for full_path in normalized:
+                row = await self.knowledge_fs_entry_repository.get_file_by_path(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    full_path=full_path,
+                )
+                if row is not None:
+                    existing.add("/" + full_path)
+            return existing
         finally:
             await connection.close()
 

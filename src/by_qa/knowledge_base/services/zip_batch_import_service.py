@@ -110,10 +110,14 @@ class ZipBatchImportService:
             if resolved is not None:
                 batch_paths.add(resolved)
 
-        async def exists_check(kb_code_: str, full_path: str) -> bool:
-            if full_path in batch_paths:
-                return True
-            return await self.ingestion_service.file_exists(kb_code_, full_path)
+        async def exists_check(kb_code_: str, paths: frozenset[str]) -> frozenset[str]:
+            in_batch = frozenset(p for p in paths if p in batch_paths)
+            rest = paths - in_batch
+            if not rest:
+                return in_batch
+            return in_batch | frozenset(
+                await self.ingestion_service.files_exist(kb_code_, rest)
+            )
 
         rewriter = MarkdownReferenceRewriter(exists_check=exists_check)
 

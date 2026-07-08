@@ -575,7 +575,7 @@ def register_routes(
             file_path_norm = "/" + request.file_path.strip("/")
             content = request.file_content
             if file_path_norm.lower().endswith((".md", ".markdown")):
-                rewriter = MarkdownReferenceRewriter(exists_check=service.file_exists)
+                rewriter = MarkdownReferenceRewriter(exists_check=service.files_exist)
                 current_dir = "/".join(file_path_norm.split("/")[:-1]) or "/"
                 rewritten = await rewriter.rewrite(
                     content.decode("utf-8"), current_dir, request.kb_code

@@ -2787,3 +2787,133 @@ def test_import_zip_auto_creates_nested_directories(monkeypatch, tmp_path):
     assert item["success"] is True
     assert download.status_code == 200
     assert download.content == body
+
+
+@pytest.mark.integration
+def test_import_zip_md_front_matter_is_persisted(monkeypatch, tmp_path):
+    """A md inside a zip has its YAML front matter parsed and metadata persisted (processFrontMatter)."""
+    import io
+    import zipfile
+
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch, FakeDocumentChunkingService(markdown_text="# t\n")
+    )
+
+    md = b"---\ntitle: ZipDoc\n---\n# body\n"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("doc.md", md)
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+        resp = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/target"},
+            files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
+        )
+        meta = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={
+                "knCode": kb_code,
+                "filePath": "/target/doc.md",
+                "metadataFieldList": ["title"],
+            },
+        )
+
+    assert resp.status_code == 200
+    item = [
+        d
+        for d in resp.json()["resultObject"]["data"]
+        if d["filePath"] == "/target/doc.md"
+    ][0]
+    assert item["success"] is True
+    assert meta.status_code == 200
+    metadata = meta.json()["resultObject"]["metadata"]
+    assert metadata["title"] == {"valueType": "string", "value": "ZipDoc"}
+
+
+@pytest.mark.integration
+def test_import_zip_rejects_oversized_entry_at_route(monkeypatch, tmp_path):
+    """A zip entry exceeding the per-entry decompressed cap is rejected at the route; no file is created."""
+    import io
+    import zipfile
+
+    from by_qa.knowledge_base.services import zip_batch_import_service as zbmod
+
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch, FakeDocumentChunkingService(markdown_text="# t\n")
+    )
+
+    monkeypatch.setattr(zbmod, "_MAX_ENTRY_UNCOMPRESSED", 512)
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("big.md", b"x" * 2048)
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+        resp = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/target"},
+            files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
+        )
+        download = client.post(
+            "/api/v1/downloadFile",
+            json={"knCode": kb_code, "filePath": "/target/big.md"},
+        )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["resultCode"] == "-1"
+    assert payload["resultMsg"] == "zip too large"
+    # no file created
+    assert download.json()["resultCode"] == "-1"
+
+
+@pytest.mark.integration
+def test_import_zip_concurrent_many_files_all_succeed(monkeypatch, tmp_path):
+    """A zip with 8 pngs + 8 mds (each md referencing its png) all upload successfully under 8-way concurrency."""
+    import io
+    import zipfile
+
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch, FakeDocumentChunkingService(markdown_text="# t\n")
+    )
+
+    png_bytes = b"\x89PNG\r\n\x1a\npayload-\x00\x01"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for i in range(8):
+            zf.writestr(f"img/{i}.png", png_bytes)
+        for i in range(8):
+            zf.writestr(f"{i}.md", f"![a](img/{i}.png)\n".encode("utf-8"))
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+        resp = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/target"},
+            files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
+        )
+        md0_download = client.post(
+            "/api/v1/downloadFile",
+            json={"knCode": kb_code, "filePath": "/target/0.md"},
+        )
+        png0_download = client.post(
+            "/api/v1/downloadFile",
+            json={"knCode": kb_code, "filePath": "/target/img/0.png"},
+        )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    data = payload["resultObject"]["data"]
+    assert payload["resultObject"]["summary"]["succeeded"] == 16
+    assert len(data) == 16
+    assert all(d["success"] for d in data)
+    # spot-check: md 0 reference rewritten to KB-absolute path
+    assert b"![a](/target/img/0.png)" in md0_download.content
+    # spot-check: png 0 bytes intact
+    assert png0_download.content == png_bytes

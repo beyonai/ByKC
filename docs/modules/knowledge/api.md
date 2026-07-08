@@ -317,15 +317,24 @@
 
 ### `POST /api/v1/knowledgeItems/import`
 
-将文档上传到指定知识库下面。
+将文档上传到指定知识库下面。支持单文件上传与 zip 包批量上传，入参不变，由 `fileContent` 文件名是否以 `.zip` 结尾且为合法 zip 自动判定。
 
 行为描述：
 
+- 文件类型：上传不再限制文件类型，任意类型文件均可入库。不可构建的文件类型（非 `txt`、`md`、`markdown`、`csv`、`pdf`、`docx`、`doc`、`pptx`、`ppt`、`xlsx`、`xls`）在后续 `POST /api/v1/fileToMarkdownIndex` 构建时会被标记为「不支持构建」状态，不影响入库。
+- Markdown 引用改写（默认动作，无论是否 zip 包）：上传 Markdown 文件时，服务端解析其中的图片引用 `![]()` 与链接引用 `[]()`，将相对路径按当前文件所在目录解析为知识库绝对路径（消除 `.`、`..`；越过知识库根的引用保持不变）。若引用指向的资源在知识库中已存在，或同批 zip 内存在该文件，则改写为知识库绝对地址；否则保持原引用。URL（带协议头）与锚点（`#anchor`）保留不变。
+- zip 包批量上传：当 `fileContent` 文件名以 `.zip` 结尾且为合法 zip 时，按批量导入处理：
+  - 解压后并发上传：非 Markdown 文件先上传，Markdown 文件最后上传，保证 Markdown 引用改写时图片与被引用文档已就位。
+  - zip 内文件上传到 `filePath` 指定的目标目录下，保留 zip 内相对目录结构。
+  - 若 zip 内文件在知识库中已存在，则先软删除原文件再上传（覆盖语义）。
+  - 自动跳过 macOS 元数据（`__MACOSX`、以 `.` 开头的隐藏条目）与目录条目。
+  - 文件名编码兼容：自动识别 zip 条目的 UTF-8 标志位，未设置时按 GBK 还原中文文件名，兼容中文 Windows 资源管理器 / WinRAR / 好压 生成的 zip。
+  - 安全限制：单条目解压上限 64 MiB、全部条目解压上限 256 MiB、条目数上限 10000，超出返回失败；越过目标目录或知识库根的路径（含 `..` 跨界）记为失败；解析后同路径的重复条目记为失败。
 - 当上传文件为 Markdown 且 `processFrontMatter` 为 `true` 时，服务端会额外解析文档开头的 YAML front matter header。
 - 若解析到合法的 YAML front matter header，则会将其中字段按同名 `propertyName` 自动录入为该文件的元数据。
 - 该行为适用于类似 Obsidian 文档头的结构化元数据写法。
-- 如果已有属性不存在于知识库系统，则文件上传失败
-- 当 `processFrontMatter` 为 `false` 时，跳过 YAML front matter 解析，不做元数据自动录入
+- 如果已有属性不存在于知识库系统，则该文件导入失败（`success=false`，`error` 含原因）。
+- 当 `processFrontMatter` 为 `false` 时，跳过 YAML front matter 解析，不做元数据自动录入。
 
 YAML front matter header 示例：
 
@@ -355,12 +364,12 @@ module: karpathy
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `knCode` | string | 是 | 知识库编码 |
-| `filePath` | string | 是 | 上传到知识库后的文件全路径，以 `/` 开头，不包括知识库名称 |
-| `fileDescription` | string | 否 | 文件描述 |
-| `fileContent` | file | 是 | 文件二进制内容 |
+| `filePath` | string | 是 | 单文件上传时为目标文件全路径；zip 上传时为目标目录路径（zip 内文件解压到该目录下），以 `/` 开头，不包括知识库名称 |
+| `fileDescription` | string | 否 | 文件描述；zip 批量上传时对所有文件统一使用该描述 |
+| `fileContent` | file | 是 | 文件二进制内容；文件名以 `.zip` 结尾且为合法 zip 时触发批量上传 |
 | `processFrontMatter` | boolean | 否 | 是否解析 YAML front matter 并自动录入元数据，默认 `true` |
 
-表单示例：
+表单示例（单文件）：
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
@@ -371,17 +380,69 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
   -F "processFrontMatter=true"
 ```
 
-成功响应示例：
+表单示例（zip 批量上传到目录 `/制度/人事`）：
+
+```bash
+curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
+  -F "knCode=1" \
+  -F "filePath=/制度/人事" \
+  -F "fileDescription=人事制度批量导入" \
+  -F "fileContent=@./人事制度.zip" \
+  -F "processFrontMatter=true"
+```
+
+成功响应：`resultObject` 为批量结果，单文件上传同样返回单元素列表：
 
 ```json
 {
   "resultCode": "0",
   "resultMsg": "success",
-  "resultObject": {}
+  "resultObject": {
+    "data": [
+      { "filePath": "/制度/人事/考勤制度.pdf", "success": true, "error": null }
+    ],
+    "summary": { "total": 1, "succeeded": 1, "failed": 0 }
+  }
 }
 ```
 
-失败响应示例：
+`data` 元素字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `filePath` | string | 该文件入库后的全路径 |
+| `success` | boolean | 是否导入成功 |
+| `error` | string \| null | 失败原因；成功时为 `null` |
+
+`summary` 字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `total` | integer | 本次上传处理的文件总数 |
+| `succeeded` | integer | 成功数 |
+| `failed` | integer | 失败数 |
+
+zip 批量上传响应示例（部分成功，含不安全路径）：
+
+```json
+{
+  "resultCode": "0",
+  "resultMsg": "success",
+  "resultObject": {
+    "data": [
+      { "filePath": "/制度/人事/考勤制度.pdf", "success": true, "error": null },
+      { "filePath": "/制度/escape.md", "success": false, "error": "unsafe path" }
+    ],
+    "summary": { "total": 2, "succeeded": 1, "failed": 1 }
+  }
+}
+```
+
+失败响应示例（整请求级别失败，`resultCode` 为 `-1`）：
+
+- `invalid zip file`（422）：`fileContent` 文件名以 `.zip` 结尾但不是合法 zip。
+- `unsafe path`（422）：单文件上传的 `filePath` 含 `..` 跨界段。
+- `file path already exists: /制度/人事/考勤制度.pdf`：单文件上传且目标路径已存在（zip 批量上传为覆盖语义，不会报此错）。
 
 ```json
 {
@@ -390,6 +451,8 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
   "resultObject": {}
 }
 ```
+
+注：zip 批量上传时单个文件的导入失败不会终止整批，而是在 `data` 中以 `success=false` 体现，`resultCode` 仍为 `0`。
 
 ### `POST /api/v1/knowledgeItems/delete`
 
@@ -816,6 +879,9 @@ Content-Disposition: attachment; filename="考勤制度.md"
 | `processing` | 处理中 | Processing |
 | `success` | 成功 | Success |
 | `failed` | 失败 | Failed |
+| `unsupported` | 不支持构建 | Unsupported |
+
+`unsupported` 表示该文件类型不在可构建类型范围内（见 `POST /api/v1/knowledgeItems/import` 的文件类型说明），构建在「原始文件转 Markdown」环节即结束，不会进入切片与向量化。
 
 `stepDict` 当前支持取值：
 

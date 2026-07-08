@@ -15,7 +15,7 @@
 2. 支持目标文件晚于源 markdown 上传：`a.md` 引用 `b.md`，即使 `b.md` 上传时尚不存在，也能在 `b.md` 上传后快速反查并绑定。
 3. 移动文件、批量文件、目录子树时，不修改 markdown sidecar、不修改 chunk，引用输出仍指向目标文件当前路径。
 4. 所有面向用户和 QA 的读输出都不暴露内部引用 token。
-5. 删除、恢复/重新上传、反向引用查询、旧数据迁移等增强能力纳入本次设计。
+5. 删除、恢复/重新上传、反向引用查询等增强能力纳入本次设计。
 
 ## 非目标
 
@@ -23,6 +23,7 @@
 - 不要求移动时同步改写 object 内容。
 - 不把 `knowledge_build` 反向耦合到 `knowledge_base`；引用解析属于 `knowledge_base` 读写编排。
 - 不为外部 URL、`mailto:`、`data:`、页内 `#anchor` 建引用关系。
+- 不考虑旧数据迁移；历史 markdown/chunk 中已经保存的旧绝对路径不在本次方案内修复。
 
 ## 核心决策
 
@@ -50,10 +51,6 @@ markdown 内部写入稳定 token：
 ### 3. 移动只改文件系统元数据
 
 移动文件/目录只更新 `knowledge_fs_entry` 的父子关系、`name`、`virtual_path`、`path_ltree`，以及路径绑定型 storage provider 的 object locator。引用表中的 `target_fs_entry_id` 不变，读时查询当前路径即可自然生效。
-
-### 4. 旧绝对路径数据单独迁移
-
-已有 markdown/chunk 中已经保存 `/old/path/file.png` 的数据，无法在“不改内容、不改 chunk”的约束下从根上保证移动后仍有效。需要提供一次性迁移任务，把可解析的旧路径引用转换为 `byqa-ref://...`。迁移完成后才享受稳定引用能力。
 
 ## 数据模型
 
@@ -337,35 +334,6 @@ POST /api/v1/knowledgeItems/references
 
 返回哪些 markdown 引用了该文件，包含 source path、original target、status。
 
-## 旧数据迁移
-
-旧数据迁移是一次性维护动作，不属于移动接口运行时逻辑。移动、删除、上传补偿路径仍然不修改 markdown sidecar、不修改 chunk。
-
-新增管理脚本或内部任务：
-
-```text
-scripts/knowledge_base/migrate_markdown_references.py
-```
-
-流程：
-
-1. 遍历知识库内 markdown 文件。
-2. 读取 markdown sidecar 或原始 markdown content。
-3. 检测引用：
-   - 外链跳过。
-   - 已经是 `byqa-ref://` 跳过。
-   - KB 绝对路径或相对路径可解析到现有文件，则创建引用记录并替换为 token。
-4. 更新 markdown sidecar。
-5. 对已构建 chunk 的文件可选择重建，或标记为“旧 chunk 未 token 化”。
-
-如果严格要求“不修改旧 markdown、不修改旧 chunk”，则旧数据只能通过路径别名兼容：
-
-- 新增 `knowledge_path_alias(old_path, target_fs_entry_id)`。
-- 移动时保留旧路径 alias。
-- resolver 和资源读取可按旧路径查 alias。
-
-但 alias 会遇到旧路径被新文件占用、历史链条过长、删除恢复歧义等问题。因此推荐把 alias 作为过渡兼容，最终仍做 token 迁移。
-
 ## 读写时序
 
 ### `a.md` 先上传，`b.md` 后上传
@@ -461,7 +429,6 @@ QA 模块原则上不直接改。如果 QA 只通过 `search` 和 `readFile` 工
 
 - **读时解析性能**：批量收集 ref ids，一次查询引用表和目标 fs entry；按 KB 分组处理搜索结果。
 - **内部 token 泄漏**：所有用户读出口都接 resolver；测试覆盖 `readFile`、download、search。
-- **旧数据不稳定**：提供迁移任务和 path alias 过渡方案，并明确 alias 不是长期主方案。
 - **移动后 search filePath 仍旧**：移动接口必须刷新受影响文件的 retrieval projection，或让 projection 查询时 join 当前 fs entry。推荐刷新 projection。
 - **删除恢复语义歧义**：保留 `original_target`、`target_path`、`target_fs_entry_id`，移动时同步刷新 `target_path`，恢复时按最后已知 `target_path` 精确补偿。
 - **事务复杂度上升**：引用登记与 markdown 写入同事务；上传后补偿保持精确路径更新，后续可异步重扫。
@@ -477,4 +444,3 @@ QA 模块原则上不直接改。如果 QA 只通过 `search` 和 `readFile` 工
 7. 实现移动接口和 retrieval projection 刷新。
 8. 实现删除/重新上传引用状态流转。
 9. 实现反向引用查询接口。
-10. 增加旧数据迁移或 path alias 过渡能力。

@@ -45,7 +45,7 @@ markdown 内部写入稳定 token：
 ![diagram](/new/path/diagram.png)
 ```
 
-如果引用尚未解析或目标已删除，则按策略输出原始 target，或输出带诊断信息的缺失地址。默认面向用户保持原始 target，避免把内部状态暴露出去。
+如果引用尚未解析，则按策略输出原始 target；如果目标已删除，则默认输出目标删除前最后可见路径，或在管理/调试视图输出缺失诊断。任何情况下都不把内部 token 暴露给用户。
 
 ### 3. 移动只改文件系统元数据
 
@@ -65,12 +65,10 @@ CREATE TABLE IF NOT EXISTS knowledge_file_reference (
     knowledge_base_id bigint NOT NULL REFERENCES knowledge_base(kid),
     source_fs_entry_id bigint NOT NULL REFERENCES knowledge_fs_entry(kid),
     target_fs_entry_id bigint NULL REFERENCES knowledge_fs_entry(kid),
-    source_path_at_import text NOT NULL,
-    source_dir_at_import text NOT NULL,
     original_target text NOT NULL,
-    resolved_target_path text NULL,
+    target_path text NOT NULL,
     target_suffix text NOT NULL DEFAULT '',
-    target_kind text NOT NULL DEFAULT 'file',
+    target_kind text NOT NULL DEFAULT 'FILE',
     status text NOT NULL,
     last_resolved_at timestamptz NULL,
     created_at timestamptz NOT NULL DEFAULT NOW(),
@@ -91,9 +89,9 @@ CREATE TABLE IF NOT EXISTS knowledge_file_reference (
 CREATE INDEX IF NOT EXISTS idx_kfr_source
 ON knowledge_file_reference(knowledge_base_id, source_fs_entry_id);
 
-CREATE INDEX IF NOT EXISTS idx_kfr_unresolved_path
-ON knowledge_file_reference(knowledge_base_id, resolved_target_path)
-WHERE target_fs_entry_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_kfr_pending_path
+ON knowledge_file_reference(knowledge_base_id, target_path)
+WHERE status IN ('unresolved', 'broken');
 
 CREATE INDEX IF NOT EXISTS idx_kfr_target
 ON knowledge_file_reference(knowledge_base_id, target_fs_entry_id);
@@ -105,7 +103,20 @@ ON knowledge_file_reference(knowledge_base_id, target_fs_entry_id);
 ALTER TABLE knowledge_file_reference
 ADD CONSTRAINT chk_kfr_status
 CHECK (status IN ('resolved', 'unresolved', 'broken'));
+
+ALTER TABLE knowledge_file_reference
+ADD CONSTRAINT chk_kfr_target_kind
+CHECK (target_kind IN ('FILE', 'DIRECTORY'));
 ```
+
+字段语义：
+
+- `source_fs_entry_id`：引用所在 markdown 文件 ID。源文件当前路径通过 `knowledge_fs_entry` 查询，不在引用表做导入时路径快照。
+- `target_fs_entry_id`：目标文件 ID。存在时以它为准解析当前路径。
+- `original_target`：用户原始写法，用于 unresolved 时回退输出；一旦引用 resolved，读时优先输出目标当前路径。
+- `target_path`：目标的当前或最后已知知识库路径。unresolved 时是按源文件当前目录和 `original_target` 算出的待匹配路径；resolved 时跟随 `target_fs_entry_id` 的当前 `virtual_path` 更新；broken 时保留删除前最后路径，用于后续按最后路径恢复绑定。
+- `target_suffix`：引用中的 query/fragment，例如 `#intro` 或 `?x=1`，存在性匹配只看 `target_path`，输出时拼回。
+- `target_kind`：目标类型，使用大写枚举 `FILE` / `DIRECTORY`，与 `knowledge_fs_entry.entry_type` 风格保持一致。
 
 ## 组件改造
 
@@ -125,11 +136,11 @@ CHECK (status IN ('resolved', 'unresolved', 'broken'));
 
 1. 调用 `knowledge_common.markdown_reference.detect_reference_spans` 检测 markdown 引用。
 2. 跳过外链、空 target、页内 anchor。
-3. 使用 `knowledge_common.kb_path_utils.normalize_kb_path` 得到 `resolved_target_path`。
+3. 使用 `knowledge_common.kb_path_utils.normalize_kb_path` 得到 `target_path`。
 4. 查询目标文件是否存在。
 5. 创建引用记录：
-   - 存在：`target_fs_entry_id=<目标ID>`，`status='resolved'`
-   - 不存在：`target_fs_entry_id=NULL`，`status='unresolved'`
+   - 存在：`target_fs_entry_id=<目标ID>`，`target_path=<目标当前路径>`，`status='resolved'`
+   - 不存在：`target_fs_entry_id=NULL`，`target_path=<待匹配路径>`，`status='unresolved'`
 6. 将原 span 的 target 替换为 `byqa-ref://<reference_id>`，保留 alt/text。
 
 单个 markdown 内多个相同 target 可以创建多条引用记录，便于保留每个 span 的原始 target 和 suffix；如果后续想去重，可在 resolver 层批量解析相同 ref id。
@@ -141,9 +152,10 @@ CHECK (status IN ('resolved', 'unresolved', 'broken'));
 - `create_reference(...) -> int`
 - `list_by_source(source_fs_entry_id) -> list[dict]`
 - `list_by_reference_ids(reference_ids) -> list[dict]`
-- `resolve_unresolved_for_path(knowledge_base_id, resolved_target_path, target_fs_entry_id)`
+- `resolve_pending_for_path(knowledge_base_id, target_path, target_fs_entry_id)`
 - `mark_target_deleted(target_fs_entry_id)`
-- `mark_target_restored(knowledge_base_id, resolved_target_path, target_fs_entry_id)`
+- `mark_target_restored(knowledge_base_id, target_path, target_fs_entry_id)`
+- `update_target_path_for_fs_entry(target_fs_entry_id, target_path)`
 - `list_sources_by_target(target_fs_entry_id)`
 
 仓储只做 SQL，不做 markdown 字符串替换。
@@ -158,7 +170,7 @@ CHECK (status IN ('resolved', 'unresolved', 'broken'));
 2. 一次性查询引用表和目标 `knowledge_fs_entry`。
 3. 对 `resolved` 且目标未删除的引用，输出目标当前 `virtual_path + target_suffix`。
 4. 对 `unresolved`，输出 `original_target`。
-5. 对 `broken`，默认输出 `original_target`；可在管理接口或调试模式输出缺失标记。
+5. 对 `broken`，默认输出 `target_path + target_suffix`（目标删除前最后可见路径）；可在管理接口或调试模式输出缺失标记。
 
 Resolver 必须支持批量文本：
 
@@ -194,7 +206,7 @@ async def resolve_texts(
 4. 应用 front matter metadata。
 5. 提交事务。
 6. 对任意新上传文件，触发 unresolved 引用补偿：
-   - 根据新文件当前路径反查 `resolved_target_path`
+   - 根据新文件当前路径反查 `target_path`
    - 批量更新 matching rows 的 `target_fs_entry_id` 和 `status='resolved'`
 
 补偿可以放在同一个事务内，保证上传完成即解析可见；如果担心上传事务变重，可先同步做精确路径命中的轻量补偿，后续再加后台重扫任务。
@@ -241,7 +253,8 @@ zip 场景必须处理导入顺序问题。
 
 - 以目标为 `target_fs_entry_id` 的引用标记为 `broken`。
 - 不清空 `target_fs_entry_id`，保留审计关系。
-- 如果未来同路径重新上传文件，按 `resolved_target_path` 把 `broken/unresolved` 引用重新绑定到新文件 ID，状态改为 `resolved`。
+- `target_path` 保留目标删除前最后可见路径。
+- 如果未来同路径重新上传文件，按 `target_path` 把 `broken/unresolved` 引用重新绑定到新文件 ID，状态改为 `resolved`。
 
 删除源 markdown 时：
 
@@ -250,7 +263,7 @@ zip 场景必须处理导入顺序问题。
 
 #### 移动文件/目录
 
-新增移动接口只更新 fs entry 树与必要的 storage locator，不更新引用表路径字段。移动后 resolver 通过 `target_fs_entry_id` 查询当前 `virtual_path`。
+新增移动接口更新 fs entry 树与必要的 storage locator，同时把以被移动文件为 `target_fs_entry_id` 的引用记录 `target_path` 更新为目标文件当前路径。移动后 resolver 仍以 `target_fs_entry_id` 查询当前 `virtual_path`；同步维护 `target_path` 是为了删除后 broken 状态和后续同路径恢复都使用移动后的最后路径。
 
 如果移动源 markdown，自身作为 source 的引用不需要变化。
 
@@ -360,7 +373,7 @@ scripts/knowledge_base/migrate_markdown_references.py
 ```text
 upload a.md
   -> detect [b](b.md)
-  -> resolved_target_path=/docs/b.md
+  -> target_path=/docs/b.md
   -> b.md 不存在
   -> insert reference(status=unresolved)
   -> markdown 写入 [b](byqa-ref://101)
@@ -368,7 +381,7 @@ upload a.md
 upload b.md
   -> create fs_entry(id=20, virtual_path=/docs/b.md)
   -> update references
-       where resolved_target_path=/docs/b.md
+       where target_path=/docs/b.md
        set target_fs_entry_id=20, status=resolved
 
 read a.md
@@ -380,7 +393,7 @@ read a.md
 ```text
 move /docs/b.md -> /archive/b.md
   -> update knowledge_fs_entry(id=20).virtual_path=/archive/b.md
-  -> reference 101 不变
+  -> update reference 101 target_path=/archive/b.md
 
 read a.md
   -> byqa-ref://101 解析为 /archive/b.md
@@ -391,12 +404,13 @@ read a.md
 ```text
 delete /archive/b.md
   -> reference 101 status=broken, target_fs_entry_id=20
+  -> reference 101 target_path 保持 /archive/b.md
 
 read a.md
-  -> byqa-ref://101 输出 original_target=b.md
+  -> byqa-ref://101 输出 /archive/b.md
 
-upload /docs/b.md
-  -> exact path compensation 命中 resolved_target_path=/docs/b.md
+upload /archive/b.md
+  -> exact path compensation 命中 target_path=/archive/b.md
   -> reference 101 target_fs_entry_id=<new_id>, status=resolved
 ```
 
@@ -409,8 +423,8 @@ upload /docs/b.md
 - rewriter：外链、anchor、逃出 KB 根保持原样。
 - resolver：resolved 输出当前路径。
 - resolver：移动后输出新路径。
-- resolver：unresolved/broken 输出 original target。
-- repository：按 source、target、unresolved path 查询和更新。
+- resolver：unresolved 输出 original target；broken 输出最后已知 target path。
+- repository：按 source、target、pending target path 查询和更新。
 - move service：文件移动、目录子树移动、批量移动、冲突校验、循环移动校验。
 
 集成测试：
@@ -420,7 +434,7 @@ upload /docs/b.md
 - 构建 `a.md` 后移动 `b.md`，搜索结果 `chunkText` 输出移动后的路径。
 - zip 内 `a.md` 引用 `b.md`，导入结束后引用 resolved。
 - 删除 `b.md` 后 `readFile/search` 不暴露内部 token。
-- 重新上传同路径 `b.md` 后引用恢复 resolved。
+- 重新上传最后已知路径的 `b.md` 后引用恢复 resolved。
 - 移动目录子树后，多个引用目标都输出新路径。
 - 反向引用接口返回引用 `b.md` 的源 markdown 列表。
 
@@ -449,7 +463,7 @@ QA 模块原则上不直接改。如果 QA 只通过 `search` 和 `readFile` 工
 - **内部 token 泄漏**：所有用户读出口都接 resolver；测试覆盖 `readFile`、download、search。
 - **旧数据不稳定**：提供迁移任务和 path alias 过渡方案，并明确 alias 不是长期主方案。
 - **移动后 search filePath 仍旧**：移动接口必须刷新受影响文件的 retrieval projection，或让 projection 查询时 join 当前 fs entry。推荐刷新 projection。
-- **删除恢复语义歧义**：保留 `original_target`、`resolved_target_path`、`target_fs_entry_id`，恢复时优先按 `resolved_target_path` 精确补偿。
+- **删除恢复语义歧义**：保留 `original_target`、`target_path`、`target_fs_entry_id`，移动时同步刷新 `target_path`，恢复时按最后已知 `target_path` 精确补偿。
 - **事务复杂度上升**：引用登记与 markdown 写入同事务；上传后补偿保持精确路径更新，后续可异步重扫。
 
 ## 实施顺序

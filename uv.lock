@@ -295,7 +295,7 @@ wheels = [
 
 [[package]]
 name = "by-framework"
-version = "0.2.2.dev5"
+version = "0.2.2.dev8"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dill" },
@@ -303,14 +303,14 @@ dependencies = [
     { name = "redis" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/53/d6/fa6399190bd6cd158a61c915dbbd12a088cfd78e390a7dbd994ec70f9092/by_framework-0.2.2.dev5.tar.gz", hash = "sha256:b5f7ee569722852af7461017cb6a893788b1bf1effd3597120ce5b859d82c07d", size = 1162628, upload-time = "2026-06-13T04:10:26.835Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1f/3c/822e19a16635afddbcd1aeffc66a4ff21f416537ed9cbc2a2dfea27d101e/by_framework-0.2.2.dev8.tar.gz", hash = "sha256:6ec37ee85d29af9c18a8b8a2a9af7f0d14ae05fd913e414dbeb52003c074c19d", size = 1260041, upload-time = "2026-07-08T07:09:11.542Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e1/e6/3c7573e677cc95b1377b4c5796c2124b534fd77ca6791351525c1bd0f197/by_framework-0.2.2.dev5-py3-none-any.whl", hash = "sha256:abf3cb913f910c6567af04f14fde04bd2937e27ebfe5725c6ca88ad6dce9f362", size = 189370, upload-time = "2026-06-13T04:10:25.478Z" },
+    { url = "https://files.pythonhosted.org/packages/c4/16/adb0b98e65d151c7d4ee9739ad244f603a7ac793ea742386e98f747d8e34/by_framework-0.2.2.dev8-py3-none-any.whl", hash = "sha256:e0c0f5a9df67cb3fff67863ab2e51fca3258f2c19f0571cf20ae8a12b1a42c98", size = 217036, upload-time = "2026-07-08T07:09:09.649Z" },
 ]
 
 [[package]]
 name = "by-qa"
-version = "0.1.16"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -402,9 +402,9 @@ requires-dist = [
     { name = "aiosqlite", marker = "extra == 'all'", specifier = ">=0.20.0" },
     { name = "aiosqlite", marker = "extra == 'qa'", specifier = ">=0.20.0" },
     { name = "beautifulsoup4", marker = "extra == 'eval'", specifier = ">=4.12.0" },
-    { name = "by-framework", marker = "extra == 'all'", specifier = "==0.2.2.dev5" },
-    { name = "by-framework", marker = "extra == 'knowledge'", specifier = "==0.2.2.dev5" },
-    { name = "by-framework", marker = "extra == 'qa'", specifier = "==0.2.2.dev5" },
+    { name = "by-framework", marker = "extra == 'all'", specifier = "==0.2.2.dev8" },
+    { name = "by-framework", marker = "extra == 'knowledge'", specifier = "==0.2.2.dev8" },
+    { name = "by-framework", marker = "extra == 'qa'", specifier = "==0.2.2.dev8" },
     { name = "datasets", marker = "extra == 'eval'", specifier = ">=3.2.0" },
     { name = "fastapi", marker = "extra == 'all'", specifier = ">=0.115.0" },
     { name = "fastapi", marker = "extra == 'knowledge'", specifier = ">=0.115.0" },

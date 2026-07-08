@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from by_framework.common.config import RedisConfig
 from by_framework.common.redis_client import init_redis
 from by_framework.core.discovery import DiscoveryClient
 from by_framework.util.discovery_http_client import DiscoveryHttpClient
 from by_framework.util.http_client import RetryConfig
 
-from by_qa.config import get_settings
+from by_qa.config import load_project_env_file
 
 DEFAULT_DISCOVERY_CACHE_INTERVAL = 5
 DEFAULT_REMOTE_REQUEST_RETRY_ATTEMPTS = 3
@@ -17,15 +18,8 @@ DEFAULT_REMOTE_REQUEST_RETRY_ATTEMPTS = 3
 
 def _build_discovery_client() -> DiscoveryClient:
     """Create a discovery client using repository settings."""
-    settings = get_settings()
-    redis_client = init_redis(
-        host=settings.redis_host,
-        port=settings.redis_port,
-        db=settings.redis_database,
-        password=settings.redis_password or None,
-        username=settings.redis_username or None,
-        decode_responses=True,
-    )
+    load_project_env_file()
+    redis_client = init_redis(config=RedisConfig.from_env())
     return DiscoveryClient(
         redis_client=redis_client,
         cache_interval=DEFAULT_DISCOVERY_CACHE_INTERVAL,

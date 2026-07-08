@@ -11,10 +11,11 @@ from importlib.util import find_spec
 from json import dumps
 from typing import Any, Callable
 
+from by_framework.common.config import RedisConfig
+from by_framework.common.redis_client import init_redis
 from by_framework.core.discovery import ServiceRegistry
-from redis.asyncio import Redis
 
-from by_qa.config import get_settings
+from by_qa.config import get_settings, load_project_env_file
 from by_qa.core import logger
 from by_qa.core.model_config import LLMModelProfile, load_model_config_provider
 
@@ -156,23 +157,35 @@ def _log_startup_configuration() -> None:
         )
 
 
-def _build_service_registry_client() -> Redis:
+def _build_service_registry_client(redis_config: Any | None = None) -> Any:
     """Build the Redis client used by the service registry."""
-    redis_kwargs: dict[str, Any] = {
-        "host": settings.redis_host,
-        "port": settings.redis_port,
-        "db": settings.redis_database,
-        "password": settings.redis_password or None,
-        "decode_responses": True,
-    }
-    if settings.redis_username:
-        redis_kwargs["username"] = settings.redis_username
-    return Redis(**redis_kwargs)
+    if redis_config is None:
+        load_project_env_file()
+        redis_config = RedisConfig.from_env()
+    return init_redis(config=redis_config)
+
+
+def _describe_redis_config(redis_config: Any) -> tuple[str, Any, bool, bool]:
+    """Return safe Redis connection details for logs."""
+    mode = getattr(redis_config, "mode", "standalone")
+    target = (
+        getattr(redis_config, "cluster_nodes")
+        if mode == "cluster"
+        else f"{getattr(redis_config, 'host', 'localhost')}:{getattr(redis_config, 'port', 6379)}"
+    )
+    return (
+        mode,
+        target,
+        bool(getattr(redis_config, "username", None)),
+        bool(getattr(redis_config, "password", None)),
+    )
 
 
 async def _register_service(application) -> None:
     """Register the running service instance in the service registry."""
-    redis_client = _build_service_registry_client()
+    load_project_env_file()
+    redis_config = RedisConfig.from_env()
+    redis_client = _build_service_registry_client(redis_config)
     registry = ServiceRegistry(redis_client=redis_client)
     metadata = {"version": "0.1.1"}
     await registry.register(
@@ -190,13 +203,13 @@ async def _register_service(application) -> None:
         settings.port,
         metadata,
     )
+    mode, target, username_set, password_set = _describe_redis_config(redis_config)
     logger.info(
-        "service registry redis configured: host=%s, port=%s, db=%s, username_set=%s, password_set=%s",
-        settings.redis_host,
-        settings.redis_port,
-        settings.redis_database,
-        bool(settings.redis_username),
-        bool(settings.redis_password),
+        "service registry redis configured: mode=%s, target=%s, username_set=%s, password_set=%s",
+        mode,
+        target,
+        username_set,
+        password_set,
     )
 
 

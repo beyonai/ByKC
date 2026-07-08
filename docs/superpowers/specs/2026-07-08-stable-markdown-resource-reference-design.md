@@ -72,7 +72,6 @@ CREATE TABLE IF NOT EXISTS knowledge_file_reference (
     target_suffix text NOT NULL DEFAULT '',
     target_kind text NOT NULL DEFAULT 'file',
     status text NOT NULL,
-    is_deleted boolean NOT NULL DEFAULT FALSE,
     last_resolved_at timestamptz NULL,
     created_at timestamptz NOT NULL DEFAULT NOW(),
     updated_at timestamptz NOT NULL DEFAULT NOW()
@@ -236,6 +235,8 @@ zip 场景必须处理导入顺序问题。
 
 #### 删除文件/目录
 
+引用表不做软删除。文件删除动作是引用状态变化的触发点，引用查询通过 `knowledge_fs_entry.is_deleted` 判断源文件和目标文件当前是否可见。
+
 删除目标文件时：
 
 - 以目标为 `target_fs_entry_id` 的引用标记为 `broken`。
@@ -244,8 +245,8 @@ zip 场景必须处理导入顺序问题。
 
 删除源 markdown 时：
 
-- 以源为 `source_fs_entry_id` 的引用标记 `is_deleted=true`，便于审计和恢复。
-- 反向引用查询默认过滤已删除源文件和 `is_deleted=true` 的引用；管理视图可展示历史引用。
+- 引用记录保持不变，不额外标记删除。
+- 反向引用查询默认 join 源 `knowledge_fs_entry` 并过滤 `source.is_deleted = FALSE`；管理视图可选择展示已删除源文件的历史引用。
 
 #### 移动文件/目录
 

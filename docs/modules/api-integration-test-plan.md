@@ -74,6 +74,57 @@
 | 29 | 异常与恢复 | 运行时依赖未配置 | 覆盖 KB runtime/fetch runtime/embedding 配置缺失 | 返回 `configuration_error` 风格错误 | 已写 |
 | 30 | 异常与恢复 | 构建或落库失败不留下半成功状态 | `knowledgeItems/import failure` 或 `fileToMarkdownIndex failure` | 不留下可见但不可读、可检索但不可读等异常状态 | 已写 |
 
+## zip 批量导入与引用改写场景总表
+
+说明：
+
+- 这一组场景覆盖 `/api/v1/knowledgeItems/import` 的 zip 包批量上传与 markdown 引用改写能力（入参不变，按 `fileContent.filename` 是否 `.zip` 分流）。
+- zip 模式下：非 markdown 文件先并发上传（阶段一），markdown 文件后并发上传（阶段二，先改写引用再上传）；已存在文件先软删后重传（覆盖）；不支持的文件类型构建时置「不支持构建」状态。
+- 出参由空 `resultObject` 改为 `{data:[{filePath,success,error}], summary:{total,succeeded,failed}}`。
+- 编号前缀 `Z` 代表 zip 批量导入；均在 `tests/knowledge_base/integration/test_kb_api_stateful_integration.py`，走真实 HTTP + OpenGauss + MinIO。
+
+### 单文件分流与出参
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| Z1 | 内容管理员 | 单文件上传返回清单出参 | `knowledgeItems/import(单个 md)` | `resultObject.data` 为含 1 项的列表（`filePath/success/error`），`summary.total=1` | 已写 |
+| Z2 | 内容管理员 | 单文件 md 引用改写（非 zip） | `import 图片资源 -> import md(引用图片)` | 引用改写为 KB 绝对路径；`downloadFile` 取回的原始 md 含改写结果 | 已写 |
+| Z3 | 内容管理员 | 单文件 `..` 路径拒绝 | `import filePath=/../escape.md` | `resultCode=-1` `resultMsg=unsafe path`；不创建文件 | 已写 |
+
+### zip 批量上传主链路
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| Z4 | 内容管理员 | zip happy path 改写 | `import zip(png + md 引用 png)` | 两者成功、`summary.succeeded=2`；md 引用改写为 KB 绝对路径 | 已写 |
+| Z5 | 内容管理员 | 覆盖成功替换旧内容 | `import md(OLD) -> import zip(同路径 md=NEW)` | 旧文件被软删并以新内容替换；`downloadFile` 返回 NEW，不含 OLD | 已写 |
+| Z6 | 内容管理员 | 非 md 二进制字节完整 | `import zip(png 二进制)` | `downloadFile` 返回的原始字节与上传字节逐字节一致 | 已写 |
+| Z7 | 内容管理员 | 两阶段顺序（非 md 先于 md） | `import zip(2 png + 2 md)` | 响应 `data` 中所有非 md 项索引 < 所有 md 项索引 | 已写 |
+| Z8 | 内容管理员 | 嵌套目录自动创建 | `import zip(a/b/c.md)` | 中间目录 `a`、`b` 自动创建；`downloadFile /target/a/b/c.md` 返回内容 | 已写 |
+| Z9 | 内容管理员 | zip 内 md front matter 持久化 | `import zip(md 含 YAML front matter) -> metadata/get` | front matter 字段被 `processFrontMatter` 解析并写入元数据 | 已写 |
+| Z10 | 内容管理员 | 8 路并发全量成功 | `import zip(8 png + 8 md，每个 md 引用各自 png)` | 16 项全部成功；md 引用改写正确；png 字节完整 | 已写 |
+
+### zip 引用改写：能替换 / 不能替换
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| Z11 | 内容管理员 | 能替换：`..` 相对 + 链接形式 + 锚点保留 | `import zip(img/x.png + other.md + sub/doc.md 引用 ../img/x.png、../other.md、../img/x.png#section)` | 三种引用均改写为 KB 绝对路径（`/t/img/x.png`、`/t/other.md`、`/t/img/x.png#section`） | 已写 |
+| Z12 | 内容管理员 | 不能替换：缺失/外部/锚点/逃根 | `import zip(doc.md 含 missing.png、https URL、#anchor、../../../x.png)` | 四种引用全部保持原样（`downloadFile` 返回原始 md 字节不变） | 已写 |
+
+### zip 异常与防护
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| Z13 | 内容管理员 | zip 不安全路径条目拒绝 | `import zip(../escape.md + real.md)` | `../escape.md` 记为失败（`error` 含 unsafe）；`real.md` 成功；逃逸路径不创建文件 | 已写 |
+| Z14 | 内容管理员 | 非法 zip 拒绝 | `import filename=.zip 但内容非法` | `resultCode=-1` `resultMsg=invalid zip file` | 已写 |
+| Z15 | 内容管理员 | zip-bomb / 超大条目路由层拒绝 | `import zip(单条目超 per-entry 解压上限)`（monkeypatch 小 cap） | `resultCode=-1` `resultMsg=zip too large`；不创建文件 | 已写 |
+| Z16 | 内容管理员 | malformed md 覆盖不删原文件（H1） | `import md(VALID) -> import zip(同路径 malformed UTF-8 md)` | malformed 条目记为失败；原 VALID 文件仍可下载（改写在 delete 之前） | 已写 |
+
+### 构建侧适配
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| Z17 | 内容管理员 | 不支持类型构建置「不支持构建」 | `import png -> fileToMarkdownIndex -> fileBuildStatus` | 构建任务 `status=unsupported`（不抛错、不写 chunks） | 已写 |
+
 ## 元数据与 DSL 检索场景总表
 
 说明：
@@ -347,7 +398,7 @@
 | 文件 | 覆盖重点 | 状态 |
 | --- | --- | --- |
 | `tests/knowledge_build/integration/test_api_integration.py` | ~~`knowledge_build` 三接口正常/异常与组合链路等价性~~ | 已弃用（`knowledge_build` 独立路由已移除） |
-| `tests/knowledge_base/integration/test_kb_api_stateful_integration.py` | 混合导入构建（`knowledgeItems/import` + `fileToMarkdownIndex`）、知识库改名、单文件/目录删除、多级目录改名删除、读取窗口校验、`downloadFile` 的中文文件名/二进制文件下载、真实搜索链路与失败保护 | 有效 |
+| `tests/knowledge_base/integration/test_kb_api_stateful_integration.py` | 混合导入构建（`knowledgeItems/import` + `fileToMarkdownIndex`）、知识库改名、单文件/目录删除、多级目录改名删除、读取窗口校验、`downloadFile` 的中文文件名/二进制文件下载、真实搜索链路与失败保护；zip 批量导入与引用改写（Z1–Z17：单文件分流与出参、zip 主链路、引用能/不能替换、zip 异常防护、不支持类型构建状态） | 有效 |
 | `tests/knowledge_base/integration/test_metadata_api_integration.py` | M1–M17 全场景:属性 CRUD/批量原子性/引用计数;文件元数据五类型 set/list 操作矩阵;`metadata/get` 错路径(unknown KB/file);YAML front matter(auto/拒绝/缺失/格式错容错);删除三档级联;`metadataFields/list`(KB 必填/多 KB 合并/单 KB 隔离);metadataSearch 接口约束(where 必填/topK 边界/KB scope/字段裁剪/knCodeList 必填);DSL 算子矩阵 + 三层布尔嵌套 + 德摩根;DSL 类型/结构/复杂度错误矩阵;系统字段(metadataSearch 单系统/混合 + chunk + searchFile 单系统/混合);search 升级版(三 mode/metadataFieldList/where 短路/前过滤证明);fileTypeList 兼容;searchFile(多 chunk 去重/where/系统字段/knCodeList 必填);跨接口一致;软删保护 | 有效 |
 | `tests/knowledge_base/integration/test_userfs_batch1.py` | U1–U9:基础读写路径、多级目录隔离、跨 KB 隔离 | 有效 |
 | `tests/knowledge_base/integration/test_userfs_batch2.py` | U10–U18:删除联动、目录改名路径迁移 | 有效 |

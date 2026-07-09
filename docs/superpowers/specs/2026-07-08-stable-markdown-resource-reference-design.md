@@ -151,7 +151,7 @@ CHECK (target_kind IN ('FILE'));
 
 单个 markdown 内多个相同 target 可以创建多条引用记录，便于保留每个 span 的原始 target 和 suffix；如果后续想去重，可在 resolver 层批量解析相同 ref id。
 
-改造位置必须从 route 层下沉到 ingestion 事务内：新 rewriter 需要 `source_fs_entry_id` 并写入引用表，不能继续作为 route 层纯函数运行。
+改造位置必须从 route 层下沉到 ingestion 事务内：新 rewriter 需要 `source_fs_entry_id` 并写入引用表，不能继续作为 route 层纯函数运行。rewriter 逐个 span 先 `INSERT` 引用行并取得 `kid`，再把该 span 的 target 回填为 `byqa-ref://<kid>`；storage 写入发生在 rewrite 之后。若 storage 或后续 DB 操作失败，事务回滚会删除引用行，bigserial 序列号空洞可接受。
 
 ### 2. 新增 `repositories/knowledge_file_reference_repository.py`
 
@@ -161,7 +161,7 @@ CHECK (target_kind IN ('FILE'));
 - `list_by_source(source_fs_entry_id) -> list[dict]`
 - `list_by_reference_ids(reference_ids) -> list[dict]`
 - `resolve_pending_for_path(knowledge_base_id, target_path, target_fs_entry_id)`
-- `mark_target_deleted(target_fs_entry_id)`
+- `mark_targets_deleted(targets: list[tuple[target_fs_entry_id, virtual_path]])`
 - `mark_target_restored(knowledge_base_id, target_path, target_fs_entry_id)`
 - `list_sources_by_target(target_fs_entry_id)`
 
@@ -176,8 +176,11 @@ CHECK (target_kind IN ('FILE'));
 1. 扫描文本中的 ref ids。
 2. 一次性查询引用表和目标 `knowledge_fs_entry`。
 3. 对 `resolved` 且目标未删除的引用，输出目标当前 `virtual_path + target_suffix`。
-4. 对 `unresolved`，输出 `original_target`。
-5. 对 `broken`，面向用户和 QA 默认输出 `original_target`；管理/调试视图可展示 `target_path + target_suffix` 和 broken 状态。
+4. 对 `resolved` 但目标已删除或 join 不到可见目标的引用，按 broken 处理并输出 `original_target`，避免删除标记漏更新或并发读时泄漏死链。
+5. 对 `unresolved`，输出 `original_target`。
+6. 对 `broken`，面向用户和 QA 默认输出 `original_target`；管理/调试视图可展示 `target_path + target_suffix` 和 broken 状态。
+
+`original_target` 已包含用户原始 query/fragment；unresolved/broken 回退 `original_target` 时不得再拼接 `target_suffix`。只有 resolved 输出当前 `virtual_path` 时才拼接 `target_suffix`。
 
 Resolver 必须支持批量文本：
 
@@ -211,12 +214,12 @@ async def resolve_texts(
 2. 如果是 markdown，在写 storage 前调用新 rewriter，生成含 `byqa-ref://...` 的 content。
 3. 写原始文件 storage。
 4. 应用 front matter metadata。
-5. 提交事务。
-6. 对任意新上传文件，触发 unresolved 引用补偿：
+5. 对任意新上传文件，触发 unresolved/broken 引用补偿：
    - 根据新文件当前路径反查 `target_path`
    - 批量更新 matching rows 的 `target_fs_entry_id`、清空 `target_path`、设置 `status='resolved'`
+6. 提交事务。
 
-补偿可以放在同一个事务内，保证上传完成即解析可见。按路径重绑是明确取舍：知识库内同路径重新上传视为替换/恢复同一逻辑资源；如果业务需要区分“同路径不同内容”，后续再增加人工 relink 或内容指纹确认。删除与上传并发时，同一 KB 路径的文件创建/删除应沿用现有 fs_entry 路径锁或事务锁，保证引用状态不会在两个文件 ID 间抖动。
+引用登记、storage metadata 更新、front matter、pending 补偿在同一 DB 事务内完成，保证上传提交后引用解析立即可见。按路径重绑是明确取舍：知识库内同路径重新上传视为替换/恢复同一逻辑资源；如果业务需要区分“同路径不同内容”，后续再增加人工 relink 或内容指纹确认。删除与上传并发时，同一 KB 路径的文件创建/删除应沿用现有 fs_entry 路径锁或事务锁，保证引用状态不会在两个文件 ID 间抖动。
 
 调用方影响：
 
@@ -269,6 +272,13 @@ zip 场景必须处理导入顺序问题。
 - 删除前先读取目标当前 `virtual_path` 写入 `target_path`。
 - 清空 `target_fs_entry_id`，因为 resolved 路径只通过非空目标 ID 查询。
 - 如果未来同路径重新上传文件，按 `target_path` 把 `broken/unresolved` 引用重新绑定到新文件 ID，状态改为 `resolved`。
+
+删除目录子树时：
+
+- 在 `soft_delete_subtree` 前拿到子树内所有非删除文件 entry（或至少 `kid` + `virtual_path`）。
+- 对 `target_fs_entry_id IN (子树文件 IDs)` 的引用批量标记 `broken`。
+- 每条引用写入对应目标删除前 `virtual_path` 到 `target_path`，并清空 `target_fs_entry_id`。
+- 目录本身不是引用目标；首版只处理目录内文件的 inbound 引用。
 
 删除源 markdown 时：
 
@@ -349,6 +359,7 @@ POST /api/v1/knowledgeItems/move
 - 同一批次内禁止 source/target 互相包含导致循环移动。
 - `targetPath` 父目录不存在时可自动创建，沿用现有 create file entry 的父目录创建能力。
 - 默认不覆盖已有文件或目录；`overwrite=true` 可作为后续增强，不建议首版打开。
+- 移动源 markdown 不改变它的 unresolved 引用待匹配路径；pending `target_path` 仍是导入时解析结果。
 
 新增反向引用查询接口：
 
@@ -363,6 +374,12 @@ POST /api/v1/knowledgeItems/references
 ```
 
 返回哪些 markdown 引用了该文件，包含 source path、original target、status。
+
+反向引用查询语义：
+
+- 对当前存在的目标文件，按 `target_fs_entry_id` 查询 resolved inbound 引用。
+- 对已删除目标文件，普通文件路径查询只能按 `target_path` 返回 broken inbound 引用；因为删除时会清空 `target_fs_entry_id`。
+- 管理视图如需按历史 `target_fs_entry_id` 审计 deleted target，需要额外历史表或在本表保留独立 `last_target_fs_entry_id` 字段；首版不做。
 
 ## 读写时序
 
@@ -412,6 +429,18 @@ upload /archive/b.md
   -> reference 101 target_fs_entry_id=<new_id>, target_path=NULL, status=resolved
 ```
 
+### 删除目录子树
+
+```text
+delete directory /archive
+  -> list subtree files, including /archive/b.md(id=20)
+  -> reference 101 target_path=/archive/b.md
+  -> reference 101 target_fs_entry_id=NULL, status=broken
+
+read a.md
+  -> byqa-ref://101 输出 original_target=b.md
+```
+
 ## 测试计划
 
 单元测试：
@@ -422,8 +451,11 @@ upload /archive/b.md
 - resolver：resolved 输出当前路径。
 - resolver：移动后输出新路径。
 - resolver：unresolved/broken 默认输出 original target，管理视图可展示 broken 的 target_path。
+- resolver：status=resolved 但目标 `is_deleted=true` 或 join 不到可见目标时，按 broken 兜底输出 original target。
+- resolver：unresolved/broken 回退 original target 时不重复拼接 query/fragment；resolved 输出当前路径时只拼接一次 `target_suffix`。
 - repository：按 source、target、pending target path 查询和更新。
 - move service：文件移动、目录子树移动、批量移动、冲突校验、循环移动校验。
+- delete service：单文件删除和目录子树删除都会批量把 inbound 引用标记 broken、写入 target_path、清空 target_fs_entry_id。
 - chunking：`byqa-ref://<id>` token 不会被切到两个 chunk 中；超长 token/span 独立成 chunk。
 - normalization：导入、zip、补偿、移动路径判断共用同一套 `split_target` / `normalize_kb_path`，覆盖 URL decode、query/fragment、trailing slash、`.` / `..`。
 
@@ -434,9 +466,10 @@ upload /archive/b.md
 - 构建 `a.md` 后移动 `b.md`，搜索结果 `chunkText` 输出移动后的路径。
 - zip 内 `a.md` 引用 `b.md`，导入结束后引用 resolved。
 - 删除 `b.md` 后 `readFile/search` 不暴露内部 token，默认回退 `original_target`。
+- 删除包含 `b.md` 的目录后，指向目录内文件的引用全部变为 broken，`readFile/search` 默认回退 `original_target`。
 - 重新上传最后已知路径的 `b.md` 后引用恢复 resolved。
 - 移动目录子树后，多个引用目标都输出新路径。
-- 反向引用接口返回引用 `b.md` 的源 markdown 列表。
+- 反向引用接口返回引用 `b.md` 的源 markdown 列表；对已删除目标路径返回 broken inbound 引用。
 
 ## 受影响文件
 

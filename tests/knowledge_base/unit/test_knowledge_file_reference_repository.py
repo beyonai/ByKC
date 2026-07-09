@@ -241,7 +241,7 @@ def test_reference_migration_declares_delete_and_state_constraints():
     ) in sql
     assert (
         "target_fs_entry_id bigint NULL REFERENCES knowledge_fs_entry(kid) "
-        "ON DELETE CASCADE"
+        "ON DELETE RESTRICT"
     ) in sql
     assert "CONSTRAINT chk_knowledge_file_reference_state CHECK" in sql
     assert "status = 'resolved'" in sql

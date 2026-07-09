@@ -2,7 +2,7 @@ CREATE TABLE IF NOT EXISTS knowledge_file_reference (
     kid bigserial PRIMARY KEY,
     knowledge_base_id bigint NOT NULL REFERENCES knowledge_base(kid) ON DELETE CASCADE,
     source_fs_entry_id bigint NOT NULL REFERENCES knowledge_fs_entry(kid) ON DELETE CASCADE,
-    target_fs_entry_id bigint NULL REFERENCES knowledge_fs_entry(kid) ON DELETE CASCADE,
+    target_fs_entry_id bigint NULL REFERENCES knowledge_fs_entry(kid) ON DELETE RESTRICT,
     original_target text NOT NULL,
     target_path text NULL,
     target_suffix text NOT NULL DEFAULT '',

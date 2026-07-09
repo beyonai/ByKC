@@ -156,6 +156,15 @@ async def test_root_directory_target_remains_original_and_creates_no_reference()
     assert reference_repository.rows == []
 
 
+async def test_protocol_relative_external_url_remains_original_and_creates_no_reference():
+    src = "![cdn](//cdn.example.com/image.png)"
+
+    out, reference_repository = await _rewrite(src)
+
+    assert out == src
+    assert reference_repository.rows == []
+
+
 async def test_legacy_rewrite_preserves_absolute_path_behavior_for_existing_target():
     rewriter = MarkdownReferenceRewriter(
         exists_check=await _exists({"/docs/p/images/x.png"})
@@ -180,6 +189,20 @@ async def test_legacy_rewrite_leaves_missing_target_original():
     )
 
     assert out == "see ![alt](missing.png) here"
+
+
+async def test_legacy_rewrite_leaves_protocol_relative_external_url_original():
+    rewriter = MarkdownReferenceRewriter(
+        exists_check=await _exists({"/cdn.example.com/image.png"})
+    )
+
+    out = await rewriter.rewrite(
+        "![cdn](//cdn.example.com/image.png)",
+        "/docs/p",
+        "kb1",
+    )
+
+    assert out == "![cdn](//cdn.example.com/image.png)"
 
 
 async def test_target_suffix_stored_separately_and_original_target_preserved():

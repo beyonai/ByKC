@@ -90,7 +90,7 @@ class MarkdownReferenceRewriter:
         replacements: list[tuple[int, int, str]] = []
         for start, end, alt, target, is_image in spans:
             t = target.strip()
-            if not t or t.startswith("#") or URL_SCHEME_RE.match(t):
+            if self._is_ineligible_target(t):
                 continue
             path_part, suffix = split_target(t)
             decoded = unquote(path_part)
@@ -178,7 +178,7 @@ class MarkdownReferenceRewriter:
         targets_to_check: set[str] = set()
         for start, end, alt, target, is_image in spans:
             t = target.strip()
-            if not t or t.startswith("#") or URL_SCHEME_RE.match(t):
+            if self._is_ineligible_target(t):
                 continue
             path_part, suffix = split_target(t)
             decoded = unquote(path_part)
@@ -223,6 +223,15 @@ class MarkdownReferenceRewriter:
             last = end
         out.append(text[last:])
         return "".join(out)
+
+    @staticmethod
+    def _is_ineligible_target(target: str) -> bool:
+        return (
+            not target
+            or target.startswith("#")
+            or target.startswith("//")
+            or URL_SCHEME_RE.match(target) is not None
+        )
 
     @staticmethod
     def _target_bounds(

@@ -12,7 +12,7 @@ import re
 
 IMAGE_REF_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 LINK_REF_RE = re.compile(r"(?<!!)\[([^\]]*)\]\(([^)]+)\)")
-REFERENCE_TOKEN_RE = re.compile(r"byqa-ref://([0-9]+)")
+REFERENCE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_])byqa-ref://([0-9]+)(?![A-Za-z0-9_])")
 URL_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:")
 
 

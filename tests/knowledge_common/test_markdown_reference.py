@@ -74,6 +74,17 @@ def test_detect_reference_token_spans_excludes_adjacent_punctuation():
     assert [reference_id for _, _, reference_id in spans] == [123, 456, 789, 10]
 
 
+def test_detect_reference_token_spans_rejects_embedded_or_suffixed_fragments():
+    text = "bad abcbyqa-ref://123 byqa-ref://456abc _byqa-ref://789 byqa-ref://10_ ok byqa-ref://11"
+    valid_start = text.index("byqa-ref://11")
+    valid_end = valid_start + len("byqa-ref://11")
+
+    spans = detect_reference_token_spans(text)
+
+    assert spans == [(valid_start, valid_end, 11)]
+    assert text[valid_start:valid_end] == "byqa-ref://11"
+
+
 def test_split_target_strips_anchor_and_query():
     assert split_target("images/x.png") == ("images/x.png", "")
     assert split_target("a.md#section") == ("a.md", "#section")

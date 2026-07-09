@@ -73,7 +73,7 @@ class MarkdownReferenceRewriter:
                 target_fs_entry_id=self._row_value(target_file, "kid")
                 if target_file is not None
                 else None,
-                original_target=t,
+                original_target=target,
                 target_path=None if target_file is not None else resolved,
                 target_suffix=suffix,
                 target_kind="FILE",

@@ -156,6 +156,19 @@ async def test_target_suffix_stored_separately_and_original_target_preserved():
     assert reference_repository.rows[0]["status"] == "resolved"
 
 
+async def test_original_target_preserves_surrounding_whitespace_with_suffix():
+    out, reference_repository = await _rewrite(
+        "prefix [doc]( a.md#sec ) suffix",
+        files={"/docs/p/a.md": 321},
+    )
+
+    assert out == "prefix [doc](byqa-ref://1) suffix"
+    assert reference_repository.rows[0]["original_target"] == " a.md#sec "
+    assert reference_repository.rows[0]["target_suffix"] == "#sec"
+    assert reference_repository.rows[0]["target_fs_entry_id"] == 321
+    assert reference_repository.rows[0]["target_path"] is None
+
+
 async def test_percent_decoded_target_path_preserves_original_target():
     out, reference_repository = await _rewrite(
         "![a](b%20c.png)",

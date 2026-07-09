@@ -1,9 +1,10 @@
 """Tests for knowledge-base ingestion settings."""
 
+import os
 from pathlib import Path
 from unittest.mock import patch
 
-from by_qa.config import Settings
+from by_qa.config import Settings, load_project_env_file
 from by_qa.knowledge_base.services.errors import KnowledgeBaseConfigurationError
 
 
@@ -195,9 +196,14 @@ def test_settings_expose_kb_fetch_cache_defaults():
     assert settings.kb_cache_path == settings.agent_data_path / "kb_cache"
 
 
-def test_settings_expose_service_registry_defaults():
+def test_settings_expose_service_registry_defaults(monkeypatch):
     """Service registry settings should expose the default service identity."""
-    settings = Settings()
+    monkeypatch.delenv("REDIS_HOST", raising=False)
+    monkeypatch.delenv("REDIS_PORT", raising=False)
+    monkeypatch.delenv("REDIS_USERNAME", raising=False)
+    monkeypatch.delenv("REDIS_PASSWORD", raising=False)
+    monkeypatch.delenv("REDIS_DATABASE", raising=False)
+    settings = Settings(_env_file=None)
 
     assert settings.service_name == "by-qa-manager"
     assert settings.redis_host == "localhost"
@@ -222,6 +228,33 @@ def test_settings_accept_service_registry_redis_env_vars():
     assert settings.redis_username == ""
     assert settings.redis_password == "admin123"
     assert settings.redis_database == 0
+
+
+def test_load_project_env_file_exports_redis_cluster_vars_without_overrides(
+    tmp_path,
+    monkeypatch,
+):
+    """Project .env values should be visible to RedisConfig.from_env."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "REDIS_CLUSTER_HOST=10.10.168.204:6379,10.10.168.205:6379",
+                "REDIS_KEY_SCHEMA_VERSION=v2",
+                "REDIS_PASSWORD=from-file",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("REDIS_CLUSTER_HOST", raising=False)
+    monkeypatch.delenv("REDIS_KEY_SCHEMA_VERSION", raising=False)
+    monkeypatch.setenv("REDIS_PASSWORD", "from-env")
+
+    load_project_env_file(env_file)
+
+    assert os.environ["REDIS_CLUSTER_HOST"] == "10.10.168.204:6379,10.10.168.205:6379"
+    assert os.environ["REDIS_KEY_SCHEMA_VERSION"] == "v2"
+    assert os.environ["REDIS_PASSWORD"] == "from-env"
 
 
 def test_settings_use_configured_host_machine():

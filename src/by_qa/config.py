@@ -8,11 +8,17 @@ from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import quote, urlencode
 
+from dotenv import load_dotenv
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 ENV_FILE = PROJECT_ROOT / ".env"
+
+
+def load_project_env_file(env_file: Path = ENV_FILE) -> None:
+    """Expose project .env values to libraries that read os.environ directly."""
+    load_dotenv(env_file, override=False)
 
 
 def _detect_host_machine_ip() -> str:

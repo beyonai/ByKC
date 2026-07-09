@@ -64,3 +64,40 @@ async def test_request_discovered_json_forwards_headers(monkeypatch):
         "headers": {"Authorization": "Bearer hr-token"},
     }
     assert discovery_client.closed is True
+
+
+def test_build_discovery_client_uses_framework_redis_config(monkeypatch):
+    recorded = {}
+    fake_redis_client = object()
+    fake_redis_config = SimpleNamespace(
+        mode="cluster",
+        cluster_nodes=("10.10.168.204:6379", "10.10.168.205:6379"),
+    )
+
+    monkeypatch.setattr(
+        framework_client,
+        "RedisConfig",
+        SimpleNamespace(from_env=lambda: fake_redis_config),
+    )
+    monkeypatch.setattr(
+        framework_client,
+        "init_redis",
+        lambda **kwargs: recorded.update(init_redis_kwargs=kwargs) or fake_redis_client,
+    )
+    monkeypatch.setattr(
+        framework_client,
+        "DiscoveryClient",
+        lambda redis_client, cache_interval: recorded.update(
+            redis_client=redis_client,
+            cache_interval=cache_interval,
+        )
+        or object(),
+    )
+
+    framework_client._build_discovery_client()
+
+    assert recorded["init_redis_kwargs"] == {"config": fake_redis_config}
+    assert recorded["redis_client"] is fake_redis_client
+    assert (
+        recorded["cache_interval"] == framework_client.DEFAULT_DISCOVERY_CACHE_INTERVAL
+    )

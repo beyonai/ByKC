@@ -493,6 +493,15 @@ async def test_lifespan_logs_configuration_and_registers_service(monkeypatch):
     fake_registry = SimpleNamespace(register=fake_register, unregister=fake_unregister)
     fake_application = SimpleNamespace(state=SimpleNamespace(enabled_modules=[]))
     fake_redis_client = object()
+    fake_redis_config = SimpleNamespace(
+        mode="cluster",
+        cluster_nodes=("10.10.168.204:6379", "10.10.168.205:6379"),
+        host="localhost",
+        port=6379,
+        db=0,
+        username=None,
+        password="admin123",
+    )
 
     monkeypatch.setattr(main_module, "settings", fake_settings)
     monkeypatch.setattr(
@@ -503,8 +512,13 @@ async def test_lifespan_logs_configuration_and_registers_service(monkeypatch):
     )
     monkeypatch.setattr(
         main_module,
-        "Redis",
-        lambda **kwargs: recorded.update(redis_kwargs=kwargs) or fake_redis_client,
+        "RedisConfig",
+        SimpleNamespace(from_env=lambda: fake_redis_config),
+    )
+    monkeypatch.setattr(
+        main_module,
+        "init_redis",
+        lambda **kwargs: recorded.update(init_redis_kwargs=kwargs) or fake_redis_client,
     )
     monkeypatch.setattr(
         main_module.logger, "info", lambda *args: info_calls.append(args)
@@ -540,13 +554,7 @@ async def test_lifespan_logs_configuration_and_registers_service(monkeypatch):
         "weight": 10,
         "metadata": {"version": "0.1.1"},
     }
-    assert recorded["redis_kwargs"] == {
-        "host": "10.10.168.204",
-        "port": 6379,
-        "db": 0,
-        "password": "admin123",
-        "decode_responses": True,
-    }
+    assert recorded["init_redis_kwargs"] == {"config": fake_redis_config}
     assert recorded["service_registry_client"] is fake_redis_client
     assert recorded["unregistered"] is True
     assert "initialized" not in recorded
@@ -571,10 +579,9 @@ async def test_lifespan_logs_configuration_and_registers_service(monkeypatch):
         {"version": "0.1.1"},
     ) in info_calls
     assert (
-        "service registry redis configured: host=%s, port=%s, db=%s, username_set=%s, password_set=%s",
-        "10.10.168.204",
-        6379,
-        0,
+        "service registry redis configured: mode=%s, target=%s, username_set=%s, password_set=%s",
+        "cluster",
+        ("10.10.168.204:6379", "10.10.168.205:6379"),
         False,
         True,
     ) in info_calls

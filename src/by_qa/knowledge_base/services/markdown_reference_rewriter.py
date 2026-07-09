@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import unquote
 
@@ -20,7 +21,52 @@ logger = logging.getLogger(__name__)
 class MarkdownReferenceRewriter:
     MAX_REFERENCES = 1024
 
+    def __init__(
+        self,
+        *,
+        exists_check: Callable[[str, frozenset[str]], Awaitable[frozenset[str]]]
+        | None = None,
+    ) -> None:
+        self._exists_check = exists_check
+
     async def rewrite(
+        self,
+        text: str,
+        current_dir: str | None = None,
+        kb_code: str | None = None,
+        *,
+        source_dir: str | None = None,
+        knowledge_base_id: int | None = None,
+        source_fs_entry_id: int | None = None,
+        cursor: Any | None = None,
+        reference_repository: Any | None = None,
+        fs_entry_repository: Any | None = None,
+    ) -> str:
+        if source_dir is None:
+            return await self._rewrite_legacy(
+                text,
+                current_dir=current_dir,
+                kb_code=kb_code,
+            )
+        if (
+            knowledge_base_id is None
+            or source_fs_entry_id is None
+            or cursor is None
+            or reference_repository is None
+            or fs_entry_repository is None
+        ):
+            raise TypeError("transactional rewrite requires repository and cursor args")
+        return await self._rewrite_transactional(
+            text,
+            source_dir=source_dir,
+            knowledge_base_id=knowledge_base_id,
+            source_fs_entry_id=source_fs_entry_id,
+            cursor=cursor,
+            reference_repository=reference_repository,
+            fs_entry_repository=fs_entry_repository,
+        )
+
+    async def _rewrite_transactional(
         self,
         text: str,
         *,
@@ -94,6 +140,78 @@ class MarkdownReferenceRewriter:
                 (target_start, target_end, f"byqa-ref://{reference_id}")
             )
 
+        if not replacements:
+            return text
+
+        out: list[str] = []
+        last = 0
+        for start, end, replacement in replacements:
+            out.append(text[last:start])
+            out.append(replacement)
+            last = end
+        out.append(text[last:])
+        return "".join(out)
+
+    async def _rewrite_legacy(
+        self,
+        text: str,
+        *,
+        current_dir: str | None,
+        kb_code: str | None,
+    ) -> str:
+        if self._exists_check is None:
+            raise TypeError("legacy rewrite requires exists_check")
+        if current_dir is None or kb_code is None:
+            raise TypeError("legacy rewrite requires current_dir and kb_code")
+
+        spans = detect_reference_spans(text)
+        if not spans:
+            return text
+        if len(spans) > self.MAX_REFERENCES:
+            logger.warning(
+                "markdown reference count exceeds cap, skipping rewrite: count=%s",
+                len(spans),
+            )
+            return text
+
+        decisions: list[tuple[int, int, str, str]] = []
+        targets_to_check: set[str] = set()
+        for start, end, alt, target, is_image in spans:
+            t = target.strip()
+            if not t or t.startswith("#") or URL_SCHEME_RE.match(t):
+                continue
+            path_part, suffix = split_target(t)
+            decoded = unquote(path_part)
+            resolved = normalize_kb_path(current_dir, decoded)
+            if resolved is None:
+                continue
+            target_start, target_end = self._target_bounds(
+                text=text,
+                start=start,
+                end=end,
+                alt=alt,
+                is_image=is_image,
+            )
+            decisions.append((target_start, target_end, resolved, suffix))
+            targets_to_check.add(resolved)
+
+        if not targets_to_check:
+            return text
+
+        try:
+            existing = await self._exists_check(kb_code, frozenset(targets_to_check))
+        except Exception as exc:
+            logger.warning(
+                "reference exists_check failed, leaving references unchanged: %s",
+                exc,
+            )
+            return text
+
+        replacements = [
+            (start, end, resolved + suffix)
+            for start, end, resolved, suffix in decisions
+            if resolved in existing
+        ]
         if not replacements:
             return text
 

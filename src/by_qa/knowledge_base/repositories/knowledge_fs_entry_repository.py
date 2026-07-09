@@ -419,6 +419,16 @@ class KnowledgeFsEntryRepository:
             return None
         return await self._get_entry_by_id(cursor, entry_id=self._row_id(current))
 
+    async def get_file_reference_target_by_path(
+        self, cursor: Any, *, knowledge_base_id: int, full_path: str
+    ) -> dict[str, Any] | None:
+        """Look up one file entry eligible as a stable Markdown reference target."""
+        return await self.get_file_by_path(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            full_path=full_path,
+        )
+
     async def list_children_by_parent_entry_id(
         self,
         cursor: Any,

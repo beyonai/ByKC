@@ -331,7 +331,7 @@ POST /api/v1/knowledgeItems/move
 {
   "knCode": "1",
   "sourcePath": ["/docs/a.md", "/docs/images"],
-  "targetPath": "/archive",
+  "targetDirectoryPath": "/archive",
   "overwrite": false
 }
 ```
@@ -353,9 +353,10 @@ POST /api/v1/knowledgeItems/move
 
 规则：
 
-- 语义参考 Linux `mv`：`sourcePath` 是一个或多个源路径，`targetPath` 是单个目标路径。
-- 单源移动时，如果 `targetPath` 是已存在目录，则移动到目录下并保留源名称；如果 `targetPath` 不存在，则移动/重命名为该路径，目标父目录必须存在。
-- 多源移动时，`targetPath` 必须是已存在目录；每个源移动到该目录下并保留源名称。
+- `sourcePath` 是一个或多个源路径，目标通过 `targetDirectoryPath` 或 `targetFilePath` 明确指定。
+- `targetDirectoryPath` 与 `targetFilePath` 必须且只能填写一个。
+- 使用 `targetDirectoryPath` 时，目标目录不存在则自动创建，每个源移动到该目录下并保留源名称。
+- 使用 `targetFilePath` 时，仅允许单个文件源，目标文件父目录必须存在。
 - 支持文件、目录、批量文件和目录混合移动。
 - 同一批次内禁止 source/target 互相包含导致循环移动。
 - 默认不覆盖已有文件或目录；`overwrite=true` 可作为后续增强，不建议首版打开。

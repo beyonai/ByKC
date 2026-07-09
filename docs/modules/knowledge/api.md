@@ -47,8 +47,8 @@
 - `knCode`：知识库编码
 - `directoryPath`：目录路径，以 `/` 开头，不包含知识库名称
 - `filePath`：文件路径，以 `/` 开头，不包含知识库名称
-- `sourcePath`：移动源路径，以 `/` 开头，不包含知识库名称，可指向文件或目录
-- `targetPath`：移动目标路径，以 `/` 开头，不包含知识库名称；移动文件时为目标文件全路径，移动目录时为目标目录全路径
+- `sourcePath`：移动源路径列表，以 `/` 开头，不包含知识库名称，元素可指向文件或目录
+- `targetPath`：移动目标路径，以 `/` 开头，不包含知识库名称；语义参考 Linux `mv`
 - `name`：目录遍历或模式匹配结果中的完整路径
 
 ## 接口总览
@@ -489,58 +489,53 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
 
 ### `POST /api/v1/knowledgeItems/move`
 
-移动指定知识库下面的文件或目录。支持一次请求移动多个文件或目录。
+移动指定知识库下面的文件或目录。语义参考 Linux `mv`：`sourcePath` 为一个或多个源路径，`targetPath` 为单个目标路径。
 
 请求体：`application/json`
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `knCode` | string | 是 | 知识库编码 |
-| `items` | array | 是 | 移动项列表，不能为空 |
-| `items[].sourcePath` | string | 是 | 源路径，以 `/` 开头，不包括知识库名称；可指向文件或目录 |
-| `items[].targetPath` | string | 是 | 目标路径，以 `/` 开头，不包括知识库名称；移动文件时为目标文件全路径，移动目录时为目标目录全路径 |
+| `sourcePath` | array[string] | 是 | 源路径列表，不能为空；每个路径以 `/` 开头，不包括知识库名称，可指向文件或目录 |
+| `targetPath` | string | 是 | 目标路径，以 `/` 开头，不包括知识库名称 |
 | `overwrite` | boolean | 否 | 是否覆盖已存在目标。默认 `false`；当前版本仅支持 `false`，目标已存在时该移动项失败 |
 
 行为说明：
 
-- 文件移动：`sourcePath` 指向文件，`targetPath` 为移动后的文件全路径。
-- 目录移动：`sourcePath` 指向目录，`targetPath` 为移动后的目录全路径；目录下所有子目录和文件随目录一起移动。
-- `targetPath` 的父目录不存在时，服务端自动创建父目录。
-- 同一请求内每个移动项独立执行；单项失败不影响其它项，失败原因写入 `data[].error`。
-- 结构性错误会导致整请求失败，包含：`items` 为空、路径不以 `/` 开头、路径含 `..` 跨界段、移动知识库根目录 `/`、同一批次内 `sourcePath` 重复、`targetPath` 重复、目录移动到自身或子目录下。
+- 单源移动：
+  - 如果 `targetPath` 是已存在目录，则将源移动到该目录下，保留源名称。
+  - 如果 `targetPath` 不存在，则将源移动或重命名为该目标路径；目标父目录必须存在。
+- 多源移动：
+  - `targetPath` 必须是已存在目录。
+  - 每个源移动到该目录下，保留各自名称。
+- 目录移动时，目录下所有子目录和文件随目录一起移动。
+- 同一请求内每个源路径独立执行；单个源移动失败不影响其它源，失败原因写入 `data[].error`。
+- 结构性错误会导致整请求失败，包含：`sourcePath` 为空、路径不以 `/` 开头、路径含 `..` 跨界段、移动知识库根目录 `/`、同一批次内 `sourcePath` 重复、目录移动到自身或子目录下、多源移动时 `targetPath` 不是已存在目录。
+- 目标路径或最终落点已存在时，该源移动失败；当前版本不覆盖已有文件或目录。
 - 移动源 Markdown 文件不会改变其中未解析引用的待匹配路径；未解析引用仍按导入时解析出的路径等待后续上传。
 - Markdown 中已经解析成功的文件引用不会因移动失效；读取文件、下载 Markdown、知识检索返回内容时，会按目标文件当前路径输出引用。
 
-请求示例（移动单个文件）：
+请求示例（移动并重命名单个文件）：
 
 ```json
 {
   "knCode": "1",
-  "items": [
-    {
-      "sourcePath": "/制度/人事/考勤制度.pdf",
-      "targetPath": "/归档/人事/考勤制度.pdf"
-    }
-  ],
+  "sourcePath": ["/制度/人事/考勤制度.pdf"],
+  "targetPath": "/归档/人事/考勤制度.pdf",
   "overwrite": false
 }
 ```
 
-请求示例（批量移动文件和目录）：
+请求示例（批量移动文件和目录到已存在目录 `/归档/人事`）：
 
 ```json
 {
   "knCode": "1",
-  "items": [
-    {
-      "sourcePath": "/制度/人事/考勤制度.pdf",
-      "targetPath": "/归档/人事/考勤制度.pdf"
-    },
-    {
-      "sourcePath": "/制度/人事/图片",
-      "targetPath": "/归档/人事/图片"
-    }
-  ]
+  "sourcePath": [
+    "/制度/人事/考勤制度.pdf",
+    "/制度/人事/图片"
+  ],
+  "targetPath": "/归档/人事"
 }
 ```
 
@@ -569,7 +564,7 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `sourcePath` | string | 本次移动的源路径 |
-| `targetPath` | string | 本次移动的目标路径 |
+| `targetPath` | string | 该源路径实际移动后的目标路径 |
 | `success` | boolean | 是否移动成功 |
 | `error` | string \| null | 失败原因；成功时为 `null` |
 
@@ -609,9 +604,11 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
 
 整请求失败响应示例：
 
-- `request validation failed`：请求体结构错误或 `items` 为空。
+- `request validation failed`：请求体结构错误或 `sourcePath` 为空。
 - `unsafe path`：路径含 `..` 跨界段。
 - `cannot move root directory`：尝试移动知识库根目录 `/`。
+- `target directory must exist when moving multiple sources`：多源移动时 `targetPath` 不是已存在目录。
+- `target parent directory not found`：单源移动到不存在目标路径时，目标父目录不存在。
 - `target path must not be inside source directory`：目录移动目标位于源目录内部。
 
 ```json

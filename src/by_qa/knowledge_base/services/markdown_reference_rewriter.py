@@ -95,7 +95,7 @@ class MarkdownReferenceRewriter:
             path_part, suffix = split_target(t)
             decoded = unquote(path_part)
             resolved = normalize_kb_path(source_dir, decoded)
-            if resolved is None:
+            if resolved is None or resolved == "/":
                 continue
 
             target_file = await fs_entry_repository.get_file_reference_target_by_path(

@@ -149,6 +149,13 @@ async def test_ineligible_targets_remain_original_and_create_no_references():
     assert reference_repository.rows == []
 
 
+async def test_root_directory_target_remains_original_and_creates_no_reference():
+    out, reference_repository = await _rewrite("[root](/)")
+
+    assert out == "[root](/)"
+    assert reference_repository.rows == []
+
+
 async def test_legacy_rewrite_preserves_absolute_path_behavior_for_existing_target():
     rewriter = MarkdownReferenceRewriter(
         exists_check=await _exists({"/docs/p/images/x.png"})

@@ -47,6 +47,7 @@ class KnowledgeBaseService:
     retrieval_projection_repository: Any | None = None
     knowledge_fetch_cache_repository: Any | None = None
     storage_provider: Any | None = None
+    markdown_reference_resolver: Any | None = None
     cache_root: Path | None = None
     cache_ttl_seconds: int = 24 * 60 * 60
 
@@ -711,6 +712,19 @@ class KnowledgeBaseService:
         payload = await self.storage_provider.read(location)
         filename = PurePosixPath(normalized_file_path).name or "download"
         media_type = str(file_row.get("mime_type") or self._guess_media_type(filename))
+        if (
+            self.markdown_reference_resolver is not None
+            and self._is_markdown_file(filename=filename, media_type=media_type)
+            and b"byqa-ref://" in payload
+        ):
+            text = payload.decode("utf-8")
+            resolved_text = (
+                await self.markdown_reference_resolver.resolve_texts(
+                    knowledge_base_id=knowledge_base_id,
+                    texts=[text],
+                )
+            )[0]
+            payload = resolved_text.encode("utf-8")
         logger.info(
             "knowledge_base_service.download_file finished: file_path=%s, filename=%s, returned_bytes=%s",
             request.file_path,
@@ -793,6 +807,14 @@ class KnowledgeBaseService:
             start_line = request.start_line
             end_line = request.end_line
 
+        if self.markdown_reference_resolver is not None and "byqa-ref://" in data:
+            data = (
+                await self.markdown_reference_resolver.resolve_texts(
+                    knowledge_base_id=knowledge_base_id,
+                    texts=[data],
+                )
+            )[0]
+
         logger.info(
             "knowledge_base_service.read_file finished: file_path=%s, returned_line_count=%s",
             request.file_path,
@@ -812,6 +834,14 @@ class KnowledgeBaseService:
         if suffix in {".md", ".markdown"}:
             return "text/markdown"
         return mimetypes.guess_type(filename)[0] or "application/octet-stream"
+
+    def _is_markdown_file(self, *, filename: str, media_type: str) -> bool:
+        normalized_media_type = media_type.split(";", 1)[0].strip().lower()
+        suffix = PurePosixPath(filename).suffix.lower()
+        return normalized_media_type == "text/markdown" or suffix in {
+            ".md",
+            ".markdown",
+        }
 
     def _row_id(self, row: dict[str, Any]) -> int:
         if "kid" in row:

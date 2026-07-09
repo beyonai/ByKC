@@ -28,6 +28,9 @@ from by_qa.knowledge_base.repositories.knowledge_build_task_repository import (
 from by_qa.knowledge_base.repositories.knowledge_fetch_cache_repository import (
     KnowledgeFetchCacheRepository,
 )
+from by_qa.knowledge_base.repositories.knowledge_file_reference_repository import (
+    KnowledgeFileReferenceRepository,
+)
 from by_qa.knowledge_base.repositories.knowledge_fs_entry_repository import (
     KnowledgeFsEntryRepository,
 )
@@ -60,6 +63,9 @@ from by_qa.knowledge_base.services.knowledge_item_ingestion_service import (
 )
 from by_qa.knowledge_base.services.knowledge_item_search_service import (
     KnowledgeItemSearchService,
+)
+from by_qa.knowledge_base.services.markdown_reference_resolver import (
+    MarkdownReferenceResolver,
 )
 
 
@@ -198,6 +204,10 @@ async def build_knowledge_base_service(
         knowledge_fetch_cache_repository=KnowledgeFetchCacheRepository(),
         storage_provider=await build_storage_provider(
             settings, embedding_config=embedding_config
+        ),
+        markdown_reference_resolver=MarkdownReferenceResolver(
+            connection_factory=build_connection_factory(settings),
+            reference_repository=KnowledgeFileReferenceRepository(),
         ),
         cache_root=settings.kb_cache_path,
         cache_ttl_seconds=settings.kb_fetch_cache_ttl_seconds,

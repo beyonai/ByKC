@@ -356,7 +356,7 @@ POST /api/v1/knowledgeItems/move
 - `sourcePath` 是一个或多个源路径，目标通过 `targetDirectoryPath` 或 `targetFilePath` 明确指定。
 - `targetDirectoryPath` 与 `targetFilePath` 必须且只能填写一个。
 - 使用 `targetDirectoryPath` 时，目标目录不存在则自动创建，每个源移动到该目录下并保留源名称。
-- 使用 `targetFilePath` 时，仅允许单个文件源，目标文件父目录必须存在。
+- 使用 `targetFilePath` 时，仅允许单个文件源，目标文件父目录不存在则自动创建。
 - 支持文件、目录、批量文件和目录混合移动。
 - 同一批次内禁止 source/target 互相包含导致循环移动。
 - 默认不覆盖已有文件或目录；`overwrite=true` 可作为后续增强，不建议首版打开。

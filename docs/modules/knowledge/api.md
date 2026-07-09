@@ -49,7 +49,7 @@
 - `filePath`：文件路径，以 `/` 开头，不包含知识库名称
 - `sourcePath`：移动源路径列表，以 `/` 开头，不包含知识库名称，元素可指向文件或目录
 - `targetDirectoryPath`：移动目标目录路径，以 `/` 开头，不包含知识库名称；不存在时自动创建
-- `targetFilePath`：移动目标文件路径，以 `/` 开头，不包含知识库名称；仅单源移动时可用
+- `targetFilePath`：移动目标文件路径，以 `/` 开头，不包含知识库名称；仅单源文件移动时可用，父目录不存在时自动创建
 - `name`：目录遍历或模式匹配结果中的完整路径
 
 ## 接口总览
@@ -499,7 +499,7 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
 | `knCode` | string | 是 | 知识库编码 |
 | `sourcePath` | array[string] | 是 | 源路径列表，不能为空；每个路径以 `/` 开头，不包括知识库名称，可指向文件或目录 |
 | `targetDirectoryPath` | string | 否 | 目标目录路径，以 `/` 开头，不包括知识库名称；不存在时自动创建。与 `targetFilePath` 二选一 |
-| `targetFilePath` | string | 否 | 目标文件路径，以 `/` 开头，不包括知识库名称；仅 `sourcePath` 为单个文件时可用。与 `targetDirectoryPath` 二选一 |
+| `targetFilePath` | string | 否 | 目标文件路径，以 `/` 开头，不包括知识库名称；仅 `sourcePath` 为单个文件时可用，父目录不存在时自动创建。与 `targetDirectoryPath` 二选一 |
 | `overwrite` | boolean | 否 | 是否覆盖已存在目标。默认 `false`；当前版本仅支持 `false`，目标已存在时该移动项失败 |
 
 行为说明：
@@ -512,7 +512,7 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
 - 使用 `targetFilePath` 时：
   - 仅允许 `sourcePath` 包含一个文件源。
   - 将源文件移动或重命名为 `targetFilePath`。
-  - `targetFilePath` 的父目录必须存在。
+  - `targetFilePath` 的父目录不存在时，服务端自动创建。
 - 目录移动时，目录下所有子目录和文件随目录一起移动。
 - 同一请求内每个源路径独立执行；单个源移动失败不影响其它源，失败原因写入 `data[].error`。
 - 结构性错误会导致整请求失败，包含：`sourcePath` 为空、路径不以 `/` 开头、路径含 `..` 跨界段、移动知识库根目录 `/`、同一批次内 `sourcePath` 重复、`targetDirectoryPath` 与 `targetFilePath` 同时填写或同时缺失、目录移动到自身或子目录下、`targetFilePath` 用于多源或目录源。
@@ -614,7 +614,6 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
 - `cannot move root directory`：尝试移动知识库根目录 `/`。
 - `exactly one of targetDirectoryPath or targetFilePath is required`：目标目录路径和目标文件路径必须且只能填写一个。
 - `targetFilePath requires exactly one file source`：`targetFilePath` 只能用于单个文件源。
-- `target parent directory not found`：使用 `targetFilePath` 时，目标父目录不存在。
 - `target path must not be inside source directory`：目录移动目标位于源目录内部。
 
 ```json

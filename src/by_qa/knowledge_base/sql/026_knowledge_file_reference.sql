@@ -1,8 +1,8 @@
 CREATE TABLE IF NOT EXISTS knowledge_file_reference (
     kid bigserial PRIMARY KEY,
-    knowledge_base_id bigint NOT NULL REFERENCES knowledge_base(kid),
-    source_fs_entry_id bigint NOT NULL REFERENCES knowledge_fs_entry(kid),
-    target_fs_entry_id bigint NULL REFERENCES knowledge_fs_entry(kid),
+    knowledge_base_id bigint NOT NULL REFERENCES knowledge_base(kid) ON DELETE CASCADE,
+    source_fs_entry_id bigint NOT NULL REFERENCES knowledge_fs_entry(kid) ON DELETE CASCADE,
+    target_fs_entry_id bigint NULL REFERENCES knowledge_fs_entry(kid) ON DELETE CASCADE,
     original_target text NOT NULL,
     target_path text NULL,
     target_suffix text NOT NULL DEFAULT '',
@@ -13,6 +13,20 @@ CREATE TABLE IF NOT EXISTS knowledge_file_reference (
     updated_at timestamptz NOT NULL DEFAULT NOW(),
     CONSTRAINT chk_knowledge_file_reference_status
         CHECK (status IN ('resolved', 'unresolved', 'broken')),
+    CONSTRAINT chk_knowledge_file_reference_state
+        CHECK (
+            (
+                status = 'resolved'
+                AND target_fs_entry_id IS NOT NULL
+                AND target_path IS NULL
+            )
+            OR
+            (
+                status IN ('unresolved', 'broken')
+                AND target_fs_entry_id IS NULL
+                AND target_path IS NOT NULL
+            )
+        ),
     CONSTRAINT chk_knowledge_file_reference_target_kind
         CHECK (target_kind IN ('FILE'))
 );

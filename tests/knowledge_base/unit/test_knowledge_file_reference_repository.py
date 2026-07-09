@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -9,6 +10,8 @@ import pytest
 from by_qa.knowledge_base.repositories.knowledge_file_reference_repository import (
     KnowledgeFileReferenceRepository,
 )
+
+MIGRATION_PATH = Path("src/by_qa/knowledge_base/sql/026_knowledge_file_reference.sql")
 
 
 class FakeCursor:
@@ -223,3 +226,27 @@ async def test_list_sources_by_target_supports_resolved_and_broken_lookup():
     assert "target_path = %(target_path)s" in broken_sql
     assert "status = 'broken'" in broken_sql
     assert broken_params == {"knowledge_base_id": 1, "target_path": "/docs/deleted.md"}
+
+
+def test_reference_migration_declares_delete_and_state_constraints():
+    sql = " ".join(MIGRATION_PATH.read_text(encoding="utf-8").split())
+
+    assert (
+        "knowledge_base_id bigint NOT NULL REFERENCES knowledge_base(kid) "
+        "ON DELETE CASCADE"
+    ) in sql
+    assert (
+        "source_fs_entry_id bigint NOT NULL REFERENCES knowledge_fs_entry(kid) "
+        "ON DELETE CASCADE"
+    ) in sql
+    assert (
+        "target_fs_entry_id bigint NULL REFERENCES knowledge_fs_entry(kid) "
+        "ON DELETE CASCADE"
+    ) in sql
+    assert "CONSTRAINT chk_knowledge_file_reference_state CHECK" in sql
+    assert "status = 'resolved'" in sql
+    assert "target_fs_entry_id IS NOT NULL" in sql
+    assert "target_path IS NULL" in sql
+    assert "status IN ('unresolved', 'broken')" in sql
+    assert "target_fs_entry_id IS NULL" in sql
+    assert "target_path IS NOT NULL" in sql

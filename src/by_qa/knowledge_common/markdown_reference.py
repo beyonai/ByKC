@@ -12,6 +12,7 @@ import re
 
 IMAGE_REF_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 LINK_REF_RE = re.compile(r"(?<!!)\[([^\]]*)\]\(([^)]+)\)")
+REFERENCE_TOKEN_RE = re.compile(r"byqa-ref://([0-9]+)")
 URL_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:")
 
 
@@ -38,6 +39,14 @@ def detect_reference_spans(text: str) -> list[tuple[int, int, str, str, bool]]:
             occupied.append((m.start(), m.end()))
     spans.sort(key=lambda t: t[0])
     return spans
+
+
+def detect_reference_token_spans(text: str) -> list[tuple[int, int, int]]:
+    """Return bare stable reference token spans as (start, end, reference_id)."""
+    return [
+        (match.start(), match.end(), int(match.group(1)))
+        for match in REFERENCE_TOKEN_RE.finditer(text)
+    ]
 
 
 def split_target(target: str) -> tuple[str, str]:

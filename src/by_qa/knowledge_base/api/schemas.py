@@ -211,6 +211,8 @@ class MoveKnowledgeItemsRequest(BaseModel):
 class MoveKnowledgeItemResult(BaseModel):
     """Single move result."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     source_path: str = Field(serialization_alias="sourcePath")
     target_path: str | None = Field(default=None, serialization_alias="targetPath")
     success: bool
@@ -227,6 +229,8 @@ class MoveKnowledgeItemsSummary(BaseModel):
 
 class MoveKnowledgeItemsResponse(BaseModel):
     """Move API business response object."""
+
+    model_config = ConfigDict(populate_by_name=True)
 
     data: list[MoveKnowledgeItemResult]
     summary: MoveKnowledgeItemsSummary

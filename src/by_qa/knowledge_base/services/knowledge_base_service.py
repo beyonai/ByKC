@@ -19,6 +19,10 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemListDirItem,
     KnowledgeItemListDirRequest,
     KnowledgeItemListDirResponse,
+    MoveKnowledgeItemResult,
+    MoveKnowledgeItemsRequest,
+    MoveKnowledgeItemsResponse,
+    MoveKnowledgeItemsSummary,
     ReadFileRequest,
     UpdateDirectoryRequest,
     UpdateKnowledgeBaseRequest,
@@ -34,6 +38,11 @@ def _optional_location(row, namespace_key, key_key):
     if not namespace or not key:
         return None
     return StorageLocation(namespace=str(namespace), key=str(key))
+
+
+def _join_virtual_path(parent: str, name: str) -> str:
+    parent = parent.rstrip("/")
+    return f"{parent}/{name}" if parent else f"/{name}"
 
 
 @dataclass
@@ -485,6 +494,331 @@ class KnowledgeBaseService:
             raise
         finally:
             await connection.close()
+
+    async def move_knowledge_items(
+        self, request: MoveKnowledgeItemsRequest
+    ) -> MoveKnowledgeItemsResponse:
+        """Move files or directory subtrees without rewriting Markdown/chunks."""
+        logger.info(
+            "knowledge_base_service.move_knowledge_items started: kb_code=%s, source_count=%s",
+            request.kb_code,
+            len(request.source_path),
+        )
+        connection = await self.connection_factory()
+        results: list[MoveKnowledgeItemResult] = []
+        try:
+            cursor = connection.cursor()
+            kb_row = await self.knowledge_base_repository.get_by_code(
+                cursor, request.kb_code
+            )
+            if not kb_row:
+                raise KnowledgeBaseValidationError(
+                    f"knowledge base not found: {request.kb_code}"
+                )
+            knowledge_base_id = self._row_id(kb_row)
+
+            await self._validate_whole_move_request(
+                cursor,
+                request=request,
+                knowledge_base_id=knowledge_base_id,
+            )
+
+            for source_path in request.source_path:
+                moved: list[tuple[StorageLocation, StorageLocation]] = []
+                try:
+                    result, moved = await self._move_one_knowledge_item(
+                        cursor,
+                        request=request,
+                        knowledge_base_id=knowledge_base_id,
+                        source_path=source_path,
+                    )
+                    await connection.commit()
+                    results.append(result)
+                except KnowledgeBaseValidationError as exc:
+                    await connection.rollback()
+                    results.append(
+                        MoveKnowledgeItemResult(
+                            source_path=source_path,
+                            target_path=None,
+                            success=False,
+                            error=str(exc),
+                        )
+                    )
+                except Exception:
+                    await connection.rollback()
+                    for old, new in reversed(moved):
+                        try:
+                            await self.storage_provider.move(new, old, overwrite=True)
+                        except Exception:
+                            pass
+                    raise
+
+            succeeded = sum(1 for item in results if item.success)
+            return MoveKnowledgeItemsResponse(
+                data=results,
+                summary=MoveKnowledgeItemsSummary(
+                    total=len(results),
+                    succeeded=succeeded,
+                    failed=len(results) - succeeded,
+                ),
+            )
+        finally:
+            await connection.close()
+
+    async def _validate_whole_move_request(
+        self,
+        cursor: Any,
+        *,
+        request: MoveKnowledgeItemsRequest,
+        knowledge_base_id: int,
+    ) -> None:
+        if request.target_directory_path is not None:
+            target_dir = request.target_directory_path
+            for source_path in request.source_path:
+                source = await self._get_entry_by_virtual_path(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    virtual_path=source_path,
+                )
+                if source is None or source.get("entry_type") != "DIRECTORY":
+                    continue
+                if target_dir == source_path or target_dir.startswith(
+                    source_path.rstrip("/") + "/"
+                ):
+                    raise KnowledgeBaseValidationError(
+                        "cannot move directory into itself or child"
+                    )
+            return
+
+        source = await self._get_entry_by_virtual_path(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            virtual_path=request.source_path[0],
+        )
+        if source is not None and source.get("entry_type") == "DIRECTORY":
+            raise KnowledgeBaseValidationError(
+                "targetFilePath requires exactly one file source"
+            )
+
+    async def _move_one_knowledge_item(
+        self,
+        cursor: Any,
+        *,
+        request: MoveKnowledgeItemsRequest,
+        knowledge_base_id: int,
+        source_path: str,
+    ) -> tuple[MoveKnowledgeItemResult, list[tuple[StorageLocation, StorageLocation]]]:
+        source = await self._get_entry_by_virtual_path(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            virtual_path=source_path,
+        )
+        if source is None:
+            raise KnowledgeBaseValidationError(f"source path not found: {source_path}")
+
+        target_parent_path, target_name, target_path = await self._resolve_move_target(
+            request=request,
+            source=source,
+            source_path=source_path,
+        )
+        target_parent_id = await self._ensure_directory_for_move(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            directory_path=target_parent_path,
+        )
+
+        existing = await self.knowledge_fs_entry_repository.get_child_entry(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            parent_entry_id=target_parent_id,
+            name=target_name,
+        )
+        if existing is not None and int(existing["kid"]) != int(source["kid"]):
+            raise KnowledgeBaseValidationError(
+                f"target path already exists: {target_path}"
+            )
+
+        path_bound = (
+            self.storage_provider is not None
+            and self.storage_provider.storage_path_bound_to_logical_path
+        )
+        file_rows = await self._list_moved_file_rows(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            source=source,
+        )
+        moved: list[tuple[StorageLocation, StorageLocation]] = []
+        locator_updates = []
+        if path_bound:
+            for row in file_rows:
+                new_file_path = self._moved_file_path(
+                    row=row,
+                    source_path=source_path,
+                    target_path=target_path,
+                )
+                old_original = _optional_location(
+                    row, "file_bucket_name", "file_object_key"
+                )
+                old_markdown = _optional_location(
+                    row, "markdown_bucket_name", "markdown_object_key"
+                )
+                new_original = self.storage_provider.build_original_location(
+                    kb_code=request.kb_code,
+                    knowledge_base_id=knowledge_base_id,
+                    fs_entry_id=int(row["kid"]),
+                    file_path=new_file_path,
+                    mime_type=str(row.get("mime_type") or "application/octet-stream"),
+                )
+                new_markdown = self.storage_provider.build_markdown_location(
+                    kb_code=request.kb_code,
+                    knowledge_base_id=knowledge_base_id,
+                    fs_entry_id=int(row["kid"]),
+                    file_path=new_file_path,
+                )
+                if old_original is not None:
+                    await self.storage_provider.move(old_original, new_original)
+                    moved.append((old_original, new_original))
+                if old_markdown is not None:
+                    await self.storage_provider.move(old_markdown, new_markdown)
+                    moved.append((old_markdown, new_markdown))
+                locator_updates.append(
+                    dict(
+                        fs_entry_id=int(row["kid"]),
+                        original_location=new_original if old_original else None,
+                        markdown_location=new_markdown if old_markdown else None,
+                    )
+                )
+
+        try:
+            await self.knowledge_fs_entry_repository.move_entry(
+                cursor,
+                entry_id=int(source["kid"]),
+                new_parent_entry_id=target_parent_id,
+                new_name=target_name,
+            )
+            for update in locator_updates:
+                await self.knowledge_fs_entry_repository.update_file_entry_locations(
+                    cursor, **update
+                )
+            if self.knowledge_fetch_cache_repository is not None and file_rows:
+                await self.knowledge_fetch_cache_repository.delete_cache_entries_for_fs_entry_ids(
+                    cursor,
+                    fs_entry_ids=[int(row["kid"]) for row in file_rows],
+                )
+        except Exception as exc:
+            if path_bound:
+                for old, new in reversed(moved):
+                    try:
+                        await self.storage_provider.move(new, old, overwrite=True)
+                    except Exception:
+                        pass
+            if isinstance(exc, ValueError):
+                raise KnowledgeBaseValidationError(str(exc)) from exc
+            raise
+
+        return (
+            MoveKnowledgeItemResult(
+                source_path=source_path,
+                target_path=target_path,
+                success=True,
+                error=None,
+            ),
+            moved,
+        )
+
+    async def _resolve_move_target(
+        self,
+        *,
+        request: MoveKnowledgeItemsRequest,
+        source: dict[str, Any],
+        source_path: str,
+    ) -> tuple[str, str, str]:
+        if request.target_file_path is not None:
+            target_path = request.target_file_path
+            target_parent_path = "/".join(target_path.split("/")[:-1]) or "/"
+            return target_parent_path, PurePosixPath(target_path).name, target_path
+
+        target_directory_path = request.target_directory_path or "/"
+        if source.get("entry_type") == "DIRECTORY" and target_directory_path.startswith(
+            source_path.rstrip("/") + "/"
+        ):
+            raise KnowledgeBaseValidationError(
+                "cannot move directory into itself or child"
+            )
+        target_name = str(source["name"])
+        target_path = _join_virtual_path(target_directory_path, target_name)
+        return target_directory_path, target_name, target_path
+
+    async def _ensure_directory_for_move(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        directory_path: str,
+    ) -> int | None:
+        if directory_path == "/":
+            return None
+        try:
+            directory = await self.knowledge_fs_entry_repository.create_directory_entry(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                full_path=directory_path.strip("/"),
+                directory_description=None,
+            )
+        except ValueError as exc:
+            raise KnowledgeBaseValidationError(str(exc)) from exc
+        if directory is None:
+            raise KnowledgeBaseValidationError(
+                f"failed to create target directory: {directory_path}"
+            )
+        return int(directory["kid"])
+
+    async def _get_entry_by_virtual_path(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        virtual_path: str,
+    ) -> dict[str, Any] | None:
+        entry = await self.knowledge_fs_entry_repository.get_file_by_path(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            full_path=virtual_path.strip("/"),
+        )
+        if entry is not None:
+            return entry
+        return await self.knowledge_fs_entry_repository.get_directory_by_path(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            full_path=virtual_path.strip("/"),
+        )
+
+    async def _list_moved_file_rows(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        source: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        if source.get("entry_type") == "FILE":
+            return [source]
+        return await self.knowledge_fs_entry_repository.list_file_entries_in_subtree(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            root_fs_entry_id=int(source["kid"]),
+        )
+
+    def _moved_file_path(
+        self,
+        *,
+        row: dict[str, Any],
+        source_path: str,
+        target_path: str,
+    ) -> str:
+        current_path = str(row["virtual_path"])
+        if current_path == source_path:
+            return target_path
+        return target_path.rstrip("/") + current_path[len(source_path.rstrip("/")) :]
 
     async def list_dir(
         self, request: KnowledgeItemListDirRequest

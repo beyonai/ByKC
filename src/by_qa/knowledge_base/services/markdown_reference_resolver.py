@@ -63,7 +63,7 @@ class MarkdownReferenceResolver:
             last = 0
             for start, end, reference_id in spans:
                 parts.append(text[last:start])
-                parts.append(replacements.get(reference_id, text[start:end]))
+                parts.append(replacements.get(reference_id, ""))
                 last = end
             parts.append(text[last:])
             resolved_texts.append("".join(parts))

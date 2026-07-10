@@ -147,11 +147,11 @@ async def test_broken_returns_original_target_without_appending_suffix_again():
     assert resolved == ["see gone.md?download=1"]
 
 
-async def test_unknown_reference_id_keeps_original_token():
+async def test_unknown_reference_id_removes_internal_token():
     resolved, repository = await _resolve(["see byqa-ref://99"], [])
 
     assert repository.calls[0]["reference_ids"] == [99]
-    assert resolved == ["see byqa-ref://99"]
+    assert resolved == ["see "]
 
 
 async def test_texts_without_tokens_do_not_query_repository():

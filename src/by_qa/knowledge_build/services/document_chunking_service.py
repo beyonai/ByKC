@@ -881,7 +881,15 @@ class DocumentChunkingService:
         if table_parts is not None:
             return table_parts
 
-        sentence_parts = self._split_block_on_sentences(block, text)
+        sentence_parts: list[_TextBlock] = []
+        for sentence in self._split_block_on_sentences(block, text):
+            if len(sentence.text) > max_body_size:
+                sentence_parts.extend(
+                    self._split_block_hard(sentence, text, max_body_size)
+                )
+            else:
+                sentence_parts.append(sentence)
+
         parts: list[_TextBlock] = []
         current_group: list[_TextBlock] = []
         for sentence in sentence_parts:

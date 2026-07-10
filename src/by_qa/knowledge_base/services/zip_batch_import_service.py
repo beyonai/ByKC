@@ -15,6 +15,7 @@ import io
 import logging
 import zipfile
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -57,6 +58,7 @@ class ImportSummary(BaseModel):
 class ZipBatchImportResult:
     data: list[ImportItem]
     summary: ImportSummary
+    post_process_errors: list[str] = dataclass_field(default_factory=list)
 
 
 @dataclass
@@ -184,13 +186,14 @@ class ZipBatchImportService:
             for uploaded in imports
             if uploaded.item.success and uploaded.upload_row is not None
         ]
+        post_process_errors: list[str] = []
         compensation_failure = await self._resolve_pending_references_after_batch(
             kb_code=kb_code,
             file_paths=[item.file_path for item in results if item.success],
             uploaded_rows=upload_rows,
         )
         if compensation_failure is not None:
-            results.append(compensation_failure)
+            post_process_errors.append(compensation_failure)
         succeeded = sum(1 for r in results if r.success)
         return ZipBatchImportResult(
             data=results,
@@ -199,6 +202,7 @@ class ZipBatchImportService:
                 succeeded=succeeded,
                 failed=len(results) - succeeded,
             ),
+            post_process_errors=post_process_errors,
         )
 
     async def _run_phase(
@@ -230,27 +234,20 @@ class ZipBatchImportService:
         kb_code: str,
         file_paths: list[str],
         uploaded_rows: list[dict[str, Any]],
-    ) -> ImportItem | None:
+    ) -> str | None:
         if not file_paths and not uploaded_rows:
             return None
         try:
-            if uploaded_rows:
-                await self.ingestion_service.resolve_pending_references_for_paths(
-                    kb_code=kb_code, uploaded_rows=uploaded_rows
-                )
-            else:
-                await self.ingestion_service.resolve_pending_references_for_paths(
-                    kb_code=kb_code, file_paths=file_paths
-                )
+            await self.ingestion_service.resolve_pending_references_for_paths(
+                kb_code=kb_code,
+                file_paths=file_paths,
+                uploaded_rows=uploaded_rows or None,
+            )
         except Exception as exc:
             logger.exception(
                 "zip batch reference compensation failed: kb_code=%s", kb_code
             )
-            return ImportItem(
-                file_path="__batch_reference_compensation__",
-                success=False,
-                error=f"batch reference compensation failed: {exc}",
-            )
+            return f"batch reference compensation failed: {exc}"
         return None
 
     def _extract_entries(self, zip_bytes: bytes) -> list[tuple[str, bytes]]:

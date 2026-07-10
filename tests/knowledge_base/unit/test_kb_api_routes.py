@@ -1,5 +1,7 @@
 """Tests for knowledge-base API routes."""
 
+import io
+import zipfile
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
@@ -18,6 +20,11 @@ from by_qa.knowledge_base.api.schemas import (
 from by_qa.knowledge_base.services.errors import (
     KnowledgeBaseConfigurationError,
     KnowledgeBaseValidationError,
+)
+from by_qa.knowledge_base.services.zip_batch_import_service import (
+    ImportItem,
+    ImportSummary,
+    ZipBatchImportResult,
 )
 from by_qa.main import app
 
@@ -1117,6 +1124,47 @@ def test_upload_file_route_passes_markdown_bytes_to_ingestion(monkeypatch):
     assert response.json()["resultCode"] == "0"
     assert len(service.import_calls) == 1
     assert service.import_calls[0].file_content == b"![later](./later.png)\n"
+
+
+def test_upload_zip_route_includes_post_process_errors(monkeypatch):
+    class FakeZipBatchImportService:
+        def __init__(self, *, ingestion_service):
+            self.ingestion_service = ingestion_service
+
+        async def import_zip(self, **_kwargs):
+            return ZipBatchImportResult(
+                data=[
+                    ImportItem(
+                        file_path="/docs/readme.md",
+                        success=True,
+                        error=None,
+                    )
+                ],
+                summary=ImportSummary(total=1, succeeded=1, failed=0),
+                post_process_errors=["batch reference compensation failed: forced"],
+            )
+
+    monkeypatch.setattr(routes, "ZipBatchImportService", FakeZipBatchImportService)
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as zf:
+        zf.writestr("readme.md", "# readme\n")
+
+    response = client.post(
+        "/api/v1/knowledgeItems/import",
+        data={"knCode": "hr-policy", "filePath": "/docs"},
+        files={"fileContent": ("docs.zip", payload.getvalue(), "application/zip")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["resultObject"] == {
+        "data": [
+            {"filePath": "/docs/readme.md", "success": True, "error": None},
+        ],
+        "summary": {"total": 1, "succeeded": 1, "failed": 0},
+        "postProcessErrors": ["batch reference compensation failed: forced"],
+    }
 
 
 # ---------------------------------------------------------------------------

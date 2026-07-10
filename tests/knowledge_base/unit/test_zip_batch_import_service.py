@@ -77,8 +77,12 @@ class FakeIngestion:
             raise RuntimeError("forced batch reference compensation failure")
         rows = tuple(
             (
-                int(row.get("fs_entry_id") or row.get("kid")),
-                str(row.get("virtual_path") or row.get("file_path")),
+                (
+                    int(row.get("fs_entry_id") or row.get("kid"))
+                    if row.get("fs_entry_id") or row.get("kid")
+                    else "missing"
+                ),
+                str(row.get("virtual_path") or row.get("file_path") or "missing"),
             )
             for row in (uploaded_rows or [])
         )
@@ -321,7 +325,7 @@ async def test_import_zip_resolves_md_to_md_pending_after_markdown_phase():
     assert ingestion.batch_reference_compensations == [
         (
             "kb1",
-            (),
+            ("/target/b.md", "/target/a.md"),
             ((1, "/target/b.md"), (2, "/target/a.md")),
         )
     ]
@@ -340,7 +344,7 @@ async def test_import_zip_passes_upload_rows_to_batch_compensation():
     assert ingestion.batch_reference_compensations == [
         (
             "kb1",
-            (),
+            ("/target/asset.png", "/target/a.md"),
             ((1, "/target/asset.png"), (2, "/target/a.md")),
         )
     ]
@@ -361,14 +365,48 @@ async def test_import_zip_reports_batch_compensation_failure_without_losing_uplo
         "/target/a.md",
         "/target/asset.png",
     }
-    assert len(failed_items) == 1
-    assert failed_items[0].file_path == "__batch_reference_compensation__"
-    assert "forced batch reference compensation failure" in (
-        failed_items[0].error or ""
+    assert failed_items == []
+    assert [item.file_path for item in result.data] == [
+        "/target/asset.png",
+        "/target/a.md",
+    ]
+    assert result.post_process_errors == [
+        "batch reference compensation failed: forced batch reference compensation failure"
+    ]
+    assert (
+        "forced batch reference compensation failure" in (result.post_process_errors[0])
     )
-    assert result.summary.total == 3
+    assert result.summary.total == 2
     assert result.summary.succeeded == 2
-    assert result.summary.failed == 1
+    assert result.summary.failed == 0
+
+
+class MalformedUploadRowIngestion(FakeIngestion):
+    async def upload_file(
+        self, request: KnowledgeItemUploadRequest
+    ) -> dict[str, object]:
+        await super().upload_file(request)
+        return {"unexpected": request.file_path}
+
+
+async def test_import_zip_keeps_file_paths_fallback_for_malformed_upload_rows():
+    ingestion = MalformedUploadRowIngestion()
+    zip_bytes = _make_zip({"a.md": b"# a\n", "asset.png": b"png"})
+    svc = ZipBatchImportService(ingestion_service=ingestion, max_concurrency=2)
+
+    result = await svc.import_zip(
+        kb_code="kb1", target_dir="/target", zip_bytes=zip_bytes
+    )
+
+    assert result.summary.total == 2
+    assert result.summary.failed == 0
+    assert ingestion.batch_reference_compensations == [
+        (
+            "kb1",
+            ("/target/asset.png", "/target/a.md"),
+            (("missing", "missing"), ("missing", "missing")),
+        )
+    ]
 
 
 async def test_import_zip_skips_unsafe_path_and_records_failure():

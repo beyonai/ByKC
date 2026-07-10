@@ -562,14 +562,13 @@ def register_routes(
                     process_front_matter=request.process_front_matter,
                     file_description=request.file_description,
                 )
-                return _documented_success_response(
-                    result_object={
-                        "data": [
-                            item.model_dump(by_alias=True) for item in result.data
-                        ],
-                        "summary": result.summary.model_dump(by_alias=True),
-                    }
-                )
+                result_object = {
+                    "data": [item.model_dump(by_alias=True) for item in result.data],
+                    "summary": result.summary.model_dump(by_alias=True),
+                }
+                if result.post_process_errors:
+                    result_object["postProcessErrors"] = result.post_process_errors
+                return _documented_success_response(result_object=result_object)
             # single file
             file_path_norm = "/" + request.file_path.strip("/")
             segments = [s for s in file_path_norm.split("/") if s]

@@ -414,3 +414,84 @@ async def test_resolve_pending_references_for_uploaded_rows_skips_path_lookup():
     assert names[-1] == "commit"
     assert connection.committed is True
     assert connection.rolled_back is False
+
+
+async def test_resolve_pending_references_falls_back_when_uploaded_rows_malformed():
+    calls = []
+    service, connection = _build_service(calls)
+
+    result = await service.resolve_pending_references_for_paths(
+        kb_code="kb-1",
+        file_paths=["/docs/readme.md"],
+        uploaded_rows=[{"unexpected": "row"}],
+    )
+
+    assert result == []
+    get_file_calls = [call for call in calls if call[0] == "get_file_by_path"]
+    assert get_file_calls == [
+        (
+            "get_file_by_path",
+            {"knowledge_base_id": 7, "full_path": "docs/readme.md"},
+        )
+    ]
+    pending_calls = [call for call in calls if call[0] == "resolve_pending_for_path"]
+    assert pending_calls == [
+        (
+            "resolve_pending_for_path",
+            {
+                "knowledge_base_id": 7,
+                "target_path": "/docs/readme.md",
+                "target_fs_entry_id": 71,
+            },
+        )
+    ]
+    assert connection.committed is True
+    assert connection.rolled_back is False
+
+
+async def test_resolve_pending_references_falls_back_per_path_for_malformed_rows():
+    calls = []
+    service, connection = _build_service(calls)
+
+    result = await service.resolve_pending_references_for_paths(
+        kb_code="kb-1",
+        file_paths=["/docs/manual.pdf", "/docs/readme.md"],
+        uploaded_rows=[
+            {
+                "fs_entry_id": 82,
+                "knowledge_base_id": 7,
+                "virtual_path": "/docs/manual.pdf",
+            },
+            {"unexpected": "row"},
+        ],
+    )
+
+    assert result == []
+    get_file_calls = [call for call in calls if call[0] == "get_file_by_path"]
+    assert get_file_calls == [
+        (
+            "get_file_by_path",
+            {"knowledge_base_id": 7, "full_path": "docs/readme.md"},
+        )
+    ]
+    pending_calls = [call for call in calls if call[0] == "resolve_pending_for_path"]
+    assert pending_calls == [
+        (
+            "resolve_pending_for_path",
+            {
+                "knowledge_base_id": 7,
+                "target_path": "/docs/manual.pdf",
+                "target_fs_entry_id": 82,
+            },
+        ),
+        (
+            "resolve_pending_for_path",
+            {
+                "knowledge_base_id": 7,
+                "target_path": "/docs/readme.md",
+                "target_fs_entry_id": 71,
+            },
+        ),
+    ]
+    assert connection.committed is True
+    assert connection.rolled_back is False

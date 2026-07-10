@@ -370,54 +370,52 @@ class KnowledgeItemIngestionService:
         upload_targets = self._pending_reference_targets_from_uploaded_rows(
             uploaded_rows or []
         )
-        if upload_targets:
-            connection = await self.connection_factory()
-            try:
-                cursor = connection.cursor()
-                resolved: list[dict[str, Any]] = []
-                for (
-                    knowledge_base_id,
-                    target_path,
-                    target_fs_entry_id,
-                ) in upload_targets:
-                    resolved.extend(
-                        await self.knowledge_file_reference_repository.resolve_pending_for_path(
-                            cursor,
-                            knowledge_base_id=knowledge_base_id,
-                            target_path=target_path,
-                            target_fs_entry_id=target_fs_entry_id,
-                        )
-                    )
-                await connection.commit()
-                return resolved
-            except Exception:
-                await connection.rollback()
-                raise
-            finally:
-                await connection.close()
-
-        if uploaded_rows is not None and file_paths is None:
-            return []
+        upload_target_paths = {
+            target_path.strip("/") for _, target_path, _ in upload_targets
+        }
 
         normalized = list(
             dict.fromkeys(
                 path.strip("/")
                 for path in (file_paths or [])
                 if (path or "").strip("/")
+                and path.strip("/") not in upload_target_paths
             )
         )
-        if not normalized:
+        if uploaded_rows is not None and file_paths is None and not upload_targets:
             return []
+        if not normalized:
+            if not upload_targets:
+                return []
 
         connection = await self.connection_factory()
         try:
             cursor = connection.cursor()
-            kb_row = await self.knowledge_base_repository.get_by_code(cursor, kb_code)
-            if not kb_row:
-                return []
-            knowledge_base_id = self._row_id(kb_row)
-
             resolved: list[dict[str, Any]] = []
+            for (
+                knowledge_base_id,
+                target_path,
+                target_fs_entry_id,
+            ) in upload_targets:
+                resolved.extend(
+                    await self.knowledge_file_reference_repository.resolve_pending_for_path(
+                        cursor,
+                        knowledge_base_id=knowledge_base_id,
+                        target_path=target_path,
+                        target_fs_entry_id=target_fs_entry_id,
+                    )
+                )
+
+            if normalized:
+                kb_row = await self.knowledge_base_repository.get_by_code(
+                    cursor, kb_code
+                )
+                if not kb_row:
+                    if upload_targets:
+                        await connection.commit()
+                    return resolved
+                knowledge_base_id = self._row_id(kb_row)
+
             for full_path in normalized:
                 file_row = await self.knowledge_fs_entry_repository.get_file_by_path(
                     cursor,

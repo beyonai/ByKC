@@ -427,6 +427,22 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
 | `succeeded` | integer | 成功数 |
 | `failed` | integer | 失败数 |
 
+zip 批量上传可能包含可选字段 `postProcessErrors`（string 数组），用于返回文件入库完成后的批后处理错误（例如 Markdown 引用批量补偿失败）。该字段不属于 `data` 文件结果列表，且不计入 `summary.total` / `summary.succeeded` / `summary.failed`；`data` 和 `summary` 只统计真实 zip entry / 知识库路径。
+
+补偿失败时响应示例片段：
+
+```json
+{
+  "resultObject": {
+    "data": [
+      { "filePath": "/制度/人事/考勤制度.pdf", "success": true, "error": null }
+    ],
+    "summary": { "total": 1, "succeeded": 1, "failed": 0 },
+    "postProcessErrors": ["batch reference compensation failed: ..."]
+  }
+}
+```
+
 zip 批量上传响应示例（部分成功，含不安全路径）：
 
 ```json

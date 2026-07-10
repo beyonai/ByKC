@@ -391,6 +391,12 @@ def _move_items(
     return data
 
 
+def _list_dir_entry_names(response) -> set[str]:
+    payload = response.json()
+    assert payload["resultCode"] == "0", payload
+    return {item["name"] for item in payload["resultObject"]["data"]}
+
+
 @pytest.mark.integration
 def test_metadata_get_returns_imported_front_matter(monkeypatch):
     """metadata/get should read YAML front matter persisted by import."""
@@ -2215,6 +2221,10 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
         moved_file_search = _search_chunk_texts(
             client, kb_code=kb_code, query="move unique alpha"
         )
+        kb_root_after_target_move = client.post(
+            "/api/v1/listDir",
+            json={"knCode": kb_code, "directoryPath": "/"},
+        )
         moved_root_list = client.post(
             "/api/v1/listDir",
             json={"knCode": kb_code, "directoryPath": "/moved"},
@@ -2268,6 +2278,10 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
         subtree_two_search = _search_chunk_texts(
             client, kb_code=kb_code, query="subtree unique two"
         )
+        kb_root_after_subtree_move = client.post(
+            "/api/v1/listDir",
+            json={"knCode": kb_code, "directoryPath": "/"},
+        )
         archive_root_list = client.post(
             "/api/v1/listDir",
             json={"knCode": kb_code, "directoryPath": "/archive"},
@@ -2301,6 +2315,14 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
         moved_source_after_old_target_upload = _read_file_data(
             client, kb_code=kb_code, file_path="/new/source/path/source.md"
         )
+        new_root_list = client.post(
+            "/api/v1/listDir",
+            json={"knCode": kb_code, "directoryPath": "/"},
+        )
+        new_list = client.post(
+            "/api/v1/listDir",
+            json={"knCode": kb_code, "directoryPath": "/new"},
+        )
         new_source_root_list = client.post(
             "/api/v1/listDir",
             json={"knCode": kb_code, "directoryPath": "/new/source"},
@@ -2313,16 +2335,12 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
     assert moved_file[0]["targetPath"] == "/moved/auto/renamed-b.md"
     assert chunk_calls_before_target_move == 1
     assert chunk_calls_after_target_move == chunk_calls_before_target_move
+    assert kb_root_after_target_move.status_code == 200
     assert moved_root_list.status_code == 200
     assert moved_auto_list.status_code == 200
-    assert any(
-        item["name"] == "/moved/auto"
-        for item in moved_root_list.json()["resultObject"]["data"]
-    )
-    assert any(
-        item["name"] == "/moved/auto/renamed-b.md"
-        for item in moved_auto_list.json()["resultObject"]["data"]
-    )
+    assert "/moved" in _list_dir_entry_names(kb_root_after_target_move)
+    assert "/moved/auto" in _list_dir_entry_names(moved_root_list)
+    assert "/moved/auto/renamed-b.md" in _list_dir_entry_names(moved_auto_list)
     assert "(/moved/auto/renamed-b.md)" in moved_file_read
     assert any("(/moved/auto/renamed-b.md)" in text for text in moved_file_search)
     assert all("byqa-ref://" not in text for text in moved_file_search)
@@ -2330,16 +2348,12 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
     assert moved_subtree[0]["targetPath"] == "/archive/auto/tree"
     assert len(chunk_calls_before_subtree_move) == 3
     assert chunk_calls_after_subtree_move == chunk_calls_before_subtree_move
+    assert kb_root_after_subtree_move.status_code == 200
     assert archive_root_list.status_code == 200
     assert archive_auto_list.status_code == 200
-    assert any(
-        item["name"] == "/archive/auto"
-        for item in archive_root_list.json()["resultObject"]["data"]
-    )
-    assert any(
-        item["name"] == "/archive/auto/tree"
-        for item in archive_auto_list.json()["resultObject"]["data"]
-    )
+    assert "/archive" in _list_dir_entry_names(kb_root_after_subtree_move)
+    assert "/archive/auto" in _list_dir_entry_names(archive_root_list)
+    assert "/archive/auto/tree" in _list_dir_entry_names(archive_auto_list)
     assert "(/archive/auto/tree/sub/one.md)" in subtree_one_read
     assert "(/archive/auto/tree/sub/two.md)" in subtree_two_read
     assert "byqa-ref://" not in subtree_one_read
@@ -2350,16 +2364,14 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
     assert all("byqa-ref://" not in text for text in subtree_two_search)
 
     assert moved_source[0]["targetPath"] == "/new/source/path/source.md"
+    assert new_root_list.status_code == 200
+    assert new_list.status_code == 200
     assert new_source_root_list.status_code == 200
     assert new_source_path_list.status_code == 200
-    assert any(
-        item["name"] == "/new/source/path"
-        for item in new_source_root_list.json()["resultObject"]["data"]
-    )
-    assert any(
-        item["name"] == "/new/source/path/source.md"
-        for item in new_source_path_list.json()["resultObject"]["data"]
-    )
+    assert "/new" in _list_dir_entry_names(new_root_list)
+    assert "/new/source" in _list_dir_entry_names(new_list)
+    assert "/new/source/path" in _list_dir_entry_names(new_source_root_list)
+    assert "/new/source/path/source.md" in _list_dir_entry_names(new_source_path_list)
     assert "(missing.md)" in moved_source_read
     assert "/new/source/path/missing.md" not in moved_source_read
     assert "(/pending-source/missing.md)" in moved_source_after_old_target_upload

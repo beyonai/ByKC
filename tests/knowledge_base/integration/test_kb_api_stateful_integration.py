@@ -42,6 +42,7 @@ class FakeDocumentChunkingService:
         self.markdown_text = markdown_text
         self.embedding = embedding or _default_embedding_vector()
         self.extract_calls: list[dict[str, object]] = []
+        self.chunk_calls: list[dict[str, object]] = []
 
     def extract_text_from_file(self, file_bytes: bytes, file_type: str) -> str:  # pylint: disable=unused-argument
         assert isinstance(file_bytes, bytes)
@@ -59,6 +60,7 @@ class FakeDocumentChunkingService:
         assert isinstance(filename, str)
         content = file_bytes.decode("utf-8")
         line_count = max(1, content.count("\n"))
+        self.chunk_calls.append({"file_bytes": file_bytes, "filename": filename})
         return [
             KnowledgeItemChunkPayload(
                 chunk_no=1,
@@ -2180,7 +2182,8 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
     """Moving targets should update read/search reference output without rebuilding chunks."""
     settings = _kb_settings(agent_data_path=tmp_path)
     _reset_runtime(monkeypatch, settings)
-    _set_document_chunking_service(monkeypatch, EchoDocumentChunkingService())
+    fake_chunking = EchoDocumentChunkingService()
+    _set_document_chunking_service(monkeypatch, fake_chunking)
     await _set_search_service(monkeypatch, settings)
 
     with TestClient(main_module.app) as client:
@@ -2198,12 +2201,14 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
             file_path="/move/source.md",
             file_content=b"see [b](/move/targets/b.md)\nmove unique alpha\n",
         )
+        chunk_calls_before_target_move = len(fake_chunking.chunk_calls)
         moved_file = _move_items(
             client,
             kb_code=kb_code,
             source_path=["/move/targets/b.md"],
             target_file_path="/moved/auto/renamed-b.md",
         )
+        chunk_calls_after_target_move = len(fake_chunking.chunk_calls)
         moved_file_read = _read_file_data(
             client, kb_code=kb_code, file_path="/move/source.md"
         )
@@ -2247,6 +2252,12 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
         subtree_two_read = _read_file_data(
             client, kb_code=kb_code, file_path="/refs/two.md"
         )
+        subtree_one_search = _search_chunk_texts(
+            client, kb_code=kb_code, query="subtree unique one"
+        )
+        subtree_two_search = _search_chunk_texts(
+            client, kb_code=kb_code, query="subtree unique two"
+        )
 
         _upload_and_build_file(
             client,
@@ -2265,6 +2276,8 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
         )
 
     assert moved_file[0]["targetPath"] == "/moved/auto/renamed-b.md"
+    assert chunk_calls_before_target_move == 1
+    assert chunk_calls_after_target_move == chunk_calls_before_target_move
     assert "(/moved/auto/renamed-b.md)" in moved_file_read
     assert any("(/moved/auto/renamed-b.md)" in text for text in moved_file_search)
     assert all("byqa-ref://" not in text for text in moved_file_search)
@@ -2272,6 +2285,10 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
     assert moved_subtree[0]["targetPath"] == "/archive/auto/tree"
     assert "(/archive/auto/tree/sub/one.md)" in subtree_one_read
     assert "(/archive/auto/tree/sub/two.md)" in subtree_two_read
+    assert any("(/archive/auto/tree/sub/one.md)" in text for text in subtree_one_search)
+    assert any("(/archive/auto/tree/sub/two.md)" in text for text in subtree_two_search)
+    assert all("byqa-ref://" not in text for text in subtree_one_search)
+    assert all("byqa-ref://" not in text for text in subtree_two_search)
 
     assert moved_source[0]["targetPath"] == "/new/source/path/source.md"
     assert "(missing.md)" in moved_source_read

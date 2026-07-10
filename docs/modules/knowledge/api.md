@@ -68,7 +68,7 @@
 | `POST` | `/api/v1/listDir` | 获取目录内容 |
 | `POST` | `/api/v1/glob` | 按路径模式匹配 |
 | `POST` | `/api/v1/readFile` | 读取文件内容 |
-| `POST` | `/api/v1/downloadFile` | 下载原始文件 |
+| `POST` | `/api/v1/downloadFile` | 下载文件 |
 | `POST` | `/api/v1/fileToMarkdown` | 上传文件并同步转换为 Markdown 文件流 |
 | `POST` | `/api/v1/fileToMarkdownIndex` | 异步触发知识构建 |
 | `POST` | `/api/v1/fileBuildStatus` | 查询文档构建状态 |
@@ -326,9 +326,9 @@
 行为描述：
 
 - 文件类型：上传不再限制文件类型，任意类型文件均可入库。不可构建的文件类型（非 `txt`、`md`、`markdown`、`csv`、`pdf`、`docx`、`doc`、`pptx`、`ppt`、`xlsx`、`xls`）在后续 `POST /api/v1/fileToMarkdownIndex` 构建时会被标记为「不支持构建」状态，不影响入库。
-- Markdown 引用改写（默认动作，无论是否 zip 包）：上传 Markdown 文件时，服务端解析其中的图片引用 `![]()` 与链接引用 `[]()`，将相对路径按当前文件所在目录解析为知识库绝对路径（消除 `.`、`..`；越过知识库根的引用保持不变）。若引用指向的资源在知识库中已存在，或同批 zip 内存在该文件，则改写为知识库绝对地址；否则保持原引用。URL（带协议头）与锚点（`#anchor`）保留不变。
+- Markdown 引用处理（默认动作，无论是否 zip 包）：上传 Markdown 文件时，服务端解析其中的图片引用 `![]()` 与链接引用 `[]()`，将相对路径按当前文件所在目录解析为知识库绝对路径（消除 `.`、`..`；越过知识库根的引用保持不变），并为可管理的文件引用登记稳定引用关系。Markdown 入库内容会保存为内部 `byqa-ref://<id>` token；面向用户的读取、Markdown 下载和知识检索会在输出时解析为目标文件当前路径。未解析或目标已删除的引用回退为用户原始写法。URL（带协议头）与锚点（`#anchor`）保留不变。
 - zip 包批量上传：当 `fileContent` 文件名以 `.zip` 结尾且为合法 zip 时，按批量导入处理：
-  - 解压后并发上传：非 Markdown 文件先上传，Markdown 文件最后上传，保证 Markdown 引用改写时图片与被引用文档已就位。
+  - 解压后并发上传：非 Markdown 文件先上传，Markdown 文件最后上传，保证 Markdown 引用登记时图片与被引用文档已就位；仍未就位的引用会保留为待解析状态，后续同路径文件上传后自动绑定。
   - zip 内文件上传到 `filePath` 指定的目标目录下，保留 zip 内相对目录结构。
   - 若 zip 内文件在知识库中已存在，则先软删除原文件再上传（覆盖语义）。
   - 自动跳过 macOS 元数据（`__MACOSX`、以 `.` 开头的隐藏条目）与目录条目。
@@ -744,7 +744,7 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
 
 ### `POST /api/v1/readFile`
 
-根据文件路径读取指定知识库下的原始文件内容，并以 Markdown 文本形式返回。
+根据文件路径读取指定知识库下的文件内容，并以 Markdown 文本形式返回。若文件内容包含内部 Markdown 引用 token，响应会解析为用户可见路径；未解析或目标已删除的引用回退为用户原始写法。
 
 请求体：`application/json`
 
@@ -795,7 +795,7 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
 
 ### `POST /api/v1/downloadFile`
 
-根据文件路径下载指定知识库下的原始文件。
+根据文件路径下载指定知识库下的文件。非 Markdown 文件返回入库字节；Markdown 文件入库时会被 token 化，系统不保留用户最初上传的原始 Markdown 字节，因此下载时返回已解析为用户可见路径的 Markdown 内容。
 
 请求体：`application/json`
 
@@ -818,7 +818,7 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
 - `200 OK`
 - `Content-Type: application/octet-stream`
 - `Content-Disposition: attachment; filename="..."` 或带 `filename*`
-- 响应体为原始文件二进制字节流
+- 响应体为文件字节流；Markdown 文件为解析后的 Markdown 字节流
 
 失败响应示例：
 

@@ -307,10 +307,14 @@ class KnowledgeBaseService:
                     root_fs_entry_id=root_fs_entry_id,
                 )
             )
-            file_locator_rows = []
-            if self.knowledge_file_reference_repository is not None or (
+            path_bound_storage = (
                 self.storage_provider is not None
                 and self.storage_provider.storage_path_bound_to_logical_path
+            )
+            file_locator_rows = []
+            if (
+                self.knowledge_file_reference_repository is not None
+                or path_bound_storage
             ):
                 file_locator_rows = await self.knowledge_fs_entry_repository.list_file_entries_in_subtree(
                     cursor,
@@ -361,7 +365,7 @@ class KnowledgeBaseService:
                     fs_entry_ids=fs_entry_ids,
                 )
             await connection.commit()
-            if file_locator_rows:
+            if path_bound_storage and file_locator_rows:
                 for row in file_locator_rows:
                     original = _optional_location(
                         row, "file_bucket_name", "file_object_key"

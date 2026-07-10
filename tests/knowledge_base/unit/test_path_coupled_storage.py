@@ -195,7 +195,23 @@ class FakeFetchCacheRepository:
         self.delete_calls.append(list(fs_entry_ids))
 
 
-def _make_service(connection, kb_repo, fs_repo, fetch_cache_repo, storage_provider):
+class FakeReferenceRepository:
+    def __init__(self):
+        self.deleted_targets = []
+
+    async def mark_targets_deleted(self, cursor, *, knowledge_base_id, targets):
+        self.deleted_targets.append((knowledge_base_id, list(targets)))
+        return []
+
+
+def _make_service(
+    connection,
+    kb_repo,
+    fs_repo,
+    fetch_cache_repo,
+    storage_provider,
+    reference_repository=None,
+):
     async def connection_factory():
         return connection
 
@@ -205,6 +221,7 @@ def _make_service(connection, kb_repo, fs_repo, fetch_cache_repo, storage_provid
         knowledge_fs_entry_repository=fs_repo,
         knowledge_fetch_cache_repository=fetch_cache_repo,
         storage_provider=storage_provider,
+        knowledge_file_reference_repository=reference_repository,
     )
 
 
@@ -295,6 +312,51 @@ async def test_delete_directory_does_not_touch_storage_when_path_not_bound():
     assert connection.committed == 1
     assert len(prov.deleted_quietly) == 0
     assert fs_repo.list_file_entries_called is False
+
+
+async def test_delete_directory_marks_references_without_storage_delete_when_path_not_bound():
+    """Path-unbound providers may need subtree rows for references, not storage delete."""
+    from by_qa.knowledge_base.api.schemas import DeleteDirectoryRequest
+
+    cursor = FakeCursor()
+    connection = FakeConnection()
+    connection._cursor = cursor
+
+    kb_repo = FakeKnowledgeBaseRepository()
+    prov = FakePathUnboundProvider()
+    fs_repo = FakeFsEntryRepository()
+    fs_repo._directory_row = {"kid": 10, "entry_type": "DIRECTORY"}
+    fs_repo._subtree_ids = [10, 11]
+    fs_repo._file_locator_rows = [
+        {
+            "kid": 11,
+            "virtual_path": "/dir/file1.txt",
+            "file_bucket_name": "unbound",
+            "file_object_key": "/content-addressed/raw/abc123",
+            "markdown_bucket_name": "unbound",
+            "markdown_object_key": "/content-addressed/md/def456",
+        },
+    ]
+    fetch_cache_repo = FakeFetchCacheRepository()
+    reference_repo = FakeReferenceRepository()
+
+    service = _make_service(
+        connection,
+        kb_repo,
+        fs_repo,
+        fetch_cache_repo,
+        prov,
+        reference_repository=reference_repo,
+    )
+
+    await service.delete_directory(
+        DeleteDirectoryRequest(kb_code="test-kb", directory_path="/dir")
+    )
+
+    assert connection.committed == 1
+    assert fs_repo.list_file_entries_called is True
+    assert reference_repo.deleted_targets == [(1, [(11, "/dir/file1.txt")])]
+    assert prov.deleted_quietly == []
 
 
 # --- Task 4.3: update_directory tests ---

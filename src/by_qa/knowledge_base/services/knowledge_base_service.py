@@ -57,6 +57,7 @@ class KnowledgeBaseService:
     knowledge_fetch_cache_repository: Any | None = None
     storage_provider: Any | None = None
     markdown_reference_resolver: Any | None = None
+    knowledge_file_reference_repository: Any | None = None
     cache_root: Path | None = None
     cache_ttl_seconds: int = 24 * 60 * 60
 
@@ -307,7 +308,7 @@ class KnowledgeBaseService:
                 )
             )
             file_locator_rows = []
-            if (
+            if self.knowledge_file_reference_repository is not None or (
                 self.storage_provider is not None
                 and self.storage_provider.storage_path_bound_to_logical_path
             ):
@@ -315,6 +316,15 @@ class KnowledgeBaseService:
                     cursor,
                     knowledge_base_id=knowledge_base_id,
                     root_fs_entry_id=root_fs_entry_id,
+                )
+            if self.knowledge_file_reference_repository is not None:
+                await self.knowledge_file_reference_repository.mark_targets_deleted(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    targets=[
+                        (int(row["kid"]), str(row["virtual_path"]))
+                        for row in file_locator_rows
+                    ],
                 )
             await self.knowledge_fs_entry_repository.soft_delete_subtree(
                 cursor,

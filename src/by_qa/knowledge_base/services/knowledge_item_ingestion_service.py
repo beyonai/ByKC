@@ -709,6 +709,12 @@ class KnowledgeItemIngestionService:
                     f"knowledge item not found: {request.file_path}"
                 )
             fs_entry_id = int(file_row["kid"])
+            if self.knowledge_file_reference_repository is not None:
+                await self.knowledge_file_reference_repository.mark_targets_deleted(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    targets=[(fs_entry_id, str(file_row["virtual_path"]))],
+                )
             await self.knowledge_fs_entry_repository.soft_delete_file_entry(
                 cursor,
                 knowledge_base_id=knowledge_base_id,

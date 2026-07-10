@@ -10,6 +10,9 @@ from by_qa.knowledge_base.api.schemas import (
     CreateKnowledgeBaseResponse,
     KnowledgeItemListDirItem,
     KnowledgeItemListDirResponse,
+    MoveKnowledgeItemResult,
+    MoveKnowledgeItemsResponse,
+    MoveKnowledgeItemsSummary,
     SearchHit,
 )
 from by_qa.knowledge_base.services.errors import (
@@ -30,6 +33,7 @@ class FakeKBService:
         self.file_to_markdown_calls = []
         self.file_build_task_requests = []
         self.file_build_task_runs = []
+        self.move_requests = []
 
     async def create_knowledge_base(self, request):
         self.created_requests.append(request)
@@ -57,6 +61,19 @@ class FakeKBService:
 
     async def delete_knowledge_item(self, request):
         return None
+
+    async def move_knowledge_items(self, request):
+        self.move_requests.append(request)
+        return MoveKnowledgeItemsResponse(
+            data=[
+                MoveKnowledgeItemResult(
+                    source_path=request.source_path[0],
+                    target_path="/archive/a.md",
+                    success=True,
+                )
+            ],
+            summary=MoveKnowledgeItemsSummary(total=1, succeeded=1, failed=0),
+        )
 
     async def upload_file(self, request):
         self.import_calls.append(request)
@@ -335,6 +352,59 @@ def test_create_knowledge_base_route_emits_summary_logs(monkeypatch):
         "create_knowledge_base service call succeeded: kb_code=7",
         "create_knowledge_base response ready: code=200, kb_code=7",
     ]
+
+
+def test_move_knowledge_items_route_delegates_to_service(monkeypatch):
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/knowledgeItems/move",
+        json={
+            "knCode": "1",
+            "sourcePath": ["/docs/a.md/"],
+            "targetFilePath": "/archive/a.md",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "resultCode": "0",
+        "resultMsg": "success",
+        "resultObject": {
+            "data": [
+                {
+                    "sourcePath": "/docs/a.md",
+                    "targetPath": "/archive/a.md",
+                    "success": True,
+                    "error": None,
+                }
+            ],
+            "summary": {"total": 1, "succeeded": 1, "failed": 0},
+        },
+    }
+    assert service.move_requests[0].source_path == ["/docs/a.md"]
+    assert service.move_requests[0].target_file_path == "/archive/a.md"
+
+
+def test_move_knowledge_items_route_maps_validation_error(monkeypatch):
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/knowledgeItems/move",
+        json={
+            "knCode": "1",
+            "sourcePath": ["/docs/a.md", "/docs/b.md"],
+            "targetFilePath": "/archive/a.md",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["resultCode"] == "-1"
+    assert body["resultMsg"] == "request validation failed"
+    assert service.move_requests == []
 
 
 def test_create_knowledge_base_route_maps_request_validation_to_documented_error(

@@ -32,6 +32,7 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemGlobRequest,
     KnowledgeItemListDirRequest,
     KnowledgeItemUploadRequest,
+    MoveKnowledgeItemsRequest,
     ReadFileRequest,
     SearchRequest,
     UpdateDirectoryRequest,
@@ -657,6 +658,56 @@ def register_routes(
                 status_code=500,
             )
         return _documented_success_response(result_object={})
+
+    @app.post("/api/v1/knowledgeItems/move")
+    @app.post("/api/v1/knowledge-items/move")
+    async def move_knowledge_items(body: dict[str, Any] = Body(...)):
+        try:
+            request = MoveKnowledgeItemsRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        logger.info(
+            "move_knowledge_items request received: kb_code=%s, source_count=%s",
+            request.kb_code,
+            len(request.source_path),
+        )
+        try:
+            service = await get_knowledge_base_service()
+            result = await service.move_knowledge_items(request)
+        except KnowledgeBaseConfigurationError as exc:
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=503,
+            )
+        except KnowledgeBaseValidationError as exc:
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=422,
+            )
+        except Exception as exc:
+            logger.exception(
+                "move_knowledge_items unexpected error: kb_code=%s, error=%s",
+                request.kb_code,
+                exc,
+            )
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error",
+                result_object={},
+                status_code=500,
+            )
+
+        result_object = (
+            result.model_dump(by_alias=True)
+            if hasattr(result, "model_dump")
+            else result
+        )
+        return _documented_success_response(result_object=result_object)
 
     @app.post("/api/v1/fileToMarkdownIndex")
     async def file_to_markdown_index(

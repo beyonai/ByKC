@@ -1414,3 +1414,57 @@ def test_chunking_hard_split_keeps_oversized_stable_reference_token_whole():
     assert not any(
         "byqa-ref://" in part.text and token not in part.text for part in parts
     )
+
+
+def test_chunking_hard_split_isolates_oversized_stable_reference_token_after_prefix():
+    from by_qa.knowledge_build.services.document_chunking_service import _TextBlock
+
+    service = _make_service()
+    service.chunk_size = 20
+    service.chunk_overlap = 0
+
+    prefix = "prefix "
+    token = "byqa-ref://12345678901234567890"
+    text = prefix + token + " tail"
+    block = _TextBlock(
+        text=text,
+        start_char=0,
+        end_char=len(text),
+        start_line=0,
+        end_line=0,
+        kind="paragraph",
+    )
+
+    parts = service._split_block_hard(block, text, service.chunk_size)
+
+    assert [part.text for part in parts[:2]] == [prefix, token]
+    assert not any(
+        "byqa-ref://" in part.text and token not in part.text for part in parts
+    )
+
+
+def test_chunking_hard_split_isolates_oversized_markdown_reference_span_after_prefix():
+    from by_qa.knowledge_build.services.document_chunking_service import _TextBlock
+
+    service = _make_service()
+    service.chunk_size = 20
+    service.chunk_overlap = 0
+
+    prefix = "prefix "
+    span = "[target](byqa-ref://12345678901234567890)"
+    text = prefix + span + " tail"
+    block = _TextBlock(
+        text=text,
+        start_char=0,
+        end_char=len(text),
+        start_line=0,
+        end_line=0,
+        kind="paragraph",
+    )
+
+    parts = service._split_block_hard(block, text, service.chunk_size)
+
+    assert [part.text for part in parts[:2]] == [prefix, span]
+    assert not any(
+        "[target](byqa-ref://" in part.text and span not in part.text for part in parts
+    )

@@ -1150,14 +1150,53 @@ class DocumentChunkingService:
                 continue
             part_end = cursor + 1
             # don't cut inside a reference span: extend to its end
+            oversized_ref_isolated = False
             for s, e in ref_spans:
                 if s < part_end < e:
+                    if e - s > max_body_size and start_char < s:
+                        prefix_text = text[start_char:s]
+                        prefix_end_line = start_line + prefix_text.count("\n")
+                        if prefix_text.strip():
+                            parts.append(
+                                _TextBlock(
+                                    text=prefix_text,
+                                    start_char=start_char,
+                                    end_char=s,
+                                    start_line=start_line,
+                                    end_line=prefix_end_line,
+                                    kind="paragraph",
+                                )
+                            )
+                        span_text = text[s:e]
+                        span_end_line = prefix_end_line + span_text.count("\n")
+                        logger.warning(
+                            "reference span exceeds max chunk size: size=%s",
+                            e - s,
+                        )
+                        parts.append(
+                            _TextBlock(
+                                text=span_text,
+                                start_char=s,
+                                end_char=e,
+                                start_line=prefix_end_line,
+                                end_line=span_end_line,
+                                kind="paragraph",
+                            )
+                        )
+                        start_char = e
+                        start_line = span_end_line
+                        line_no = span_end_line
+                        cursor = e
+                        oversized_ref_isolated = True
+                        break
                     while cursor + 1 < e and cursor + 1 < block.end_char:
                         if text[cursor + 1] == "\n":
                             line_no += 1
                         cursor += 1
                     part_end = cursor + 1
                     break
+            if oversized_ref_isolated:
+                continue
             # spec §5.2: an oversized reference span becomes its own chunk;
             # log it once per oversized part so it's surfaced, not silent.
             if part_end - start_char > max_body_size:

@@ -279,6 +279,10 @@ async def build_knowledge_item_search_service(
         search_repository=KnowledgeItemSearchRepository(bootstrap.embedding_table_name),
         embedding_query_service=EmbeddingQueryService(provider=provider),
         metadata_search_repository=MetadataSearchRepository(),
+        markdown_reference_resolver=MarkdownReferenceResolver(
+            connection_factory=build_connection_factory(settings),
+            reference_repository=KnowledgeFileReferenceRepository(),
+        ),
     )
 
 

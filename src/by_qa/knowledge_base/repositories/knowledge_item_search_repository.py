@@ -10,8 +10,8 @@ from by_qa.knowledge_common.text_segmentation import segment_for_fts
 _PATH_EXTENSION_EXPR = """
     lower(
         CASE
-            WHEN r.full_path LIKE '%%.%%'
-            THEN substring(r.full_path FROM '[^.]+$')
+            WHEN fe.virtual_path LIKE '%%.%%'
+            THEN substring(fe.virtual_path FROM '[^.]+$')
             ELSE ''
         END
     )
@@ -26,8 +26,9 @@ _FILE_TYPE_FILTER = f"""
 
 _CHUNK_COLUMNS = """
     r.chunk_id,
+    r.knowledge_base_id,
     kb.kid::text AS kb_code,
-    r.full_path,
+    ltrim(fe.virtual_path, '/') AS full_path,
     r.chunk_no,
     r.start_line,
     r.end_line,
@@ -116,9 +117,12 @@ class KnowledgeItemSearchRepository:
                     plainto_tsquery('simple', %(segmented_query)s)
                 ) AS text_score
             {chunk_from}
+            JOIN knowledge_fs_entry fe ON fe.kid = r.fs_entry_id
             JOIN knowledge_base kb ON kb.kid = r.knowledge_base_id
             WHERE {kb_scope}
               AND kb.is_deleted = FALSE
+              AND fe.is_deleted = FALSE
+              AND fe.entry_type = 'FILE'
               {_FILE_TYPE_FILTER}
               AND r.search_text @@ plainto_tsquery('simple', %(segmented_query)s)
             ORDER BY text_score DESC, r.chunk_id DESC
@@ -165,10 +169,13 @@ class KnowledgeItemSearchRepository:
                 {_CHUNK_COLUMNS},
                 1 - (e.embedding <=> %(query_embedding)s) AS vector_score
             {chunk_from}
+            JOIN knowledge_fs_entry fe ON fe.kid = r.fs_entry_id
             JOIN {self.embedding_table_name} e ON e.chunk_id = r.chunk_id
             JOIN knowledge_base kb ON kb.kid = r.knowledge_base_id
             WHERE {kb_scope}
               AND kb.is_deleted = FALSE
+              AND fe.is_deleted = FALSE
+              AND fe.entry_type = 'FILE'
               {_FILE_TYPE_FILTER}
             ORDER BY e.embedding <=> %(query_embedding)s ASC, r.chunk_id DESC
             LIMIT %(limit)s

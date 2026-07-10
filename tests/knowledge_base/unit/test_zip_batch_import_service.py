@@ -126,7 +126,7 @@ def _make_nonutf8_zip(entries: list[tuple[bytes, bytes]]) -> bytes:
     return local + central + eocd
 
 
-async def test_import_zip_uploads_non_md_first_then_md_and_rewrites():
+async def test_import_zip_uploads_non_md_first_then_md_without_pre_rewrite():
     ingestion = FakeIngestion()
     md = "# t\n![alt](images/x.png)\n"
     zip_bytes = _make_zip({"images/x.png": b"\x89PNG fake", "doc.md": md.encode()})
@@ -138,11 +138,11 @@ async def test_import_zip_uploads_non_md_first_then_md_and_rewrites():
     assert set(seq_by_path) == {"/target/images/x.png", "/target/doc.md"}
     # phase barrier: every non-md uploaded before the md
     assert seq_by_path["/target/images/x.png"] < seq_by_path["/target/doc.md"]
-    # md reference rewritten to KB-absolute path
+    # ZIP service leaves markdown bytes untouched; ingestion owns tokenization.
     md_req = next(
         req for _, req in ingestion.uploads if req.file_path == "/target/doc.md"
     )
-    assert b"![alt](/target/images/x.png)" in md_req.file_content
+    assert b"![alt](images/x.png)" in md_req.file_content
     assert result.summary.total == 2 and result.summary.succeeded == 2
 
 
@@ -176,9 +176,11 @@ async def test_import_zip_deletes_existing_file_before_upload():
     assert result.summary.succeeded == 1
 
 
-async def test_import_zip_rewrites_md_to_md_reference_within_batch():
-    """A md referencing a sibling md in the same zip is rewritten even though
-    the target md is uploaded concurrently (batch-aware existence check)."""
+async def test_import_zip_preserves_md_to_md_reference_for_ingestion():
+    """A md referencing a sibling md in the same zip is uploaded as-is.
+
+    The ingestion service handles transactional reference tokenization.
+    """
     ingestion = FakeIngestion()
     zip_bytes = _make_zip({"b/b.md": b"# b\n", "a.md": b"see [b](b/b.md)\n"})
     svc = ZipBatchImportService(ingestion_service=ingestion, max_concurrency=2)
@@ -187,7 +189,7 @@ async def test_import_zip_rewrites_md_to_md_reference_within_batch():
     )
     assert result.summary.succeeded == 2
     a_req = next(req for _, req in ingestion.uploads if req.file_path == "/target/a.md")
-    assert b"see [b](/target/b/b.md)" in a_req.file_content
+    assert b"see [b](b/b.md)" in a_req.file_content
 
 
 async def test_import_zip_skips_unsafe_path_and_records_failure():
@@ -260,18 +262,16 @@ async def test_import_zip_malformed_md_preserves_existing():
     assert "/t/a.md" in ingestion.files
 
 
-async def test_import_zip_drops_failed_phase1_from_batch_paths():
-    """A non-md that fails to upload is removed from batch_paths, so an md
-    referencing it is NOT rewritten to a dangling KB-absolute path."""
+async def test_import_zip_keeps_reference_to_failed_phase1_for_ingestion():
+    """A non-md failure does not change the markdown upload bytes."""
     ingestion = FakeIngestion(fail_upload_for="/t/images/x.png")
     md = "# t\n![alt](images/x.png)\n"
     zip_bytes = _make_zip({"images/x.png": b"\x89PNG fake", "doc.md": md.encode()})
     svc = ZipBatchImportService(ingestion_service=ingestion, max_concurrency=2)
     await svc.import_zip(kb_code="kb1", target_dir="/t", zip_bytes=zip_bytes)
-    # the png failed; the md uploaded but its reference was left relative
+    # the png failed; the md uploaded with its original reference intact
     md_uploads = [req for _, req in ingestion.uploads if req.file_path == "/t/doc.md"]
     assert len(md_uploads) == 1
-    # reference NOT rewritten to /t/images/x.png (failed sibling dropped)
     assert b"![alt](images/x.png)" in md_uploads[0].file_content
     assert b"![alt](/t/images/x.png)" not in md_uploads[0].file_content
 
@@ -325,11 +325,11 @@ async def test_import_zip_keeps_utf8_flagged_chinese_filenames():
     uploaded = {req.file_path for _, req in ingestion.uploads}
     assert "/target/图片/中文图.png" in uploaded
     assert "/target/中文文档.md" in uploaded
-    # md reference rewritten using the real (decoded) sibling path
+    # md reference is preserved using the real decoded sibling path
     md_req = next(
         req for _, req in ingestion.uploads if req.file_path == "/target/中文文档.md"
     )
-    assert "![alt](/target/图片/中文图.png)".encode() in md_req.file_content
+    assert "![alt](图片/中文图.png)".encode() in md_req.file_content
     assert all(item.success for item in result.data)
 
 

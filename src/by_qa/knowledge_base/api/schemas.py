@@ -338,6 +338,49 @@ class KnowledgeItemGlobRequest(BaseModel):
     )
 
 
+class KnowledgeItemReferenceQueryRequest(BaseModel):
+    """Request body for querying inbound Markdown file references."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kb_code: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("knCode", "kb_code"),
+    )
+    target_path: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices(
+            "targetPath",
+            "filePath",
+            "target_path",
+            "file_path",
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_target_path(self) -> "KnowledgeItemReferenceQueryRequest":
+        self.target_path = _normalize_api_path(self.target_path, allow_root=False)
+        return self
+
+
+class KnowledgeItemReferenceSource(BaseModel):
+    """Single inbound reference source row."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    source_path: str = Field(serialization_alias="sourcePath")
+    original_target: str = Field(serialization_alias="originalTarget")
+    target_suffix: str = Field(default="", serialization_alias="targetSuffix")
+    target_path: str = Field(serialization_alias="targetPath")
+    status: str
+
+
+class KnowledgeItemReferenceQueryResponse(BaseModel):
+    """Business response for inbound reference queries."""
+
+    data: list[KnowledgeItemReferenceSource]
+
+
 class ReadFileRequest(BaseModel):
     """Request body for reading built markdown content by line range."""
 

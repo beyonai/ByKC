@@ -256,11 +256,15 @@ class KnowledgeFileReferenceRepository:
         knowledge_base_id: int,
         target_fs_entry_id: int | None = None,
         target_path: str | None = None,
+        include_deleted_sources: bool = False,
     ) -> list[dict[str, Any]]:
         """List source references for a live target id or broken target path."""
         if (target_fs_entry_id is None) == (target_path is None):
             raise ValueError("provide exactly one of target_fs_entry_id or target_path")
 
+        source_filter = (
+            "" if include_deleted_sources else "AND source.is_deleted = FALSE"
+        )
         if target_fs_entry_id is not None:
             await cursor.execute(
                 f"""
@@ -268,6 +272,7 @@ class KnowledgeFileReferenceRepository:
                 WHERE kfr.knowledge_base_id = %(knowledge_base_id)s
                   AND kfr.target_fs_entry_id = %(target_fs_entry_id)s
                   AND kfr.status = 'resolved'
+                  {source_filter}
                 ORDER BY kfr.kid
                 """,
                 {
@@ -283,6 +288,7 @@ class KnowledgeFileReferenceRepository:
                   AND kfr.target_fs_entry_id IS NULL
                   AND kfr.target_path = %(target_path)s
                   AND kfr.status = 'broken'
+                  {source_filter}
                 ORDER BY kfr.kid
                 """,
                 {

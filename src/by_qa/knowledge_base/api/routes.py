@@ -31,6 +31,7 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemDownloadRequest,
     KnowledgeItemGlobRequest,
     KnowledgeItemListDirRequest,
+    KnowledgeItemReferenceQueryRequest,
     KnowledgeItemUploadRequest,
     MoveKnowledgeItemsRequest,
     ReadFileRequest,
@@ -869,6 +870,66 @@ def register_routes(
         )
         return _documented_success_response(
             result_object={"data": [item.model_dump(by_alias=True) for item in items]}
+        )
+
+    @app.post("/api/v1/knowledgeItems/references")
+    @app.post("/api/v1/knowledge-items/references")
+    async def list_inbound_references(body: dict[str, Any] = Body(...)):
+        try:
+            request = KnowledgeItemReferenceQueryRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        logger.info(
+            "list_inbound_references request received: kb_code=%s, target_path=%s",
+            request.kb_code,
+            request.target_path,
+        )
+        try:
+            service = await get_knowledge_base_service()
+            result = await service.list_inbound_references(request)
+        except KnowledgeBaseConfigurationError as exc:
+            logger.warning(
+                "list_inbound_references configuration failed: target_path=%s, error=%s",
+                request.target_path,
+                exc,
+            )
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=503,
+            )
+        except KnowledgeBaseValidationError as exc:
+            logger.warning(
+                "list_inbound_references validation failed: target_path=%s, error=%s",
+                request.target_path,
+                exc,
+            )
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=422,
+            )
+        except Exception as exc:
+            logger.exception(
+                "list_inbound_references unexpected error: kb_code=%s, target_path=%s, error=%s",
+                request.kb_code,
+                request.target_path,
+                exc,
+            )
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error",
+                result_object={},
+                status_code=500,
+            )
+
+        return _documented_success_response(
+            result_object={
+                "data": [item.model_dump(by_alias=True) for item in result.data]
+            }
         )
 
     @app.post("/api/v1/listDir")

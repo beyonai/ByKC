@@ -19,6 +19,9 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemListDirItem,
     KnowledgeItemListDirRequest,
     KnowledgeItemListDirResponse,
+    KnowledgeItemReferenceQueryRequest,
+    KnowledgeItemReferenceQueryResponse,
+    KnowledgeItemReferenceSource,
     MoveKnowledgeItemResult,
     MoveKnowledgeItemsRequest,
     MoveKnowledgeItemsResponse,
@@ -1011,6 +1014,81 @@ class KnowledgeBaseService:
                 len(items),
             )
             return KnowledgeItemListDirResponse(data=items)
+        finally:
+            await connection.close()
+
+    async def list_inbound_references(
+        self, request: KnowledgeItemReferenceQueryRequest
+    ) -> KnowledgeItemReferenceQueryResponse:
+        """List source files that reference one target file path."""
+        logger.info(
+            "knowledge_base_service.list_inbound_references started: kb_code=%s, target_path=%s",
+            request.kb_code,
+            request.target_path,
+        )
+        if self.knowledge_file_reference_repository is None:
+            raise KnowledgeBaseValidationError(
+                "knowledge reference query runtime is not configured"
+            )
+
+        connection = await self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            kb_row = await self.knowledge_base_repository.get_by_code(
+                cursor,
+                request.kb_code,
+            )
+            if not kb_row:
+                raise KnowledgeBaseValidationError(
+                    f"knowledge base not found: {request.kb_code}"
+                )
+            knowledge_base_id = self._row_id(kb_row)
+            target_row = await self.knowledge_fs_entry_repository.get_file_by_path(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                full_path=request.target_path.strip("/"),
+            )
+            if target_row is not None:
+                target_query = {
+                    "target_fs_entry_id": self._row_id(target_row),
+                    "target_path": None,
+                }
+                response_target_path = str(
+                    target_row.get("virtual_path") or request.target_path
+                )
+            else:
+                target_query = {
+                    "target_fs_entry_id": None,
+                    "target_path": request.target_path,
+                }
+                response_target_path = request.target_path
+
+            rows = (
+                await self.knowledge_file_reference_repository.list_sources_by_target(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    **target_query,
+                )
+            )
+            items = [
+                KnowledgeItemReferenceSource(
+                    source_path=self._ensure_leading_slash(
+                        str(row["source_virtual_path"])
+                    ),
+                    original_target=str(row["original_target"]),
+                    target_suffix=str(row.get("target_suffix") or ""),
+                    target_path=str(row.get("target_path") or response_target_path),
+                    status=str(row["status"]),
+                )
+                for row in rows
+                if not row.get("source_is_deleted")
+            ]
+            logger.info(
+                "knowledge_base_service.list_inbound_references finished: target_path=%s, item_count=%s",
+                request.target_path,
+                len(items),
+            )
+            return KnowledgeItemReferenceQueryResponse(data=items)
         finally:
             await connection.close()
 

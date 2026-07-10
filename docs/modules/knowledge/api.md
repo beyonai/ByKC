@@ -65,6 +65,7 @@
 | `POST` | `/api/v1/knowledgeItems/import` | 上传文档 |
 | `POST` | `/api/v1/knowledgeItems/delete` | 删除文档 |
 | `POST` | `/api/v1/knowledgeItems/move` | 移动文件或目录 |
+| `POST` | `/api/v1/knowledgeItems/references` | 查询引用指定文件或路径的 Markdown 来源文件；兼容别名 `/api/v1/knowledge-items/references` |
 | `POST` | `/api/v1/listDir` | 获取目录内容 |
 | `POST` | `/api/v1/glob` | 按路径模式匹配 |
 | `POST` | `/api/v1/readFile` | 读取文件内容 |
@@ -623,6 +624,64 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
   "resultObject": {}
 }
 ```
+
+### `POST /api/v1/knowledgeItems/references`
+
+查询指定文件或路径的 Markdown 反向引用，即“谁引用了这个文件/路径”。兼容别名：`POST /api/v1/knowledge-items/references`。
+
+请求体：`application/json`
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `knCode` | string | 是 | 知识库编码 |
+| `targetPath` | string | 是（二选一） | 被引用的目标文件路径，以 `/` 开头，不包括知识库名称 |
+| `filePath` | string | 是（二选一） | `targetPath` 的兼容别名；二者都填写时以 `targetPath` 为准，解析后使用同一个内部字段 `target_path` |
+
+请求示例：
+
+```json
+{
+  "knCode": "1",
+  "targetPath": "/制度/人事/附件/请假单模板.docx"
+}
+```
+
+成功响应示例：
+
+```json
+{
+  "resultCode": "0",
+  "resultMsg": "success",
+  "resultObject": {
+    "data": [
+      {
+        "sourcePath": "/制度/人事/请假制度.md",
+        "originalTarget": "./附件/请假单模板.docx",
+        "targetSuffix": "",
+        "targetPath": "/制度/人事/附件/请假单模板.docx",
+        "status": "resolved"
+      }
+    ]
+  }
+}
+```
+
+`data` 元素字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `sourcePath` | string | 包含该 Markdown 引用的来源文件路径 |
+| `originalTarget` | string | 来源 Markdown 中原始写入的引用目标 |
+| `targetSuffix` | string | 引用目标中的后缀片段；无后缀时为空字符串 |
+| `targetPath` | string | 当前匹配到的目标路径；broken 引用返回删除时记录的目标路径 |
+| `status` | string | 引用状态，当前返回 `resolved` 或 `broken` |
+
+查询语义：
+
+- 当 `targetPath`/`filePath` 指向当前存在的文件时，按当前文件对应的 target id 查询 `resolved` 引用；目标文件移动后仍可通过当前路径查询。
+- 当目标文件已删除时，按删除时写入引用记录的 `target_path` 查询 `broken` 引用。
+- 默认不返回已删除 source 文件产生的引用。
+- 该接口只查询反向引用来源，不读取或修改 Markdown 内容。
 
 ## 目录与文件读取
 

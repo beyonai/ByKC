@@ -2215,6 +2215,14 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
         moved_file_search = _search_chunk_texts(
             client, kb_code=kb_code, query="move unique alpha"
         )
+        moved_root_list = client.post(
+            "/api/v1/listDir",
+            json={"knCode": kb_code, "directoryPath": "/moved"},
+        )
+        moved_auto_list = client.post(
+            "/api/v1/listDir",
+            json={"knCode": kb_code, "directoryPath": "/moved/auto"},
+        )
 
         _upload_file(
             client,
@@ -2260,6 +2268,14 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
         subtree_two_search = _search_chunk_texts(
             client, kb_code=kb_code, query="subtree unique two"
         )
+        archive_root_list = client.post(
+            "/api/v1/listDir",
+            json={"knCode": kb_code, "directoryPath": "/archive"},
+        )
+        archive_auto_list = client.post(
+            "/api/v1/listDir",
+            json={"knCode": kb_code, "directoryPath": "/archive/auto"},
+        )
 
         _upload_and_build_file(
             client,
@@ -2285,10 +2301,28 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
         moved_source_after_old_target_upload = _read_file_data(
             client, kb_code=kb_code, file_path="/new/source/path/source.md"
         )
+        new_source_root_list = client.post(
+            "/api/v1/listDir",
+            json={"knCode": kb_code, "directoryPath": "/new/source"},
+        )
+        new_source_path_list = client.post(
+            "/api/v1/listDir",
+            json={"knCode": kb_code, "directoryPath": "/new/source/path"},
+        )
 
     assert moved_file[0]["targetPath"] == "/moved/auto/renamed-b.md"
     assert chunk_calls_before_target_move == 1
     assert chunk_calls_after_target_move == chunk_calls_before_target_move
+    assert moved_root_list.status_code == 200
+    assert moved_auto_list.status_code == 200
+    assert any(
+        item["name"] == "/moved/auto"
+        for item in moved_root_list.json()["resultObject"]["data"]
+    )
+    assert any(
+        item["name"] == "/moved/auto/renamed-b.md"
+        for item in moved_auto_list.json()["resultObject"]["data"]
+    )
     assert "(/moved/auto/renamed-b.md)" in moved_file_read
     assert any("(/moved/auto/renamed-b.md)" in text for text in moved_file_search)
     assert all("byqa-ref://" not in text for text in moved_file_search)
@@ -2296,6 +2330,16 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
     assert moved_subtree[0]["targetPath"] == "/archive/auto/tree"
     assert len(chunk_calls_before_subtree_move) == 3
     assert chunk_calls_after_subtree_move == chunk_calls_before_subtree_move
+    assert archive_root_list.status_code == 200
+    assert archive_auto_list.status_code == 200
+    assert any(
+        item["name"] == "/archive/auto"
+        for item in archive_root_list.json()["resultObject"]["data"]
+    )
+    assert any(
+        item["name"] == "/archive/auto/tree"
+        for item in archive_auto_list.json()["resultObject"]["data"]
+    )
     assert "(/archive/auto/tree/sub/one.md)" in subtree_one_read
     assert "(/archive/auto/tree/sub/two.md)" in subtree_two_read
     assert "byqa-ref://" not in subtree_one_read
@@ -2306,6 +2350,16 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
     assert all("byqa-ref://" not in text for text in subtree_two_search)
 
     assert moved_source[0]["targetPath"] == "/new/source/path/source.md"
+    assert new_source_root_list.status_code == 200
+    assert new_source_path_list.status_code == 200
+    assert any(
+        item["name"] == "/new/source/path"
+        for item in new_source_root_list.json()["resultObject"]["data"]
+    )
+    assert any(
+        item["name"] == "/new/source/path/source.md"
+        for item in new_source_path_list.json()["resultObject"]["data"]
+    )
     assert "(missing.md)" in moved_source_read
     assert "/new/source/path/missing.md" not in moved_source_read
     assert "(/pending-source/missing.md)" in moved_source_after_old_target_upload

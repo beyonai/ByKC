@@ -23,7 +23,10 @@ from by_qa.knowledge_common.exceptions import (
     KnowledgeConfigurationError,
     UnsupportedFileTypeError,
 )
-from by_qa.knowledge_common.markdown_reference import detect_reference_spans
+from by_qa.knowledge_common.markdown_reference import (
+    detect_reference_spans,
+    detect_reference_token_spans,
+)
 from by_qa.knowledge_common.schemas import KnowledgeItemChunkPayload
 
 SUPPORTED_EXTENSIONS = {
@@ -1064,6 +1067,9 @@ class DocumentChunkingService:
     ) -> list[tuple[int, int]]:
         spans: list[tuple[int, int]] = []
         for s, e, _, _, _ in detect_reference_spans(text):
+            if s < end_char and e > start_char:
+                spans.append((s, e))
+        for s, e, _ in detect_reference_token_spans(text):
             if s < end_char and e > start_char:
                 spans.append((s, e))
         return spans

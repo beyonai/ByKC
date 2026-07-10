@@ -1332,3 +1332,85 @@ def test_chunking_hard_split_keeps_reference_span_whole():
         for part in parts
     )
     assert not any("ng)" in part.text and full_span not in part.text for part in parts)
+
+
+def test_chunking_hard_split_keeps_stable_reference_token_whole():
+    from by_qa.knowledge_build.services.document_chunking_service import _TextBlock
+
+    service = _make_service()
+    service.chunk_size = 18
+    service.chunk_overlap = 0
+
+    token = "byqa-ref://12345"
+    text = "字" * 8 + token + "字" * 30
+    block = _TextBlock(
+        text=text,
+        start_char=0,
+        end_char=len(text),
+        start_line=0,
+        end_line=0,
+        kind="paragraph",
+    )
+
+    parts = service._split_block_hard(block, text, service.chunk_size)
+
+    containing = [part for part in parts if token in part.text]
+    assert len(containing) == 1
+    assert not any(
+        "byqa-ref://" in part.text and token not in part.text for part in parts
+    )
+    assert not any("12345" in part.text and token not in part.text for part in parts)
+
+
+def test_chunking_hard_split_keeps_markdown_link_with_stable_token_whole():
+    from by_qa.knowledge_build.services.document_chunking_service import _TextBlock
+
+    service = _make_service()
+    service.chunk_size = 24
+    service.chunk_overlap = 0
+
+    span = "[target](byqa-ref://12345)"
+    text = "字" * 8 + span + "字" * 30
+    block = _TextBlock(
+        text=text,
+        start_char=0,
+        end_char=len(text),
+        start_line=0,
+        end_line=0,
+        kind="paragraph",
+    )
+
+    parts = service._split_block_hard(block, text, service.chunk_size)
+
+    containing = [part for part in parts if span in part.text]
+    assert len(containing) == 1
+    assert not any(
+        "[target](byqa-ref://" in part.text and span not in part.text for part in parts
+    )
+
+
+def test_chunking_hard_split_keeps_oversized_stable_reference_token_whole():
+    from by_qa.knowledge_build.services.document_chunking_service import _TextBlock
+
+    service = _make_service()
+    service.chunk_size = 20
+    service.chunk_overlap = 0
+
+    token = "byqa-ref://12345678901234567890"
+    text = token + " tail"
+    block = _TextBlock(
+        text=text,
+        start_char=0,
+        end_char=len(text),
+        start_line=0,
+        end_line=0,
+        kind="paragraph",
+    )
+
+    parts = service._split_block_hard(block, text, service.chunk_size)
+
+    containing = [part for part in parts if token in part.text]
+    assert len(containing) == 1
+    assert not any(
+        "byqa-ref://" in part.text and token not in part.text for part in parts
+    )

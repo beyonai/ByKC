@@ -2240,12 +2240,14 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
             file_path="/refs/two.md",
             file_content=b"two [target](/tree/sub/two.md)\nsubtree unique two\n",
         )
+        chunk_calls_before_subtree_move = list(fake_chunking.chunk_calls)
         moved_subtree = _move_items(
             client,
             kb_code=kb_code,
             source_path=["/tree"],
             target_directory_path="/archive/auto",
         )
+        chunk_calls_after_subtree_move = list(fake_chunking.chunk_calls)
         subtree_one_read = _read_file_data(
             client, kb_code=kb_code, file_path="/refs/one.md"
         )
@@ -2283,8 +2285,12 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
     assert all("byqa-ref://" not in text for text in moved_file_search)
 
     assert moved_subtree[0]["targetPath"] == "/archive/auto/tree"
+    assert len(chunk_calls_before_subtree_move) == 3
+    assert chunk_calls_after_subtree_move == chunk_calls_before_subtree_move
     assert "(/archive/auto/tree/sub/one.md)" in subtree_one_read
     assert "(/archive/auto/tree/sub/two.md)" in subtree_two_read
+    assert "byqa-ref://" not in subtree_one_read
+    assert "byqa-ref://" not in subtree_two_read
     assert any("(/archive/auto/tree/sub/one.md)" in text for text in subtree_one_search)
     assert any("(/archive/auto/tree/sub/two.md)" in text for text in subtree_two_search)
     assert all("byqa-ref://" not in text for text in subtree_one_search)

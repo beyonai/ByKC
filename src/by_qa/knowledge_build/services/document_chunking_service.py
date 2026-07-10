@@ -844,7 +844,12 @@ class DocumentChunkingService:
                 candidate_size = len(candidate_body_text)
                 current_size = len(current_body_text)
                 should_merge = False
-                if candidate_size <= soft_body_size:
+                if (
+                    current_body_blocks[-1].kind == "reference"
+                    or part.kind == "reference"
+                ):
+                    should_merge = False
+                elif candidate_size <= soft_body_size:
                     should_merge = True
                 elif (
                     candidate_size <= hard_body_size
@@ -874,6 +879,18 @@ class DocumentChunkingService:
     def _split_oversized_block(
         self, block: _TextBlock, text: str, max_body_size: int
     ) -> list[_TextBlock]:
+        reference_parts = self._split_block_around_oversized_references(
+            block, text, max(self.chunk_size, 1)
+        )
+        if reference_parts is not None:
+            parts: list[_TextBlock] = []
+            for part in reference_parts:
+                if part.kind == "reference" or len(part.text) <= max_body_size:
+                    parts.append(part)
+                    continue
+                parts.extend(self._split_oversized_block(part, text, max_body_size))
+            return parts
+
         if len(block.text) <= max_body_size:
             return [block]
 
@@ -1081,6 +1098,84 @@ class DocumentChunkingService:
             if s < end_char and e > start_char:
                 spans.append((s, e))
         return spans
+
+    @staticmethod
+    def _outermost_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+        outermost: list[tuple[int, int]] = []
+        for start, end in sorted(spans, key=lambda span: (span[0], -span[1])):
+            if outermost and start >= outermost[-1][0] and end <= outermost[-1][1]:
+                continue
+            outermost.append((start, end))
+        return outermost
+
+    def _split_block_around_oversized_references(
+        self, block: _TextBlock, text: str, max_reference_size: int
+    ) -> list[_TextBlock] | None:
+        spans = self._outermost_spans(
+            self._reference_spans_overlapping(text, block.start_char, block.end_char)
+        )
+        oversized_spans = [
+            (start, end) for start, end in spans if end - start > max_reference_size
+        ]
+        if not oversized_spans:
+            return None
+
+        parts: list[_TextBlock] = []
+        cursor = block.start_char
+        start_line = block.start_line
+        for span_start, span_end in oversized_spans:
+            if cursor < span_start:
+                prefix_text = text[cursor:span_start]
+                prefix_end_line = start_line + prefix_text.count("\n")
+                if prefix_text.strip():
+                    parts.append(
+                        _TextBlock(
+                            text=prefix_text,
+                            start_char=cursor,
+                            end_char=span_start,
+                            start_line=start_line,
+                            end_line=prefix_end_line,
+                            kind=block.kind,
+                            level=block.level,
+                        )
+                    )
+                start_line = prefix_end_line
+
+            span_text = text[span_start:span_end]
+            span_end_line = start_line + span_text.count("\n")
+            logger.warning(
+                "reference span exceeds max chunk size: size=%s",
+                span_end - span_start,
+            )
+            parts.append(
+                _TextBlock(
+                    text=span_text,
+                    start_char=span_start,
+                    end_char=span_end,
+                    start_line=start_line,
+                    end_line=span_end_line,
+                    kind="reference",
+                    level=block.level,
+                )
+            )
+            cursor = span_end
+            start_line = span_end_line
+
+        if cursor < block.end_char:
+            suffix_text = text[cursor : block.end_char]
+            if suffix_text.strip():
+                parts.append(
+                    _TextBlock(
+                        text=suffix_text,
+                        start_char=cursor,
+                        end_char=block.end_char,
+                        start_line=start_line,
+                        end_line=block.end_line,
+                        kind=block.kind,
+                        level=block.level,
+                    )
+                )
+        return parts
 
     @staticmethod
     def _inside_any_span(spans: list[tuple[int, int]], pos: int) -> bool:

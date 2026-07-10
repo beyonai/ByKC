@@ -1489,6 +1489,27 @@ def test_chunking_public_path_isolates_oversized_stable_reference_token_after_pr
     )
 
 
+def test_chunking_public_path_isolates_stable_reference_token_above_chunk_size():
+    service = _make_service()
+    service.chunk_size = 20
+    service.chunk_overlap = 0
+
+    prefix = "prefix "
+    token = "byqa-ref://" + "1" * 16
+    text = prefix + token + " tail"
+
+    assert service.chunk_size < len(token) <= service.chunk_size + 128
+
+    chunks = service._split_text(text, ".md")
+    chunk_texts = [chunk["chunk_text"] for chunk in chunks]
+
+    assert chunk_texts[:3] == [prefix, token, " tail"]
+    assert not any(
+        "byqa-ref://" in chunk_text and token not in chunk_text
+        for chunk_text in chunk_texts
+    )
+
+
 def test_chunking_hard_split_isolates_oversized_markdown_reference_span_after_prefix():
     from by_qa.knowledge_build.services.document_chunking_service import _TextBlock
 
@@ -1524,6 +1545,27 @@ def test_chunking_public_path_isolates_oversized_markdown_reference_span_after_p
     prefix = "prefix "
     span = "[target](byqa-ref://" + "1" * 180 + ")"
     text = prefix + span + " tail"
+
+    chunks = service._split_text(text, ".md")
+    chunk_texts = [chunk["chunk_text"] for chunk in chunks]
+
+    assert chunk_texts[:3] == [prefix, span, " tail"]
+    assert not any(
+        "[target](byqa-ref://" in chunk_text and span not in chunk_text
+        for chunk_text in chunk_texts
+    )
+
+
+def test_chunking_public_path_isolates_markdown_reference_span_above_chunk_size():
+    service = _make_service()
+    service.chunk_size = 20
+    service.chunk_overlap = 0
+
+    prefix = "prefix "
+    span = "[target](byqa-ref://12345)"
+    text = prefix + span + " tail"
+
+    assert service.chunk_size < len(span) <= service.chunk_size + 128
 
     chunks = service._split_text(text, ".md")
     chunk_texts = [chunk["chunk_text"] for chunk in chunks]
@@ -1574,6 +1616,31 @@ def test_chunking_public_path_isolates_oversized_markdown_image_span_after_prefi
     prefix = "prefix "
     span = f"![{'very-long-alt' * 16}](byqa-ref://12345)"
     text = prefix + span + " tail"
+
+    chunks = service._split_text(text, ".md")
+    chunk_texts = [chunk["chunk_text"] for chunk in chunks]
+
+    assert chunk_texts[:3] == [prefix, span, " tail"]
+    assert not any(
+        "![very-long-alt" in chunk_text and span not in chunk_text
+        for chunk_text in chunk_texts
+    )
+    assert not any(
+        "](byqa-ref://12345)" in chunk_text and span not in chunk_text
+        for chunk_text in chunk_texts
+    )
+
+
+def test_chunking_public_path_isolates_markdown_image_span_above_chunk_size():
+    service = _make_service()
+    service.chunk_size = 20
+    service.chunk_overlap = 0
+
+    prefix = "prefix "
+    span = "![very-long-alt](byqa-ref://12345)"
+    text = prefix + span + " tail"
+
+    assert service.chunk_size < len(span) <= service.chunk_size + 128
 
     chunks = service._split_text(text, ".md")
     chunk_texts = [chunk["chunk_text"] for chunk in chunks]

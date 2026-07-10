@@ -3,7 +3,7 @@
 import asyncio
 import hashlib
 import mimetypes
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, Callable
@@ -357,15 +357,53 @@ class KnowledgeItemIngestionService:
             await connection.close()
 
     async def resolve_pending_references_for_paths(
-        self, *, kb_code: str, file_paths: Iterable[str]
+        self,
+        *,
+        kb_code: str,
+        file_paths: Iterable[str] | None = None,
+        uploaded_rows: Iterable[Mapping[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """Resolve pending Markdown references for already-uploaded target paths."""
         if self.knowledge_file_reference_repository is None:
             return []
 
+        upload_targets = self._pending_reference_targets_from_uploaded_rows(
+            uploaded_rows or []
+        )
+        if upload_targets:
+            connection = await self.connection_factory()
+            try:
+                cursor = connection.cursor()
+                resolved: list[dict[str, Any]] = []
+                for (
+                    knowledge_base_id,
+                    target_path,
+                    target_fs_entry_id,
+                ) in upload_targets:
+                    resolved.extend(
+                        await self.knowledge_file_reference_repository.resolve_pending_for_path(
+                            cursor,
+                            knowledge_base_id=knowledge_base_id,
+                            target_path=target_path,
+                            target_fs_entry_id=target_fs_entry_id,
+                        )
+                    )
+                await connection.commit()
+                return resolved
+            except Exception:
+                await connection.rollback()
+                raise
+            finally:
+                await connection.close()
+
+        if uploaded_rows is not None and file_paths is None:
+            return []
+
         normalized = list(
             dict.fromkeys(
-                path.strip("/") for path in file_paths if (path or "").strip("/")
+                path.strip("/")
+                for path in (file_paths or [])
+                if (path or "").strip("/")
             )
         )
         if not normalized:
@@ -404,6 +442,34 @@ class KnowledgeItemIngestionService:
             raise
         finally:
             await connection.close()
+
+    def _pending_reference_targets_from_uploaded_rows(
+        self, uploaded_rows: Iterable[Mapping[str, Any]]
+    ) -> list[tuple[int, str, int]]:
+        targets: list[tuple[int, str, int]] = []
+        seen: set[tuple[int, str]] = set()
+        for row in uploaded_rows:
+            fs_entry_value = row.get("fs_entry_id") or row.get("kid")
+            knowledge_base_value = row.get("knowledge_base_id")
+            path_value = (
+                row.get("virtual_path") or row.get("file_path") or row.get("filePath")
+            )
+            if fs_entry_value is None or knowledge_base_value is None or not path_value:
+                continue
+            target_path = "/" + str(path_value).strip("/")
+            if target_path == "/":
+                continue
+            try:
+                knowledge_base_id = int(knowledge_base_value)
+                target_fs_entry_id = int(fs_entry_value)
+            except (TypeError, ValueError):
+                continue
+            dedupe_key = (knowledge_base_id, target_path)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            targets.append((knowledge_base_id, target_path, target_fs_entry_id))
+        return targets
 
     async def _apply_front_matter_metadata(
         self,

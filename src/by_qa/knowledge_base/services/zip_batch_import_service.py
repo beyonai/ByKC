@@ -59,6 +59,12 @@ class ZipBatchImportResult:
     summary: ImportSummary
 
 
+@dataclass
+class _ImportedItem:
+    item: ImportItem
+    upload_row: dict[str, Any] | None = None
+
+
 def _is_junk_segment(seg: str) -> bool:
     # `..` is a relative component, not junk — let path resolution flag it as
     # unsafe if it escapes the target dir. macOS metadata starts with `.`.
@@ -152,7 +158,7 @@ class ZipBatchImportService:
         sem = asyncio.Semaphore(limit)
 
         # Phase 1: non-md concurrent.
-        non_md_results = await self._run_phase(
+        non_md_imports = await self._run_phase(
             non_md,
             sem=sem,
             kb_code=kb_code,
@@ -162,7 +168,7 @@ class ZipBatchImportService:
         )
 
         # Phase 2: md concurrent after barrier.
-        md_results = await self._run_phase(
+        md_imports = await self._run_phase(
             md,
             sem=sem,
             kb_code=kb_code,
@@ -171,11 +177,20 @@ class ZipBatchImportService:
             file_description=file_description,
         )
 
-        results = list(non_md_results) + list(md_results) + duplicate_results
-        await self._resolve_pending_references_after_batch(
+        imports = list(non_md_imports) + list(md_imports)
+        results = [uploaded.item for uploaded in imports] + duplicate_results
+        upload_rows = [
+            uploaded.upload_row
+            for uploaded in imports
+            if uploaded.item.success and uploaded.upload_row is not None
+        ]
+        compensation_failure = await self._resolve_pending_references_after_batch(
             kb_code=kb_code,
             file_paths=[item.file_path for item in results if item.success],
+            uploaded_rows=upload_rows,
         )
+        if compensation_failure is not None:
+            results.append(compensation_failure)
         succeeded = sum(1 for r in results if r.success)
         return ZipBatchImportResult(
             data=results,
@@ -195,8 +210,8 @@ class ZipBatchImportService:
         target_dir: str,
         process_front_matter: bool,
         file_description: str | None,
-    ) -> list[ImportItem]:
-        async def one(name: str, data: bytes) -> ImportItem:
+    ) -> list[_ImportedItem]:
+        async def one(name: str, data: bytes) -> _ImportedItem:
             async with sem:
                 return await self._import_one(
                     kb_code=kb_code,
@@ -210,13 +225,33 @@ class ZipBatchImportService:
         return await asyncio.gather(*(one(n, d) for n, d in group))
 
     async def _resolve_pending_references_after_batch(
-        self, *, kb_code: str, file_paths: list[str]
-    ) -> None:
-        if not file_paths:
-            return
-        await self.ingestion_service.resolve_pending_references_for_paths(
-            kb_code=kb_code, file_paths=file_paths
-        )
+        self,
+        *,
+        kb_code: str,
+        file_paths: list[str],
+        uploaded_rows: list[dict[str, Any]],
+    ) -> ImportItem | None:
+        if not file_paths and not uploaded_rows:
+            return None
+        try:
+            if uploaded_rows:
+                await self.ingestion_service.resolve_pending_references_for_paths(
+                    kb_code=kb_code, uploaded_rows=uploaded_rows
+                )
+            else:
+                await self.ingestion_service.resolve_pending_references_for_paths(
+                    kb_code=kb_code, file_paths=file_paths
+                )
+        except Exception as exc:
+            logger.exception(
+                "zip batch reference compensation failed: kb_code=%s", kb_code
+            )
+            return ImportItem(
+                file_path="__batch_reference_compensation__",
+                success=False,
+                error=f"batch reference compensation failed: {exc}",
+            )
+        return None
 
     def _extract_entries(self, zip_bytes: bytes) -> list[tuple[str, bytes]]:
         try:
@@ -266,13 +301,15 @@ class ZipBatchImportService:
         data: bytes,
         process_front_matter: bool,
         file_description: str | None,
-    ) -> ImportItem:
+    ) -> _ImportedItem:
         resolved = _resolve_within_target(target_dir, name)
         if resolved is None:
             reported = "/" + "/".join(
                 p for p in (target_dir.split("/") + name.split("/")) if p
             )
-            return ImportItem(file_path=reported, success=False, error="unsafe path")
+            return _ImportedItem(
+                item=ImportItem(file_path=reported, success=False, error="unsafe path")
+            )
         file_path = resolved
         try:
             # Validate markdown bytes BEFORE deleting the existing file: a
@@ -290,8 +327,13 @@ class ZipBatchImportService:
                 file_content=data,
                 process_front_matter=process_front_matter,
             )
-            await self.ingestion_service.upload_file(request)
-            return ImportItem(file_path=file_path, success=True, error=None)
+            upload_row = await self.ingestion_service.upload_file(request)
+            return _ImportedItem(
+                item=ImportItem(file_path=file_path, success=True, error=None),
+                upload_row=dict(upload_row) if isinstance(upload_row, dict) else None,
+            )
         except Exception as exc:
             logger.warning("zip batch import failed: path=%s error=%s", file_path, exc)
-            return ImportItem(file_path=file_path, success=False, error=str(exc))
+            return _ImportedItem(
+                item=ImportItem(file_path=file_path, success=False, error=str(exc))
+            )

@@ -16,27 +16,42 @@ from by_qa.knowledge_base.services.zip_batch_import_service import ZipBatchImpor
 class FakeIngestion:
     """Records upload/delete order with a monotonic sequence number."""
 
-    def __init__(self, *, fail_upload_for: str | None = None):
+    def __init__(
+        self,
+        *,
+        fail_upload_for: str | None = None,
+        fail_batch_reference_compensation: bool = False,
+    ):
         self.uploads: list[tuple[int, KnowledgeItemUploadRequest]] = []
         self.deletes: list[tuple[int, str]] = []
-        self.batch_reference_compensations: list[tuple[str, tuple[str, ...]]] = []
+        self.batch_reference_compensations: list[
+            tuple[str, tuple[str, ...], tuple[tuple[int, str], ...]]
+        ] = []
         self.files: set[str] = set()
         self._seq = 0
         self.fail_upload_for = (
             "/" + fail_upload_for.strip("/") if fail_upload_for else None
         )
+        self.fail_batch_reference_compensation = fail_batch_reference_compensation
 
     def _next(self) -> int:
         self._seq += 1
         return self._seq
 
-    async def upload_file(self, request: KnowledgeItemUploadRequest) -> None:
+    async def upload_file(
+        self, request: KnowledgeItemUploadRequest
+    ) -> dict[str, object]:
         seq = self._next()
         self.uploads.append((seq, request))
         normalized = "/" + request.file_path.strip("/")
         if self.fail_upload_for is not None and normalized == self.fail_upload_for:
             raise RuntimeError(f"forced upload failure for {normalized}")
         self.files.add(normalized)
+        return {
+            "fs_entry_id": seq,
+            "knowledge_base_id": 7,
+            "virtual_path": normalized,
+        }
 
     async def file_exists(self, kb_code: str, full_path: str) -> bool:  # pylint: disable=unused-argument
         return full_path in self.files
@@ -52,9 +67,24 @@ class FakeIngestion:
         self.files.discard("/" + request.file_path.strip("/"))
 
     async def resolve_pending_references_for_paths(
-        self, *, kb_code: str, file_paths: list[str]
+        self,
+        *,
+        kb_code: str,
+        file_paths: list[str] | None = None,
+        uploaded_rows: list[dict[str, object]] | None = None,
     ) -> list[dict[str, object]]:
-        self.batch_reference_compensations.append((kb_code, tuple(file_paths)))
+        if self.fail_batch_reference_compensation:
+            raise RuntimeError("forced batch reference compensation failure")
+        rows = tuple(
+            (
+                int(row.get("fs_entry_id") or row.get("kid")),
+                str(row.get("virtual_path") or row.get("file_path")),
+            )
+            for row in (uploaded_rows or [])
+        )
+        self.batch_reference_compensations.append(
+            (kb_code, tuple(file_paths or []), rows)
+        )
         return []
 
 
@@ -67,7 +97,9 @@ class MarkdownReferenceRaceIngestion(FakeIngestion):
         self.a_unresolved_committed = asyncio.Event()
         self.pending_references: list[dict[str, object]] = []
 
-    async def upload_file(self, request: KnowledgeItemUploadRequest) -> None:
+    async def upload_file(
+        self, request: KnowledgeItemUploadRequest
+    ) -> dict[str, object]:
         seq = self._next()
         self.uploads.append((seq, request))
         normalized = "/" + request.file_path.strip("/")
@@ -78,7 +110,11 @@ class MarkdownReferenceRaceIngestion(FakeIngestion):
             # a.md records the unresolved reference.
             self.b_per_file_compensation_done.set()
             await asyncio.wait_for(self.a_unresolved_committed.wait(), timeout=2)
-            return
+            return {
+                "fs_entry_id": seq,
+                "knowledge_base_id": 7,
+                "virtual_path": normalized,
+            }
 
         if normalized == "/target/a.md":
             await asyncio.wait_for(self.b_per_file_compensation_done.wait(), timeout=2)
@@ -91,19 +127,35 @@ class MarkdownReferenceRaceIngestion(FakeIngestion):
                 }
             )
             self.a_unresolved_committed.set()
-            return
+            return {
+                "fs_entry_id": seq,
+                "knowledge_base_id": 7,
+                "virtual_path": normalized,
+            }
 
         self.files.add(normalized)
+        return {
+            "fs_entry_id": seq,
+            "knowledge_base_id": 7,
+            "virtual_path": normalized,
+        }
 
     async def resolve_pending_references_for_paths(
-        self, *, kb_code: str, file_paths: list[str]
+        self,
+        *,
+        kb_code: str,
+        file_paths: list[str] | None = None,
+        uploaded_rows: list[dict[str, object]] | None = None,
     ) -> list[dict[str, object]]:
         await asyncio.wait_for(self.a_unresolved_committed.wait(), timeout=2)
         await super().resolve_pending_references_for_paths(
-            kb_code=kb_code, file_paths=file_paths
+            kb_code=kb_code, file_paths=file_paths, uploaded_rows=uploaded_rows
         )
         resolved: list[dict[str, object]] = []
-        uploaded_paths = {"/" + path.strip("/") for path in file_paths}
+        uploaded_paths = {
+            "/" + str(row.get("virtual_path") or row.get("file_path")).strip("/")
+            for row in (uploaded_rows or [])
+        }
         for reference in self.pending_references:
             if reference["target"] in uploaded_paths:
                 reference["resolved"] = True
@@ -267,8 +319,56 @@ async def test_import_zip_resolves_md_to_md_pending_after_markdown_phase():
         {"source": "/target/a.md", "target": "/target/b.md", "resolved": True}
     ]
     assert ingestion.batch_reference_compensations == [
-        ("kb1", ("/target/b.md", "/target/a.md"))
+        (
+            "kb1",
+            (),
+            ((1, "/target/b.md"), (2, "/target/a.md")),
+        )
     ]
+
+
+async def test_import_zip_passes_upload_rows_to_batch_compensation():
+    ingestion = FakeIngestion()
+    zip_bytes = _make_zip({"a.md": b"# a\n", "asset.png": b"png"})
+    svc = ZipBatchImportService(ingestion_service=ingestion, max_concurrency=2)
+
+    result = await svc.import_zip(
+        kb_code="kb1", target_dir="/target", zip_bytes=zip_bytes
+    )
+
+    assert result.summary.succeeded == 2
+    assert ingestion.batch_reference_compensations == [
+        (
+            "kb1",
+            (),
+            ((1, "/target/asset.png"), (2, "/target/a.md")),
+        )
+    ]
+
+
+async def test_import_zip_reports_batch_compensation_failure_without_losing_uploads():
+    ingestion = FakeIngestion(fail_batch_reference_compensation=True)
+    zip_bytes = _make_zip({"a.md": b"# a\n", "asset.png": b"png"})
+    svc = ZipBatchImportService(ingestion_service=ingestion, max_concurrency=2)
+
+    result = await svc.import_zip(
+        kb_code="kb1", target_dir="/target", zip_bytes=zip_bytes
+    )
+
+    uploaded_items = [item for item in result.data if item.success]
+    failed_items = [item for item in result.data if not item.success]
+    assert {item.file_path for item in uploaded_items} == {
+        "/target/a.md",
+        "/target/asset.png",
+    }
+    assert len(failed_items) == 1
+    assert failed_items[0].file_path == "__batch_reference_compensation__"
+    assert "forced batch reference compensation failure" in (
+        failed_items[0].error or ""
+    )
+    assert result.summary.total == 3
+    assert result.summary.succeeded == 2
+    assert result.summary.failed == 1
 
 
 async def test_import_zip_skips_unsafe_path_and_records_failure():

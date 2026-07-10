@@ -367,3 +367,50 @@ async def test_resolve_pending_references_for_paths_resolves_existing_targets_on
     assert names[-1] == "commit"
     assert connection.committed is True
     assert connection.rolled_back is False
+
+
+async def test_resolve_pending_references_for_uploaded_rows_skips_path_lookup():
+    calls = []
+    service, connection = _build_service(calls)
+
+    result = await service.resolve_pending_references_for_paths(
+        kb_code="kb-1",
+        uploaded_rows=[
+            {
+                "fs_entry_id": 81,
+                "knowledge_base_id": 7,
+                "virtual_path": "/docs/readme.md",
+            },
+            {
+                "kid": 82,
+                "knowledge_base_id": 7,
+                "file_path": "docs/manual.pdf",
+            },
+        ],
+    )
+
+    assert result == []
+    names = _call_names(calls)
+    assert "get_file_by_path" not in names
+    pending_calls = [call for call in calls if call[0] == "resolve_pending_for_path"]
+    assert pending_calls == [
+        (
+            "resolve_pending_for_path",
+            {
+                "knowledge_base_id": 7,
+                "target_path": "/docs/readme.md",
+                "target_fs_entry_id": 81,
+            },
+        ),
+        (
+            "resolve_pending_for_path",
+            {
+                "knowledge_base_id": 7,
+                "target_path": "/docs/manual.pdf",
+                "target_fs_entry_id": 82,
+            },
+        ),
+    ]
+    assert names[-1] == "commit"
+    assert connection.committed is True
+    assert connection.rolled_back is False

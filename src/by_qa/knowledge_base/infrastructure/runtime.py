@@ -67,6 +67,9 @@ from by_qa.knowledge_base.services.knowledge_item_search_service import (
 from by_qa.knowledge_base.services.markdown_reference_resolver import (
     MarkdownReferenceResolver,
 )
+from by_qa.knowledge_base.services.markdown_reference_rewriter import (
+    MarkdownReferenceRewriter,
+)
 
 
 def validate_knowledge_base_settings(
@@ -254,6 +257,8 @@ async def build_knowledge_item_ingestion_service(
         embedding_dimension=dimension,
         knowledge_fetch_cache_repository=KnowledgeFetchCacheRepository(),
         file_metadata_value_repository=FileMetadataValueRepository(),
+        knowledge_file_reference_repository=KnowledgeFileReferenceRepository(),
+        markdown_reference_rewriter=MarkdownReferenceRewriter(),
     )
 
 

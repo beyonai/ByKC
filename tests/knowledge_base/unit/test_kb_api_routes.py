@@ -1018,6 +1018,38 @@ def test_download_file_route_maps_validation_error_to_documented_error(monkeypat
 
 
 # ---------------------------------------------------------------------------
+# upload route tests
+# ---------------------------------------------------------------------------
+
+
+def test_upload_file_route_passes_markdown_bytes_to_ingestion(monkeypatch):
+    """Single-file upload should leave Markdown reference rewriting to ingestion."""
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/knowledgeItems/import",
+        data={
+            "knCode": "hr-policy",
+            "filePath": "/docs/readme.md",
+            "processFrontMatter": "true",
+        },
+        files={
+            "fileContent": (
+                "readme.md",
+                b"![later](./later.png)\n",
+                "text/markdown",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["resultCode"] == "0"
+    assert len(service.import_calls) == 1
+    assert service.import_calls[0].file_content == b"![later](./later.png)\n"
+
+
+# ---------------------------------------------------------------------------
 # fileToMarkdown route tests
 # ---------------------------------------------------------------------------
 

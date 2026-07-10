@@ -147,6 +147,8 @@ class KnowledgeItemIngestionService:
     knowledge_build_task_repository: Any | None = None
     knowledge_fetch_cache_repository: Any | None = None
     file_metadata_value_repository: Any | None = None
+    knowledge_file_reference_repository: Any | None = None
+    markdown_reference_rewriter: Any | None = None
 
     async def convert_uploaded_file_to_markdown(
         self,
@@ -162,7 +164,7 @@ class KnowledgeItemIngestionService:
             document_chunking_service=document_chunking_service,
         )
 
-    async def upload_file(self, request: KnowledgeItemUploadRequest) -> None:
+    async def upload_file(self, request: KnowledgeItemUploadRequest) -> dict[str, Any]:
         """Upload one original file and register its storage metadata on the file entry."""
         logger.info(
             "knowledge_item_ingestion_service.upload_file started: kb_code=%s, file_path=%s, file_size=%s",
@@ -178,8 +180,6 @@ class KnowledgeItemIngestionService:
             raise KnowledgeBaseValidationError("file_path must not be root")
 
         mime_type = _guess_mime_type(normalized_object_path)
-        checksum = hashlib.sha256(request.file_content).hexdigest()
-
         connection = await self.connection_factory()
         stored: Any | None = None
         original_location: Any | None = None
@@ -207,6 +207,16 @@ class KnowledgeItemIngestionService:
                 raise KnowledgeBaseValidationError(str(exc)) from exc
 
             fs_entry_id = self._row_id(file_entry_row)
+            content = request.file_content
+            if self._is_markdown_upload(normalized_object_path, mime_type):
+                content = await self._rewrite_markdown_references(
+                    content,
+                    cursor=cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    source_fs_entry_id=fs_entry_id,
+                    normalized_object_path=normalized_object_path,
+                )
+            checksum = hashlib.sha256(content).hexdigest()
 
             original_location = self.storage_provider.build_original_location(
                 kb_code=request.kb_code,
@@ -218,7 +228,7 @@ class KnowledgeItemIngestionService:
 
             stored = await self.storage_provider.write(
                 original_location,
-                request.file_content,
+                content,
                 content_type=mime_type,
             )
 
@@ -227,7 +237,7 @@ class KnowledgeItemIngestionService:
                 fs_entry_id=fs_entry_id,
                 file_description=request.file_description,
                 original_location=stored.location,
-                file_size=len(request.file_content),
+                file_size=len(content),
                 mime_type=mime_type,
                 checksum=checksum,
             )
@@ -237,11 +247,26 @@ class KnowledgeItemIngestionService:
                     cursor,
                     fs_entry_id=fs_entry_id,
                     knowledge_base_id=knowledge_base_id,
-                    content=request.file_content,
+                    content=content,
                     file_path=normalized_file_path,
                 )
 
+            if self.knowledge_file_reference_repository is not None:
+                await self.knowledge_file_reference_repository.resolve_pending_for_path(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    target_path="/" + normalized_object_path,
+                    target_fs_entry_id=fs_entry_id,
+                )
+
             await connection.commit()
+            return {
+                "fs_entry_id": fs_entry_id,
+                "knowledge_base_id": knowledge_base_id,
+                "virtual_path": file_entry_row.get("virtual_path")
+                or "/" + normalized_object_path,
+                "mime_type": mime_type,
+            }
         except Exception:
             await connection.rollback()
             if original_location is not None:
@@ -249,6 +274,39 @@ class KnowledgeItemIngestionService:
             raise
         finally:
             await connection.close()
+
+    def _is_markdown_upload(self, normalized_object_path: str, mime_type: str) -> bool:
+        suffix = PurePosixPath(normalized_object_path).suffix.lower()
+        return mime_type == "text/markdown" or suffix in {".md", ".markdown"}
+
+    async def _rewrite_markdown_references(
+        self,
+        content: bytes,
+        *,
+        cursor: Any,
+        knowledge_base_id: int,
+        source_fs_entry_id: int,
+        normalized_object_path: str,
+    ) -> bytes:
+        if (
+            self.markdown_reference_rewriter is None
+            or self.knowledge_file_reference_repository is None
+        ):
+            return content
+        text = content.decode("utf-8")
+        source_dir = "/" + str(PurePosixPath(normalized_object_path).parent).strip("/")
+        if source_dir == "/.":
+            source_dir = "/"
+        rewritten = await self.markdown_reference_rewriter.rewrite(
+            text,
+            source_dir=source_dir,
+            knowledge_base_id=knowledge_base_id,
+            source_fs_entry_id=source_fs_entry_id,
+            cursor=cursor,
+            reference_repository=self.knowledge_file_reference_repository,
+            fs_entry_repository=self.knowledge_fs_entry_repository,
+        )
+        return rewritten.encode("utf-8")
 
     async def file_exists(self, kb_code: str, full_path: str) -> bool:
         """Return True if an uploaded file exists at `full_path` in the KB."""

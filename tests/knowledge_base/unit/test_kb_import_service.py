@@ -1706,7 +1706,12 @@ async def test_upload_file_commits_object_and_updates_fs_entry_storage():
         )
     )
 
-    assert response is None
+    assert response == {
+        "fs_entry_id": 71,
+        "knowledge_base_id": 7,
+        "virtual_path": "/dir1/item-1.pdf",
+        "mime_type": "application/pdf",
+    }
     assert connection.committed is True
     assert (
         "create_file_entry",
@@ -1763,7 +1768,12 @@ async def test_upload_file_recursively_creates_missing_parent_directories():
         )
     )
 
-    assert response is None
+    assert response == {
+        "fs_entry_id": 71,
+        "knowledge_base_id": 7,
+        "virtual_path": "/missing-dir/item-1.pdf",
+        "mime_type": "application/pdf",
+    }
     assert connection.committed is True
     assert (
         "create_file_entry",

@@ -51,7 +51,8 @@ class MarkdownReferenceResolver:
         replacements = {
             int(row["kid"]): self._replacement_for_row(row)
             for row in rows
-            if int(row.get("knowledge_base_id", knowledge_base_id)) == knowledge_base_id
+            if row.get("knowledge_base_id") is not None
+            and int(row["knowledge_base_id"]) == knowledge_base_id
         }
 
         resolved_texts: list[str] = []

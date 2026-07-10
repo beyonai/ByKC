@@ -1389,6 +1389,33 @@ def test_chunking_hard_split_keeps_markdown_link_with_stable_token_whole():
     )
 
 
+def test_chunking_hard_split_keeps_markdown_image_with_stable_token_whole():
+    from by_qa.knowledge_build.services.document_chunking_service import _TextBlock
+
+    service = _make_service()
+    service.chunk_size = 24
+    service.chunk_overlap = 0
+
+    span = "![alt](byqa-ref://12345)"
+    text = "字" * 8 + span + "字" * 30
+    block = _TextBlock(
+        text=text,
+        start_char=0,
+        end_char=len(text),
+        start_line=0,
+        end_line=0,
+        kind="paragraph",
+    )
+
+    parts = service._split_block_hard(block, text, service.chunk_size)
+
+    containing = [part for part in parts if span in part.text]
+    assert len(containing) == 1
+    assert not any(
+        "![alt](byqa-ref://" in part.text and span not in part.text for part in parts
+    )
+
+
 def test_chunking_hard_split_keeps_oversized_stable_reference_token_whole():
     from by_qa.knowledge_build.services.document_chunking_service import _TextBlock
 
@@ -1467,4 +1494,35 @@ def test_chunking_hard_split_isolates_oversized_markdown_reference_span_after_pr
     assert [part.text for part in parts[:2]] == [prefix, span]
     assert not any(
         "[target](byqa-ref://" in part.text and span not in part.text for part in parts
+    )
+
+
+def test_chunking_hard_split_isolates_oversized_markdown_image_span_after_prefix():
+    from by_qa.knowledge_build.services.document_chunking_service import _TextBlock
+
+    service = _make_service()
+    service.chunk_size = 20
+    service.chunk_overlap = 0
+
+    prefix = "prefix "
+    span = f"![{'very-long-alt' * 4}](byqa-ref://12345)"
+    text = prefix + span + " tail"
+    block = _TextBlock(
+        text=text,
+        start_char=0,
+        end_char=len(text),
+        start_line=0,
+        end_line=0,
+        kind="paragraph",
+    )
+
+    parts = service._split_block_hard(block, text, service.chunk_size)
+
+    assert len(span) > service.chunk_size
+    assert [part.text for part in parts[:2]] == [prefix, span]
+    assert not any(
+        "![very-long-alt" in part.text and span not in part.text for part in parts
+    )
+    assert not any(
+        "](byqa-ref://12345)" in part.text and span not in part.text for part in parts
     )

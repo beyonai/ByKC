@@ -15,6 +15,7 @@ import io
 import logging
 import zipfile
 from dataclasses import dataclass
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -106,7 +107,7 @@ def _resolve_within_target(target_dir: str, name: str) -> str | None:
 
 @dataclass
 class ZipBatchImportService:
-    ingestion_service: object
+    ingestion_service: Any
     max_concurrency: int = 8
 
     async def import_zip(
@@ -171,6 +172,10 @@ class ZipBatchImportService:
         )
 
         results = list(non_md_results) + list(md_results) + duplicate_results
+        await self._resolve_pending_references_after_batch(
+            kb_code=kb_code,
+            file_paths=[item.file_path for item in results if item.success],
+        )
         succeeded = sum(1 for r in results if r.success)
         return ZipBatchImportResult(
             data=results,
@@ -203,6 +208,15 @@ class ZipBatchImportService:
                 )
 
         return await asyncio.gather(*(one(n, d) for n, d in group))
+
+    async def _resolve_pending_references_after_batch(
+        self, *, kb_code: str, file_paths: list[str]
+    ) -> None:
+        if not file_paths:
+            return
+        await self.ingestion_service.resolve_pending_references_for_paths(
+            kb_code=kb_code, file_paths=file_paths
+        )
 
     def _extract_entries(self, zip_bytes: bytes) -> list[tuple[str, bytes]]:
         try:

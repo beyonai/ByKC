@@ -356,6 +356,55 @@ class KnowledgeItemIngestionService:
         finally:
             await connection.close()
 
+    async def resolve_pending_references_for_paths(
+        self, *, kb_code: str, file_paths: Iterable[str]
+    ) -> list[dict[str, Any]]:
+        """Resolve pending Markdown references for already-uploaded target paths."""
+        if self.knowledge_file_reference_repository is None:
+            return []
+
+        normalized = list(
+            dict.fromkeys(
+                path.strip("/") for path in file_paths if (path or "").strip("/")
+            )
+        )
+        if not normalized:
+            return []
+
+        connection = await self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            kb_row = await self.knowledge_base_repository.get_by_code(cursor, kb_code)
+            if not kb_row:
+                return []
+            knowledge_base_id = self._row_id(kb_row)
+
+            resolved: list[dict[str, Any]] = []
+            for full_path in normalized:
+                file_row = await self.knowledge_fs_entry_repository.get_file_by_path(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    full_path=full_path,
+                )
+                if file_row is None:
+                    continue
+                resolved.extend(
+                    await self.knowledge_file_reference_repository.resolve_pending_for_path(
+                        cursor,
+                        knowledge_base_id=knowledge_base_id,
+                        target_path="/" + full_path,
+                        target_fs_entry_id=self._row_id(file_row),
+                    )
+                )
+
+            await connection.commit()
+            return resolved
+        except Exception:
+            await connection.rollback()
+            raise
+        finally:
+            await connection.close()
+
     async def _apply_front_matter_metadata(
         self,
         cursor: Any,

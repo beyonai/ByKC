@@ -1,4 +1,5 @@
 # tests/knowledge_base/unit/test_zip_batch_import_service.py
+import asyncio
 import io
 import zipfile
 
@@ -18,6 +19,7 @@ class FakeIngestion:
     def __init__(self, *, fail_upload_for: str | None = None):
         self.uploads: list[tuple[int, KnowledgeItemUploadRequest]] = []
         self.deletes: list[tuple[int, str]] = []
+        self.batch_reference_compensations: list[tuple[str, tuple[str, ...]]] = []
         self.files: set[str] = set()
         self._seq = 0
         self.fail_upload_for = (
@@ -48,6 +50,65 @@ class FakeIngestion:
         seq = self._next()
         self.deletes.append((seq, request.file_path))
         self.files.discard("/" + request.file_path.strip("/"))
+
+    async def resolve_pending_references_for_paths(
+        self, *, kb_code: str, file_paths: list[str]
+    ) -> list[dict[str, object]]:
+        self.batch_reference_compensations.append((kb_code, tuple(file_paths)))
+        return []
+
+
+class MarkdownReferenceRaceIngestion(FakeIngestion):
+    """Models the zip md->md race across per-file transactions."""
+
+    def __init__(self):
+        super().__init__()
+        self.b_per_file_compensation_done = asyncio.Event()
+        self.a_unresolved_committed = asyncio.Event()
+        self.pending_references: list[dict[str, object]] = []
+
+    async def upload_file(self, request: KnowledgeItemUploadRequest) -> None:
+        seq = self._next()
+        self.uploads.append((seq, request))
+        normalized = "/" + request.file_path.strip("/")
+
+        if normalized == "/target/b.md":
+            self.files.add(normalized)
+            # b.md has already run its single-file pending compensation before
+            # a.md records the unresolved reference.
+            self.b_per_file_compensation_done.set()
+            await asyncio.wait_for(self.a_unresolved_committed.wait(), timeout=2)
+            return
+
+        if normalized == "/target/a.md":
+            await asyncio.wait_for(self.b_per_file_compensation_done.wait(), timeout=2)
+            self.files.add(normalized)
+            self.pending_references.append(
+                {
+                    "source": "/target/a.md",
+                    "target": "/target/b.md",
+                    "resolved": False,
+                }
+            )
+            self.a_unresolved_committed.set()
+            return
+
+        self.files.add(normalized)
+
+    async def resolve_pending_references_for_paths(
+        self, *, kb_code: str, file_paths: list[str]
+    ) -> list[dict[str, object]]:
+        await asyncio.wait_for(self.a_unresolved_committed.wait(), timeout=2)
+        await super().resolve_pending_references_for_paths(
+            kb_code=kb_code, file_paths=file_paths
+        )
+        resolved: list[dict[str, object]] = []
+        uploaded_paths = {"/" + path.strip("/") for path in file_paths}
+        for reference in self.pending_references:
+            if reference["target"] in uploaded_paths:
+                reference["resolved"] = True
+                resolved.append(reference)
+        return resolved
 
 
 def _make_zip(entries: dict[str, bytes]) -> bytes:
@@ -190,6 +251,24 @@ async def test_import_zip_preserves_md_to_md_reference_for_ingestion():
     assert result.summary.succeeded == 2
     a_req = next(req for _, req in ingestion.uploads if req.file_path == "/target/a.md")
     assert b"see [b](b/b.md)" in a_req.file_content
+
+
+async def test_import_zip_resolves_md_to_md_pending_after_markdown_phase():
+    ingestion = MarkdownReferenceRaceIngestion()
+    zip_bytes = _make_zip({"b.md": b"# b\n", "a.md": b"see [b](b.md)\n"})
+    svc = ZipBatchImportService(ingestion_service=ingestion, max_concurrency=2)
+
+    result = await svc.import_zip(
+        kb_code="kb1", target_dir="/target", zip_bytes=zip_bytes
+    )
+
+    assert result.summary.succeeded == 2
+    assert ingestion.pending_references == [
+        {"source": "/target/a.md", "target": "/target/b.md", "resolved": True}
+    ]
+    assert ingestion.batch_reference_compensations == [
+        ("kb1", ("/target/b.md", "/target/a.md"))
+    ]
 
 
 async def test_import_zip_skips_unsafe_path_and_records_failure():

@@ -67,6 +67,20 @@ class FakeFsEntryRepository:
     async def update_file_entry_storage(self, cursor, **kwargs):
         self.calls.append(("update_file_entry_storage", kwargs))
 
+    async def get_file_by_path(self, cursor, *, knowledge_base_id, full_path):
+        self.calls.append(
+            (
+                "get_file_by_path",
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "full_path": full_path,
+                },
+            )
+        )
+        if full_path == "docs/readme.md":
+            return {"kid": 71, "virtual_path": "/docs/readme.md"}
+        return None
+
     async def get_file_reference_target_by_path(
         self, cursor, *, knowledge_base_id, full_path
     ):
@@ -315,3 +329,41 @@ async def test_non_markdown_upload_does_not_call_rewriter_but_resolves_pending()
     assert result["virtual_path"] == "/docs/manual.pdf"
     assert result["mime_type"] == "application/pdf"
     assert connection.committed is True
+
+
+async def test_resolve_pending_references_for_paths_resolves_existing_targets_once():
+    calls = []
+    service, connection = _build_service(calls)
+
+    result = await service.resolve_pending_references_for_paths(
+        kb_code="kb-1",
+        file_paths=["/docs/readme.md", "docs/readme.md", "/docs/missing.md"],
+    )
+
+    assert result == []
+    names = _call_names(calls)
+    get_file_calls = [call for call in calls if call[0] == "get_file_by_path"]
+    assert get_file_calls == [
+        (
+            "get_file_by_path",
+            {"knowledge_base_id": 7, "full_path": "docs/readme.md"},
+        ),
+        (
+            "get_file_by_path",
+            {"knowledge_base_id": 7, "full_path": "docs/missing.md"},
+        ),
+    ]
+    pending_calls = [call for call in calls if call[0] == "resolve_pending_for_path"]
+    assert pending_calls == [
+        (
+            "resolve_pending_for_path",
+            {
+                "knowledge_base_id": 7,
+                "target_path": "/docs/readme.md",
+                "target_fs_entry_id": 71,
+            },
+        )
+    ]
+    assert names[-1] == "commit"
+    assert connection.committed is True
+    assert connection.rolled_back is False

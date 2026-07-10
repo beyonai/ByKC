@@ -2276,6 +2276,15 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
         moved_source_read = _read_file_data(
             client, kb_code=kb_code, file_path="/new/source/path/source.md"
         )
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/pending-source/missing.md",
+            file_content=b"# restored missing\n",
+        )
+        moved_source_after_old_target_upload = _read_file_data(
+            client, kb_code=kb_code, file_path="/new/source/path/source.md"
+        )
 
     assert moved_file[0]["targetPath"] == "/moved/auto/renamed-b.md"
     assert chunk_calls_before_target_move == 1
@@ -2299,7 +2308,10 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
     assert moved_source[0]["targetPath"] == "/new/source/path/source.md"
     assert "(missing.md)" in moved_source_read
     assert "/new/source/path/missing.md" not in moved_source_read
+    assert "(/pending-source/missing.md)" in moved_source_after_old_target_upload
+    assert "/new/source/path/missing.md" not in moved_source_after_old_target_upload
     assert "byqa-ref://" not in moved_source_read
+    assert "byqa-ref://" not in moved_source_after_old_target_upload
 
 
 @pytest.mark.integration

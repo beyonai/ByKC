@@ -586,7 +586,7 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `sourcePath` | string | 本次移动的源路径 |
-| `targetPath` | string | 该源路径实际移动后的目标路径 |
+| `targetPath` | string \| null | 该源路径实际移动后的目标路径；失败时可为 `null` |
 | `success` | boolean | 是否移动成功 |
 | `error` | string \| null | 失败原因；成功时为 `null` |
 
@@ -614,7 +614,7 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
       },
       {
         "sourcePath": "/制度/人事/不存在.pdf",
-        "targetPath": "/归档/人事/不存在.pdf",
+        "targetPath": null,
         "success": false,
         "error": "source path not found: /制度/人事/不存在.pdf"
       }

@@ -171,6 +171,43 @@ class FakeReferenceRepository:
         self.calls.append(("resolve_pending_for_path", kwargs))
         return []
 
+    async def rebind_deleted_target_for_path(self, cursor, **kwargs):
+        self.calls.append(("rebind_deleted_target_for_path", kwargs))
+        return []
+
+
+class RebindingReferenceRepository(FakeReferenceRepository):
+    def __init__(self, calls):
+        super().__init__(calls)
+        self.deleted_targets = {
+            41: {"virtual_path": "/target/b.md", "is_deleted": True}
+        }
+        self.references = [
+            {
+                "kid": 601,
+                "status": "resolved",
+                "target_fs_entry_id": 41,
+                "target_path": None,
+            }
+        ]
+
+    async def rebind_deleted_target_for_path(self, cursor, **kwargs):
+        self.calls.append(("rebind_deleted_target_for_path", kwargs))
+        rebound = []
+        for reference in self.references:
+            deleted_target = self.deleted_targets.get(reference["target_fs_entry_id"])
+            if (
+                reference["status"] == "resolved"
+                and deleted_target is not None
+                and deleted_target["is_deleted"] is True
+                and deleted_target["virtual_path"] == kwargs["target_path"]
+                and reference["target_fs_entry_id"] != kwargs["target_fs_entry_id"]
+            ):
+                reference["target_fs_entry_id"] = kwargs["target_fs_entry_id"]
+                reference["target_path"] = None
+                rebound.append(dict(reference))
+        return rebound
+
 
 class FakeMarkdownReferenceRewriter:
     def __init__(self, calls):
@@ -410,6 +447,63 @@ async def test_resolve_pending_references_for_uploaded_rows_skips_path_lookup():
                 "target_fs_entry_id": 82,
             },
         ),
+    ]
+    assert names[-1] == "commit"
+    assert connection.committed is True
+    assert connection.rolled_back is False
+
+
+async def test_resolve_pending_references_for_uploaded_rows_rebinds_deleted_targets():
+    calls = []
+    reference_repository = RebindingReferenceRepository(calls)
+    service, connection = _build_service(
+        calls,
+        reference_repository=reference_repository,
+    )
+
+    result = await service.resolve_pending_references_for_paths(
+        kb_code="kb-1",
+        uploaded_rows=[
+            {
+                "fs_entry_id": 81,
+                "knowledge_base_id": 7,
+                "virtual_path": "/target/b.md",
+            },
+        ],
+    )
+    names = _call_names(calls)
+    assert "get_file_by_path" not in names
+    assert names.index("resolve_pending_for_path") < names.index(
+        "rebind_deleted_target_for_path"
+    )
+    rebind_calls = [
+        call for call in calls if call[0] == "rebind_deleted_target_for_path"
+    ]
+    assert rebind_calls == [
+        (
+            "rebind_deleted_target_for_path",
+            {
+                "knowledge_base_id": 7,
+                "target_path": "/target/b.md",
+                "target_fs_entry_id": 81,
+            },
+        )
+    ]
+    assert result == [
+        {
+            "kid": 601,
+            "status": "resolved",
+            "target_fs_entry_id": 81,
+            "target_path": None,
+        }
+    ]
+    assert reference_repository.references == [
+        {
+            "kid": 601,
+            "status": "resolved",
+            "target_fs_entry_id": 81,
+            "target_path": None,
+        }
     ]
     assert names[-1] == "commit"
     assert connection.committed is True

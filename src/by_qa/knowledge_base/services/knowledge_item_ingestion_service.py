@@ -405,6 +405,14 @@ class KnowledgeItemIngestionService:
                         target_fs_entry_id=target_fs_entry_id,
                     )
                 )
+                resolved.extend(
+                    await self.knowledge_file_reference_repository.rebind_deleted_target_for_path(
+                        cursor,
+                        knowledge_base_id=knowledge_base_id,
+                        target_path=target_path,
+                        target_fs_entry_id=target_fs_entry_id,
+                    )
+                )
 
             if normalized:
                 kb_row = await self.knowledge_base_repository.get_by_code(
@@ -426,6 +434,14 @@ class KnowledgeItemIngestionService:
                     continue
                 resolved.extend(
                     await self.knowledge_file_reference_repository.resolve_pending_for_path(
+                        cursor,
+                        knowledge_base_id=knowledge_base_id,
+                        target_path="/" + full_path,
+                        target_fs_entry_id=self._row_id(file_row),
+                    )
+                )
+                resolved.extend(
+                    await self.knowledge_file_reference_repository.rebind_deleted_target_for_path(
                         cursor,
                         knowledge_base_id=knowledge_base_id,
                         target_path="/" + full_path,

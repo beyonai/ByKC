@@ -163,6 +163,41 @@ async def test_resolve_pending_for_path_updates_unresolved_and_broken_rows_by_ex
 
 
 @pytest.mark.asyncio
+async def test_rebind_deleted_target_for_path_updates_resolved_rows_by_deleted_target_path():
+    repo = KnowledgeFileReferenceRepository()
+    cursor = FakeCursor(
+        fetchall_results=[
+            [
+                {"kid": 23, "status": "resolved", "target_fs_entry_id": 9},
+            ]
+        ]
+    )
+
+    rows = await repo.rebind_deleted_target_for_path(
+        cursor,
+        knowledge_base_id=1,
+        target_path="/docs/restored.md",
+        target_fs_entry_id=9,
+    )
+
+    assert rows == [{"kid": 23, "status": "resolved", "target_fs_entry_id": 9}]
+    sql, params = cursor.executed[0]
+    normalized = " ".join(sql.split())
+    assert "FROM knowledge_fs_entry deleted_target" in normalized
+    assert "deleted_target.kid = kfr.target_fs_entry_id" in normalized
+    assert "deleted_target.is_deleted = TRUE" in normalized
+    assert "deleted_target.virtual_path = %(target_path)s" in normalized
+    assert "kfr.status = 'resolved'" in normalized
+    assert "kfr.target_fs_entry_id <> %(target_fs_entry_id)s" in normalized
+    assert "target_path = NULL" in normalized
+    assert params == {
+        "knowledge_base_id": 1,
+        "target_path": "/docs/restored.md",
+        "target_fs_entry_id": 9,
+    }
+
+
+@pytest.mark.asyncio
 async def test_mark_targets_deleted_writes_each_rows_own_target_path():
     repo = KnowledgeFileReferenceRepository()
     cursor = FakeCursor(

@@ -156,6 +156,52 @@ class KnowledgeFileReferenceRepository:
         )
         return await self._fetchall(cursor)
 
+    async def rebind_deleted_target_for_path(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        target_path: str,
+        target_fs_entry_id: int,
+    ) -> list[dict[str, Any]]:
+        """Rebind resolved refs from a soft-deleted row at this path to a live row."""
+        await cursor.execute(
+            """
+            UPDATE knowledge_file_reference kfr
+            SET target_fs_entry_id = %(target_fs_entry_id)s,
+                target_path = NULL,
+                status = 'resolved',
+                last_resolved_at = NOW(),
+                updated_at = NOW()
+            FROM knowledge_fs_entry deleted_target
+            WHERE kfr.knowledge_base_id = %(knowledge_base_id)s
+              AND deleted_target.kid = kfr.target_fs_entry_id
+              AND kfr.target_fs_entry_id <> %(target_fs_entry_id)s
+              AND kfr.status = 'resolved'
+              AND deleted_target.is_deleted = TRUE
+              AND deleted_target.virtual_path = %(target_path)s
+            RETURNING
+                kfr.kid,
+                kfr.knowledge_base_id,
+                kfr.source_fs_entry_id,
+                kfr.target_fs_entry_id,
+                kfr.original_target,
+                kfr.target_path,
+                kfr.target_suffix,
+                kfr.target_kind,
+                kfr.status,
+                kfr.last_resolved_at,
+                kfr.created_at,
+                kfr.updated_at
+            """,
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "target_path": target_path,
+                "target_fs_entry_id": target_fs_entry_id,
+            },
+        )
+        return await self._fetchall(cursor)
+
     async def mark_targets_deleted(
         self,
         cursor: Any,

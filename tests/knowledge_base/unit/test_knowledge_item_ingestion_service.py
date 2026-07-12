@@ -1,3 +1,5 @@
+import hashlib
+
 import pytest
 
 from by_qa.knowledge_base.api.schemas import KnowledgeItemUploadRequest
@@ -301,6 +303,13 @@ async def test_markdown_upload_rewrites_inside_transaction_before_storage_and_co
     update_call = calls[names.index("update_file_entry_storage")][1]
     assert update_call["file_size"] == len(storage_call["content"])
     assert update_call["mime_type"] == "text/markdown"
+    assert (
+        update_call["checksum"]
+        == hashlib.sha256(b"---\ntitle: Doc\n---\n![later](./later.png)\n").hexdigest()
+    )
+    assert (
+        update_call["checksum"] != hashlib.sha256(storage_call["content"]).hexdigest()
+    )
 
     pending_call = calls[names.index("resolve_pending_for_path")][1]
     assert pending_call == {
@@ -361,6 +370,8 @@ async def test_non_markdown_upload_does_not_call_rewriter_but_resolves_pending()
         "resolve_pending_for_path"
     )
     assert calls[names.index("storage_write")][1]["content"] == b"%PDF bytes"
+    update_call = calls[names.index("update_file_entry_storage")][1]
+    assert update_call["checksum"] == hashlib.sha256(b"%PDF bytes").hexdigest()
     assert result["fs_entry_id"] == 71
     assert result["knowledge_base_id"] == 7
     assert result["virtual_path"] == "/docs/manual.pdf"

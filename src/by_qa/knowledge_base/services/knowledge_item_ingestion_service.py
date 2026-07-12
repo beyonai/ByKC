@@ -208,6 +208,7 @@ class KnowledgeItemIngestionService:
 
             fs_entry_id = self._row_id(file_entry_row)
             content = request.file_content
+            checksum = hashlib.sha256(request.file_content).hexdigest()
             if self._is_markdown_upload(normalized_object_path, mime_type):
                 content = await self._rewrite_markdown_references(
                     content,
@@ -216,7 +217,6 @@ class KnowledgeItemIngestionService:
                     source_fs_entry_id=fs_entry_id,
                     normalized_object_path=normalized_object_path,
                 )
-            checksum = hashlib.sha256(content).hexdigest()
 
             original_location = self.storage_provider.build_original_location(
                 kb_code=request.kb_code,

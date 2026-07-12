@@ -773,6 +773,9 @@ class KnowledgeFsEntryRepository:
                 ),
                 updated_at = NOW()
             WHERE fs.path_ltree <@ %(current_path_ltree)s::ltree
+              AND fs.knowledge_base_id = (
+                    SELECT knowledge_base_id FROM knowledge_fs_entry WHERE kid = %(entry_id)s
+                  )
               AND fs.is_deleted = FALSE
             """,
             {
@@ -902,6 +905,9 @@ class KnowledgeFsEntryRepository:
                     || substring(fs.virtual_path FROM char_length(%(current_virtual_path)s) + 1),
                 updated_at = NOW()
             WHERE fs.path_ltree <@ %(current_path_ltree)s::ltree
+              AND fs.knowledge_base_id = (
+                    SELECT knowledge_base_id FROM knowledge_fs_entry WHERE kid = %(entry_id)s
+                  )
               AND fs.is_deleted = FALSE
             """,
             {

@@ -436,14 +436,16 @@ class KnowledgeBaseService:
                 self.storage_provider is not None
                 and self.storage_provider.storage_path_bound_to_logical_path
             )
-            if path_bound:
-                old_dir = "/" + normalized_directory_path
-                new_dir = old_dir.rsplit("/", 1)[0] + "/" + request.directory_name
+            files = []
+            if path_bound or self.retrieval_projection_repository is not None:
                 files = await self.knowledge_fs_entry_repository.list_file_entries_in_subtree(
                     cursor,
                     knowledge_base_id=knowledge_base_id,
                     root_fs_entry_id=fs_entry_id,
                 )
+            if path_bound:
+                old_dir = "/" + normalized_directory_path
+                new_dir = old_dir.rsplit("/", 1)[0] + "/" + request.directory_name
                 for row in files:
                     old_path = str(row["virtual_path"])
                     new_path = new_dir + old_path[len(old_dir) :]
@@ -489,6 +491,12 @@ class KnowledgeBaseService:
             for upd in locator_updates:
                 await self.knowledge_fs_entry_repository.update_file_entry_locations(
                     cursor, **upd
+                )
+            if self.retrieval_projection_repository is not None and files:
+                await self.retrieval_projection_repository.sync_full_paths_for_fs_entry_ids(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    fs_entry_ids=[int(row["kid"]) for row in files],
                 )
             if (
                 path_bound
@@ -716,6 +724,12 @@ class KnowledgeBaseService:
             for update in locator_updates:
                 await self.knowledge_fs_entry_repository.update_file_entry_locations(
                     cursor, **update
+                )
+            if self.retrieval_projection_repository is not None and file_rows:
+                await self.retrieval_projection_repository.sync_full_paths_for_fs_entry_ids(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    fs_entry_ids=[int(row["kid"]) for row in file_rows],
                 )
             if self.knowledge_fetch_cache_repository is not None and file_rows:
                 await self.knowledge_fetch_cache_repository.delete_cache_entries_for_fs_entry_ids(

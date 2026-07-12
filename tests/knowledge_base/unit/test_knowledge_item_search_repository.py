@@ -77,7 +77,7 @@ async def test_search_text_omits_cte_when_no_dsl_filter():
 
 
 @pytest.mark.asyncio
-async def test_search_text_returns_current_fs_entry_path_not_projection_path():
+async def test_search_text_returns_projection_path_without_fs_entry_join():
     repo = KnowledgeItemSearchRepository(embedding_table_name="emb")
     cursor = _RecordingCursor()
 
@@ -89,9 +89,9 @@ async def test_search_text_returns_current_fs_entry_path_not_projection_path():
     )
 
     normalized = " ".join(cursor.executed_sql.split())
-    assert "JOIN knowledge_fs_entry fe ON fe.kid = r.fs_entry_id" in normalized
-    assert "ltrim(fe.virtual_path, '/') AS full_path" in normalized
-    assert "r.full_path," not in normalized
+    assert "JOIN knowledge_fs_entry fe ON fe.kid = r.fs_entry_id" not in normalized
+    assert "r.full_path," in normalized
+    assert "ltrim(fe.virtual_path, '/') AS full_path" not in normalized
 
 
 @pytest.mark.asyncio

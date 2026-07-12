@@ -42,6 +42,21 @@ class FakeFetchCacheRepository:
         self.delete_calls.append(list(fs_entry_ids))
 
 
+class FakeRetrievalProjectionRepository:
+    def __init__(self):
+        self.sync_calls = []
+
+    async def sync_full_paths_for_fs_entry_ids(
+        self, cursor, *, knowledge_base_id, fs_entry_ids
+    ):
+        self.sync_calls.append(
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "fs_entry_ids": list(fs_entry_ids),
+            }
+        )
+
+
 class FakeStorageProvider:
     storage_path_bound_to_logical_path = True
 
@@ -174,7 +189,13 @@ class FakeFsEntryRepository:
         return None
 
 
-def _make_service(connection, fs_repo, storage_provider=None, fetch_cache_repo=None):
+def _make_service(
+    connection,
+    fs_repo,
+    storage_provider=None,
+    fetch_cache_repo=None,
+    retrieval_projection_repo=None,
+):
     async def connection_factory():
         return connection
 
@@ -182,6 +203,7 @@ def _make_service(connection, fs_repo, storage_provider=None, fetch_cache_repo=N
         connection_factory=connection_factory,
         knowledge_base_repository=FakeKnowledgeBaseRepository(),
         knowledge_fs_entry_repository=fs_repo,
+        retrieval_projection_repository=retrieval_projection_repo,
         knowledge_fetch_cache_repository=fetch_cache_repo,
         storage_provider=storage_provider,
     )
@@ -209,7 +231,13 @@ async def test_move_multiple_files_to_auto_created_directory():
     fs_repo.add_entry(_file(10, "/docs/a.md"))
     fs_repo.add_entry(_file(11, "/docs/b.md"))
     cache_repo = FakeFetchCacheRepository()
-    service = _make_service(connection, fs_repo, fetch_cache_repo=cache_repo)
+    projection_repo = FakeRetrievalProjectionRepository()
+    service = _make_service(
+        connection,
+        fs_repo,
+        fetch_cache_repo=cache_repo,
+        retrieval_projection_repo=projection_repo,
+    )
 
     result = await service.move_knowledge_items(
         MoveKnowledgeItemsRequest.model_validate(
@@ -228,8 +256,50 @@ async def test_move_multiple_files_to_auto_created_directory():
     ]
     assert fs_repo.created_directories == ["/archive/new"]
     assert fs_repo.move_calls == [(10, 1000, "a.md"), (11, 1000, "b.md")]
+    assert projection_repo.sync_calls == [
+        {"knowledge_base_id": 1, "fs_entry_ids": [10]},
+        {"knowledge_base_id": 1, "fs_entry_ids": [11]},
+    ]
     assert cache_repo.delete_calls == [[10], [11]]
     assert connection.committed == 2
+
+
+@pytest.mark.asyncio
+async def test_move_directory_syncs_retrieval_projection_for_subtree_files():
+    connection = FakeConnection()
+    fs_repo = FakeFsEntryRepository()
+    fs_repo.add_entry(
+        {
+            "kid": 20,
+            "name": "docs",
+            "entry_type": "DIRECTORY",
+            "virtual_path": "/docs",
+            "parent_entry_id": None,
+        }
+    )
+    fs_repo.add_entry(_file(21, "/docs/a.md", parent_entry_id=20))
+    fs_repo.add_entry(_file(22, "/docs/nested/b.md", parent_entry_id=20))
+    projection_repo = FakeRetrievalProjectionRepository()
+    service = _make_service(
+        connection,
+        fs_repo,
+        retrieval_projection_repo=projection_repo,
+    )
+
+    result = await service.move_knowledge_items(
+        MoveKnowledgeItemsRequest.model_validate(
+            {
+                "knCode": "kb",
+                "sourcePath": ["/docs"],
+                "targetDirectoryPath": "/archive",
+            }
+        )
+    )
+
+    assert result.data[0].target_path == "/archive/docs"
+    assert projection_repo.sync_calls == [
+        {"knowledge_base_id": 1, "fs_entry_ids": [21, 22]}
+    ]
 
 
 @pytest.mark.asyncio

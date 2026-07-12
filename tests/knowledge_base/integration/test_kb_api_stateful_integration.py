@@ -332,12 +332,12 @@ def _read_file_data(client: TestClient, *, kb_code: str, file_path: str) -> str:
     return payload["resultObject"]["data"]
 
 
-def _search_chunk_texts(
+def _search_items(
     client: TestClient,
     *,
     kb_code: str,
     query: str,
-) -> list[str]:
+) -> list[dict]:
     response = client.post(
         "/api/v1/knowledgeItems/search",
         json={
@@ -350,7 +350,19 @@ def _search_chunk_texts(
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["resultCode"] == "0", payload
-    return [item["chunkText"] for item in payload["resultObject"]["data"]]
+    return payload["resultObject"]["data"]
+
+
+def _search_chunk_texts(
+    client: TestClient,
+    *,
+    kb_code: str,
+    query: str,
+) -> list[str]:
+    return [
+        item["chunkText"]
+        for item in _search_items(client, kb_code=kb_code, query=query)
+    ]
 
 
 def _reference_rows(
@@ -1875,11 +1887,10 @@ async def test_search_path_updates_after_middle_directory_rename(monkeypatch, tm
 
     assert rename.status_code == 200, rename.text
 
-    # NOTE: knowledge_chunk_retrieval_mv.full_path is not updated on directory rename.
-    # Search results still return the old path. This is a known gap to be addressed.
     assert after.status_code == 200
     after_items = after.json()["resultObject"]["data"]
     assert len(after_items) >= 1
+    assert "2025" in after_items[0]["filePath"]
 
 
 @pytest.mark.integration
@@ -2249,6 +2260,12 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
         _upload_and_build_file(
             client,
             kb_code=kb_code,
+            file_path="/tree/sub/indexed.md",
+            file_content=b"tree indexed unique\n",
+        )
+        _upload_and_build_file(
+            client,
+            kb_code=kb_code,
             file_path="/refs/one.md",
             file_content=b"one [target](/tree/sub/one.md)\nsubtree unique one\n",
         )
@@ -2278,6 +2295,9 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
         subtree_two_search = _search_chunk_texts(
             client, kb_code=kb_code, query="subtree unique two"
         )
+        tree_index_search_items = _search_items(
+            client, kb_code=kb_code, query="tree indexed unique"
+        )
         kb_root_after_subtree_move = client.post(
             "/api/v1/listDir",
             json={"knCode": kb_code, "directoryPath": "/"},
@@ -2305,6 +2325,9 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
         )
         moved_source_read = _read_file_data(
             client, kb_code=kb_code, file_path="/new/source/path/source.md"
+        )
+        moved_source_search_items = _search_items(
+            client, kb_code=kb_code, query="pending source move"
         )
         _upload_file(
             client,
@@ -2346,7 +2369,7 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
     assert all("byqa-ref://" not in text for text in moved_file_search)
 
     assert moved_subtree[0]["targetPath"] == "/archive/auto/tree"
-    assert len(chunk_calls_before_subtree_move) == 3
+    assert len(chunk_calls_before_subtree_move) == 4
     assert chunk_calls_after_subtree_move == chunk_calls_before_subtree_move
     assert kb_root_after_subtree_move.status_code == 200
     assert archive_root_list.status_code == 200
@@ -2356,6 +2379,10 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
     assert "/archive/auto/tree" in _list_dir_entry_names(archive_auto_list)
     assert "(/archive/auto/tree/sub/one.md)" in subtree_one_read
     assert "(/archive/auto/tree/sub/two.md)" in subtree_two_read
+    assert any(
+        item["filePath"].endswith("archive/auto/tree/sub/indexed.md")
+        for item in tree_index_search_items
+    )
     assert "byqa-ref://" not in subtree_one_read
     assert "byqa-ref://" not in subtree_two_read
     assert any("(/archive/auto/tree/sub/one.md)" in text for text in subtree_one_search)
@@ -2372,6 +2399,10 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
     assert "/new/source" in _list_dir_entry_names(new_list)
     assert "/new/source/path" in _list_dir_entry_names(new_source_root_list)
     assert "/new/source/path/source.md" in _list_dir_entry_names(new_source_path_list)
+    assert any(
+        item["filePath"].endswith("new/source/path/source.md")
+        for item in moved_source_search_items
+    )
     assert "(missing.md)" in moved_source_read
     assert "/new/source/path/missing.md" not in moved_source_read
     assert "(/pending-source/missing.md)" in moved_source_after_old_target_upload

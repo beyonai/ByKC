@@ -65,7 +65,7 @@
 | `POST` | `/api/v1/knowledgeItems/import` | 上传文档 |
 | `POST` | `/api/v1/knowledgeItems/delete` | 删除文档 |
 | `POST` | `/api/v1/knowledgeItems/move` | 移动文件或目录 |
-| `POST` | `/api/v1/knowledgeItems/references` | 查询引用指定文件或路径的 Markdown 来源文件；兼容别名 `/api/v1/knowledge-items/references` |
+| `POST` | `/api/v1/knowledgeItems/references` | 查询指定文件的 Markdown 引用关系；兼容别名 `/api/v1/knowledge-items/references` |
 | `POST` | `/api/v1/listDir` | 获取目录内容 |
 | `POST` | `/api/v1/glob` | 按路径模式匹配 |
 | `POST` | `/api/v1/readFile` | 读取文件内容 |
@@ -643,22 +643,31 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
 
 ### `POST /api/v1/knowledgeItems/references`
 
-查询指定文件或路径的 Markdown 反向引用，即“谁引用了这个文件/路径”。兼容别名：`POST /api/v1/knowledge-items/references`。
+查询指定文件的 Markdown 引用关系。兼容别名：`POST /api/v1/knowledge-items/references`。
 
 请求体：`application/json`
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `knCode` | string | 是 | 知识库编码 |
-| `targetPath` | string | 是（二选一） | 被引用的目标文件路径，以 `/` 开头，不包括知识库名称 |
-| `filePath` | string | 是（二选一） | `targetPath` 的兼容别名；二者都填写时以 `targetPath` 为准，解析后使用同一个内部字段 `target_path` |
+| `filePath` | string | 是 | 查询对象文件路径，以 `/` 开头，不包括知识库名称 |
+| `direction` | string | 否 | 查询方向：`inbound`、`outbound`、`all`；默认 `inbound` |
+
+`direction` 语义：
+
+- `inbound`：查询“谁引用了 `filePath`”。
+- `outbound`：查询“`filePath` 引用了谁”。
+- `all`：同时返回 inbound 和 outbound。
+
+响应体固定包含 `inbound` 与 `outbound` 两个数组；未被本次 `direction` 请求的方向返回空数组。
 
 请求示例：
 
 ```json
 {
   "knCode": "1",
-  "targetPath": "/制度/人事/附件/请假单模板.docx"
+  "filePath": "/制度/人事/附件/请假单模板.docx",
+  "direction": "all"
 }
 ```
 
@@ -669,7 +678,7 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
   "resultCode": "0",
   "resultMsg": "success",
   "resultObject": {
-    "data": [
+    "inbound": [
       {
         "sourcePath": "/制度/人事/请假制度.md",
         "originalTarget": "./附件/请假单模板.docx",
@@ -677,12 +686,21 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
         "targetPath": "/制度/人事/附件/请假单模板.docx",
         "status": "resolved"
       }
+    ],
+    "outbound": [
+      {
+        "sourcePath": "/制度/人事/附件/请假单模板.docx",
+        "originalTarget": "../员工手册.md#请假",
+        "targetSuffix": "#请假",
+        "targetPath": "/制度/员工手册.md",
+        "status": "resolved"
+      }
     ]
   }
 }
 ```
 
-`data` 元素字段：
+`inbound` 元素字段：
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -690,14 +708,18 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
 | `originalTarget` | string | 来源 Markdown 中原始写入的引用目标 |
 | `targetSuffix` | string | 引用目标中的后缀片段；无后缀时为空字符串 |
 | `targetPath` | string | 当前匹配到的目标路径；broken 引用返回删除时记录的目标路径 |
-| `status` | string | 引用状态，当前返回 `resolved` 或 `broken` |
+| `status` | string | 引用状态，可能为 `resolved`、`unresolved` 或 `broken` |
+
+`outbound` 元素字段同 inbound；其中 `sourcePath` 固定为本次请求的 `filePath`。
 
 查询语义：
 
-- 当 `targetPath`/`filePath` 指向当前存在的文件时，按当前文件对应的 target id 查询 `resolved` 引用；目标文件移动后仍可通过当前路径查询。
-- 当目标文件已删除时，按删除时写入引用记录的 `target_path` 查询 `broken` 引用。
-- 默认不返回已删除 source 文件产生的引用。
-- 该接口只查询反向引用来源，不读取或修改 Markdown 内容。
+- `inbound` 且 `filePath` 指向当前存在的文件时，按当前文件对应的 target id 查询 `resolved` 引用；目标文件移动后仍可通过当前路径查询。
+- `inbound` 且目标文件尚未上传或已删除时，按引用表中的 `target_path` 查询 `unresolved` / `broken` 引用。
+- `outbound` 按 `filePath` 定位 source 文件，返回该 Markdown 文件中登记的可管理文件引用；resolved 引用的 `targetPath` 输出目标当前路径，unresolved / broken 引用输出引用表中的待匹配路径或删除前路径。
+- `all` 同时执行 inbound 与 outbound，并分别写入 `resultObject.inbound` 和 `resultObject.outbound`。
+- 默认不返回已删除 source 文件产生的引用；outbound 查询的 source 文件不存在或已删除时返回空数组。
+- 该接口只查询引用关系，不读取或修改 Markdown 内容。
 
 ## 目录与文件读取
 

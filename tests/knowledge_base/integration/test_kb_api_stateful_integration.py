@@ -378,7 +378,7 @@ def _reference_rows(
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["resultCode"] == "0", payload
-    return payload["resultObject"]["data"]
+    return payload["resultObject"]["inbound"]
 
 
 def _move_items(

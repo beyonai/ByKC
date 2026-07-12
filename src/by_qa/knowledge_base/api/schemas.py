@@ -339,7 +339,7 @@ class KnowledgeItemGlobRequest(BaseModel):
 
 
 class KnowledgeItemReferenceQueryRequest(BaseModel):
-    """Request body for querying inbound Markdown file references."""
+    """Request body for querying Markdown file reference relationships."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -347,24 +347,20 @@ class KnowledgeItemReferenceQueryRequest(BaseModel):
         min_length=1,
         validation_alias=AliasChoices("knCode", "kb_code"),
     )
-    target_path: str = Field(
+    file_path: str = Field(
         min_length=1,
-        validation_alias=AliasChoices(
-            "targetPath",
-            "filePath",
-            "target_path",
-            "file_path",
-        ),
+        validation_alias=AliasChoices("filePath", "file_path"),
     )
+    direction: Literal["inbound", "outbound", "all"] = "inbound"
 
     @model_validator(mode="after")
-    def validate_target_path(self) -> "KnowledgeItemReferenceQueryRequest":
-        self.target_path = _normalize_api_path(self.target_path, allow_root=False)
+    def validate_file_path(self) -> "KnowledgeItemReferenceQueryRequest":
+        self.file_path = _normalize_api_path(self.file_path, allow_root=False)
         return self
 
 
 class KnowledgeItemReferenceSource(BaseModel):
-    """Single inbound reference source row."""
+    """Single Markdown file reference relationship row."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -376,9 +372,10 @@ class KnowledgeItemReferenceSource(BaseModel):
 
 
 class KnowledgeItemReferenceQueryResponse(BaseModel):
-    """Business response for inbound reference queries."""
+    """Business response for file reference relationship queries."""
 
-    data: list[KnowledgeItemReferenceSource]
+    inbound: list[KnowledgeItemReferenceSource]
+    outbound: list[KnowledgeItemReferenceSource]
 
 
 class ReadFileRequest(BaseModel):

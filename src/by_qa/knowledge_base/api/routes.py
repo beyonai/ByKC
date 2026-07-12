@@ -883,17 +883,18 @@ def register_routes(
                 status_code=422,
             )
         logger.info(
-            "list_inbound_references request received: kb_code=%s, target_path=%s",
+            "list_inbound_references request received: kb_code=%s, file_path=%s, direction=%s",
             request.kb_code,
-            request.target_path,
+            request.file_path,
+            request.direction,
         )
         try:
             service = await get_knowledge_base_service()
             result = await service.list_inbound_references(request)
         except KnowledgeBaseConfigurationError as exc:
             logger.warning(
-                "list_inbound_references configuration failed: target_path=%s, error=%s",
-                request.target_path,
+                "list_inbound_references configuration failed: file_path=%s, error=%s",
+                request.file_path,
                 exc,
             )
             return _documented_error_response(
@@ -903,8 +904,8 @@ def register_routes(
             )
         except KnowledgeBaseValidationError as exc:
             logger.warning(
-                "list_inbound_references validation failed: target_path=%s, error=%s",
-                request.target_path,
+                "list_inbound_references validation failed: file_path=%s, error=%s",
+                request.file_path,
                 exc,
             )
             return _documented_error_response(
@@ -914,9 +915,9 @@ def register_routes(
             )
         except Exception as exc:
             logger.exception(
-                "list_inbound_references unexpected error: kb_code=%s, target_path=%s, error=%s",
+                "list_inbound_references unexpected error: kb_code=%s, file_path=%s, error=%s",
                 request.kb_code,
-                request.target_path,
+                request.file_path,
                 exc,
             )
             return _documented_error_response(
@@ -927,7 +928,10 @@ def register_routes(
 
         return _documented_success_response(
             result_object={
-                "data": [item.model_dump(by_alias=True) for item in result.data]
+                "inbound": [item.model_dump(by_alias=True) for item in result.inbound],
+                "outbound": [
+                    item.model_dump(by_alias=True) for item in result.outbound
+                ],
             }
         )
 

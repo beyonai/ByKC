@@ -1,4 +1,4 @@
-"""Tests for inbound Markdown reference queries."""
+"""Tests for Markdown reference relationship queries."""
 
 from __future__ import annotations
 
@@ -80,6 +80,16 @@ class FakeReferenceRepository:
         )
         return self.rows
 
+    async def list_by_source(
+        self,
+        cursor: Any,
+        *,
+        source_fs_entry_id: int,
+    ) -> list[dict[str, Any]]:
+        del cursor
+        self.calls.append({"source_fs_entry_id": source_fs_entry_id})
+        return self.rows
+
 
 class FakeSqlCursor:
     def __init__(self) -> None:
@@ -115,7 +125,7 @@ def _service(
 
 
 @pytest.mark.asyncio
-async def test_list_inbound_references_uses_live_target_fs_entry_id():
+async def test_reference_query_inbound_uses_live_target_fs_entry_id():
     service, connection, fs_repository, reference_repository = _service(
         target_row={"kid": 99, "virtual_path": "/docs/target.md"},
         reference_rows=[
@@ -133,11 +143,12 @@ async def test_list_inbound_references_uses_live_target_fs_entry_id():
     response = await service.list_inbound_references(
         KnowledgeItemReferenceQueryRequest(
             kb_code="kb-1",
-            target_path="/docs/target.md",
+            file_path="/docs/target.md",
+            direction="inbound",
         )
     )
 
-    assert response.data == [
+    assert response.inbound == [
         KnowledgeItemReferenceSource(
             source_path="/docs/source.md",
             original_target="../target.md",
@@ -146,6 +157,7 @@ async def test_list_inbound_references_uses_live_target_fs_entry_id():
             status="resolved",
         )
     ]
+    assert response.outbound == []
     assert fs_repository.calls == [
         {"knowledge_base_id": 7, "full_path": "docs/target.md"}
     ]
@@ -156,7 +168,7 @@ async def test_list_inbound_references_uses_live_target_fs_entry_id():
 
 
 @pytest.mark.asyncio
-async def test_list_inbound_references_uses_target_path_for_broken_rows():
+async def test_reference_query_inbound_uses_target_path_for_unresolved_and_broken_rows():
     service_parts = _service(
         target_row=None,
         reference_rows=[
@@ -176,13 +188,15 @@ async def test_list_inbound_references_uses_target_path_for_broken_rows():
     response = await service.list_inbound_references(
         KnowledgeItemReferenceQueryRequest(
             kb_code="kb-1",
-            target_path="/docs/deleted.md",
+            file_path="/docs/deleted.md",
+            direction="inbound",
         )
     )
 
-    assert response.data[0].source_path == "/docs/source.md"
-    assert response.data[0].target_path == "/docs/deleted.md"
-    assert response.data[0].status == "broken"
+    assert response.inbound[0].source_path == "/docs/source.md"
+    assert response.inbound[0].target_path == "/docs/deleted.md"
+    assert response.inbound[0].status == "broken"
+    assert response.outbound == []
     assert reference_repository.calls == [
         {
             "knowledge_base_id": 7,
@@ -193,7 +207,7 @@ async def test_list_inbound_references_uses_target_path_for_broken_rows():
 
 
 @pytest.mark.asyncio
-async def test_list_inbound_references_excludes_deleted_source_files():
+async def test_reference_query_inbound_excludes_deleted_source_files():
     service = _service(
         target_row={"kid": 99, "virtual_path": "/docs/target.md"},
         reference_rows=[
@@ -219,11 +233,102 @@ async def test_list_inbound_references_excludes_deleted_source_files():
     response = await service.list_inbound_references(
         KnowledgeItemReferenceQueryRequest(
             kb_code="kb-1",
-            target_path="/docs/target.md",
+            file_path="/docs/target.md",
+            direction="inbound",
         )
     )
 
-    assert [item.source_path for item in response.data] == ["/docs/live.md"]
+    assert [item.source_path for item in response.inbound] == ["/docs/live.md"]
+
+
+@pytest.mark.asyncio
+async def test_reference_query_outbound_uses_source_fs_entry_id():
+    service, connection, fs_repository, reference_repository = _service(
+        target_row={"kid": 88, "virtual_path": "/docs/source.md"},
+        reference_rows=[
+            {
+                "target_virtual_path": "/docs/target.md",
+                "target_is_deleted": False,
+                "original_target": "./target.md",
+                "target_suffix": "#section",
+                "target_path": None,
+                "status": "resolved",
+            },
+            {
+                "target_virtual_path": None,
+                "target_is_deleted": None,
+                "original_target": "./missing.md",
+                "target_suffix": "",
+                "target_path": "/docs/missing.md",
+                "status": "unresolved",
+            },
+        ],
+    )
+
+    response = await service.list_inbound_references(
+        KnowledgeItemReferenceQueryRequest(
+            kb_code="kb-1",
+            file_path="/docs/source.md",
+            direction="outbound",
+        )
+    )
+
+    assert response.inbound == []
+    assert response.outbound == [
+        KnowledgeItemReferenceSource(
+            source_path="/docs/source.md",
+            original_target="./target.md",
+            target_suffix="#section",
+            target_path="/docs/target.md",
+            status="resolved",
+        ),
+        KnowledgeItemReferenceSource(
+            source_path="/docs/source.md",
+            original_target="./missing.md",
+            target_suffix="",
+            target_path="/docs/missing.md",
+            status="unresolved",
+        ),
+    ]
+    assert fs_repository.calls == [
+        {"knowledge_base_id": 7, "full_path": "docs/source.md"}
+    ]
+    assert reference_repository.calls == [{"source_fs_entry_id": 88}]
+    assert connection.closed is True
+
+
+@pytest.mark.asyncio
+async def test_reference_query_all_returns_inbound_and_outbound():
+    service, _, _, reference_repository = _service(
+        target_row={"kid": 99, "virtual_path": "/docs/file.md"},
+        reference_rows=[
+            {
+                "source_virtual_path": "/docs/source.md",
+                "source_is_deleted": False,
+                "target_virtual_path": "/docs/target.md",
+                "target_is_deleted": False,
+                "original_target": "./file.md",
+                "target_suffix": "",
+                "target_path": None,
+                "status": "resolved",
+            }
+        ],
+    )
+
+    response = await service.list_inbound_references(
+        KnowledgeItemReferenceQueryRequest(
+            kb_code="kb-1",
+            file_path="/docs/file.md",
+            direction="all",
+        )
+    )
+
+    assert len(response.inbound) == 1
+    assert len(response.outbound) == 1
+    assert reference_repository.calls == [
+        {"knowledge_base_id": 7, "target_fs_entry_id": 99, "target_path": None},
+        {"source_fs_entry_id": 99},
+    ]
 
 
 def test_references_route_returns_standard_success_envelope():
@@ -234,7 +339,7 @@ def test_references_route_returns_standard_success_envelope():
         async def list_inbound_references(self, request):
             self.requests.append(request)
             return KnowledgeItemReferenceQueryResponse(
-                data=[
+                inbound=[
                     KnowledgeItemReferenceSource(
                         source_path="/docs/source.md",
                         original_target="../target.md",
@@ -242,7 +347,8 @@ def test_references_route_returns_standard_success_envelope():
                         target_path="/docs/target.md",
                         status="resolved",
                     )
-                ]
+                ],
+                outbound=[],
             )
 
     service = FakeRouteService()
@@ -267,7 +373,11 @@ def test_references_route_returns_standard_success_envelope():
 
     response = client.post(
         "/api/v1/knowledgeItems/references",
-        json={"knCode": "kb-1", "targetPath": "/docs/target.md"},
+        json={
+            "knCode": "kb-1",
+            "filePath": "/docs/target.md",
+            "direction": "inbound",
+        },
     )
 
     assert response.status_code == 200
@@ -275,7 +385,7 @@ def test_references_route_returns_standard_success_envelope():
         "resultCode": "0",
         "resultMsg": "success",
         "resultObject": {
-            "data": [
+            "inbound": [
                 {
                     "sourcePath": "/docs/source.md",
                     "originalTarget": "../target.md",
@@ -283,18 +393,70 @@ def test_references_route_returns_standard_success_envelope():
                     "targetPath": "/docs/target.md",
                     "status": "resolved",
                 }
-            ]
+            ],
+            "outbound": [],
         },
     }
     assert service.requests[0].kb_code == "kb-1"
-    assert service.requests[0].target_path == "/docs/target.md"
+    assert service.requests[0].file_path == "/docs/target.md"
+    assert service.requests[0].direction == "inbound"
+
+
+def test_references_route_rejects_unsupported_direction():
+    app = FastAPI()
+
+    async def get_service():
+        raise AssertionError("service should not be resolved")
+
+    register_routes(
+        app,
+        get_knowledge_base_service=get_service,
+        get_knowledge_item_ingestion_service=get_service,
+        get_knowledge_item_search_service=get_service,
+        get_document_chunking_service=get_service,
+        get_metadata_search_service=get_service,
+        get_file_metadata_query_service=get_service,
+    )
+
+    response = TestClient(app).post(
+        "/api/v1/knowledgeItems/references",
+        json={"knCode": "kb-1", "filePath": "/docs/file.md", "direction": "sideways"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["resultCode"] == "-1"
+
+
+def test_references_route_rejects_legacy_target_path_without_file_path():
+    app = FastAPI()
+
+    async def get_service():
+        raise AssertionError("service should not be resolved")
+
+    register_routes(
+        app,
+        get_knowledge_base_service=get_service,
+        get_knowledge_item_ingestion_service=get_service,
+        get_knowledge_item_search_service=get_service,
+        get_document_chunking_service=get_service,
+        get_metadata_search_service=get_service,
+        get_file_metadata_query_service=get_service,
+    )
+
+    response = TestClient(app).post(
+        "/api/v1/knowledgeItems/references",
+        json={"knCode": "kb-1", "targetPath": "/docs/file.md"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["resultCode"] == "-1"
 
 
 def test_kebab_references_route_alias_is_supported():
     class FakeRouteService:
         async def list_inbound_references(self, request):
             del request
-            return KnowledgeItemReferenceQueryResponse(data=[])
+            return KnowledgeItemReferenceQueryResponse(inbound=[], outbound=[])
 
     app = FastAPI()
 
@@ -320,7 +482,7 @@ def test_kebab_references_route_alias_is_supported():
     )
 
     assert response.status_code == 200
-    assert response.json()["resultObject"] == {"data": []}
+    assert response.json()["resultObject"] == {"inbound": [], "outbound": []}
 
 
 @pytest.mark.asyncio
@@ -339,3 +501,20 @@ async def test_repository_default_source_query_excludes_deleted_source_files():
     assert "JOIN knowledge_fs_entry source" in normalized_sql
     assert "source.is_deleted = FALSE" in normalized_sql
     assert params == {"knowledge_base_id": 7, "target_fs_entry_id": 99}
+
+
+@pytest.mark.asyncio
+async def test_repository_path_query_includes_unresolved_and_broken_sources():
+    repo = KnowledgeFileReferenceRepository()
+    cursor = FakeSqlCursor()
+
+    await repo.list_sources_by_target(
+        cursor,
+        knowledge_base_id=7,
+        target_path="/docs/missing.md",
+    )
+
+    sql, params = cursor.executed[0]
+    normalized_sql = " ".join(sql.split())
+    assert "kfr.status IN ('unresolved', 'broken')" in normalized_sql
+    assert params == {"knowledge_base_id": 7, "target_path": "/docs/missing.md"}

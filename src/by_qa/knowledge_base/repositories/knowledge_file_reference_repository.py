@@ -304,7 +304,7 @@ class KnowledgeFileReferenceRepository:
         target_path: str | None = None,
         include_deleted_sources: bool = False,
     ) -> list[dict[str, Any]]:
-        """List source references for a live target id or broken target path."""
+        """List source references for a live target id or pending target path."""
         if (target_fs_entry_id is None) == (target_path is None):
             raise ValueError("provide exactly one of target_fs_entry_id or target_path")
 
@@ -333,7 +333,7 @@ class KnowledgeFileReferenceRepository:
                 WHERE kfr.knowledge_base_id = %(knowledge_base_id)s
                   AND kfr.target_fs_entry_id IS NULL
                   AND kfr.target_path = %(target_path)s
-                  AND kfr.status = 'broken'
+                  AND kfr.status IN ('unresolved', 'broken')
                   {source_filter}
                 ORDER BY kfr.kid
                 """,

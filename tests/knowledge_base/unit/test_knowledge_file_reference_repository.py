@@ -259,7 +259,7 @@ async def test_list_sources_by_target_supports_resolved_and_broken_lookup():
     assert broken_rows == [{"kid": 42}]
     broken_sql, broken_params = broken_cursor.executed[0]
     assert "target_path = %(target_path)s" in broken_sql
-    assert "status = 'broken'" in broken_sql
+    assert "status IN ('unresolved', 'broken')" in broken_sql
     assert broken_params == {"knowledge_base_id": 1, "target_path": "/docs/deleted.md"}
 
 

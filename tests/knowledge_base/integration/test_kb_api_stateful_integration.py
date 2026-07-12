@@ -17,6 +17,9 @@ from by_qa.knowledge_base.infrastructure.runtime import (
     build_knowledge_item_search_service,
 )
 from by_qa.knowledge_base.services.errors import KnowledgeBaseConfigurationError
+from by_qa.knowledge_build.services.document_chunking_service import (
+    DocumentChunkingService,
+)
 from by_qa.knowledge_common.exceptions import UnsupportedFileTypeError
 from by_qa.knowledge_common.schemas import KnowledgeItemChunkPayload
 
@@ -109,6 +112,31 @@ class _UnsupportedPngChunking(FakeDocumentChunkingService):
         if file_type == "png":
             raise UnsupportedFileTypeError("unsupported file type: png")
         return super().extract_text_from_file(file_bytes, file_type)
+
+
+class LocalEmbeddingDocumentChunkingService(DocumentChunkingService):
+    """Real splitter with deterministic local embeddings for integration tests."""
+
+    def __init__(
+        self,
+        *,
+        chunk_size: int,
+        chunk_overlap: int = 0,
+        embedding: list[float] | None = None,
+    ):
+        vector = embedding or _default_embedding_vector()
+        super().__init__(
+            embedding_base_url="https://embedding.example.com",
+            embedding_api_key="secret",
+            embedding_model_name="fake-embedding",
+            embedding_dimension=len(vector),
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+        )
+        self.embedding = vector
+
+    def _request_embeddings(self, texts: list[str]) -> list[list[float]]:
+        return [list(self.embedding) for _ in texts]
 
 
 class FakeEmbeddingQueryService:
@@ -332,6 +360,38 @@ def _read_file_data(client: TestClient, *, kb_code: str, file_path: str) -> str:
     return payload["resultObject"]["data"]
 
 
+def _read_file_window_data(
+    client: TestClient,
+    *,
+    kb_code: str,
+    file_path: str,
+    start_line: int,
+    end_line: int,
+) -> str:
+    response = client.post(
+        "/api/v1/readFile",
+        json={
+            "knCode": kb_code,
+            "filePath": file_path,
+            "startLine": start_line,
+            "endLine": end_line,
+        },
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["resultCode"] == "0", payload
+    return payload["resultObject"]["data"]
+
+
+def _download_file_bytes(client: TestClient, *, kb_code: str, file_path: str) -> bytes:
+    response = client.post(
+        "/api/v1/downloadFile",
+        json={"knCode": kb_code, "filePath": file_path},
+    )
+    assert response.status_code == 200, response.text
+    return response.content
+
+
 def _search_items(
     client: TestClient,
     *,
@@ -379,6 +439,23 @@ def _reference_rows(
     payload = response.json()
     assert payload["resultCode"] == "0", payload
     return payload["resultObject"]["inbound"]
+
+
+def _reference_result(
+    client: TestClient,
+    *,
+    kb_code: str,
+    file_path: str,
+    direction: str,
+) -> dict:
+    response = client.post(
+        "/api/v1/knowledgeItems/references",
+        json={"knCode": kb_code, "filePath": file_path, "direction": direction},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["resultCode"] == "0", payload
+    return payload["resultObject"]
 
 
 def _move_items(
@@ -2409,6 +2486,470 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
     assert "/new/source/path/missing.md" not in moved_source_after_old_target_upload
     assert "byqa-ref://" not in moved_source_read
     assert "byqa-ref://" not in moved_source_after_old_target_upload
+
+
+@pytest.mark.integration
+async def test_markdown_reference_downloads_resolve_across_move_delete_and_restore(
+    monkeypatch, tmp_path
+):
+    """downloadFile should resolve stable Markdown reference tokens like readFile."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(monkeypatch, EchoDocumentChunkingService())
+    await _set_search_service(monkeypatch, settings)
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/download/target/b.md",
+            file_content=b"# b\n",
+        )
+        _upload_and_build_file(
+            client,
+            kb_code=kb_code,
+            file_path="/download/source/a.md",
+            file_content=b"download [b](../target/b.md)\ndownload unique alpha\n",
+        )
+        resolved_download = _download_file_bytes(
+            client, kb_code=kb_code, file_path="/download/source/a.md"
+        ).decode("utf-8")
+
+        _move_items(
+            client,
+            kb_code=kb_code,
+            source_path=["/download/target/b.md"],
+            target_file_path="/download/moved/b.md",
+        )
+        moved_download = _download_file_bytes(
+            client, kb_code=kb_code, file_path="/download/source/a.md"
+        ).decode("utf-8")
+
+        delete_target = client.post(
+            "/api/v1/knowledgeItems/delete",
+            json={"knCode": kb_code, "filePath": "/download/moved/b.md"},
+        )
+        broken_download = _download_file_bytes(
+            client, kb_code=kb_code, file_path="/download/source/a.md"
+        ).decode("utf-8")
+
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/download/moved/b.md",
+            file_content=b"# restored\n",
+        )
+        restored_download = _download_file_bytes(
+            client, kb_code=kb_code, file_path="/download/source/a.md"
+        ).decode("utf-8")
+
+    assert delete_target.status_code == 200
+    assert "(/download/target/b.md)" in resolved_download
+    assert "(/download/moved/b.md)" in moved_download
+    assert "(../target/b.md)" in broken_download
+    assert "(/download/moved/b.md)" in restored_download
+    assert "byqa-ref://" not in resolved_download
+    assert "byqa-ref://" not in moved_download
+    assert "byqa-ref://" not in broken_download
+    assert "byqa-ref://" not in restored_download
+
+
+@pytest.mark.integration
+async def test_markdown_reference_suffix_is_preserved_once_across_read_search_download(
+    monkeypatch, tmp_path
+):
+    """query/fragment suffixes should resolve once and fall back to original target."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(monkeypatch, EchoDocumentChunkingService())
+    await _set_search_service(monkeypatch, settings)
+
+    original_target = "b.md?download=1#intro"
+    resolved_target = "/suffix/b.md?download=1#intro"
+    moved_target = "/suffix/moved/b.md?download=1#intro"
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/suffix/b.md",
+            file_content=b"# intro\n",
+        )
+        _upload_and_build_file(
+            client,
+            kb_code=kb_code,
+            file_path="/suffix/a.md",
+            file_content=(b"suffix [b](b.md?download=1#intro)\nsuffix unique alpha\n"),
+        )
+        resolved_read = _read_file_data(
+            client, kb_code=kb_code, file_path="/suffix/a.md"
+        )
+        resolved_download = _download_file_bytes(
+            client, kb_code=kb_code, file_path="/suffix/a.md"
+        ).decode("utf-8")
+        resolved_search = _search_chunk_texts(
+            client, kb_code=kb_code, query="suffix unique alpha"
+        )
+        resolved_refs = _reference_rows(
+            client, kb_code=kb_code, target_path="/suffix/b.md"
+        )
+
+        _move_items(
+            client,
+            kb_code=kb_code,
+            source_path=["/suffix/b.md"],
+            target_file_path="/suffix/moved/b.md",
+        )
+        moved_read = _read_file_data(client, kb_code=kb_code, file_path="/suffix/a.md")
+
+        delete_target = client.post(
+            "/api/v1/knowledgeItems/delete",
+            json={"knCode": kb_code, "filePath": "/suffix/moved/b.md"},
+        )
+        broken_read = _read_file_data(client, kb_code=kb_code, file_path="/suffix/a.md")
+        broken_download = _download_file_bytes(
+            client, kb_code=kb_code, file_path="/suffix/a.md"
+        ).decode("utf-8")
+
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/suffix/moved/b.md",
+            file_content=b"# restored intro\n",
+        )
+        restored_read = _read_file_data(
+            client, kb_code=kb_code, file_path="/suffix/a.md"
+        )
+
+    assert delete_target.status_code == 200
+    assert f"({resolved_target})" in resolved_read
+    assert f"({resolved_target})" in resolved_download
+    assert any(f"({resolved_target})" in text for text in resolved_search)
+    assert resolved_refs[0]["originalTarget"] == original_target
+    assert resolved_refs[0]["targetSuffix"] == "?download=1#intro"
+    assert resolved_refs[0]["targetPath"] == "/suffix/b.md"
+    assert f"({moved_target})" in moved_read
+    assert f"({original_target})" in broken_read
+    assert f"({original_target})" in broken_download
+    assert "?download=1#intro?download=1#intro" not in broken_read
+    assert f"({moved_target})" in restored_read
+    assert "byqa-ref://" not in resolved_read
+    assert "byqa-ref://" not in broken_read
+    assert "byqa-ref://" not in restored_read
+
+
+@pytest.mark.integration
+def test_read_file_line_window_slices_before_resolving_markdown_references(
+    monkeypatch, tmp_path
+):
+    """Line-window readFile should resolve tokens only after slicing the sidecar."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(monkeypatch, EchoDocumentChunkingService())
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/window/b.md",
+            file_content=b"# b\n",
+        )
+        _upload_and_build_file(
+            client,
+            kb_code=kb_code,
+            file_path="/window/a.md",
+            file_content=b"line 1\nsee [b](b.md)\nline 3\n",
+        )
+        line_two = _read_file_window_data(
+            client,
+            kb_code=kb_code,
+            file_path="/window/a.md",
+            start_line=2,
+            end_line=2,
+        )
+
+    assert line_two.strip() == "see [b](/window/b.md)"
+    assert "line 1" not in line_two
+    assert "line 3" not in line_two
+    assert "byqa-ref://" not in line_two
+
+
+@pytest.mark.integration
+def test_reference_query_filters_deleted_source_and_supports_outbound_and_all(
+    monkeypatch, tmp_path
+):
+    """references should hide deleted source rows and expose outbound/all directions."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(monkeypatch, EchoDocumentChunkingService())
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/refs-api/target.md",
+            file_content=b"# target\n",
+        )
+        _upload_and_build_file(
+            client,
+            kb_code=kb_code,
+            file_path="/refs-api/source.md",
+            file_content=(
+                b"known [target](target.md#part)\n"
+                b"missing [ghost](ghost.md)\n"
+                b"refs api unique\n"
+            ),
+        )
+        all_before_delete = _reference_result(
+            client,
+            kb_code=kb_code,
+            file_path="/refs-api/source.md",
+            direction="all",
+        )
+        outbound = _reference_result(
+            client,
+            kb_code=kb_code,
+            file_path="/refs-api/source.md",
+            direction="outbound",
+        )
+        inbound_before_delete = _reference_result(
+            client,
+            kb_code=kb_code,
+            file_path="/refs-api/target.md",
+            direction="inbound",
+        )
+
+        delete_source = client.post(
+            "/api/v1/knowledgeItems/delete",
+            json={"knCode": kb_code, "filePath": "/refs-api/source.md"},
+        )
+        inbound_after_delete = _reference_result(
+            client,
+            kb_code=kb_code,
+            file_path="/refs-api/target.md",
+            direction="inbound",
+        )
+        outbound_after_delete = _reference_result(
+            client,
+            kb_code=kb_code,
+            file_path="/refs-api/source.md",
+            direction="outbound",
+        )
+
+    assert delete_source.status_code == 200
+    assert all_before_delete["inbound"] == []
+    assert [item["status"] for item in all_before_delete["outbound"]] == [
+        "resolved",
+        "unresolved",
+    ]
+    assert outbound["inbound"] == []
+    assert outbound["outbound"][0]["sourcePath"] == "/refs-api/source.md"
+    assert outbound["outbound"][0]["targetPath"] == "/refs-api/target.md"
+    assert outbound["outbound"][0]["targetSuffix"] == "#part"
+    assert outbound["outbound"][1]["targetPath"] == "/refs-api/ghost.md"
+    assert inbound_before_delete["inbound"][0]["sourcePath"] == "/refs-api/source.md"
+    assert inbound_after_delete["inbound"] == []
+    assert outbound_after_delete["outbound"] == []
+
+
+@pytest.mark.integration
+def test_directory_markdown_links_are_not_recorded_as_stable_file_references(
+    monkeypatch, tmp_path
+):
+    """Directory targets are intentionally left as original Markdown links."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(monkeypatch, EchoDocumentChunkingService())
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+        _create_directory(client, kb_code=kb_code, directory_path="/dir-link/assets")
+        _upload_and_build_file(
+            client,
+            kb_code=kb_code,
+            file_path="/dir-link/source.md",
+            file_content=b"see [assets](assets)\ndir link unique\n",
+        )
+        read_before_move = _read_file_data(
+            client, kb_code=kb_code, file_path="/dir-link/source.md"
+        )
+        refs_before_move = _reference_result(
+            client,
+            kb_code=kb_code,
+            file_path="/dir-link/source.md",
+            direction="outbound",
+        )
+
+        _move_items(
+            client,
+            kb_code=kb_code,
+            source_path=["/dir-link/assets"],
+            target_directory_path="/dir-link/archive",
+        )
+        read_after_move = _read_file_data(
+            client, kb_code=kb_code, file_path="/dir-link/source.md"
+        )
+        refs_after_move = _reference_result(
+            client,
+            kb_code=kb_code,
+            file_path="/dir-link/source.md",
+            direction="outbound",
+        )
+
+    assert "(assets)" in read_before_move
+    assert "(assets)" in read_after_move
+    assert "/dir-link/archive/assets" not in read_after_move
+    assert refs_before_move["outbound"] == []
+    assert refs_after_move["outbound"] == []
+    assert "byqa-ref://" not in read_after_move
+
+
+@pytest.mark.integration
+async def test_batch_move_updates_multiple_reference_targets_and_invalid_move_is_atomic(
+    monkeypatch, tmp_path
+):
+    """Batch target moves should update all resolved refs; invalid moves should change none."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(monkeypatch, EchoDocumentChunkingService())
+    await _set_search_service(monkeypatch, settings)
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/batch-targets/a.md",
+            file_content=b"# a\n",
+        )
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/batch-targets/b.md",
+            file_content=b"# b\n",
+        )
+        _upload_and_build_file(
+            client,
+            kb_code=kb_code,
+            file_path="/batch-source/source.md",
+            file_content=(
+                b"a [a](/batch-targets/a.md)\n"
+                b"b [b](/batch-targets/b.md)\n"
+                b"batch move unique\n"
+            ),
+        )
+
+        moved = _move_items(
+            client,
+            kb_code=kb_code,
+            source_path=["/batch-targets/a.md", "/batch-targets/b.md"],
+            target_directory_path="/batch-archive/new",
+        )
+        moved_read = _read_file_data(
+            client, kb_code=kb_code, file_path="/batch-source/source.md"
+        )
+        moved_search = _search_chunk_texts(
+            client, kb_code=kb_code, query="batch move unique"
+        )
+
+        invalid_move = client.post(
+            "/api/v1/knowledgeItems/move",
+            json={
+                "knCode": kb_code,
+                "sourcePath": ["/batch-archive"],
+                "targetDirectoryPath": "/batch-archive/new/loop",
+            },
+        )
+        after_invalid_read = _read_file_data(
+            client, kb_code=kb_code, file_path="/batch-source/source.md"
+        )
+
+    assert [item["targetPath"] for item in moved] == [
+        "/batch-archive/new/a.md",
+        "/batch-archive/new/b.md",
+    ]
+    assert "(/batch-archive/new/a.md)" in moved_read
+    assert "(/batch-archive/new/b.md)" in moved_read
+    assert any("(/batch-archive/new/a.md)" in text for text in moved_search)
+    assert any("(/batch-archive/new/b.md)" in text for text in moved_search)
+    assert invalid_move.status_code == 200
+    assert invalid_move.json()["resultCode"] == "-1"
+    assert after_invalid_read == moved_read
+    assert "byqa-ref://" not in after_invalid_read
+
+
+@pytest.mark.integration
+async def test_reference_normalization_and_chunk_boundaries_do_not_leak_tokens(
+    monkeypatch, tmp_path
+):
+    """Stable refs should normalize paths and survive real chunk splitting."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch,
+        LocalEmbeddingDocumentChunkingService(chunk_size=20, chunk_overlap=0),
+    )
+    await _set_search_service(monkeypatch, settings)
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+
+        _upload_and_build_file(
+            client,
+            kb_code=kb_code,
+            file_path="/norm/source.md",
+            file_content=(
+                b"prefix [later](./b%20file.md#intro) suffix\n"
+                b"escape [bad](../../outside.md)\n"
+                b"normalization unique alpha\n"
+            ),
+        )
+        read_before_target = _read_file_data(
+            client, kb_code=kb_code, file_path="/norm/source.md"
+        )
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/norm/b file.md",
+            file_content=b"# intro\n",
+        )
+        read_after_target = _read_file_data(
+            client, kb_code=kb_code, file_path="/norm/source.md"
+        )
+        search_after_target = _search_chunk_texts(
+            client, kb_code=kb_code, query="normalization unique alpha"
+        )
+        outbound_refs = _reference_result(
+            client,
+            kb_code=kb_code,
+            file_path="/norm/source.md",
+            direction="outbound",
+        )
+
+    assert "(./b%20file.md#intro)" in read_before_target
+    assert "(/norm/b file.md#intro)" in read_after_target
+    assert "(../../outside.md)" in read_after_target
+    assert any("(/norm/b file.md#intro)" in text for text in search_after_target)
+    assert all("byqa-ref://" not in text for text in search_after_target)
+    assert all("b%20file.md" not in text for text in search_after_target)
+    assert outbound_refs["outbound"] == [
+        {
+            "sourcePath": "/norm/source.md",
+            "originalTarget": "./b%20file.md#intro",
+            "targetSuffix": "#intro",
+            "targetPath": "/norm/b file.md",
+            "status": "resolved",
+        }
+    ]
 
 
 @pytest.mark.integration

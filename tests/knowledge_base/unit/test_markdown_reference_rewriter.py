@@ -59,14 +59,6 @@ class FakeFsEntryRepository:
         }
 
 
-async def _exists(found: set[str]):
-    async def _check(kb_code: str, paths: frozenset[str]) -> frozenset[str]:
-        del kb_code
-        return frozenset(path for path in paths if path in found)
-
-    return _check
-
-
 async def _rewrite(
     text: str,
     *,
@@ -163,46 +155,6 @@ async def test_protocol_relative_external_url_remains_original_and_creates_no_re
 
     assert out == src
     assert reference_repository.rows == []
-
-
-async def test_legacy_rewrite_preserves_absolute_path_behavior_for_existing_target():
-    rewriter = MarkdownReferenceRewriter(
-        exists_check=await _exists({"/docs/p/images/x.png"})
-    )
-
-    out = await rewriter.rewrite(
-        "see ![alt](images/x.png) here",
-        "/docs/p",
-        "kb1",
-    )
-
-    assert out == "see ![alt](/docs/p/images/x.png) here"
-
-
-async def test_legacy_rewrite_leaves_missing_target_original():
-    rewriter = MarkdownReferenceRewriter(exists_check=await _exists(set()))
-
-    out = await rewriter.rewrite(
-        "see ![alt](missing.png) here",
-        "/docs/p",
-        "kb1",
-    )
-
-    assert out == "see ![alt](missing.png) here"
-
-
-async def test_legacy_rewrite_leaves_protocol_relative_external_url_original():
-    rewriter = MarkdownReferenceRewriter(
-        exists_check=await _exists({"/cdn.example.com/image.png"})
-    )
-
-    out = await rewriter.rewrite(
-        "![cdn](//cdn.example.com/image.png)",
-        "/docs/p",
-        "kb1",
-    )
-
-    assert out == "![cdn](//cdn.example.com/image.png)"
 
 
 async def test_target_suffix_stored_separately_and_original_target_preserved():

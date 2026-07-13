@@ -1,5 +1,7 @@
 """Tests for knowledge-base API routes."""
 
+import io
+import zipfile
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
@@ -10,11 +12,19 @@ from by_qa.knowledge_base.api.schemas import (
     CreateKnowledgeBaseResponse,
     KnowledgeItemListDirItem,
     KnowledgeItemListDirResponse,
+    MoveKnowledgeItemResult,
+    MoveKnowledgeItemsResponse,
+    MoveKnowledgeItemsSummary,
     SearchHit,
 )
 from by_qa.knowledge_base.services.errors import (
     KnowledgeBaseConfigurationError,
     KnowledgeBaseValidationError,
+)
+from by_qa.knowledge_base.services.zip_batch_import_service import (
+    ImportItem,
+    ImportSummary,
+    ZipBatchImportResult,
 )
 from by_qa.main import app
 
@@ -30,6 +40,7 @@ class FakeKBService:
         self.file_to_markdown_calls = []
         self.file_build_task_requests = []
         self.file_build_task_runs = []
+        self.move_requests = []
 
     async def create_knowledge_base(self, request):
         self.created_requests.append(request)
@@ -57,6 +68,19 @@ class FakeKBService:
 
     async def delete_knowledge_item(self, request):
         return None
+
+    async def move_knowledge_items(self, request):
+        self.move_requests.append(request)
+        return MoveKnowledgeItemsResponse(
+            data=[
+                MoveKnowledgeItemResult(
+                    source_path=request.source_path[0],
+                    target_path="/archive/a.md",
+                    success=True,
+                )
+            ],
+            summary=MoveKnowledgeItemsSummary(total=1, succeeded=1, failed=0),
+        )
 
     async def upload_file(self, request):
         self.import_calls.append(request)
@@ -335,6 +359,59 @@ def test_create_knowledge_base_route_emits_summary_logs(monkeypatch):
         "create_knowledge_base service call succeeded: kb_code=7",
         "create_knowledge_base response ready: code=200, kb_code=7",
     ]
+
+
+def test_move_knowledge_items_route_delegates_to_service(monkeypatch):
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/knowledgeItems/move",
+        json={
+            "knCode": "1",
+            "sourcePath": ["/docs/a.md/"],
+            "targetFilePath": "/archive/a.md",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "resultCode": "0",
+        "resultMsg": "success",
+        "resultObject": {
+            "data": [
+                {
+                    "sourcePath": "/docs/a.md",
+                    "targetPath": "/archive/a.md",
+                    "success": True,
+                    "error": None,
+                }
+            ],
+            "summary": {"total": 1, "succeeded": 1, "failed": 0},
+        },
+    }
+    assert service.move_requests[0].source_path == ["/docs/a.md"]
+    assert service.move_requests[0].target_file_path == "/archive/a.md"
+
+
+def test_move_knowledge_items_route_maps_validation_error(monkeypatch):
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/knowledgeItems/move",
+        json={
+            "knCode": "1",
+            "sourcePath": ["/docs/a.md", "/docs/b.md"],
+            "targetFilePath": "/archive/a.md",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["resultCode"] == "-1"
+    assert body["resultMsg"] == "request validation failed"
+    assert service.move_requests == []
 
 
 def test_create_knowledge_base_route_maps_request_validation_to_documented_error(
@@ -1014,6 +1091,79 @@ def test_download_file_route_maps_validation_error_to_documented_error(monkeypat
         "resultCode": "-1",
         "resultMsg": "file not found: /missing.pdf",
         "resultObject": {},
+    }
+
+
+# ---------------------------------------------------------------------------
+# upload route tests
+# ---------------------------------------------------------------------------
+
+
+def test_upload_file_route_passes_markdown_bytes_to_ingestion(monkeypatch):
+    """Single-file upload should leave Markdown reference rewriting to ingestion."""
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/knowledgeItems/import",
+        data={
+            "knCode": "hr-policy",
+            "filePath": "/docs/readme.md",
+            "processFrontMatter": "true",
+        },
+        files={
+            "fileContent": (
+                "readme.md",
+                b"![later](./later.png)\n",
+                "text/markdown",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["resultCode"] == "0"
+    assert len(service.import_calls) == 1
+    assert service.import_calls[0].file_content == b"![later](./later.png)\n"
+
+
+def test_upload_zip_route_includes_post_process_errors(monkeypatch):
+    class FakeZipBatchImportService:
+        def __init__(self, *, ingestion_service):
+            self.ingestion_service = ingestion_service
+
+        async def import_zip(self, **_kwargs):
+            return ZipBatchImportResult(
+                data=[
+                    ImportItem(
+                        file_path="/docs/readme.md",
+                        success=True,
+                        error=None,
+                    )
+                ],
+                summary=ImportSummary(total=1, succeeded=1, failed=0),
+                post_process_errors=["batch reference compensation failed: forced"],
+            )
+
+    monkeypatch.setattr(routes, "ZipBatchImportService", FakeZipBatchImportService)
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as zf:
+        zf.writestr("readme.md", "# readme\n")
+
+    response = client.post(
+        "/api/v1/knowledgeItems/import",
+        data={"knCode": "hr-policy", "filePath": "/docs"},
+        files={"fileContent": ("docs.zip", payload.getvalue(), "application/zip")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["resultObject"] == {
+        "data": [
+            {"filePath": "/docs/readme.md", "success": True, "error": None},
+        ],
+        "summary": {"total": 1, "succeeded": 1, "failed": 0},
+        "postProcessErrors": ["batch reference compensation failed: forced"],
     }
 
 

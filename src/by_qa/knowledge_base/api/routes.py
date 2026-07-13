@@ -31,7 +31,9 @@ from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemDownloadRequest,
     KnowledgeItemGlobRequest,
     KnowledgeItemListDirRequest,
+    KnowledgeItemReferenceQueryRequest,
     KnowledgeItemUploadRequest,
+    MoveKnowledgeItemsRequest,
     ReadFileRequest,
     SearchRequest,
     UpdateDirectoryRequest,
@@ -44,9 +46,6 @@ from by_qa.knowledge_base.services.errors import (
 )
 from by_qa.knowledge_base.services.knowledge_item_ingestion_service import (
     convert_uploaded_file_to_markdown,
-)
-from by_qa.knowledge_base.services.markdown_reference_rewriter import (
-    MarkdownReferenceRewriter,
 )
 from by_qa.knowledge_base.services.zip_batch_import_service import ZipBatchImportService
 
@@ -563,14 +562,13 @@ def register_routes(
                     process_front_matter=request.process_front_matter,
                     file_description=request.file_description,
                 )
-                return _documented_success_response(
-                    result_object={
-                        "data": [
-                            item.model_dump(by_alias=True) for item in result.data
-                        ],
-                        "summary": result.summary.model_dump(by_alias=True),
-                    }
-                )
+                result_object = {
+                    "data": [item.model_dump(by_alias=True) for item in result.data],
+                    "summary": result.summary.model_dump(by_alias=True),
+                }
+                if result.post_process_errors:
+                    result_object["postProcessErrors"] = result.post_process_errors
+                return _documented_success_response(result_object=result_object)
             # single file
             file_path_norm = "/" + request.file_path.strip("/")
             segments = [s for s in file_path_norm.split("/") if s]
@@ -578,16 +576,7 @@ def register_routes(
                 return _documented_error_response(
                     result_msg="unsafe path", result_object={}, status_code=422
                 )
-            content = request.file_content
-            if file_path_norm.lower().endswith((".md", ".markdown")):
-                rewriter = MarkdownReferenceRewriter(exists_check=service.files_exist)
-                current_dir = "/".join(file_path_norm.split("/")[:-1]) or "/"
-                rewritten = await rewriter.rewrite(
-                    content.decode("utf-8"), current_dir, request.kb_code
-                )
-                content = rewritten.encode("utf-8")
-            single_request = request.model_copy(update={"file_content": content})
-            await service.upload_file(single_request)
+            await service.upload_file(request)
             return _documented_success_response(
                 result_object={
                     "data": [
@@ -669,6 +658,56 @@ def register_routes(
                 status_code=500,
             )
         return _documented_success_response(result_object={})
+
+    @app.post("/api/v1/knowledgeItems/move")
+    @app.post("/api/v1/knowledge-items/move")
+    async def move_knowledge_items(body: dict[str, Any] = Body(...)):
+        try:
+            request = MoveKnowledgeItemsRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        logger.info(
+            "move_knowledge_items request received: kb_code=%s, source_count=%s",
+            request.kb_code,
+            len(request.source_path),
+        )
+        try:
+            service = await get_knowledge_base_service()
+            result = await service.move_knowledge_items(request)
+        except KnowledgeBaseConfigurationError as exc:
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=503,
+            )
+        except KnowledgeBaseValidationError as exc:
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=422,
+            )
+        except Exception as exc:
+            logger.exception(
+                "move_knowledge_items unexpected error: kb_code=%s, error=%s",
+                request.kb_code,
+                exc,
+            )
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error",
+                result_object={},
+                status_code=500,
+            )
+
+        result_object = (
+            result.model_dump(by_alias=True)
+            if hasattr(result, "model_dump")
+            else result
+        )
+        return _documented_success_response(result_object=result_object)
 
     @app.post("/api/v1/fileToMarkdownIndex")
     async def file_to_markdown_index(
@@ -830,6 +869,70 @@ def register_routes(
         )
         return _documented_success_response(
             result_object={"data": [item.model_dump(by_alias=True) for item in items]}
+        )
+
+    @app.post("/api/v1/knowledgeItems/references")
+    @app.post("/api/v1/knowledge-items/references")
+    async def list_inbound_references(body: dict[str, Any] = Body(...)):
+        try:
+            request = KnowledgeItemReferenceQueryRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        logger.info(
+            "list_inbound_references request received: kb_code=%s, file_path=%s, direction=%s",
+            request.kb_code,
+            request.file_path,
+            request.direction,
+        )
+        try:
+            service = await get_knowledge_base_service()
+            result = await service.list_inbound_references(request)
+        except KnowledgeBaseConfigurationError as exc:
+            logger.warning(
+                "list_inbound_references configuration failed: file_path=%s, error=%s",
+                request.file_path,
+                exc,
+            )
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=503,
+            )
+        except KnowledgeBaseValidationError as exc:
+            logger.warning(
+                "list_inbound_references validation failed: file_path=%s, error=%s",
+                request.file_path,
+                exc,
+            )
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=422,
+            )
+        except Exception as exc:
+            logger.exception(
+                "list_inbound_references unexpected error: kb_code=%s, file_path=%s, error=%s",
+                request.kb_code,
+                request.file_path,
+                exc,
+            )
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error",
+                result_object={},
+                status_code=500,
+            )
+
+        return _documented_success_response(
+            result_object={
+                "inbound": [item.model_dump(by_alias=True) for item in result.inbound],
+                "outbound": [
+                    item.model_dump(by_alias=True) for item in result.outbound
+                ],
+            }
         )
 
     @app.post("/api/v1/listDir")

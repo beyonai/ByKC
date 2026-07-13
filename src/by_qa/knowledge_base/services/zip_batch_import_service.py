@@ -2,9 +2,10 @@
 """Batch import a zip archive into a knowledge base directory.
 
 Two-phase concurrent upload: non-markdown files first (phase 1), then a
-barrier, then markdown files (phase 2) after rewriting their image/link
-references to KB-absolute paths. For zip uploads, an already-existing file
-is soft-deleted before re-upload (overwrite semantics).
+barrier, then markdown files (phase 2). Markdown reference tokenization is
+owned by the ingestion service so zip and single-file uploads share the same
+transactional behavior. For zip uploads, an already-existing file is
+soft-deleted before re-upload (overwrite semantics).
 """
 
 from __future__ import annotations
@@ -14,15 +15,14 @@ import io
 import logging
 import zipfile
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from by_qa.knowledge_base.api.schemas import (
     DeleteKnowledgeItemRequest,
     KnowledgeItemUploadRequest,
-)
-from by_qa.knowledge_base.services.markdown_reference_rewriter import (
-    MarkdownReferenceRewriter,
 )
 from by_qa.knowledge_common.kb_path_utils import normalize_kb_path
 
@@ -58,6 +58,13 @@ class ImportSummary(BaseModel):
 class ZipBatchImportResult:
     data: list[ImportItem]
     summary: ImportSummary
+    post_process_errors: list[str] = dataclass_field(default_factory=list)
+
+
+@dataclass
+class _ImportedItem:
+    item: ImportItem
+    upload_row: dict[str, Any] | None = None
 
 
 def _is_junk_segment(seg: str) -> bool:
@@ -108,7 +115,7 @@ def _resolve_within_target(target_dir: str, name: str) -> str | None:
 
 @dataclass
 class ZipBatchImportService:
-    ingestion_service: object
+    ingestion_service: Any
     max_concurrency: int = 8
 
     async def import_zip(
@@ -149,62 +156,44 @@ class ZipBatchImportService:
             seen.add(resolved)
             (md if name.lower().endswith(_MD_SUFFIXES) else non_md).append((name, data))
 
-        # All resolved paths in this batch. A reference to a sibling file that is
-        # also in the zip (including md->md) is considered to exist even before
-        # that file is uploaded, so concurrent phase-2 md uploads resolve
-        # intra-batch references regardless of upload order.
-        batch_paths: set[str] = set()
-        for name, _ in non_md + md:
-            resolved = _resolve_within_target(normalized_target, name)
-            if resolved is not None:
-                batch_paths.add(resolved)
-
         limit = max(1, max_concurrency or self.max_concurrency)
         sem = asyncio.Semaphore(limit)
 
         # Phase 1: non-md concurrent.
-        non_md_results = await self._run_phase(
+        non_md_imports = await self._run_phase(
             non_md,
             sem=sem,
             kb_code=kb_code,
             target_dir=normalized_target,
             process_front_matter=process_front_matter,
             file_description=file_description,
-            rewriter=None,
         )
 
-        # Drop failed phase-1 paths from batch_paths so md references to a
-        # non-md sibling that failed to upload are not rewritten to a dangling
-        # KB-absolute path.
-        for item in non_md_results:
-            if not item.success and item.file_path in batch_paths:
-                batch_paths.discard(item.file_path)
-
-        # Now construct the rewriter with the batch-aware closure reflecting
-        # phase-1 successes.
-        async def exists_check(kb_code_: str, paths: frozenset[str]) -> frozenset[str]:
-            in_batch = frozenset(p for p in paths if p in batch_paths)
-            rest = paths - in_batch
-            if not rest:
-                return in_batch
-            return in_batch | frozenset(
-                await self.ingestion_service.files_exist(kb_code_, rest)
-            )
-
-        rewriter = MarkdownReferenceRewriter(exists_check=exists_check)
-
         # Phase 2: md concurrent after barrier.
-        md_results = await self._run_phase(
+        md_imports = await self._run_phase(
             md,
             sem=sem,
             kb_code=kb_code,
             target_dir=normalized_target,
             process_front_matter=process_front_matter,
             file_description=file_description,
-            rewriter=rewriter,
         )
 
-        results = list(non_md_results) + list(md_results) + duplicate_results
+        imports = list(non_md_imports) + list(md_imports)
+        results = [uploaded.item for uploaded in imports] + duplicate_results
+        upload_rows = [
+            uploaded.upload_row
+            for uploaded in imports
+            if uploaded.item.success and uploaded.upload_row is not None
+        ]
+        post_process_errors: list[str] = []
+        compensation_failure = await self._resolve_pending_references_after_batch(
+            kb_code=kb_code,
+            file_paths=[item.file_path for item in results if item.success],
+            uploaded_rows=upload_rows,
+        )
+        if compensation_failure is not None:
+            post_process_errors.append(compensation_failure)
         succeeded = sum(1 for r in results if r.success)
         return ZipBatchImportResult(
             data=results,
@@ -213,6 +202,7 @@ class ZipBatchImportService:
                 succeeded=succeeded,
                 failed=len(results) - succeeded,
             ),
+            post_process_errors=post_process_errors,
         )
 
     async def _run_phase(
@@ -224,9 +214,8 @@ class ZipBatchImportService:
         target_dir: str,
         process_front_matter: bool,
         file_description: str | None,
-        rewriter: MarkdownReferenceRewriter | None,
-    ) -> list[ImportItem]:
-        async def one(name: str, data: bytes) -> ImportItem:
+    ) -> list[_ImportedItem]:
+        async def one(name: str, data: bytes) -> _ImportedItem:
             async with sem:
                 return await self._import_one(
                     kb_code=kb_code,
@@ -235,10 +224,31 @@ class ZipBatchImportService:
                     data=data,
                     process_front_matter=process_front_matter,
                     file_description=file_description,
-                    rewriter=rewriter,
                 )
 
         return await asyncio.gather(*(one(n, d) for n, d in group))
+
+    async def _resolve_pending_references_after_batch(
+        self,
+        *,
+        kb_code: str,
+        file_paths: list[str],
+        uploaded_rows: list[dict[str, Any]],
+    ) -> str | None:
+        if not file_paths and not uploaded_rows:
+            return None
+        try:
+            await self.ingestion_service.resolve_pending_references_for_paths(
+                kb_code=kb_code,
+                file_paths=file_paths,
+                uploaded_rows=uploaded_rows or None,
+            )
+        except Exception as exc:
+            logger.exception(
+                "zip batch reference compensation failed: kb_code=%s", kb_code
+            )
+            return f"batch reference compensation failed: {exc}"
+        return None
 
     def _extract_entries(self, zip_bytes: bytes) -> list[tuple[str, bytes]]:
         try:
@@ -288,25 +298,21 @@ class ZipBatchImportService:
         data: bytes,
         process_front_matter: bool,
         file_description: str | None,
-        rewriter: MarkdownReferenceRewriter | None,
-    ) -> ImportItem:
+    ) -> _ImportedItem:
         resolved = _resolve_within_target(target_dir, name)
         if resolved is None:
             reported = "/" + "/".join(
                 p for p in (target_dir.split("/") + name.split("/")) if p
             )
-            return ImportItem(file_path=reported, success=False, error="unsafe path")
+            return _ImportedItem(
+                item=ImportItem(file_path=reported, success=False, error="unsafe path")
+            )
         file_path = resolved
         try:
-            # Prepare content BEFORE deleting the existing file: a malformed md
-            # (UnicodeDecodeError) or rewrite failure must NOT lose the original.
-            content = data
+            # Validate markdown bytes BEFORE deleting the existing file: a
+            # malformed md (UnicodeDecodeError) must NOT lose the original.
             if name.lower().endswith(_MD_SUFFIXES):
-                current_dir = "/".join(resolved.split("/")[:-1]) or "/"
-                rewritten = await rewriter.rewrite(
-                    data.decode("utf-8"), current_dir, kb_code
-                )
-                content = rewritten.encode("utf-8")
+                data.decode("utf-8")
             if await self.ingestion_service.file_exists(kb_code, file_path):
                 await self.ingestion_service.delete_knowledge_item(
                     DeleteKnowledgeItemRequest(kb_code=kb_code, file_path=file_path)
@@ -315,11 +321,16 @@ class ZipBatchImportService:
                 kb_code=kb_code,
                 file_path=file_path,
                 file_description=file_description,
-                file_content=content,
+                file_content=data,
                 process_front_matter=process_front_matter,
             )
-            await self.ingestion_service.upload_file(request)
-            return ImportItem(file_path=file_path, success=True, error=None)
+            upload_row = await self.ingestion_service.upload_file(request)
+            return _ImportedItem(
+                item=ImportItem(file_path=file_path, success=True, error=None),
+                upload_row=dict(upload_row) if isinstance(upload_row, dict) else None,
+            )
         except Exception as exc:
             logger.warning("zip batch import failed: path=%s error=%s", file_path, exc)
-            return ImportItem(file_path=file_path, success=False, error=str(exc))
+            return _ImportedItem(
+                item=ImportItem(file_path=file_path, success=False, error=str(exc))
+            )

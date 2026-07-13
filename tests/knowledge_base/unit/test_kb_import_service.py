@@ -257,6 +257,7 @@ class FakeKnowledgeFsEntryRepository:
             },
         }
         self.child_entry_by_parent_and_name = {}
+        self.file_entries_in_subtree = []
         self.directory_children = [
             {
                 "kb_code": "hr-policy",
@@ -541,6 +542,20 @@ class FakeKnowledgeFsEntryRepository:
             (knowledge_base_id, parent_entry_id, name)
         )
 
+    async def list_file_entries_in_subtree(
+        self, cursor, *, knowledge_base_id, root_fs_entry_id
+    ):
+        self.calls.append(
+            (
+                "list_file_entries_in_subtree",
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "root_fs_entry_id": root_fs_entry_id,
+                },
+            )
+        )
+        return list(self.file_entries_in_subtree)
+
     async def get_virtual_path_by_entry_id(self, cursor, *, entry_id):
         self.calls.append(("get_virtual_path_by_entry_id", {"entry_id": entry_id}))
         entry = self.entry_by_id.get(entry_id)
@@ -692,6 +707,19 @@ class FakeRetrievalProjectionRepository:
                     "knowledge_base_id": knowledge_base_id,
                     "fs_entry_id": fs_entry_id,
                     "full_path": full_path,
+                },
+            )
+        )
+
+    async def sync_full_paths_for_fs_entry_ids(
+        self, cursor, *, knowledge_base_id, fs_entry_ids
+    ):
+        self.calls.append(
+            (
+                "sync_full_paths_for_fs_entry_ids",
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "fs_entry_ids": list(fs_entry_ids),
                 },
             )
         )
@@ -1403,6 +1431,7 @@ async def test_update_directory_renames_directory_by_path():
     """Updating a directory should rename the matched path entry."""
     connection = FakeConnection()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
+    retrieval_projection_repository = FakeRetrievalProjectionRepository()
     knowledge_fs_entry_repository.directory_entry = {
         "kid": 80,
         "knowledge_base_id": 7,
@@ -1420,6 +1449,10 @@ async def test_update_directory_renames_directory_by_path():
         "entry_type": "DIRECTORY",
         "path_ltree": "d1_a.d2_b",
     }
+    knowledge_fs_entry_repository.file_entries_in_subtree = [
+        {"kid": 81, "virtual_path": "/考勤制度/归档/a.md"},
+        {"kid": 82, "virtual_path": "/考勤制度/归档/b.md"},
+    ]
     service = KnowledgeBaseService(
         connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=FakeKnowledgeBaseRepository(
@@ -1434,6 +1467,7 @@ async def test_update_directory_renames_directory_by_path():
             }
         ),
         knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        retrieval_projection_repository=retrieval_projection_repository,
     )
 
     response = await service.update_directory(
@@ -1454,6 +1488,16 @@ async def test_update_directory_renames_directory_by_path():
         "rename_entry",
         {"entry_id": 80, "new_name": "历史归档"},
     ) in knowledge_fs_entry_repository.calls
+    assert (
+        "list_file_entries_in_subtree",
+        {"knowledge_base_id": 7, "root_fs_entry_id": 80},
+    ) in knowledge_fs_entry_repository.calls
+    assert retrieval_projection_repository.calls == [
+        (
+            "sync_full_paths_for_fs_entry_ids",
+            {"knowledge_base_id": 7, "fs_entry_ids": [81, 82]},
+        )
+    ]
 
 
 async def test_update_directory_allows_same_name_without_conflict():
@@ -1706,7 +1750,12 @@ async def test_upload_file_commits_object_and_updates_fs_entry_storage():
         )
     )
 
-    assert response is None
+    assert response == {
+        "fs_entry_id": 71,
+        "knowledge_base_id": 7,
+        "virtual_path": "/dir1/item-1.pdf",
+        "mime_type": "application/pdf",
+    }
     assert connection.committed is True
     assert (
         "create_file_entry",
@@ -1763,7 +1812,12 @@ async def test_upload_file_recursively_creates_missing_parent_directories():
         )
     )
 
-    assert response is None
+    assert response == {
+        "fs_entry_id": 71,
+        "knowledge_base_id": 7,
+        "virtual_path": "/missing-dir/item-1.pdf",
+        "mime_type": "application/pdf",
+    }
     assert connection.committed is True
     assert (
         "create_file_entry",

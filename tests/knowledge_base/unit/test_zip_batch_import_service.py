@@ -1,4 +1,5 @@
 # tests/knowledge_base/unit/test_zip_batch_import_service.py
+import asyncio
 import io
 import zipfile
 
@@ -15,26 +16,42 @@ from by_qa.knowledge_base.services.zip_batch_import_service import ZipBatchImpor
 class FakeIngestion:
     """Records upload/delete order with a monotonic sequence number."""
 
-    def __init__(self, *, fail_upload_for: str | None = None):
+    def __init__(
+        self,
+        *,
+        fail_upload_for: str | None = None,
+        fail_batch_reference_compensation: bool = False,
+    ):
         self.uploads: list[tuple[int, KnowledgeItemUploadRequest]] = []
         self.deletes: list[tuple[int, str]] = []
+        self.batch_reference_compensations: list[
+            tuple[str, tuple[str, ...], tuple[tuple[int, str], ...]]
+        ] = []
         self.files: set[str] = set()
         self._seq = 0
         self.fail_upload_for = (
             "/" + fail_upload_for.strip("/") if fail_upload_for else None
         )
+        self.fail_batch_reference_compensation = fail_batch_reference_compensation
 
     def _next(self) -> int:
         self._seq += 1
         return self._seq
 
-    async def upload_file(self, request: KnowledgeItemUploadRequest) -> None:
+    async def upload_file(
+        self, request: KnowledgeItemUploadRequest
+    ) -> dict[str, object]:
         seq = self._next()
         self.uploads.append((seq, request))
         normalized = "/" + request.file_path.strip("/")
         if self.fail_upload_for is not None and normalized == self.fail_upload_for:
             raise RuntimeError(f"forced upload failure for {normalized}")
         self.files.add(normalized)
+        return {
+            "fs_entry_id": seq,
+            "knowledge_base_id": 7,
+            "virtual_path": normalized,
+        }
 
     async def file_exists(self, kb_code: str, full_path: str) -> bool:  # pylint: disable=unused-argument
         return full_path in self.files
@@ -48,6 +65,106 @@ class FakeIngestion:
         seq = self._next()
         self.deletes.append((seq, request.file_path))
         self.files.discard("/" + request.file_path.strip("/"))
+
+    async def resolve_pending_references_for_paths(
+        self,
+        *,
+        kb_code: str,
+        file_paths: list[str] | None = None,
+        uploaded_rows: list[dict[str, object]] | None = None,
+    ) -> list[dict[str, object]]:
+        if self.fail_batch_reference_compensation:
+            raise RuntimeError("forced batch reference compensation failure")
+        rows = tuple(
+            (
+                (
+                    int(row.get("fs_entry_id") or row.get("kid"))
+                    if row.get("fs_entry_id") or row.get("kid")
+                    else "missing"
+                ),
+                str(row.get("virtual_path") or row.get("file_path") or "missing"),
+            )
+            for row in (uploaded_rows or [])
+        )
+        self.batch_reference_compensations.append(
+            (kb_code, tuple(file_paths or []), rows)
+        )
+        return []
+
+
+class MarkdownReferenceRaceIngestion(FakeIngestion):
+    """Models the zip md->md race across per-file transactions."""
+
+    def __init__(self):
+        super().__init__()
+        self.b_per_file_compensation_done = asyncio.Event()
+        self.a_unresolved_committed = asyncio.Event()
+        self.pending_references: list[dict[str, object]] = []
+
+    async def upload_file(
+        self, request: KnowledgeItemUploadRequest
+    ) -> dict[str, object]:
+        seq = self._next()
+        self.uploads.append((seq, request))
+        normalized = "/" + request.file_path.strip("/")
+
+        if normalized == "/target/b.md":
+            self.files.add(normalized)
+            # b.md has already run its single-file pending compensation before
+            # a.md records the unresolved reference.
+            self.b_per_file_compensation_done.set()
+            await asyncio.wait_for(self.a_unresolved_committed.wait(), timeout=2)
+            return {
+                "fs_entry_id": seq,
+                "knowledge_base_id": 7,
+                "virtual_path": normalized,
+            }
+
+        if normalized == "/target/a.md":
+            await asyncio.wait_for(self.b_per_file_compensation_done.wait(), timeout=2)
+            self.files.add(normalized)
+            self.pending_references.append(
+                {
+                    "source": "/target/a.md",
+                    "target": "/target/b.md",
+                    "resolved": False,
+                }
+            )
+            self.a_unresolved_committed.set()
+            return {
+                "fs_entry_id": seq,
+                "knowledge_base_id": 7,
+                "virtual_path": normalized,
+            }
+
+        self.files.add(normalized)
+        return {
+            "fs_entry_id": seq,
+            "knowledge_base_id": 7,
+            "virtual_path": normalized,
+        }
+
+    async def resolve_pending_references_for_paths(
+        self,
+        *,
+        kb_code: str,
+        file_paths: list[str] | None = None,
+        uploaded_rows: list[dict[str, object]] | None = None,
+    ) -> list[dict[str, object]]:
+        await asyncio.wait_for(self.a_unresolved_committed.wait(), timeout=2)
+        await super().resolve_pending_references_for_paths(
+            kb_code=kb_code, file_paths=file_paths, uploaded_rows=uploaded_rows
+        )
+        resolved: list[dict[str, object]] = []
+        uploaded_paths = {
+            "/" + str(row.get("virtual_path") or row.get("file_path")).strip("/")
+            for row in (uploaded_rows or [])
+        }
+        for reference in self.pending_references:
+            if reference["target"] in uploaded_paths:
+                reference["resolved"] = True
+                resolved.append(reference)
+        return resolved
 
 
 def _make_zip(entries: dict[str, bytes]) -> bytes:
@@ -126,7 +243,7 @@ def _make_nonutf8_zip(entries: list[tuple[bytes, bytes]]) -> bytes:
     return local + central + eocd
 
 
-async def test_import_zip_uploads_non_md_first_then_md_and_rewrites():
+async def test_import_zip_uploads_non_md_first_then_md_without_pre_rewrite():
     ingestion = FakeIngestion()
     md = "# t\n![alt](images/x.png)\n"
     zip_bytes = _make_zip({"images/x.png": b"\x89PNG fake", "doc.md": md.encode()})
@@ -138,11 +255,11 @@ async def test_import_zip_uploads_non_md_first_then_md_and_rewrites():
     assert set(seq_by_path) == {"/target/images/x.png", "/target/doc.md"}
     # phase barrier: every non-md uploaded before the md
     assert seq_by_path["/target/images/x.png"] < seq_by_path["/target/doc.md"]
-    # md reference rewritten to KB-absolute path
+    # ZIP service leaves markdown bytes untouched; ingestion owns tokenization.
     md_req = next(
         req for _, req in ingestion.uploads if req.file_path == "/target/doc.md"
     )
-    assert b"![alt](/target/images/x.png)" in md_req.file_content
+    assert b"![alt](images/x.png)" in md_req.file_content
     assert result.summary.total == 2 and result.summary.succeeded == 2
 
 
@@ -176,9 +293,11 @@ async def test_import_zip_deletes_existing_file_before_upload():
     assert result.summary.succeeded == 1
 
 
-async def test_import_zip_rewrites_md_to_md_reference_within_batch():
-    """A md referencing a sibling md in the same zip is rewritten even though
-    the target md is uploaded concurrently (batch-aware existence check)."""
+async def test_import_zip_preserves_md_to_md_reference_for_ingestion():
+    """A md referencing a sibling md in the same zip is uploaded as-is.
+
+    The ingestion service handles transactional reference tokenization.
+    """
     ingestion = FakeIngestion()
     zip_bytes = _make_zip({"b/b.md": b"# b\n", "a.md": b"see [b](b/b.md)\n"})
     svc = ZipBatchImportService(ingestion_service=ingestion, max_concurrency=2)
@@ -187,7 +306,107 @@ async def test_import_zip_rewrites_md_to_md_reference_within_batch():
     )
     assert result.summary.succeeded == 2
     a_req = next(req for _, req in ingestion.uploads if req.file_path == "/target/a.md")
-    assert b"see [b](/target/b/b.md)" in a_req.file_content
+    assert b"see [b](b/b.md)" in a_req.file_content
+
+
+async def test_import_zip_resolves_md_to_md_pending_after_markdown_phase():
+    ingestion = MarkdownReferenceRaceIngestion()
+    zip_bytes = _make_zip({"b.md": b"# b\n", "a.md": b"see [b](b.md)\n"})
+    svc = ZipBatchImportService(ingestion_service=ingestion, max_concurrency=2)
+
+    result = await svc.import_zip(
+        kb_code="kb1", target_dir="/target", zip_bytes=zip_bytes
+    )
+
+    assert result.summary.succeeded == 2
+    assert ingestion.pending_references == [
+        {"source": "/target/a.md", "target": "/target/b.md", "resolved": True}
+    ]
+    assert ingestion.batch_reference_compensations == [
+        (
+            "kb1",
+            ("/target/b.md", "/target/a.md"),
+            ((1, "/target/b.md"), (2, "/target/a.md")),
+        )
+    ]
+
+
+async def test_import_zip_passes_upload_rows_to_batch_compensation():
+    ingestion = FakeIngestion()
+    zip_bytes = _make_zip({"a.md": b"# a\n", "asset.png": b"png"})
+    svc = ZipBatchImportService(ingestion_service=ingestion, max_concurrency=2)
+
+    result = await svc.import_zip(
+        kb_code="kb1", target_dir="/target", zip_bytes=zip_bytes
+    )
+
+    assert result.summary.succeeded == 2
+    assert ingestion.batch_reference_compensations == [
+        (
+            "kb1",
+            ("/target/asset.png", "/target/a.md"),
+            ((1, "/target/asset.png"), (2, "/target/a.md")),
+        )
+    ]
+
+
+async def test_import_zip_reports_batch_compensation_failure_without_losing_uploads():
+    ingestion = FakeIngestion(fail_batch_reference_compensation=True)
+    zip_bytes = _make_zip({"a.md": b"# a\n", "asset.png": b"png"})
+    svc = ZipBatchImportService(ingestion_service=ingestion, max_concurrency=2)
+
+    result = await svc.import_zip(
+        kb_code="kb1", target_dir="/target", zip_bytes=zip_bytes
+    )
+
+    uploaded_items = [item for item in result.data if item.success]
+    failed_items = [item for item in result.data if not item.success]
+    assert {item.file_path for item in uploaded_items} == {
+        "/target/a.md",
+        "/target/asset.png",
+    }
+    assert failed_items == []
+    assert [item.file_path for item in result.data] == [
+        "/target/asset.png",
+        "/target/a.md",
+    ]
+    assert result.post_process_errors == [
+        "batch reference compensation failed: forced batch reference compensation failure"
+    ]
+    assert (
+        "forced batch reference compensation failure" in (result.post_process_errors[0])
+    )
+    assert result.summary.total == 2
+    assert result.summary.succeeded == 2
+    assert result.summary.failed == 0
+
+
+class MalformedUploadRowIngestion(FakeIngestion):
+    async def upload_file(
+        self, request: KnowledgeItemUploadRequest
+    ) -> dict[str, object]:
+        await super().upload_file(request)
+        return {"unexpected": request.file_path}
+
+
+async def test_import_zip_keeps_file_paths_fallback_for_malformed_upload_rows():
+    ingestion = MalformedUploadRowIngestion()
+    zip_bytes = _make_zip({"a.md": b"# a\n", "asset.png": b"png"})
+    svc = ZipBatchImportService(ingestion_service=ingestion, max_concurrency=2)
+
+    result = await svc.import_zip(
+        kb_code="kb1", target_dir="/target", zip_bytes=zip_bytes
+    )
+
+    assert result.summary.total == 2
+    assert result.summary.failed == 0
+    assert ingestion.batch_reference_compensations == [
+        (
+            "kb1",
+            ("/target/asset.png", "/target/a.md"),
+            (("missing", "missing"), ("missing", "missing")),
+        )
+    ]
 
 
 async def test_import_zip_skips_unsafe_path_and_records_failure():
@@ -260,18 +479,16 @@ async def test_import_zip_malformed_md_preserves_existing():
     assert "/t/a.md" in ingestion.files
 
 
-async def test_import_zip_drops_failed_phase1_from_batch_paths():
-    """A non-md that fails to upload is removed from batch_paths, so an md
-    referencing it is NOT rewritten to a dangling KB-absolute path."""
+async def test_import_zip_keeps_reference_to_failed_phase1_for_ingestion():
+    """A non-md failure does not change the markdown upload bytes."""
     ingestion = FakeIngestion(fail_upload_for="/t/images/x.png")
     md = "# t\n![alt](images/x.png)\n"
     zip_bytes = _make_zip({"images/x.png": b"\x89PNG fake", "doc.md": md.encode()})
     svc = ZipBatchImportService(ingestion_service=ingestion, max_concurrency=2)
     await svc.import_zip(kb_code="kb1", target_dir="/t", zip_bytes=zip_bytes)
-    # the png failed; the md uploaded but its reference was left relative
+    # the png failed; the md uploaded with its original reference intact
     md_uploads = [req for _, req in ingestion.uploads if req.file_path == "/t/doc.md"]
     assert len(md_uploads) == 1
-    # reference NOT rewritten to /t/images/x.png (failed sibling dropped)
     assert b"![alt](images/x.png)" in md_uploads[0].file_content
     assert b"![alt](/t/images/x.png)" not in md_uploads[0].file_content
 
@@ -325,11 +542,11 @@ async def test_import_zip_keeps_utf8_flagged_chinese_filenames():
     uploaded = {req.file_path for _, req in ingestion.uploads}
     assert "/target/图片/中文图.png" in uploaded
     assert "/target/中文文档.md" in uploaded
-    # md reference rewritten using the real (decoded) sibling path
+    # md reference is preserved using the real decoded sibling path
     md_req = next(
         req for _, req in ingestion.uploads if req.file_path == "/target/中文文档.md"
     )
-    assert "![alt](/target/图片/中文图.png)".encode() in md_req.file_content
+    assert "![alt](图片/中文图.png)".encode() in md_req.file_content
     assert all(item.success for item in result.data)
 
 

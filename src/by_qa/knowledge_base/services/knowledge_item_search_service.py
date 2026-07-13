@@ -26,6 +26,7 @@ class KnowledgeItemSearchService:
     search_repository: Any
     embedding_query_service: Any
     metadata_search_repository: Any = None
+    markdown_reference_resolver: Any = None
 
     def _merge_hits(
         self,
@@ -140,20 +141,21 @@ class KnowledgeItemSearchService:
                         )
                     )
 
+            resolved_chunk_texts = await self._resolve_chunk_texts(top_items)
             results = [
                 SearchHit(
                     kb_code=item["kb_code"],
                     file_path="/" + item["full_path"],
                     chunk_no=item["chunk_no"],
                     chunk_id=item["chunk_id"],
-                    chunk_text=item["chunk_text"],
+                    chunk_text=resolved_chunk_texts[index],
                     score=item["score"],
                     image_path="",
                     start_line=item["start_line"],
                     end_line=item["end_line"],
                     metadata=metadata_map.get(item.get("fs_entry_id")),
                 )
-                for item in top_items
+                for index, item in enumerate(top_items)
             ]
             logger.info(
                 "knowledge_item_search_service.search finished: count=%s",
@@ -162,6 +164,29 @@ class KnowledgeItemSearchService:
             return results
         finally:
             await connection.close()
+
+    async def _resolve_chunk_texts(self, items: list[dict[str, Any]]) -> list[str]:
+        texts = [item["chunk_text"] for item in items]
+        if not texts or self.markdown_reference_resolver is None:
+            return texts
+
+        resolved = list(texts)
+        index_by_kb: dict[int, list[int]] = {}
+        for index, item in enumerate(items):
+            knowledge_base_id = item.get("knowledge_base_id")
+            if knowledge_base_id is None:
+                continue
+            index_by_kb.setdefault(int(knowledge_base_id), []).append(index)
+
+        for knowledge_base_id, indexes in index_by_kb.items():
+            group_texts = [texts[index] for index in indexes]
+            group_resolved = await self.markdown_reference_resolver.resolve_texts(
+                knowledge_base_id=knowledge_base_id,
+                texts=group_texts,
+            )
+            for index, text in zip(indexes, group_resolved, strict=True):
+                resolved[index] = text
+        return resolved
 
     async def search_file_with_dsl(
         self, request: SearchFileRequest

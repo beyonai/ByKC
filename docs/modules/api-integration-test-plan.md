@@ -125,6 +125,34 @@
 | --- | --- | --- | --- | --- | --- |
 | Z17 | 内容管理员 | 不支持类型构建置「不支持构建」 | `import png -> fileToMarkdownIndex -> fileBuildStatus` | 构建任务 `status=unsupported`（不抛错、不写 chunks） | 已写 |
 
+## 稳定 Markdown 引用与移动场景总表
+
+说明：
+
+- 这一组场景覆盖稳定 Markdown 资源引用方案：上传/导入时登记 `knowledge_file_reference` 并写入内部 token，读出口按当前文件树解析为对外路径。
+- 覆盖接口包括 `knowledgeItems/import`、`fileToMarkdownIndex`、`readFile`、`downloadFile`、`knowledgeItems/search`、`knowledgeItems/move`、`knowledgeItems/delete`、`directories/delete`、`knowledgeItems/references`。
+- 编号前缀 `R` 代表 stable reference；当前接口级集成测试均在 `tests/knowledge_base/integration/test_kb_api_stateful_integration.py`。
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| R1 | 内容管理员 | 已存在目标引用在读取和检索时解析为当前路径 | `import /resolved/b.md -> import+build /resolved/a.md(引用 b.md) -> readFile -> knowledgeItems/search` | `readFile` 和 `search.chunkText` 输出 `(/resolved/b.md)`；不泄漏 `byqa-ref://` 内部 token | 已写 |
+| R2 | 内容管理员 | unresolved 引用在目标补传后自动恢复 | `import+build /pending/a.md(引用 b.md) -> readFile -> import /pending/b.md -> readFile` | 目标缺失时回退原始写法 `(b.md)`；目标上传后输出 `(/pending/b.md)`；无需重建 source markdown | 已写 |
+| R3 | 内容管理员 | 删除目标文件后引用断链并回退原始写法 | `R2 -> knowledgeItems/delete(/pending/b.md) -> readFile -> knowledgeItems/search` | 删除后 `readFile` 和 `search.chunkText` 回退 `(b.md)`；不输出已删除目标路径；不泄漏 `byqa-ref://` | 已写 |
+| R4 | 内容管理员 | 同路径重新上传后 broken 引用恢复 | `R3 -> import /pending/b.md -> readFile -> knowledgeItems/search` | 重新上传同路径后输出 `(/pending/b.md)`；检索 chunk 文本也解析为恢复后的路径 | 已写 |
+| R5 | 目录管理员 | 移动目标文件后读出口跟随新路径且不重建 chunk | `import target -> import+build source(引用 target) -> knowledgeItems/move(sourcePath=[target], targetFilePath=...) -> readFile -> search` | `targetFilePath` 前缀目录自动创建；`readFile` 和 `search.chunkText` 输出移动后的路径；chunking 调用次数不增加 | 已写 |
+| R6 | 目录管理员 | 移动目标目录子树后引用和检索投影同步更新 | `import /tree/sub/* -> import+build refs -> knowledgeItems/move(sourcePath=[/tree], targetDirectoryPath=/archive/auto) -> readFile -> search -> listDir` | `targetDirectoryPath` 不存在时自动建目录；子树引用输出 `/archive/auto/tree/...`；search `filePath` 使用移动后的路径；不重建 chunk | 已写 |
+| R7 | 内容管理员 | 移动 source markdown 不重算 unresolved 待匹配路径 | `import+build /pending-source/source.md(引用 missing.md) -> knowledgeItems/move(... targetFilePath=/new/source/path/source.md) -> import /pending-source/missing.md -> readFile` | source 移动后 `readFile` 仍先回退 `(missing.md)`；补传旧待匹配路径 `/pending-source/missing.md` 后解析为旧待匹配路径，不改为 `/new/source/path/missing.md` | 已写 |
+| R8 | 内容管理员 | zip 内 md-to-md 引用入库并可通过 references 查询 | `import zip(b.md,a.md 引用 b.md) -> fileToMarkdownIndex(a.md) -> readFile(a.md) -> knowledgeItems/references(filePath=/zip/b.md)` | `readFile` 输出 `(/zip/b.md)`；`references.resultObject.inbound` 返回 source/originalTarget/targetPath/status=resolved | 已写 |
+| R9 | 目录管理员 | 删除目录子树时子树内目标的 inbound 引用统一标 broken | `import targets 子树 -> import+build sources 引用子树文件 -> directories/delete(target dir) -> readFile(sources) -> knowledgeItems/references(filePath=deleted paths)` | 指向子树内每个被删文件的 inbound 引用都变为 `status=broken`，写入删除前 `targetPath`；读出口回退原始写法 | 已写 |
+| R10 | 普通使用者 | 下载 Markdown 时解析 stable reference token | `import target -> import+build source -> downloadFile(source) -> move/delete/restore target -> downloadFile(source)` | markdown 下载内容与 `readFile` 一致：resolved/moved/restored 输出当前路径，broken 回退 original target，任何阶段不泄漏 `byqa-ref://` | 已写 |
+| R11 | 普通使用者 | query/fragment suffix 只拼接一次 | `import b.md -> import+build a.md(引用 b.md?download=1#intro) -> readFile/search/download -> move/delete/restore b.md` | resolved 输出当前 `targetPath + targetSuffix`；broken 回退 `originalTarget`；不重复拼接 `targetSuffix`；references 返回 `targetSuffix` | 已写 |
+| R12 | 普通使用者 | 行窗口读取先切片再解析 token | `import b.md -> import+build a.md(第2行引用 b.md) -> readFile(startLine=2,endLine=2)` | 只返回第 2 行，且该行引用已解析；不包含相邻行；不泄漏 `byqa-ref://` | 已写 |
+| R13 | 内容管理员 | references 支持 outbound/all 并过滤已删除 source | `import target -> import+build source(引用 target 和 missing) -> references(source,direction=all/outbound) -> delete source -> references(target,inbound)` | outbound 返回 resolved + unresolved；all 同时返回 inbound/outbound；删除 source 后 target inbound 为空 | 已写 |
+| R14 | 内容管理员 | 目录链接不登记为 stable file reference | `create directory -> import+build source(链接目录) -> references(source,outbound) -> move directory -> readFile(source)` | 目录链接保持原始 markdown target；outbound 为空；移动目录不改写目录链接 | 已写 |
+| R15 | 目录管理员 | 批量移动多个目标文件后引用同步，非法 move 保持原子 | `import targets -> import+build source(引用两个 target) -> knowledgeItems/move(sourcePath=[a,b],targetDirectoryPath=...) -> invalid move` | 两个引用都输出新路径；search chunkText 同步；非法 move 返回失败且引用输出保持不变 | 已写 |
+| R16 | 内容管理员 | 路径归一化与 pending 补偿一致 | `import+build source(引用 ./b%20file.md#intro 和逃根路径) -> import /norm/b file.md -> readFile/search/references(outbound)` | URL decode 后按 `/norm/b file.md` 补偿 resolved；逃根路径不入引用表；search 不泄漏 token | 已写 |
+| R17 | 检索使用者 | 真实分片路径不切开 stable reference token | `使用真实 DocumentChunkingService 小 chunk_size -> import+build source(含 stable token) -> search` | 搜索结果中 stable reference 已解析，且不出现半截或完整 `byqa-ref://` token | 已写 |
+
 ## 元数据与 DSL 检索场景总表
 
 说明：
@@ -398,7 +426,7 @@
 | 文件 | 覆盖重点 | 状态 |
 | --- | --- | --- |
 | `tests/knowledge_build/integration/test_api_integration.py` | ~~`knowledge_build` 三接口正常/异常与组合链路等价性~~ | 已弃用（`knowledge_build` 独立路由已移除） |
-| `tests/knowledge_base/integration/test_kb_api_stateful_integration.py` | 混合导入构建（`knowledgeItems/import` + `fileToMarkdownIndex`）、知识库改名、单文件/目录删除、多级目录改名删除、读取窗口校验、`downloadFile` 的中文文件名/二进制文件下载、真实搜索链路与失败保护；zip 批量导入与引用改写（Z1–Z17：单文件分流与出参、zip 主链路、引用能/不能替换、zip 异常防护、不支持类型构建状态） | 有效 |
+| `tests/knowledge_base/integration/test_kb_api_stateful_integration.py` | 混合导入构建（`knowledgeItems/import` + `fileToMarkdownIndex`）、知识库改名、单文件/目录删除、多级目录改名删除、读取窗口校验、`downloadFile` 的中文文件名/二进制文件下载、真实搜索链路与失败保护；zip 批量导入与引用改写（Z1–Z17：单文件分流与出参、zip 主链路、引用能/不能替换、zip 异常防护、不支持类型构建状态）；稳定 Markdown 引用（R1–R17：resolved/unresolved/broken/restore、readFile/download/search token 解析、suffix、行窗口、references inbound/outbound/all、目标文件和目录子树 move、source move unresolved 取舍、目录子树删除、目录链接、归一化、真实分片边界） | 有效 |
 | `tests/knowledge_base/integration/test_metadata_api_integration.py` | M1–M17 全场景:属性 CRUD/批量原子性/引用计数;文件元数据五类型 set/list 操作矩阵;`metadata/get` 错路径(unknown KB/file);YAML front matter(auto/拒绝/缺失/格式错容错);删除三档级联;`metadataFields/list`(KB 必填/多 KB 合并/单 KB 隔离);metadataSearch 接口约束(where 必填/topK 边界/KB scope/字段裁剪/knCodeList 必填);DSL 算子矩阵 + 三层布尔嵌套 + 德摩根;DSL 类型/结构/复杂度错误矩阵;系统字段(metadataSearch 单系统/混合 + chunk + searchFile 单系统/混合);search 升级版(三 mode/metadataFieldList/where 短路/前过滤证明);fileTypeList 兼容;searchFile(多 chunk 去重/where/系统字段/knCodeList 必填);跨接口一致;软删保护 | 有效 |
 | `tests/knowledge_base/integration/test_userfs_batch1.py` | U1–U9:基础读写路径、多级目录隔离、跨 KB 隔离 | 有效 |
 | `tests/knowledge_base/integration/test_userfs_batch2.py` | U10–U18:删除联动、目录改名路径迁移 | 有效 |

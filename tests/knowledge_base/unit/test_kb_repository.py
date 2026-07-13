@@ -775,8 +775,89 @@ async def test_delete_retrieval_projection_for_fs_entry_ids_executes_targeted_de
 
     sql, params = cursor.executed[0]
     lowered = sql.lower()
-    assert "delete from knowledge_item_chunk_retrieval_mv" in lowered
+    assert "delete from knowledge_chunk_retrieval_mv" in lowered
     assert "knowledge_base_id = %(knowledge_base_id)s" in sql
+    assert "fs_entry_id = any(%(fs_entry_ids)s)" in lowered
+    assert params == {"knowledge_base_id": 7, "fs_entry_ids": [81, 82, 83]}
+
+
+async def test_rename_entry_subtree_update_is_scoped_to_knowledge_base():
+    """Renaming a directory must not update same ltree labels in another KB."""
+    repo = KnowledgeFsEntryRepository()
+    cursor = FakeCursor(
+        fetchone_results=[
+            {
+                "kid": 80,
+                "path_ltree": "d1_a.d2_b",
+                "depth": 2,
+                "virtual_path": "/docs/archive",
+            }
+        ]
+    )
+
+    await repo.rename_entry(cursor, entry_id=80, new_name="history")
+
+    subtree_sql, subtree_params = cursor.executed[1]
+    lowered = subtree_sql.lower()
+    assert "update knowledge_fs_entry fs" in lowered
+    assert "fs.knowledge_base_id = (" in lowered
+    assert (
+        "select knowledge_base_id from knowledge_fs_entry where kid = %(entry_id)s"
+        in lowered
+    )
+    assert subtree_params["entry_id"] == 80
+
+
+async def test_move_entry_subtree_update_is_scoped_to_knowledge_base():
+    """Moving an entry must not update same ltree labels in another KB."""
+    repo = KnowledgeFsEntryRepository()
+    cursor = FakeCursor(
+        fetchone_results=[
+            {
+                "kid": 80,
+                "path_ltree": "d1_a.d2_b",
+                "depth": 2,
+                "virtual_path": "/docs/archive",
+                "entry_type": "DIRECTORY",
+            }
+        ]
+    )
+
+    await repo.move_entry(
+        cursor,
+        entry_id=80,
+        new_parent_entry_id=None,
+        new_name="history",
+    )
+
+    subtree_sql, subtree_params = cursor.executed[1]
+    lowered = subtree_sql.lower()
+    assert "update knowledge_fs_entry fs" in lowered
+    assert "fs.knowledge_base_id = (" in lowered
+    assert (
+        "select knowledge_base_id from knowledge_fs_entry where kid = %(entry_id)s"
+        in lowered
+    )
+    assert subtree_params["entry_id"] == 80
+
+
+async def test_sync_retrieval_projection_full_paths_updates_from_current_fs_entries():
+    """Moving entries should update projection paths from the current filesystem tree."""
+    repo = RetrievalProjectionRepository()
+    cursor = FakeCursor()
+
+    await repo.sync_full_paths_for_fs_entry_ids(
+        cursor,
+        knowledge_base_id=7,
+        fs_entry_ids=[81, 82, 83],
+    )
+
+    sql, params = cursor.executed[0]
+    lowered = sql.lower()
+    assert "update knowledge_chunk_retrieval_mv" in lowered
+    assert "set full_path = ltrim(fe.virtual_path, '/')" in lowered
+    assert "from knowledge_fs_entry fe" in lowered
+    assert "knowledge_chunk_retrieval_mv.fs_entry_id = fe.kid" in lowered
     assert "fs_entry_id = any(%(fs_entry_ids)s)" in lowered
     assert params == {"knowledge_base_id": 7, "fs_entry_ids": [81, 82, 83]}
 

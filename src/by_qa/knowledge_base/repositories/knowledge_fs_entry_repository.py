@@ -419,6 +419,16 @@ class KnowledgeFsEntryRepository:
             return None
         return await self._get_entry_by_id(cursor, entry_id=self._row_id(current))
 
+    async def get_file_reference_target_by_path(
+        self, cursor: Any, *, knowledge_base_id: int, full_path: str
+    ) -> dict[str, Any] | None:
+        """Look up one file entry eligible as a stable Markdown reference target."""
+        return await self.get_file_by_path(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            full_path=full_path,
+        )
+
     async def list_children_by_parent_entry_id(
         self,
         cursor: Any,
@@ -763,6 +773,9 @@ class KnowledgeFsEntryRepository:
                 ),
                 updated_at = NOW()
             WHERE fs.path_ltree <@ %(current_path_ltree)s::ltree
+              AND fs.knowledge_base_id = (
+                    SELECT knowledge_base_id FROM knowledge_fs_entry WHERE kid = %(entry_id)s
+                  )
               AND fs.is_deleted = FALSE
             """,
             {
@@ -818,6 +831,97 @@ class KnowledgeFsEntryRepository:
             },
         )
 
+    async def move_entry(
+        self,
+        cursor: Any,
+        *,
+        entry_id: int,
+        new_parent_entry_id: int | None,
+        new_name: str,
+    ) -> None:
+        """Move one filesystem entry to another parent and rebuild its subtree."""
+        await cursor.execute(
+            """
+            SELECT kid, knowledge_base_id, parent_entry_id, path_ltree, depth,
+                   virtual_path, entry_type
+            FROM knowledge_fs_entry
+            WHERE kid = %(entry_id)s
+              AND is_deleted = FALSE
+            """,
+            {"entry_id": entry_id},
+        )
+        target = await cursor.fetchone()
+        if target is None:
+            return
+
+        parent = None
+        if new_parent_entry_id is not None:
+            parent = await self._get_entry_by_id(cursor, entry_id=new_parent_entry_id)
+            if parent is None or parent.get("entry_type") != "DIRECTORY":
+                raise ValueError("target parent directory not found")
+
+        current_path_ltree = str(self._row_value(target, "path_ltree"))
+        current_depth = int(self._row_value(target, "depth"))
+        current_virtual_path = str(self._row_value(target, "virtual_path"))
+        parent_depth = int(parent["depth"]) if parent is not None else 0
+        parent_path_ltree = str(parent["path_ltree"]) if parent is not None else ""
+        parent_virtual_path = str(parent["virtual_path"]) if parent is not None else "/"
+        new_depth = parent_depth + 1
+        prefix = "d" if target.get("entry_type") == "DIRECTORY" else "f"
+        new_label = self._path_label(prefix, new_depth, new_name)
+        new_path_ltree = (
+            f"{parent_path_ltree}.{new_label}" if parent_path_ltree else new_label
+        )
+        depth_delta = new_depth - current_depth
+        new_virtual_path = (
+            f"{parent_virtual_path}/{new_name}"
+            if parent_virtual_path != "/"
+            else f"/{new_name}"
+        )
+
+        await cursor.execute(
+            """
+            UPDATE knowledge_fs_entry fs
+            SET name = CASE
+                    WHEN fs.kid = %(entry_id)s THEN %(new_name)s
+                    ELSE fs.name
+                END,
+                parent_entry_id = CASE
+                    WHEN fs.kid = %(entry_id)s THEN %(new_parent_entry_id)s
+                    ELSE fs.parent_entry_id
+                END,
+                path_ltree = text2ltree(
+                    %(new_path_ltree)s
+                    || COALESCE(
+                        substring(
+                            fs.path_ltree::text
+                            FROM char_length(%(current_path_ltree)s) + 1
+                        ),
+                        ''
+                    )
+                ),
+                depth = fs.depth + %(depth_delta)s,
+                virtual_path = %(new_virtual_path)s
+                    || substring(fs.virtual_path FROM char_length(%(current_virtual_path)s) + 1),
+                updated_at = NOW()
+            WHERE fs.path_ltree <@ %(current_path_ltree)s::ltree
+              AND fs.knowledge_base_id = (
+                    SELECT knowledge_base_id FROM knowledge_fs_entry WHERE kid = %(entry_id)s
+                  )
+              AND fs.is_deleted = FALSE
+            """,
+            {
+                "entry_id": entry_id,
+                "new_parent_entry_id": new_parent_entry_id,
+                "new_name": new_name,
+                "new_path_ltree": new_path_ltree,
+                "current_path_ltree": current_path_ltree,
+                "depth_delta": depth_delta,
+                "new_virtual_path": new_virtual_path,
+                "current_virtual_path": current_virtual_path,
+            },
+        )
+
     async def _fetchall(self, cursor: Any) -> list[dict[str, Any]]:
         return list(await cursor.fetchall())
 
@@ -867,7 +971,8 @@ class KnowledgeFsEntryRepository:
     ) -> list[dict[str, Any]]:
         """List all file entries (with storage locators) in one directory subtree."""
         await cursor.execute(
-            """SELECT fs.kid, fs.virtual_path, fs.file_bucket_name, fs.file_object_key, fs.markdown_bucket_name, fs.markdown_object_key
+            """SELECT fs.kid, fs.virtual_path, fs.file_bucket_name, fs.file_object_key,
+                      fs.markdown_bucket_name, fs.markdown_object_key, fs.mime_type
             FROM knowledge_fs_entry fs JOIN knowledge_fs_entry root ON root.kid = %(root_fs_entry_id)s
             WHERE fs.knowledge_base_id = %(knowledge_base_id)s AND fs.is_deleted = FALSE
             AND fs.entry_type = 'FILE' AND fs.path_ltree <@ root.path_ltree ORDER BY fs.kid""",

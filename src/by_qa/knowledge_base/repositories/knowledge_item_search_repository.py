@@ -26,6 +26,7 @@ _FILE_TYPE_FILTER = f"""
 
 _CHUNK_COLUMNS = """
     r.chunk_id,
+    r.knowledge_base_id,
     kb.kid::text AS kb_code,
     r.full_path,
     r.chunk_no,

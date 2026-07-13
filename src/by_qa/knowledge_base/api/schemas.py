@@ -5,6 +5,19 @@ from typing import Literal, Optional
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 
+def _normalize_api_path(path: str, *, allow_root: bool) -> str:
+    value = str(path or "").strip()
+    if not value.startswith("/"):
+        raise ValueError("path must start with /")
+    parts = [part for part in value.split("/") if part]
+    if any(part == ".." for part in parts):
+        raise ValueError("path must not contain ..")
+    normalized = "/" + "/".join(parts) if parts else "/"
+    if normalized == "/" and not allow_root:
+        raise ValueError("root path is not allowed")
+    return normalized
+
+
 class CreateKnowledgeBaseRequest(BaseModel):
     """Request body for creating a knowledge base."""
 
@@ -136,6 +149,93 @@ class DeleteKnowledgeItemRequest(BaseModel):
     )
 
 
+class MoveKnowledgeItemsRequest(BaseModel):
+    """Request body for moving files or directory subtrees."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kb_code: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("knCode", "kb_code"),
+    )
+    source_path: list[str] = Field(
+        min_length=1,
+        validation_alias=AliasChoices("sourcePath", "source_path"),
+    )
+    target_directory_path: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("targetDirectoryPath", "target_directory_path"),
+    )
+    target_file_path: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("targetFilePath", "target_file_path"),
+    )
+    overwrite: bool = False
+
+    @model_validator(mode="after")
+    def validate_move_request(self) -> "MoveKnowledgeItemsRequest":
+        normalized_sources = [
+            _normalize_api_path(path, allow_root=False) for path in self.source_path
+        ]
+        if len(set(normalized_sources)) != len(normalized_sources):
+            raise ValueError("sourcePath must not contain duplicate paths")
+        self.source_path = normalized_sources
+
+        target_count = int(self.target_directory_path is not None) + int(
+            self.target_file_path is not None
+        )
+        if target_count != 1:
+            raise ValueError(
+                "exactly one of targetDirectoryPath or targetFilePath is required"
+            )
+
+        if self.target_directory_path is not None:
+            self.target_directory_path = _normalize_api_path(
+                self.target_directory_path,
+                allow_root=True,
+            )
+
+        if self.target_file_path is not None:
+            if len(self.source_path) != 1:
+                raise ValueError("targetFilePath requires exactly one file source")
+            self.target_file_path = _normalize_api_path(
+                self.target_file_path,
+                allow_root=False,
+            )
+
+        if self.overwrite:
+            raise ValueError("overwrite=true is not supported")
+        return self
+
+
+class MoveKnowledgeItemResult(BaseModel):
+    """Single move result."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    source_path: str = Field(serialization_alias="sourcePath")
+    target_path: str | None = Field(default=None, serialization_alias="targetPath")
+    success: bool
+    error: str | None = None
+
+
+class MoveKnowledgeItemsSummary(BaseModel):
+    """Move batch summary."""
+
+    total: int
+    succeeded: int
+    failed: int
+
+
+class MoveKnowledgeItemsResponse(BaseModel):
+    """Move API business response object."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    data: list[MoveKnowledgeItemResult]
+    summary: MoveKnowledgeItemsSummary
+
+
 class FileToMarkdownIndexRequest(BaseModel):
     """Request body for triggering knowledge build on an uploaded file."""
 
@@ -236,6 +336,46 @@ class KnowledgeItemGlobRequest(BaseModel):
         min_length=1,
         validation_alias=AliasChoices("pathRule", "path_rule"),
     )
+
+
+class KnowledgeItemReferenceQueryRequest(BaseModel):
+    """Request body for querying Markdown file reference relationships."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kb_code: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("knCode", "kb_code"),
+    )
+    file_path: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("filePath", "file_path"),
+    )
+    direction: Literal["inbound", "outbound", "all"] = "inbound"
+
+    @model_validator(mode="after")
+    def validate_file_path(self) -> "KnowledgeItemReferenceQueryRequest":
+        self.file_path = _normalize_api_path(self.file_path, allow_root=False)
+        return self
+
+
+class KnowledgeItemReferenceSource(BaseModel):
+    """Single Markdown file reference relationship row."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    source_path: str = Field(serialization_alias="sourcePath")
+    original_target: str = Field(serialization_alias="originalTarget")
+    target_suffix: str = Field(default="", serialization_alias="targetSuffix")
+    target_path: str = Field(serialization_alias="targetPath")
+    status: str
+
+
+class KnowledgeItemReferenceQueryResponse(BaseModel):
+    """Business response for file reference relationship queries."""
+
+    inbound: list[KnowledgeItemReferenceSource]
+    outbound: list[KnowledgeItemReferenceSource]
 
 
 class ReadFileRequest(BaseModel):

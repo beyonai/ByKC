@@ -47,6 +47,9 @@
 - `knCode`：知识库编码
 - `directoryPath`：目录路径，以 `/` 开头，不包含知识库名称
 - `filePath`：文件路径，以 `/` 开头，不包含知识库名称
+- `sourcePath`：移动源路径列表，以 `/` 开头，不包含知识库名称，元素可指向文件或目录
+- `targetDirectoryPath`：移动目标目录路径，以 `/` 开头，不包含知识库名称；不存在时自动创建
+- `targetFilePath`：移动目标文件路径，以 `/` 开头，不包含知识库名称；仅单源文件移动时可用，父目录不存在时自动创建
 - `name`：目录遍历或模式匹配结果中的完整路径
 
 ## 接口总览
@@ -61,10 +64,12 @@
 | `POST` | `/api/v1/directories/delete` | 删除目录 |
 | `POST` | `/api/v1/knowledgeItems/import` | 上传文档 |
 | `POST` | `/api/v1/knowledgeItems/delete` | 删除文档 |
+| `POST` | `/api/v1/knowledgeItems/move` | 移动文件或目录 |
+| `POST` | `/api/v1/knowledgeItems/references` | 查询指定文件的 Markdown 引用关系；兼容别名 `/api/v1/knowledge-items/references` |
 | `POST` | `/api/v1/listDir` | 获取目录内容 |
 | `POST` | `/api/v1/glob` | 按路径模式匹配 |
 | `POST` | `/api/v1/readFile` | 读取文件内容 |
-| `POST` | `/api/v1/downloadFile` | 下载原始文件 |
+| `POST` | `/api/v1/downloadFile` | 下载文件 |
 | `POST` | `/api/v1/fileToMarkdown` | 上传文件并同步转换为 Markdown 文件流 |
 | `POST` | `/api/v1/fileToMarkdownIndex` | 异步触发知识构建 |
 | `POST` | `/api/v1/fileBuildStatus` | 查询文档构建状态 |
@@ -322,9 +327,9 @@
 行为描述：
 
 - 文件类型：上传不再限制文件类型，任意类型文件均可入库。不可构建的文件类型（非 `txt`、`md`、`markdown`、`csv`、`pdf`、`docx`、`doc`、`pptx`、`ppt`、`xlsx`、`xls`）在后续 `POST /api/v1/fileToMarkdownIndex` 构建时会被标记为「不支持构建」状态，不影响入库。
-- Markdown 引用改写（默认动作，无论是否 zip 包）：上传 Markdown 文件时，服务端解析其中的图片引用 `![]()` 与链接引用 `[]()`，将相对路径按当前文件所在目录解析为知识库绝对路径（消除 `.`、`..`；越过知识库根的引用保持不变）。若引用指向的资源在知识库中已存在，或同批 zip 内存在该文件，则改写为知识库绝对地址；否则保持原引用。URL（带协议头）与锚点（`#anchor`）保留不变。
+- Markdown 引用处理（默认动作，无论是否 zip 包）：上传 Markdown 文件时，服务端解析其中的图片引用 `![]()` 与链接引用 `[]()`，将相对路径按当前文件所在目录解析为知识库绝对路径（消除 `.`、`..`；越过知识库根的引用保持不变），并为可管理的文件引用登记稳定引用关系。Markdown 入库内容会保存为内部 `byqa-ref://<id>` token；面向用户的读取、Markdown 下载和知识检索会在输出时解析为目标文件当前路径。未解析或目标已删除的引用回退为用户原始写法。URL（带协议头）与锚点（`#anchor`）保留不变。
 - zip 包批量上传：当 `fileContent` 文件名以 `.zip` 结尾且为合法 zip 时，按批量导入处理：
-  - 解压后并发上传：非 Markdown 文件先上传，Markdown 文件最后上传，保证 Markdown 引用改写时图片与被引用文档已就位。
+  - 解压后并发上传：非 Markdown 文件先上传，Markdown 文件最后上传，保证 Markdown 引用登记时图片与被引用文档已就位；仍未就位的引用会保留为待解析状态，后续同路径文件上传后自动绑定。
   - zip 内文件上传到 `filePath` 指定的目标目录下，保留 zip 内相对目录结构。
   - 若 zip 内文件在知识库中已存在，则先软删除原文件再上传（覆盖语义）。
   - 自动跳过 macOS 元数据（`__MACOSX`、以 `.` 开头的隐藏条目）与目录条目。
@@ -422,6 +427,22 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
 | `succeeded` | integer | 成功数 |
 | `failed` | integer | 失败数 |
 
+zip 批量上传可能包含可选字段 `postProcessErrors`（string 数组），用于返回文件入库完成后的批后处理错误（例如 Markdown 引用批量补偿失败）。该字段不属于 `data` 文件结果列表，且不计入 `summary.total` / `summary.succeeded` / `summary.failed`；`data` 和 `summary` 只统计真实 zip entry / 知识库路径。
+
+补偿失败时响应示例片段：
+
+```json
+{
+  "resultObject": {
+    "data": [
+      { "filePath": "/制度/人事/考勤制度.pdf", "success": true, "error": null }
+    ],
+    "summary": { "total": 1, "succeeded": 1, "failed": 0 },
+    "postProcessErrors": ["batch reference compensation failed: ..."]
+  }
+}
+```
+
 zip 批量上传响应示例（部分成功，含不安全路径）：
 
 ```json
@@ -483,6 +504,222 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
   "resultObject": {}
 }
 ```
+
+### `POST /api/v1/knowledgeItems/move`
+
+移动指定知识库下面的文件或目录。`sourcePath` 为一个或多个源路径，目标通过 `targetDirectoryPath` 或 `targetFilePath` 明确指定。
+
+请求体：`application/json`
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `knCode` | string | 是 | 知识库编码 |
+| `sourcePath` | array[string] | 是 | 源路径列表，不能为空；每个路径以 `/` 开头，不包括知识库名称，可指向文件或目录 |
+| `targetDirectoryPath` | string | 否 | 目标目录路径，以 `/` 开头，不包括知识库名称；不存在时自动创建。与 `targetFilePath` 二选一 |
+| `targetFilePath` | string | 否 | 目标文件路径，以 `/` 开头，不包括知识库名称；仅 `sourcePath` 为单个文件时可用，父目录不存在时自动创建。与 `targetDirectoryPath` 二选一 |
+| `overwrite` | boolean | 否 | 是否覆盖已存在目标。默认 `false`；当前版本仅支持 `false`，目标已存在时该移动项失败 |
+
+行为说明：
+
+- `targetDirectoryPath` 与 `targetFilePath` 必须且只能填写一个。
+- 使用 `targetDirectoryPath` 时：
+  - 目标目录不存在时，服务端自动创建。
+  - 每个源移动到该目录下，保留各自名称。
+  - 支持单源、多源、文件、目录。
+- 使用 `targetFilePath` 时：
+  - 仅允许 `sourcePath` 包含一个文件源。
+  - 将源文件移动或重命名为 `targetFilePath`。
+  - `targetFilePath` 的父目录不存在时，服务端自动创建。
+- 目录移动时，目录下所有子目录和文件随目录一起移动。
+- 同一请求内每个源路径独立执行；单个源移动失败不影响其它源，失败原因写入 `data[].error`。
+- 结构性错误会导致整请求失败，包含：`sourcePath` 为空、路径不以 `/` 开头、路径含 `..` 跨界段、移动知识库根目录 `/`、同一批次内 `sourcePath` 重复、`targetDirectoryPath` 与 `targetFilePath` 同时填写或同时缺失、目录移动到自身或子目录下、`targetFilePath` 用于多源或目录源。
+- 目标路径或最终落点已存在时，该源移动失败；当前版本不覆盖已有文件或目录。
+- 移动源 Markdown 文件不会改变其中未解析引用的待匹配路径；未解析引用仍按导入时解析出的路径等待后续上传。
+- Markdown 中已经解析成功的文件引用不会因移动失效；读取文件、下载 Markdown、知识检索返回内容时，会按目标文件当前路径输出引用。
+
+请求示例（移动并重命名单个文件）：
+
+```json
+{
+  "knCode": "1",
+  "sourcePath": ["/制度/人事/考勤制度.pdf"],
+  "targetFilePath": "/归档/人事/考勤制度.pdf",
+  "overwrite": false
+}
+```
+
+请求示例（批量移动文件和目录到目录 `/归档/人事`，目录不存在时自动创建）：
+
+```json
+{
+  "knCode": "1",
+  "sourcePath": [
+    "/制度/人事/考勤制度.pdf",
+    "/制度/人事/图片"
+  ],
+  "targetDirectoryPath": "/归档/人事"
+}
+```
+
+成功响应：`resultObject` 为批量结果。
+
+```json
+{
+  "resultCode": "0",
+  "resultMsg": "success",
+  "resultObject": {
+    "data": [
+      {
+        "sourcePath": "/制度/人事/考勤制度.pdf",
+        "targetPath": "/归档/人事/考勤制度.pdf",
+        "success": true,
+        "error": null
+      }
+    ],
+    "summary": { "total": 1, "succeeded": 1, "failed": 0 }
+  }
+}
+```
+
+`data` 元素字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `sourcePath` | string | 本次移动的源路径 |
+| `targetPath` | string \| null | 该源路径实际移动后的目标路径；失败时可为 `null` |
+| `success` | boolean | 是否移动成功 |
+| `error` | string \| null | 失败原因；成功时为 `null` |
+
+`summary` 字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `total` | integer | 本次请求处理的移动项总数 |
+| `succeeded` | integer | 成功数 |
+| `failed` | integer | 失败数 |
+
+部分成功响应示例：
+
+```json
+{
+  "resultCode": "0",
+  "resultMsg": "success",
+  "resultObject": {
+    "data": [
+      {
+        "sourcePath": "/制度/人事/考勤制度.pdf",
+        "targetPath": "/归档/人事/考勤制度.pdf",
+        "success": true,
+        "error": null
+      },
+      {
+        "sourcePath": "/制度/人事/不存在.pdf",
+        "targetPath": null,
+        "success": false,
+        "error": "source path not found: /制度/人事/不存在.pdf"
+      }
+    ],
+    "summary": { "total": 2, "succeeded": 1, "failed": 1 }
+  }
+}
+```
+
+整请求失败响应示例：
+
+- `request validation failed`：请求体结构错误或 `sourcePath` 为空。
+- `unsafe path`：路径含 `..` 跨界段。
+- `cannot move root directory`：尝试移动知识库根目录 `/`。
+- `exactly one of targetDirectoryPath or targetFilePath is required`：目标目录路径和目标文件路径必须且只能填写一个。
+- `targetFilePath requires exactly one file source`：`targetFilePath` 只能用于单个文件源。
+- `target path must not be inside source directory`：目录移动目标位于源目录内部。
+
+```json
+{
+  "resultCode": "-1",
+  "resultMsg": "target path must not be inside source directory",
+  "resultObject": {}
+}
+```
+
+### `POST /api/v1/knowledgeItems/references`
+
+查询指定文件的 Markdown 引用关系。兼容别名：`POST /api/v1/knowledge-items/references`。
+
+请求体：`application/json`
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `knCode` | string | 是 | 知识库编码 |
+| `filePath` | string | 是 | 查询对象文件路径，以 `/` 开头，不包括知识库名称 |
+| `direction` | string | 否 | 查询方向：`inbound`、`outbound`、`all`；默认 `inbound` |
+
+`direction` 语义：
+
+- `inbound`：查询“谁引用了 `filePath`”。
+- `outbound`：查询“`filePath` 引用了谁”。
+- `all`：同时返回 inbound 和 outbound。
+
+响应体固定包含 `inbound` 与 `outbound` 两个数组；未被本次 `direction` 请求的方向返回空数组。
+
+请求示例：
+
+```json
+{
+  "knCode": "1",
+  "filePath": "/制度/人事/附件/请假单模板.docx",
+  "direction": "all"
+}
+```
+
+成功响应示例：
+
+```json
+{
+  "resultCode": "0",
+  "resultMsg": "success",
+  "resultObject": {
+    "inbound": [
+      {
+        "sourcePath": "/制度/人事/请假制度.md",
+        "originalTarget": "./附件/请假单模板.docx",
+        "targetSuffix": "",
+        "targetPath": "/制度/人事/附件/请假单模板.docx",
+        "status": "resolved"
+      }
+    ],
+    "outbound": [
+      {
+        "sourcePath": "/制度/人事/附件/请假单模板.docx",
+        "originalTarget": "../员工手册.md#请假",
+        "targetSuffix": "#请假",
+        "targetPath": "/制度/员工手册.md",
+        "status": "resolved"
+      }
+    ]
+  }
+}
+```
+
+`inbound` 元素字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `sourcePath` | string | 包含该 Markdown 引用的来源文件路径 |
+| `originalTarget` | string | 来源 Markdown 中原始写入的引用目标 |
+| `targetSuffix` | string | 引用目标中的后缀片段；无后缀时为空字符串 |
+| `targetPath` | string | 当前匹配到的目标路径；broken 引用返回删除时记录的目标路径 |
+| `status` | string | 引用状态，可能为 `resolved`、`unresolved` 或 `broken` |
+
+`outbound` 元素字段同 inbound；其中 `sourcePath` 固定为本次请求的 `filePath`。
+
+查询语义：
+
+- `inbound` 且 `filePath` 指向当前存在的文件时，按当前文件对应的 target id 查询 `resolved` 引用；目标文件移动后仍可通过当前路径查询。
+- `inbound` 且目标文件尚未上传或已删除时，按引用表中的 `target_path` 查询 `unresolved` / `broken` 引用。
+- `outbound` 按 `filePath` 定位 source 文件，返回该 Markdown 文件中登记的可管理文件引用；resolved 引用的 `targetPath` 输出目标当前路径，unresolved / broken 引用输出引用表中的待匹配路径或删除前路径。
+- `all` 同时执行 inbound 与 outbound，并分别写入 `resultObject.inbound` 和 `resultObject.outbound`。
+- 默认不返回已删除 source 文件产生的引用；outbound 查询的 source 文件不存在或已删除时返回空数组。
+- 该接口只查询引用关系，不读取或修改 Markdown 内容。
 
 ## 目录与文件读取
 
@@ -604,7 +841,7 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
 
 ### `POST /api/v1/readFile`
 
-根据文件路径读取指定知识库下的原始文件内容，并以 Markdown 文本形式返回。
+根据文件路径读取指定知识库下的文件内容，并以 Markdown 文本形式返回。若文件内容包含内部 Markdown 引用 token，响应会解析为用户可见路径；未解析或目标已删除的引用回退为用户原始写法。
 
 请求体：`application/json`
 
@@ -655,7 +892,7 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
 
 ### `POST /api/v1/downloadFile`
 
-根据文件路径下载指定知识库下的原始文件。
+根据文件路径下载指定知识库下的文件。非 Markdown 文件返回入库字节；Markdown 文件入库时会被 token 化，系统不保留用户最初上传的原始 Markdown 字节，因此下载时返回已解析为用户可见路径的 Markdown 内容。
 
 请求体：`application/json`
 
@@ -678,7 +915,7 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
 - `200 OK`
 - `Content-Type: application/octet-stream`
 - `Content-Disposition: attachment; filename="..."` 或带 `filename*`
-- 响应体为原始文件二进制字节流
+- 响应体为文件字节流；Markdown 文件为解析后的 Markdown 字节流
 
 失败响应示例：
 

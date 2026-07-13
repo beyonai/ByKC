@@ -12,7 +12,7 @@ class RetrievalProjectionRepository:
         """Delete retrieval projection rows for one filesystem subtree."""
         await cursor.execute(
             """
-            DELETE FROM knowledge_item_chunk_retrieval_mv
+            DELETE FROM knowledge_chunk_retrieval_mv
             WHERE knowledge_base_id = %(knowledge_base_id)s
               AND fs_entry_id = ANY(%(fs_entry_ids)s)
             """,
@@ -72,5 +72,30 @@ class RetrievalProjectionRepository:
                 "knowledge_base_id": knowledge_base_id,
                 "fs_entry_id": fs_entry_id,
                 "full_path": full_path,
+            },
+        )
+
+    async def sync_full_paths_for_fs_entry_ids(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        fs_entry_ids: list[int],
+    ) -> None:
+        """Update projection paths for moved file entries."""
+        if not fs_entry_ids:
+            return
+        await cursor.execute(
+            """
+            UPDATE knowledge_chunk_retrieval_mv
+               SET full_path = ltrim(fe.virtual_path, '/')
+              FROM knowledge_fs_entry fe
+             WHERE knowledge_chunk_retrieval_mv.fs_entry_id = fe.kid
+               AND knowledge_chunk_retrieval_mv.knowledge_base_id = %(knowledge_base_id)s
+               AND knowledge_chunk_retrieval_mv.fs_entry_id = ANY(%(fs_entry_ids)s)
+            """,
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "fs_entry_ids": fs_entry_ids,
             },
         )

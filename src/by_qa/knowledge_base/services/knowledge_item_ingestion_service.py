@@ -3,7 +3,7 @@
 import asyncio
 import hashlib
 import mimetypes
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, Callable
@@ -147,6 +147,8 @@ class KnowledgeItemIngestionService:
     knowledge_build_task_repository: Any | None = None
     knowledge_fetch_cache_repository: Any | None = None
     file_metadata_value_repository: Any | None = None
+    knowledge_file_reference_repository: Any | None = None
+    markdown_reference_rewriter: Any | None = None
 
     async def convert_uploaded_file_to_markdown(
         self,
@@ -162,7 +164,7 @@ class KnowledgeItemIngestionService:
             document_chunking_service=document_chunking_service,
         )
 
-    async def upload_file(self, request: KnowledgeItemUploadRequest) -> None:
+    async def upload_file(self, request: KnowledgeItemUploadRequest) -> dict[str, Any]:
         """Upload one original file and register its storage metadata on the file entry."""
         logger.info(
             "knowledge_item_ingestion_service.upload_file started: kb_code=%s, file_path=%s, file_size=%s",
@@ -178,8 +180,6 @@ class KnowledgeItemIngestionService:
             raise KnowledgeBaseValidationError("file_path must not be root")
 
         mime_type = _guess_mime_type(normalized_object_path)
-        checksum = hashlib.sha256(request.file_content).hexdigest()
-
         connection = await self.connection_factory()
         stored: Any | None = None
         original_location: Any | None = None
@@ -207,6 +207,16 @@ class KnowledgeItemIngestionService:
                 raise KnowledgeBaseValidationError(str(exc)) from exc
 
             fs_entry_id = self._row_id(file_entry_row)
+            content = request.file_content
+            checksum = hashlib.sha256(request.file_content).hexdigest()
+            if self._is_markdown_upload(normalized_object_path, mime_type):
+                content = await self._rewrite_markdown_references(
+                    content,
+                    cursor=cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    source_fs_entry_id=fs_entry_id,
+                    normalized_object_path=normalized_object_path,
+                )
 
             original_location = self.storage_provider.build_original_location(
                 kb_code=request.kb_code,
@@ -218,7 +228,7 @@ class KnowledgeItemIngestionService:
 
             stored = await self.storage_provider.write(
                 original_location,
-                request.file_content,
+                content,
                 content_type=mime_type,
             )
 
@@ -227,7 +237,7 @@ class KnowledgeItemIngestionService:
                 fs_entry_id=fs_entry_id,
                 file_description=request.file_description,
                 original_location=stored.location,
-                file_size=len(request.file_content),
+                file_size=len(content),
                 mime_type=mime_type,
                 checksum=checksum,
             )
@@ -237,11 +247,26 @@ class KnowledgeItemIngestionService:
                     cursor,
                     fs_entry_id=fs_entry_id,
                     knowledge_base_id=knowledge_base_id,
-                    content=request.file_content,
+                    content=content,
                     file_path=normalized_file_path,
                 )
 
+            if self.knowledge_file_reference_repository is not None:
+                await self.knowledge_file_reference_repository.resolve_pending_for_path(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    target_path="/" + normalized_object_path,
+                    target_fs_entry_id=fs_entry_id,
+                )
+
             await connection.commit()
+            return {
+                "fs_entry_id": fs_entry_id,
+                "knowledge_base_id": knowledge_base_id,
+                "virtual_path": file_entry_row.get("virtual_path")
+                or "/" + normalized_object_path,
+                "mime_type": mime_type,
+            }
         except Exception:
             await connection.rollback()
             if original_location is not None:
@@ -249,6 +274,39 @@ class KnowledgeItemIngestionService:
             raise
         finally:
             await connection.close()
+
+    def _is_markdown_upload(self, normalized_object_path: str, mime_type: str) -> bool:
+        suffix = PurePosixPath(normalized_object_path).suffix.lower()
+        return mime_type == "text/markdown" or suffix in {".md", ".markdown"}
+
+    async def _rewrite_markdown_references(
+        self,
+        content: bytes,
+        *,
+        cursor: Any,
+        knowledge_base_id: int,
+        source_fs_entry_id: int,
+        normalized_object_path: str,
+    ) -> bytes:
+        if (
+            self.markdown_reference_rewriter is None
+            or self.knowledge_file_reference_repository is None
+        ):
+            return content
+        text = content.decode("utf-8")
+        source_dir = "/" + str(PurePosixPath(normalized_object_path).parent).strip("/")
+        if source_dir == "/.":
+            source_dir = "/"
+        rewritten = await self.markdown_reference_rewriter.rewrite(
+            text,
+            source_dir=source_dir,
+            knowledge_base_id=knowledge_base_id,
+            source_fs_entry_id=source_fs_entry_id,
+            cursor=cursor,
+            reference_repository=self.knowledge_file_reference_repository,
+            fs_entry_repository=self.knowledge_fs_entry_repository,
+        )
+        return rewritten.encode("utf-8")
 
     async def file_exists(self, kb_code: str, full_path: str) -> bool:
         """Return True if an uploaded file exists at `full_path` in the KB."""
@@ -297,6 +355,135 @@ class KnowledgeItemIngestionService:
             return existing
         finally:
             await connection.close()
+
+    async def resolve_pending_references_for_paths(
+        self,
+        *,
+        kb_code: str,
+        file_paths: Iterable[str] | None = None,
+        uploaded_rows: Iterable[Mapping[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Resolve pending Markdown references for already-uploaded target paths."""
+        if self.knowledge_file_reference_repository is None:
+            return []
+
+        upload_targets = self._pending_reference_targets_from_uploaded_rows(
+            uploaded_rows or []
+        )
+        upload_target_paths = {
+            target_path.strip("/") for _, target_path, _ in upload_targets
+        }
+
+        normalized = list(
+            dict.fromkeys(
+                path.strip("/")
+                for path in (file_paths or [])
+                if (path or "").strip("/")
+                and path.strip("/") not in upload_target_paths
+            )
+        )
+        if uploaded_rows is not None and file_paths is None and not upload_targets:
+            return []
+        if not normalized:
+            if not upload_targets:
+                return []
+
+        connection = await self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            resolved: list[dict[str, Any]] = []
+            for (
+                knowledge_base_id,
+                target_path,
+                target_fs_entry_id,
+            ) in upload_targets:
+                resolved.extend(
+                    await self.knowledge_file_reference_repository.resolve_pending_for_path(
+                        cursor,
+                        knowledge_base_id=knowledge_base_id,
+                        target_path=target_path,
+                        target_fs_entry_id=target_fs_entry_id,
+                    )
+                )
+                resolved.extend(
+                    await self.knowledge_file_reference_repository.rebind_deleted_target_for_path(
+                        cursor,
+                        knowledge_base_id=knowledge_base_id,
+                        target_path=target_path,
+                        target_fs_entry_id=target_fs_entry_id,
+                    )
+                )
+
+            if normalized:
+                kb_row = await self.knowledge_base_repository.get_by_code(
+                    cursor, kb_code
+                )
+                if not kb_row:
+                    if upload_targets:
+                        await connection.commit()
+                    return resolved
+                knowledge_base_id = self._row_id(kb_row)
+
+            for full_path in normalized:
+                file_row = await self.knowledge_fs_entry_repository.get_file_by_path(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    full_path=full_path,
+                )
+                if file_row is None:
+                    continue
+                resolved.extend(
+                    await self.knowledge_file_reference_repository.resolve_pending_for_path(
+                        cursor,
+                        knowledge_base_id=knowledge_base_id,
+                        target_path="/" + full_path,
+                        target_fs_entry_id=self._row_id(file_row),
+                    )
+                )
+                resolved.extend(
+                    await self.knowledge_file_reference_repository.rebind_deleted_target_for_path(
+                        cursor,
+                        knowledge_base_id=knowledge_base_id,
+                        target_path="/" + full_path,
+                        target_fs_entry_id=self._row_id(file_row),
+                    )
+                )
+
+            await connection.commit()
+            return resolved
+        except Exception:
+            await connection.rollback()
+            raise
+        finally:
+            await connection.close()
+
+    def _pending_reference_targets_from_uploaded_rows(
+        self, uploaded_rows: Iterable[Mapping[str, Any]]
+    ) -> list[tuple[int, str, int]]:
+        targets: list[tuple[int, str, int]] = []
+        seen: set[tuple[int, str]] = set()
+        for row in uploaded_rows:
+            fs_entry_value = row.get("fs_entry_id") or row.get("kid")
+            knowledge_base_value = row.get("knowledge_base_id")
+            path_value = (
+                row.get("virtual_path") or row.get("file_path") or row.get("filePath")
+            )
+            if fs_entry_value is None or knowledge_base_value is None or not path_value:
+                continue
+            target_path = "/" + str(path_value).strip("/")
+            if target_path == "/":
+                continue
+            try:
+                knowledge_base_id = int(knowledge_base_value)
+                target_fs_entry_id = int(fs_entry_value)
+            except (TypeError, ValueError):
+                continue
+            dedupe_key = (knowledge_base_id, target_path)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            targets.append((knowledge_base_id, target_path, target_fs_entry_id))
+        return targets
 
     async def _apply_front_matter_metadata(
         self,
@@ -651,6 +838,12 @@ class KnowledgeItemIngestionService:
                     f"knowledge item not found: {request.file_path}"
                 )
             fs_entry_id = int(file_row["kid"])
+            if self.knowledge_file_reference_repository is not None:
+                await self.knowledge_file_reference_repository.mark_targets_deleted(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    targets=[(fs_entry_id, str(file_row["virtual_path"]))],
+                )
             await self.knowledge_fs_entry_repository.soft_delete_file_entry(
                 cursor,
                 knowledge_base_id=knowledge_base_id,

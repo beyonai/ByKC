@@ -48,7 +48,7 @@ knowledge = [
     "python-pptx>=1.0.2",
     "xlrd>=2.0.0",
     "jieba>=0.42.1",
-    "by-framework==0.2.2.dev8",
+    "by-framework==0.2.2.dev9",
     "lxml==6.1.0",
     "urllib3==2.7.0"
 ]
@@ -61,7 +61,7 @@ qa = [
     "langgraph-checkpoint-sqlite>=2.0.0",
     "psycopg[binary]>=3.2.0",
     "aiosqlite>=0.20.0",
-    "by-framework==0.2.2.dev8",
+    "by-framework==0.2.2.dev9",
     "json_repair==0.52.2",
     "langsmith==0.8.0",
     "lxml==6.1.0",
@@ -86,7 +86,7 @@ all = [
     "langgraph-checkpoint-postgres>=2.0.0",
     "langgraph-checkpoint-sqlite>=2.0.0",
     "aiosqlite>=0.20.0",
-    "by-framework==0.2.2.dev8",
+    "by-framework==0.2.2.dev9",
     "json_repair==0.52.2",
     "jieba>=0.42.1",
     "langsmith==0.8.0",

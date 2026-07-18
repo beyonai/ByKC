@@ -106,6 +106,56 @@ async def _resolve_maybe_async(factory):
     return result
 
 
+async def _backfill_markdown_update_timeline_summary(
+    *,
+    markdown_update_summary_service,
+    connection_factory,
+    update_timeline_repository,
+    timeline_id: int,
+    old_markdown_context: str | None,
+    new_markdown_context: str | None,
+) -> None:
+    """Replace a rule-based timeline summary when an LLM produces a safe one."""
+    try:
+        summary = await markdown_update_summary_service.generate_llm_summary(
+            old_markdown_context or "", new_markdown_context or ""
+        )
+    except Exception:
+        logger.exception(
+            "document update timeline LLM summary failed: timeline_id=%s", timeline_id
+        )
+        return
+    if not summary:
+        logger.info(
+            "document update timeline LLM summary unavailable; retaining fallback: timeline_id=%s",
+            timeline_id,
+        )
+        return
+
+    connection = None
+    try:
+        connection = await connection_factory()
+        cursor = connection.cursor()
+        await update_timeline_repository.update_summary_from_llm(
+            cursor, timeline_id=timeline_id, summary=summary
+        )
+        await connection.commit()
+    except Exception:
+        logger.exception(
+            "document update timeline LLM summary backfill failed: timeline_id=%s",
+            timeline_id,
+        )
+    finally:
+        if connection is not None:
+            try:
+                await connection.close()
+            except Exception:
+                logger.exception(
+                    "document update timeline backfill connection close failed: timeline_id=%s",
+                    timeline_id,
+                )
+
+
 def _ensure_leading_slash(path: str) -> str:
     """Normalize outward-facing paths to the canonical slash-prefixed form."""
     normalized = str(path or "").strip()
@@ -620,6 +670,7 @@ def register_routes(
     @app.post("/api/v1/knowledge-items/update")
     async def update_document(
         request: Request,
+        background_tasks: BackgroundTasks,
         kn_code: str | None = Form(None, alias="knCode"),
         file_path: str | None = Form(None, alias="filePath"),
         file_description: str | None = Form(None, alias="fileDescription"),
@@ -677,7 +728,17 @@ def register_routes(
                     "document update service is not configured"
                 )
             service = await _resolve_maybe_async(get_document_update_service)
-            await service.update_file(document_request)
+            update_result = await service.update_file(document_request)
+            if update_result is not None and update_result.is_markdown:
+                background_tasks.add_task(
+                    _backfill_markdown_update_timeline_summary,
+                    markdown_update_summary_service=service.markdown_update_summary_service,
+                    connection_factory=service.connection_factory,
+                    update_timeline_repository=service.update_timeline_repository,
+                    timeline_id=update_result.timeline_id,
+                    old_markdown_context=update_result.old_markdown_context,
+                    new_markdown_context=update_result.new_markdown_context,
+                )
         except KnowledgeBaseConfigurationError as exc:
             return _documented_error_response(
                 result_msg=str(exc),

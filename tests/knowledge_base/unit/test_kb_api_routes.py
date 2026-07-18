@@ -4,6 +4,7 @@ import io
 import zipfile
 from decimal import Decimal
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -18,6 +19,7 @@ from by_qa.knowledge_base.api.schemas import (
     MoveKnowledgeItemsSummary,
     SearchHit,
 )
+from by_qa.knowledge_base.services.document_update_service import DocumentUpdateResult
 from by_qa.knowledge_base.services.errors import (
     KnowledgeBaseConfigurationError,
     KnowledgeBaseValidationError,
@@ -1175,6 +1177,147 @@ def test_document_update_route_returns_documented_success_shape():
     assert request.file_path == "/docs/readme.md"
     assert request.file_description == "updated description"
     assert request.process_front_matter is False
+
+
+class _TimelineConnection:
+    def __init__(self):
+        self.cursor_value = object()
+        self.committed = False
+        self.closed = False
+
+    def cursor(self):
+        return self.cursor_value
+
+    async def commit(self):
+        self.committed = True
+
+    async def close(self):
+        self.closed = True
+
+
+class _TimelineRepository:
+    def __init__(self):
+        self.calls = []
+
+    async def update_summary_from_llm(self, cursor, *, timeline_id, summary):
+        self.calls.append((cursor, timeline_id, summary))
+
+
+class _MarkdownSummaryService:
+    def __init__(self, result=None, error=None):
+        self.result = result
+        self.error = error
+        self.calls = []
+
+    async def generate_llm_summary(self, old_markdown, new_markdown):
+        self.calls.append((old_markdown, new_markdown))
+        if self.error:
+            raise self.error
+        return self.result
+
+
+class _MarkdownUpdateService(FakeKBService):
+    def __init__(self, result, summary_service):
+        super().__init__()
+        self.result = result
+        self.markdown_update_summary_service = summary_service
+        self.update_timeline_repository = _TimelineRepository()
+        self.connections = []
+
+    async def connection_factory(self):
+        connection = _TimelineConnection()
+        self.connections.append(connection)
+        return connection
+
+    async def update_file(self, request):
+        self.document_update_requests.append(request)
+        return self.result
+
+
+def test_document_update_route_schedules_markdown_timeline_backfill_and_writes_summary():
+    summary = "本次更新补充了员工休假规则的适用范围，并明确了申请审批与生效时间要求，删除了已废止的说明内容。"
+    summary_service = _MarkdownSummaryService(result=summary)
+    service = _MarkdownUpdateService(
+        DocumentUpdateResult(
+            timeline_id=81,
+            is_markdown=True,
+            old_markdown_context="# 旧版\n旧内容",
+            new_markdown_context="# 新版\n新内容",
+        ),
+        summary_service,
+    )
+    client = make_document_update_client(
+        service, get_document_update_service=lambda: service
+    )
+
+    response = client.post(
+        "/api/v1/knowledgeItems/update",
+        data={"knCode": "hr-policy", "filePath": "/docs/readme.md"},
+        files={"fileContent": ("readme.md", b"# Updated\n", "text/markdown")},
+    )
+
+    assert response.json()["resultCode"] == "0"
+    assert summary_service.calls == [("# 旧版\n旧内容", "# 新版\n新内容")]
+    assert len(service.connections) == 1
+    connection = service.connections[0]
+    assert connection.committed is True
+    assert connection.closed is True
+    assert service.update_timeline_repository.calls == [
+        (connection.cursor_value, 81, summary)
+    ]
+
+
+def test_document_update_route_does_not_schedule_timeline_backfill_for_non_markdown():
+    summary_service = _MarkdownSummaryService(
+        result="不会被使用的有效摘要内容，应当保持完全不执行以避免无谓的模型调用和数据库写入。"
+    )
+    service = _MarkdownUpdateService(
+        DocumentUpdateResult(timeline_id=82, is_markdown=False), summary_service
+    )
+    client = make_document_update_client(
+        service, get_document_update_service=lambda: service
+    )
+
+    response = client.post(
+        "/api/v1/knowledgeItems/update",
+        data={"knCode": "hr-policy", "filePath": "/docs/readme.pdf"},
+        files={"fileContent": ("readme.pdf", b"%PDF", "application/pdf")},
+    )
+
+    assert response.json()["resultCode"] == "0"
+    assert summary_service.calls == []
+    assert service.connections == []
+    assert service.update_timeline_repository.calls == []
+
+
+@pytest.mark.parametrize(
+    "result,error", [(None, None), (None, RuntimeError("LLM unavailable"))]
+)
+def test_document_update_route_keeps_fallback_when_llm_backfill_is_unavailable(
+    result, error
+):
+    service = _MarkdownUpdateService(
+        DocumentUpdateResult(
+            timeline_id=83,
+            is_markdown=True,
+            old_markdown_context="旧版",
+            new_markdown_context="新版",
+        ),
+        _MarkdownSummaryService(result=result, error=error),
+    )
+    client = make_document_update_client(
+        service, get_document_update_service=lambda: service
+    )
+
+    response = client.post(
+        "/api/v1/knowledgeItems/update",
+        data={"knCode": "hr-policy", "filePath": "/docs/readme.md"},
+        files={"fileContent": ("readme.md", b"# Updated\n", "text/markdown")},
+    )
+
+    assert response.json()["resultCode"] == "0"
+    assert service.connections == []
+    assert service.update_timeline_repository.calls == []
 
 
 def test_document_update_route_rejects_invalid_target_paths():

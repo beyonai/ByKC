@@ -15,8 +15,11 @@ pytestmark = pytest.mark.asyncio
 
 
 class Connection:
-    def __init__(self, calls, fail_commit=False):
-        self.calls, self.fail_commit, self.cursor_obj = calls, fail_commit, object()
+    def __init__(self, calls, fail_commit=False, fail_rollback=False):
+        self.calls = calls
+        self.fail_commit = fail_commit
+        self.fail_rollback = fail_rollback
+        self.cursor_obj = object()
         self.rolled_back = False
 
     def cursor(self):
@@ -30,6 +33,8 @@ class Connection:
     async def rollback(self):
         self.rolled_back = True
         self.calls.append(("rollback", {}))
+        if self.fail_rollback:
+            raise RuntimeError("rollback unavailable")
 
     async def close(self):
         self.calls.append(("close", {}))
@@ -177,10 +182,16 @@ class Summary:
 
 
 def build_service(
-    calls, *, fail_commit=False, fail_write=False, markdown=True, task_status=None
+    calls,
+    *,
+    fail_commit=False,
+    fail_rollback=False,
+    fail_write=False,
+    markdown=True,
+    task_status=None,
 ):
     connection, storage = (
-        Connection(calls, fail_commit),
+        Connection(calls, fail_commit, fail_rollback),
         Storage(calls, fail_write=fail_write),
     )
     service = DocumentUpdateService(
@@ -238,6 +249,23 @@ async def test_database_failure_restores_all_old_original_bytes_to_existing_loca
         await service.update_file(request())
     writes = [data for name, data in calls if name == "write"]
     assert [item["location"] for item in writes] == [storage.original, storage.original]
+    assert writes[-1]["content"] == old
+    assert storage.objects[storage.original] == old
+    assert connection.rolled_back
+
+
+async def test_rollback_failure_still_attempts_storage_restore_and_raises_original_error():
+    calls = []
+    service, connection, storage = build_service(
+        calls, fail_commit=True, fail_rollback=True
+    )
+    old = storage.objects[storage.original]
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await service.update_file(request())
+
+    writes = [data for name, data in calls if name == "write"]
+    assert writes[-1]["location"] == storage.original
     assert writes[-1]["content"] == old
     assert storage.objects[storage.original] == old
     assert connection.rolled_back

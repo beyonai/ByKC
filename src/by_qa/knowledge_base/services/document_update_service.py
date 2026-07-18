@@ -204,7 +204,15 @@ class DocumentUpdateService:
             )
         except Exception:
             if not committed:
-                await connection.rollback()
+                try:
+                    await connection.rollback()
+                except Exception:
+                    logger.critical(
+                        "document update rollback failed; attempting storage compensation: kb_code=%s, file_path=%s",
+                        request.kb_code,
+                        request.file_path,
+                        exc_info=True,
+                    )
             if (
                 not committed
                 and wrote_original

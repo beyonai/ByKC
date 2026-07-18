@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from by_qa.main import _detect_missing_packages, _register_api_modules
+from by_qa.main import API_MODULES, _detect_missing_packages, _register_api_modules
 
 
 def test_detect_missing_packages_returns_only_unavailable_modules(monkeypatch):
@@ -90,3 +90,11 @@ def test_register_api_modules_registers_available_modules(monkeypatch):
     assert infos == [
         "api module registered: module=knowledge_base, route_module=by_qa.knowledge_base.api.routes"
     ]
+
+
+def test_knowledge_base_module_injects_document_update_resolver():
+    definition = next(item for item in API_MODULES if item.name == "knowledge_base")
+
+    assert definition.register_kwargs_factory()[
+        "get_document_update_service"
+    ].__name__ == ("resolve_document_update_service")

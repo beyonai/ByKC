@@ -15,6 +15,7 @@ def reset_main_runtime_state(monkeypatch):
     monkeypatch.setattr(main_module, "_knowledge_base_service", None)
     monkeypatch.setattr(main_module, "_knowledge_item_ingestion_service", None)
     monkeypatch.setattr(main_module, "_knowledge_item_search_service", None)
+    monkeypatch.setattr(main_module, "_document_update_service", None, raising=False)
     monkeypatch.setattr(main_module, "_knowledge_fetch_cache_cleanup_service", None)
     monkeypatch.setattr(main_module, "_document_chunking_service", None)
     monkeypatch.setattr(main_module, "_knowledge_base_schema_initialized", False)
@@ -118,6 +119,49 @@ async def test_knowledge_item_services_receive_model_config_provider(monkeypatch
     assert recorded["ingestion"] == (main_module.settings, provider)
     assert recorded["search"] == (main_module.settings, provider)
     assert recorded["ensured"] == [provider, provider]
+
+
+@pytest.mark.asyncio
+async def test_document_update_service_is_built_and_cached_with_model_config_provider(
+    monkeypatch,
+):
+    provider = object()
+    recorded = {}
+
+    async def fake_build_document_update(settings, provider=None):
+        recorded["build"] = (settings, provider)
+        return "document-update-service"
+
+    fake_runtime = SimpleNamespace(
+        build_document_update_service=fake_build_document_update
+    )
+
+    def fake_import(name, global_vars=None, local_vars=None, fromlist=(), level=0):
+        if name == "by_qa.knowledge_base.infrastructure.runtime":
+            return fake_runtime
+        return original_import(name, global_vars, local_vars, fromlist, level)
+
+    original_import = __import__
+    monkeypatch.setattr(main_module, "load_model_config_provider", lambda: provider)
+    monkeypatch.setattr(__import__("builtins"), "__import__", fake_import)
+
+    async def fake_ensure_schema(provider=None):
+        recorded.setdefault("ensured", []).append(provider)
+
+    monkeypatch.setattr(
+        main_module,
+        "_ensure_knowledge_base_schema_initialized",
+        fake_ensure_schema,
+    )
+
+    assert (
+        await main_module.resolve_document_update_service() == "document-update-service"
+    )
+    assert (
+        await main_module.resolve_document_update_service() == "document-update-service"
+    )
+    assert recorded["build"] == (main_module.settings, provider)
+    assert recorded["ensured"] == [provider]
 
 
 @pytest.mark.asyncio
@@ -456,8 +500,9 @@ async def test_lifespan_logs_configuration_and_registers_service(monkeypatch):
     monkeypatch.setattr(
         main_module,
         "ServiceRegistry",
-        lambda redis_client=None: recorded.update(service_registry_client=redis_client)
-        or fake_registry,
+        lambda redis_client=None: (
+            recorded.update(service_registry_client=redis_client) or fake_registry
+        ),
     )
     monkeypatch.setattr(
         main_module,

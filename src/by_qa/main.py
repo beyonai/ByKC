@@ -27,6 +27,7 @@ _request_model_config_provider: ContextVar[Any | None] = ContextVar(
 _knowledge_base_service: Any | None = None
 _knowledge_item_ingestion_service: Any | None = None
 _knowledge_item_search_service: Any | None = None
+_document_update_service: Any | None = None
 _knowledge_fetch_cache_cleanup_service: Any | None = None
 _document_chunking_service: Any | None = None
 _metadata_search_service: Any | None = None
@@ -58,6 +59,7 @@ API_MODULES = (
                 resolve_knowledge_item_ingestion_service
             ),
             "get_knowledge_item_search_service": resolve_knowledge_item_search_service,
+            "get_document_update_service": resolve_document_update_service,
             "get_document_chunking_service": resolve_document_chunking_service,
             "get_metadata_search_service": resolve_metadata_search_service,
             "get_file_metadata_query_service": resolve_file_metadata_query_service,
@@ -330,6 +332,31 @@ async def _get_or_build_knowledge_item_search_service(provider: Any | None = Non
     return _knowledge_item_search_service
 
 
+async def _get_or_build_document_update_service(provider: Any | None = None):
+    """Get or build the document-update service."""
+    global _document_update_service
+    request_provider = _get_request_model_config_provider()
+    if request_provider is not None and provider is None:
+        from by_qa.knowledge_base.infrastructure.runtime import (
+            build_document_update_service,
+        )
+
+        await _ensure_knowledge_base_schema_initialized(provider=request_provider)
+        return await build_document_update_service(settings, provider=request_provider)
+
+    if _document_update_service is None:
+        from by_qa.knowledge_base.infrastructure.runtime import (
+            build_document_update_service,
+        )
+
+        active_provider = provider or _build_model_config_provider()
+        await _ensure_knowledge_base_schema_initialized(provider=active_provider)
+        _document_update_service = await build_document_update_service(
+            settings, provider=active_provider
+        )
+    return _document_update_service
+
+
 def get_knowledge_fetch_cache_cleanup_service():
     """Get or create the fetched-file cache cleanup service."""
     return _knowledge_fetch_cache_cleanup_service
@@ -395,6 +422,11 @@ async def resolve_knowledge_item_ingestion_service():
 async def resolve_knowledge_item_search_service():
     """Resolve the search service dynamically so tests can monkeypatch the factory."""
     return await _get_or_build_knowledge_item_search_service()
+
+
+async def resolve_document_update_service():
+    """Resolve the document-update service for the knowledge-base API."""
+    return await _get_or_build_document_update_service()
 
 
 async def resolve_document_chunking_service():

@@ -21,6 +21,9 @@ from by_qa.knowledge_base.infrastructure.database import build_connection_factor
 from by_qa.knowledge_base.infrastructure.runtime import (
     build_knowledge_item_search_service,
 )
+from by_qa.knowledge_base.repositories.knowledge_fs_entry_repository import (
+    KnowledgeFsEntryRepository,
+)
 from by_qa.knowledge_base.services.errors import KnowledgeBaseConfigurationError
 from by_qa.knowledge_build.services.document_chunking_service import (
     DocumentChunkingService,
@@ -445,22 +448,27 @@ async def _latest_update_timeline(
     settings: Settings, *, kb_code: str, file_path: str
 ) -> dict:
     """Read the persisted update event for a document after its HTTP request completes."""
-    _ = file_path
 
     async def _read() -> dict:
         connection = await build_connection_factory(settings)()
         try:
             cursor = connection.cursor()
+            entry = await KnowledgeFsEntryRepository().get_file_by_path(
+                cursor,
+                knowledge_base_id=int(kb_code),
+                full_path=file_path.strip("/"),
+            )
+            assert entry is not None
             await cursor.execute(
                 """
                 SELECT timeline.summary, timeline.summary_source,
                        timeline.old_file_size, timeline.new_file_size
                 FROM knowledge_file_update_timeline AS timeline
-                WHERE timeline.knowledge_base_id = %(kb_code)s::bigint
+                WHERE timeline.fs_entry_id = %(fs_entry_id)s
                 ORDER BY timeline.kid DESC
                 LIMIT 1
                 """,
-                {"kb_code": kb_code},
+                {"fs_entry_id": entry["kid"]},
             )
             row = await cursor.fetchone()
             assert row is not None
@@ -4288,6 +4296,13 @@ async def test_document_update_markdown_reregisters_stable_source_references_and
             file_content=b"png",
             content_type="image/png",
         )
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/assets/new-logo.png",
+            file_content=b"new-png",
+            content_type="image/png",
+        )
         _upload_and_build_file(
             client,
             kb_code=kb_code,
@@ -4298,7 +4313,7 @@ async def test_document_update_markdown_reregisters_stable_source_references_and
             client,
             kb_code=kb_code,
             file_path="/docs/source.md",
-            file_content=b"# New\n![logo](../assets/logo.png)\n",
+            file_content=b"# New\n![logo](../assets/new-logo.png)\n",
         )
         references = _reference_result(
             client,
@@ -4318,9 +4333,9 @@ async def test_document_update_markdown_reregisters_stable_source_references_and
     assert references["outbound"] == [
         {
             "sourcePath": "/docs/source.md",
-            "originalTarget": "../assets/logo.png",
+            "originalTarget": "../assets/new-logo.png",
             "targetSuffix": "",
-            "targetPath": "/assets/logo.png",
+            "targetPath": "/assets/new-logo.png",
             "status": "resolved",
         }
     ]
@@ -4338,6 +4353,23 @@ async def test_document_update_non_markdown_and_validation_errors_use_http_200_e
     settings = _kb_settings(agent_data_path=tmp_path)
     _wire_userfs(monkeypatch, tmp_path / "userfs", settings)
     _set_document_chunking_service(monkeypatch, EchoDocumentChunkingService())
+
+    from by_qa.knowledge_base.services.markdown_update_summary_service import (
+        MarkdownUpdateSummaryService,
+    )
+
+    llm_calls: list[tuple[str, str]] = []
+
+    async def unexpected_llm_summary(self, old_markdown, new_markdown):
+        _ = self
+        llm_calls.append((old_markdown, new_markdown))
+        raise AssertionError("non-Markdown document updates must not invoke the LLM")
+
+    monkeypatch.setattr(
+        MarkdownUpdateSummaryService,
+        "generate_llm_summary",
+        unexpected_llm_summary,
+    )
 
     with TestClient(main_module.app) as client:
         kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
@@ -4392,6 +4424,7 @@ async def test_document_update_non_markdown_and_validation_errors_use_http_200_e
     assert success.status_code == 200
     assert success.json()["resultCode"] == "0"
     assert logo_bytes == b"new-png"
+    assert llm_calls == []
     for response in (zip_error, suffix_error, missing_error, running_error):
         assert response.status_code == 200
         assert response.json()["resultCode"] == "-1"

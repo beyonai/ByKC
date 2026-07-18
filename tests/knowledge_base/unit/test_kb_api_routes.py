@@ -1149,7 +1149,7 @@ def test_document_update_route_rejects_invalid_target_paths(monkeypatch):
     service = FakeKBService()
     client = make_test_client(monkeypatch, service)
 
-    for file_path in ("docs/readme.md", "/", "/docs/../readme.md"):
+    for file_path in ("docs/readme.md", "/", "/docs/../readme.md", "/docs/./readme.md"):
         response = client.post(
             "/api/v1/knowledge-items/update",
             data={"knCode": "hr-policy", "filePath": file_path},

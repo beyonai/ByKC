@@ -321,6 +321,8 @@ class DocumentUpdateRequest(BaseModel):
 
     @model_validator(mode="after")
     def normalize_file_path(self) -> "DocumentUpdateRequest":
+        if "." in self.file_path.split("/"):
+            raise ValueError("filePath must not contain .")
         self.file_path = _normalize_api_path(self.file_path, allow_root=False)
         return self
 

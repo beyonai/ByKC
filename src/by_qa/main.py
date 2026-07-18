@@ -561,6 +561,7 @@ def create_app():
     from fastapi.exceptions import RequestValidationError
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import JSONResponse
+    from starlette.exceptions import HTTPException as StarletteHTTPException
 
     application = FastAPI(
         title="by_qa Service",
@@ -622,6 +623,26 @@ def create_app():
                 "resultObject": {
                     "errors": errors,
                 },
+            },
+        )
+
+    @application.exception_handler(StarletteHTTPException)
+    async def handle_http_exception(
+        request: Request, exc: StarletteHTTPException
+    ) -> JSONResponse:
+        """Normalize framework HTTP errors for API routes only."""
+        if not request.url.path.startswith("/api/v1/"):
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+                headers=exc.headers,
+            )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "resultCode": "-1",
+                "resultMsg": str(exc.detail),
+                "resultObject": {},
             },
         )
 

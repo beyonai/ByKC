@@ -1297,6 +1297,23 @@ def test_document_update_route_without_factory_returns_configuration_error():
     }
 
 
+def test_document_update_route_standardizes_malformed_multipart(monkeypatch):
+    client = make_test_client(monkeypatch, FakeKBService())
+
+    response = client.post(
+        "/api/v1/knowledgeItems/update",
+        content=b"malformed multipart payload",
+        headers={"content-type": "multipart/form-data"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "Missing boundary in multipart.",
+        "resultObject": {},
+    }
+
+
 def test_document_update_route_preserves_omitted_and_empty_descriptions():
     service = FakeKBService()
 

@@ -1,6 +1,7 @@
 """Unit tests for Markdown update summaries."""
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -77,6 +78,37 @@ async def test_llm_summary_times_out_and_returns_none():
     )
 
     assert await service.generate_llm_summary("# 概述\n旧", "# 概述\n新") is None
+
+
+async def test_llm_summary_accepts_a_valid_40_character_chinese_summary():
+    """The lower output boundary accepts 40-character Chinese plain text."""
+    output = "已" * 40
+    service = MarkdownUpdateSummaryService(
+        llm_service=_FakeLLM(output), timeout_seconds=1
+    )
+
+    assert await service.generate_llm_summary("# 概述\n旧", "# 概述\n新") == output
+
+
+async def test_llm_summary_rejects_a_39_character_summary():
+    """The lower output boundary rejects incomplete short summaries."""
+    service = MarkdownUpdateSummaryService(
+        llm_service=_FakeLLM("已" * 39), timeout_seconds=1
+    )
+
+    assert await service.generate_llm_summary("# 概述\n旧", "# 概述\n新") is None
+
+
+def test_service_uses_configured_default_timeout(monkeypatch):
+    """The configured timeout applies when callers do not override it."""
+    monkeypatch.setattr(
+        "by_qa.knowledge_base.services.markdown_update_summary_service.get_settings",
+        lambda: SimpleNamespace(kb_update_timeline_llm_timeout_seconds=7),
+    )
+
+    service = MarkdownUpdateSummaryService(llm_service=_FakeLLM("已" * 40))
+
+    assert service._timeout_seconds == 7
 
 
 class _FakeLLM:

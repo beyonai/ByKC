@@ -26,6 +26,7 @@ class MarkdownUpdateSummaryService:
     """Build deterministic and optional LLM summaries from final Markdown."""
 
     FALLBACK_SUMMARY = "文档内容已更新。"
+    _MIN_LLM_SUMMARY_CHARS = 40
     _MAX_LLM_SUMMARY_CHARS = 180
 
     def __init__(
@@ -142,7 +143,9 @@ class MarkdownUpdateSummaryService:
         if not isinstance(output, str):
             return None
         summary = output.strip()
-        if not summary or len(summary) > self._MAX_LLM_SUMMARY_CHARS:
+        if not (
+            self._MIN_LLM_SUMMARY_CHARS <= len(summary) <= self._MAX_LLM_SUMMARY_CHARS
+        ):
             return None
         if (
             _INTERNAL_REFERENCE_RE.search(summary)

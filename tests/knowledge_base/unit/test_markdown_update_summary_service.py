@@ -46,7 +46,20 @@ def test_rule_summary_ignores_internal_reference_tokens():
 
 @pytest.mark.parametrize(
     "output",
-    ["", "  ", '{"summary":"更新"}', "- 更新了概述", "# 更新摘要", "x" * 181],
+    [
+        "",
+        "  ",
+        '{"summary":"更新"}',
+        "- 更新了概述",
+        "# 更新摘要",
+        "x" * 181,
+        "Updated the overview section.",
+        "已更新 byqa-ref://42 引用。",
+        "```markdown\n已更新概述\n```",
+        "已更新 **概述** 内容。",
+        "> 已更新概述内容。",
+        "已更新 <strong>概述</strong> 内容。",
+    ],
 )
 async def test_llm_summary_rejects_unsafe_or_invalid_output(output):
     """Invalid LLM output leaves the deterministic fallback in place."""

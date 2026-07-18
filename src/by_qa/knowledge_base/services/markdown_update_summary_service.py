@@ -15,6 +15,11 @@ from by_qa.qa.services.llm_service import LLMService
 _HEADING_RE = re.compile(r"^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$")
 _INTERNAL_REFERENCE_RE = re.compile(r"byqa-ref://\S+")
 _MARKDOWN_BLOCK_RE = re.compile(r"(?m)^\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+)")
+_INLINE_MARKDOWN_RE = re.compile(r"```|`|\*\*|__|~~|!?\[[^]]*\]\([^)]*\)")
+_BLOCK_QUOTE_RE = re.compile(r"(?m)^\s*>")
+_HTML_RE = re.compile(r"</?[A-Za-z][^>]*>")
+_ASCII_LETTER_RE = re.compile(r"[A-Za-z]")
+_CHINESE_CHARACTER_RE = re.compile(r"[\u4e00-\u9fff]")
 
 
 class MarkdownUpdateSummaryService:
@@ -139,7 +144,15 @@ class MarkdownUpdateSummaryService:
         summary = output.strip()
         if not summary or len(summary) > self._MAX_LLM_SUMMARY_CHARS:
             return None
-        if _MARKDOWN_BLOCK_RE.search(summary):
+        if (
+            _INTERNAL_REFERENCE_RE.search(summary)
+            or _MARKDOWN_BLOCK_RE.search(summary)
+            or _INLINE_MARKDOWN_RE.search(summary)
+            or _BLOCK_QUOTE_RE.search(summary)
+            or _HTML_RE.search(summary)
+            or _ASCII_LETTER_RE.search(summary)
+            or not _CHINESE_CHARACTER_RE.search(summary)
+        ):
             return None
         try:
             json.loads(summary)

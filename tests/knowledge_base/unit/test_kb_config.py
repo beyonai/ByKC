@@ -4,6 +4,9 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+from pydantic import ValidationError
+
 from by_qa.config import Settings, load_project_env_file
 from by_qa.knowledge_base.services.errors import KnowledgeBaseConfigurationError
 
@@ -97,6 +100,19 @@ def test_settings_expose_embedding_batch_max_texts_default():
     settings = Settings()
 
     assert settings.embedding_batch_max_texts == 10
+
+
+def test_settings_expose_positive_update_timeline_llm_timeout():
+    """Timeline LLM generation has a bounded, configurable timeout."""
+    assert (
+        Settings(
+            KB_UPDATE_TIMELINE_LLM_TIMEOUT_SECONDS=8
+        ).kb_update_timeline_llm_timeout_seconds
+        == 8
+    )
+
+    with pytest.raises(ValidationError, match="KB_UPDATE_TIMELINE_LLM_TIMEOUT_SECONDS"):
+        Settings(KB_UPDATE_TIMELINE_LLM_TIMEOUT_SECONDS=0)
 
 
 def test_settings_accept_minus_one_embedding_batch_max_texts():

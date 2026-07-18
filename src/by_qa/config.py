@@ -158,6 +158,11 @@ class Settings(BaseSettings):
     kb_fetch_cache_cleanup_interval_seconds: int = Field(
         default=10 * 60, alias="KB_FETCH_CACHE_CLEANUP_INTERVAL_SECONDS"
     )
+    kb_update_timeline_llm_timeout_seconds: float = Field(
+        default=15,
+        gt=0,
+        alias="KB_UPDATE_TIMELINE_LLM_TIMEOUT_SECONDS",
+    )
 
     @field_validator("host_machine", mode="before")
     @classmethod

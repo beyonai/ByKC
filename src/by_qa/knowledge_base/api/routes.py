@@ -9,7 +9,7 @@ from pathlib import PurePosixPath
 from typing import Any, Optional
 from urllib.parse import quote
 
-from fastapi import BackgroundTasks, Body, File, Form, Response, UploadFile
+from fastapi import BackgroundTasks, Body, File, Form, Request, Response, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
@@ -26,6 +26,7 @@ from by_qa.knowledge_base.api.schemas import (
     DeleteDirectoryRequest,
     DeleteKnowledgeBaseRequest,
     DeleteKnowledgeItemRequest,
+    DocumentUpdateRequest,
     FileBuildStatusRequest,
     FileToMarkdownIndexRequest,
     KnowledgeItemDownloadRequest,
@@ -133,6 +134,7 @@ def register_routes(
     get_knowledge_base_service,
     get_knowledge_item_ingestion_service,
     get_knowledge_item_search_service,
+    get_document_update_service,
     get_document_chunking_service,
     get_metadata_search_service,
     get_file_metadata_query_service,
@@ -613,6 +615,94 @@ def register_routes(
                 result_object={},
                 status_code=500,
             )
+
+    @app.post("/api/v1/knowledgeItems/update")
+    @app.post("/api/v1/knowledge-items/update")
+    async def update_document(request: Request):
+        form = await request.form()
+        file_content = form.get("fileContent")
+        payload = await file_content.read() if hasattr(file_content, "read") else None
+        request_data = {
+            "knCode": form.get("knCode"),
+            "filePath": form.get("filePath"),
+            "fileContent": payload,
+            "processFrontMatter": form.get("processFrontMatter", True),
+        }
+        if "fileDescription" in form:
+            request_data["fileDescription"] = form.get("fileDescription")
+
+        try:
+            document_request = DocumentUpdateRequest.model_validate(request_data)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+
+        filename = getattr(file_content, "filename", "")
+        upload_suffix = PurePosixPath(filename or "").suffix.lower()
+        target_suffix = PurePosixPath(document_request.file_path).suffix.lower()
+        if upload_suffix == ".zip":
+            return _documented_error_response(
+                result_msg="zip uploads are not supported for document update",
+                result_object={},
+                status_code=422,
+            )
+        if upload_suffix != target_suffix:
+            return _documented_error_response(
+                result_msg="uploaded filename suffix must match filePath suffix",
+                result_object={},
+                status_code=422,
+            )
+
+        logger.info(
+            "update_document request received: kb_code=%s, file_path=%s, has_description=%s, process_front_matter=%s",
+            document_request.kb_code,
+            document_request.file_path,
+            "file_description" in document_request.model_fields_set,
+            document_request.process_front_matter,
+        )
+        try:
+            service = await _resolve_maybe_async(get_document_update_service)
+            await service.update_file(document_request)
+        except KnowledgeBaseConfigurationError as exc:
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=503,
+            )
+        except KnowledgeBaseValidationError as exc:
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object={},
+                status_code=422,
+            )
+        except Exception as exc:
+            logger.exception(
+                "update_document unexpected error: kb_code=%s, file_path=%s, error=%s",
+                document_request.kb_code,
+                document_request.file_path,
+                exc,
+            )
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error",
+                result_object={},
+                status_code=500,
+            )
+
+        return _documented_success_response(
+            result_object={
+                "data": [
+                    {
+                        "knCode": document_request.kb_code,
+                        "filePath": document_request.file_path,
+                        "success": True,
+                        "error": None,
+                    }
+                ]
+            }
+        )
 
     @app.post("/api/v1/knowledgeItems/delete")
     @app.post("/api/v1/knowledge-items/delete")

@@ -293,6 +293,38 @@ class KnowledgeItemUploadRequest(BaseModel):
     )
 
 
+class DocumentUpdateRequest(BaseModel):
+    """Multipart request for replacing one existing document's content."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kb_code: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("knCode", "kb_code"),
+    )
+    file_path: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("filePath", "file_path"),
+    )
+    file_content: bytes = Field(
+        min_length=1,
+        validation_alias=AliasChoices("fileContent", "file_content"),
+    )
+    file_description: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("fileDescription", "file_description"),
+    )
+    process_front_matter: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("processFrontMatter", "process_front_matter"),
+    )
+
+    @model_validator(mode="after")
+    def normalize_file_path(self) -> "DocumentUpdateRequest":
+        self.file_path = _normalize_api_path(self.file_path, allow_root=False)
+        return self
+
+
 class KnowledgeItemListDirRequest(BaseModel):
     """Request body for virtual filesystem listing."""
 

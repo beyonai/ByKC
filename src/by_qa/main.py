@@ -58,6 +58,7 @@ API_MODULES = (
                 resolve_knowledge_item_ingestion_service
             ),
             "get_knowledge_item_search_service": resolve_knowledge_item_search_service,
+            "get_document_update_service": resolve_knowledge_item_ingestion_service,
             "get_document_chunking_service": resolve_document_chunking_service,
             "get_metadata_search_service": resolve_metadata_search_service,
             "get_file_metadata_query_service": resolve_file_metadata_query_service,

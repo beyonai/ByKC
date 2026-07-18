@@ -41,6 +41,7 @@ class FakeKBService:
         self.file_build_task_requests = []
         self.file_build_task_runs = []
         self.move_requests = []
+        self.document_update_requests = []
 
     async def create_knowledge_base(self, request):
         self.created_requests.append(request)
@@ -84,6 +85,10 @@ class FakeKBService:
 
     async def upload_file(self, request):
         self.import_calls.append(request)
+        return None
+
+    async def update_file(self, request):
+        self.document_update_requests.append(request)
         return None
 
     async def convert_uploaded_file_to_markdown(
@@ -1097,6 +1102,143 @@ def test_download_file_route_maps_validation_error_to_documented_error(monkeypat
 # ---------------------------------------------------------------------------
 # upload route tests
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# document update route tests
+# ---------------------------------------------------------------------------
+
+
+def test_document_update_route_returns_documented_success_shape(monkeypatch):
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/knowledgeItems/update",
+        data={
+            "knCode": "hr-policy",
+            "filePath": "//docs//readme.md",
+            "fileDescription": "updated description",
+            "processFrontMatter": "false",
+        },
+        files={"fileContent": ("README.md", b"# Updated\n", "text/markdown")},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "resultCode": "0",
+        "resultMsg": "success",
+        "resultObject": {
+            "data": [
+                {
+                    "knCode": "hr-policy",
+                    "filePath": "/docs/readme.md",
+                    "success": True,
+                    "error": None,
+                }
+            ]
+        },
+    }
+    request = service.document_update_requests[0]
+    assert request.file_path == "/docs/readme.md"
+    assert request.file_description == "updated description"
+    assert request.process_front_matter is False
+
+
+def test_document_update_route_rejects_invalid_target_paths(monkeypatch):
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    for file_path in ("docs/readme.md", "/", "/docs/../readme.md"):
+        response = client.post(
+            "/api/v1/knowledge-items/update",
+            data={"knCode": "hr-policy", "filePath": file_path},
+            files={"fileContent": ("readme.md", b"# Updated\n", "text/markdown")},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["resultCode"] == "-1"
+        assert response.json()["resultMsg"] == "request validation failed"
+        assert response.json()["resultObject"]
+
+    assert service.document_update_requests == []
+
+
+def test_document_update_route_rejects_zip_upload(monkeypatch):
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/knowledgeItems/update",
+        data={"knCode": "hr-policy", "filePath": "/docs/readme.md"},
+        files={"fileContent": ("payload.zip", b"not a zip", "application/zip")},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "zip uploads are not supported for document update",
+        "resultObject": {},
+    }
+    assert service.document_update_requests == []
+
+
+def test_document_update_route_rejects_uploaded_filename_suffix_mismatch(monkeypatch):
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/knowledgeItems/update",
+        data={"knCode": "hr-policy", "filePath": "/docs/readme.markdown"},
+        files={"fileContent": ("readme.md", b"# Updated\n", "text/markdown")},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "uploaded filename suffix must match filePath suffix",
+        "resultObject": {},
+    }
+    assert service.document_update_requests == []
+
+
+def test_document_update_route_rejects_empty_upload(monkeypatch):
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/knowledgeItems/update",
+        data={"knCode": "hr-policy", "filePath": "/docs/readme.md"},
+        files={"fileContent": ("readme.md", b"", "text/markdown")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["resultCode"] == "-1"
+    assert response.json()["resultMsg"] == "request validation failed"
+    assert response.json()["resultObject"]
+    assert service.document_update_requests == []
+
+
+def test_document_update_route_standardizes_service_validation_errors(monkeypatch):
+    class InvalidUpdateService(FakeKBService):
+        async def update_file(self, request):
+            raise KnowledgeBaseValidationError("file not found: /docs/readme.md")
+
+    service = InvalidUpdateService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/knowledgeItems/update",
+        data={"knCode": "hr-policy", "filePath": "/docs/readme.md"},
+        files={"fileContent": ("readme.md", b"# Updated\n", "text/markdown")},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "file not found: /docs/readme.md",
+        "resultObject": {},
+    }
 
 
 def test_upload_file_route_passes_markdown_bytes_to_ingestion(monkeypatch):

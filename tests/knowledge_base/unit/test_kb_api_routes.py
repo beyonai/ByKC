@@ -4,6 +4,7 @@ import io
 import zipfile
 from decimal import Decimal
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from by_qa.knowledge_base.api import routes
@@ -41,7 +42,7 @@ class FakeKBService:
         self.file_build_task_requests = []
         self.file_build_task_runs = []
         self.move_requests = []
-        self.document_update_requests = []
+        self.document_update_requests: list[object] = []
 
     async def create_knowledge_base(self, request):
         self.created_requests.append(request)
@@ -273,6 +274,30 @@ def make_test_client(monkeypatch, service):
     client = TestClient(app)
     client.fake_document_chunking_service = chunking_service
     return client
+
+
+def make_document_update_client(service, *, get_document_update_service=None):
+    """Create an isolated app with an optional document-update dependency."""
+    route_app = FastAPI()
+
+    async def get_service():
+        return service
+
+    routes.register_routes(
+        route_app,
+        get_knowledge_base_service=get_service,
+        get_knowledge_item_ingestion_service=get_service,
+        get_knowledge_item_search_service=get_service,
+        get_document_chunking_service=get_service,
+        get_metadata_search_service=get_service,
+        get_file_metadata_query_service=get_service,
+        **(
+            {"get_document_update_service": get_document_update_service}
+            if get_document_update_service is not None
+            else {}
+        ),
+    )
+    return TestClient(route_app)
 
 
 def test_metadata_get_route_returns_file_metadata(monkeypatch):
@@ -1109,9 +1134,16 @@ def test_download_file_route_maps_validation_error_to_documented_error(monkeypat
 # ---------------------------------------------------------------------------
 
 
-def test_document_update_route_returns_documented_success_shape(monkeypatch):
+def test_document_update_route_returns_documented_success_shape():
     service = FakeKBService()
-    client = make_test_client(monkeypatch, service)
+
+    async def get_document_update_service():
+        return service
+
+    client = make_document_update_client(
+        service,
+        get_document_update_service=get_document_update_service,
+    )
 
     response = client.post(
         "/api/v1/knowledgeItems/update",
@@ -1145,9 +1177,9 @@ def test_document_update_route_returns_documented_success_shape(monkeypatch):
     assert request.process_front_matter is False
 
 
-def test_document_update_route_rejects_invalid_target_paths(monkeypatch):
+def test_document_update_route_rejects_invalid_target_paths():
     service = FakeKBService()
-    client = make_test_client(monkeypatch, service)
+    client = make_document_update_client(service)
 
     for file_path in ("docs/readme.md", "/", "/docs/../readme.md", "/docs/./readme.md"):
         response = client.post(
@@ -1164,9 +1196,9 @@ def test_document_update_route_rejects_invalid_target_paths(monkeypatch):
     assert service.document_update_requests == []
 
 
-def test_document_update_route_rejects_zip_upload(monkeypatch):
+def test_document_update_route_rejects_zip_upload():
     service = FakeKBService()
-    client = make_test_client(monkeypatch, service)
+    client = make_document_update_client(service)
 
     response = client.post(
         "/api/v1/knowledgeItems/update",
@@ -1183,9 +1215,9 @@ def test_document_update_route_rejects_zip_upload(monkeypatch):
     assert service.document_update_requests == []
 
 
-def test_document_update_route_rejects_uploaded_filename_suffix_mismatch(monkeypatch):
+def test_document_update_route_rejects_uploaded_filename_suffix_mismatch():
     service = FakeKBService()
-    client = make_test_client(monkeypatch, service)
+    client = make_document_update_client(service)
 
     response = client.post(
         "/api/v1/knowledgeItems/update",
@@ -1202,9 +1234,9 @@ def test_document_update_route_rejects_uploaded_filename_suffix_mismatch(monkeyp
     assert service.document_update_requests == []
 
 
-def test_document_update_route_rejects_empty_upload(monkeypatch):
+def test_document_update_route_rejects_empty_upload():
     service = FakeKBService()
-    client = make_test_client(monkeypatch, service)
+    client = make_document_update_client(service)
 
     response = client.post(
         "/api/v1/knowledgeItems/update",
@@ -1219,13 +1251,20 @@ def test_document_update_route_rejects_empty_upload(monkeypatch):
     assert service.document_update_requests == []
 
 
-def test_document_update_route_standardizes_service_validation_errors(monkeypatch):
+def test_document_update_route_standardizes_service_validation_errors():
     class InvalidUpdateService(FakeKBService):
         async def update_file(self, request):
             raise KnowledgeBaseValidationError("file not found: /docs/readme.md")
 
     service = InvalidUpdateService()
-    client = make_test_client(monkeypatch, service)
+
+    async def get_document_update_service():
+        return service
+
+    client = make_document_update_client(
+        service,
+        get_document_update_service=get_document_update_service,
+    )
 
     response = client.post(
         "/api/v1/knowledgeItems/update",
@@ -1239,6 +1278,57 @@ def test_document_update_route_standardizes_service_validation_errors(monkeypatc
         "resultMsg": "file not found: /docs/readme.md",
         "resultObject": {},
     }
+
+
+def test_document_update_route_without_factory_returns_configuration_error():
+    client = make_document_update_client(FakeKBService())
+
+    response = client.post(
+        "/api/v1/knowledgeItems/update",
+        data={"knCode": "hr-policy", "filePath": "/docs/readme.md"},
+        files={"fileContent": ("readme.md", b"# Updated\n", "text/markdown")},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "document update service is not configured",
+        "resultObject": {},
+    }
+
+
+def test_document_update_route_preserves_omitted_and_empty_descriptions():
+    service = FakeKBService()
+
+    async def get_document_update_service():
+        return service
+
+    client = make_document_update_client(
+        service,
+        get_document_update_service=get_document_update_service,
+    )
+    omitted_response = client.post(
+        "/api/v1/knowledgeItems/update",
+        data={"knCode": "hr-policy", "filePath": "/docs/readme.md"},
+        files={"fileContent": ("readme.md", b"# Updated\n", "text/markdown")},
+    )
+    empty_response = client.post(
+        "/api/v1/knowledgeItems/update",
+        data={"knCode": "hr-policy", "filePath": "/docs/readme.md"},
+        files=[
+            ("fileDescription", (None, "")),
+            ("fileContent", ("readme.md", b"# Updated\n", "text/markdown")),
+        ],
+    )
+
+    assert omitted_response.json()["resultCode"] == "0"
+    assert empty_response.json()["resultCode"] == "0"
+    omitted = service.document_update_requests[0]
+    empty = service.document_update_requests[1]
+    assert omitted.file_description is None
+    assert "file_description" not in omitted.model_fields_set
+    assert empty.file_description == ""
+    assert "file_description" in empty.model_fields_set
 
 
 def test_upload_file_route_passes_markdown_bytes_to_ingestion(monkeypatch):

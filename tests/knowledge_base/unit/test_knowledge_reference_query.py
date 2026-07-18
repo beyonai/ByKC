@@ -331,6 +331,27 @@ async def test_reference_query_all_returns_inbound_and_outbound():
     ]
 
 
+def test_register_routes_is_backward_compatible_without_update_factory():
+    app = FastAPI()
+
+    async def get_unused_service():
+        raise AssertionError("unused dependency should not be resolved")
+
+    register_routes(
+        app,
+        get_knowledge_base_service=get_unused_service,
+        get_knowledge_item_ingestion_service=get_unused_service,
+        get_knowledge_item_search_service=get_unused_service,
+        get_document_chunking_service=get_unused_service,
+        get_metadata_search_service=get_unused_service,
+        get_file_metadata_query_service=get_unused_service,
+    )
+
+    assert any(
+        route.path == "/api/v1/knowledgeItems/references" for route in app.routes
+    )
+
+
 def test_references_route_returns_standard_success_envelope():
     class FakeRouteService:
         def __init__(self) -> None:

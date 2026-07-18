@@ -134,7 +134,7 @@ def register_routes(
     get_knowledge_base_service,
     get_knowledge_item_ingestion_service,
     get_knowledge_item_search_service,
-    get_document_update_service,
+    get_document_update_service=None,
     get_document_chunking_service,
     get_metadata_search_service,
     get_file_metadata_query_service,
@@ -518,7 +518,7 @@ def register_routes(
     async def upload_file(
         kn_code: str | None = Form(None, alias="knCode"),
         file_path: str | None = Form(None, alias="filePath"),
-        file_description: str | None = Form(None, alias="fileDescription"),
+        file_description: str | None = Body(None, alias="fileDescription"),
         file_content: UploadFile | None = File(None, alias="fileContent"),
         process_front_matter: bool = Form(True, alias="processFrontMatter"),
     ):
@@ -618,18 +618,26 @@ def register_routes(
 
     @app.post("/api/v1/knowledgeItems/update")
     @app.post("/api/v1/knowledge-items/update")
-    async def update_document(request: Request):
-        form = await request.form()
-        file_content = form.get("fileContent")
-        payload = await file_content.read() if hasattr(file_content, "read") else None
+    async def update_document(
+        request: Request,
+        kn_code: str | None = Form(None, alias="knCode"),
+        file_path: str | None = Form(None, alias="filePath"),
+        file_description: str | None = Form(None, alias="fileDescription"),
+        file_content: UploadFile | None = File(None, alias="fileContent"),
+        process_front_matter: bool = Form(True, alias="processFrontMatter"),
+    ):
+        payload = await file_content.read() if file_content is not None else None
         request_data = {
-            "knCode": form.get("knCode"),
-            "filePath": form.get("filePath"),
+            "knCode": kn_code,
+            "filePath": file_path,
             "fileContent": payload,
-            "processFrontMatter": form.get("processFrontMatter", True),
+            "processFrontMatter": process_front_matter,
         }
-        if "fileDescription" in form:
-            request_data["fileDescription"] = form.get("fileDescription")
+        # FastAPI converts an empty optional Form value to its default (None).
+        # The parsed multipart form is cached, so inspect only field presence to
+        # retain the API's omitted-versus-explicit-empty contract.
+        if "fileDescription" in await request.form():
+            request_data["fileDescription"] = file_description or ""
 
         try:
             document_request = DocumentUpdateRequest.model_validate(request_data)
@@ -640,7 +648,7 @@ def register_routes(
                 status_code=422,
             )
 
-        filename = getattr(file_content, "filename", "")
+        filename = file_content.filename if file_content is not None else ""
         upload_suffix = PurePosixPath(filename or "").suffix.lower()
         target_suffix = PurePosixPath(document_request.file_path).suffix.lower()
         if upload_suffix == ".zip":
@@ -664,6 +672,10 @@ def register_routes(
             document_request.process_front_matter,
         )
         try:
+            if get_document_update_service is None:
+                raise KnowledgeBaseConfigurationError(
+                    "document update service is not configured"
+                )
             service = await _resolve_maybe_async(get_document_update_service)
             await service.update_file(document_request)
         except KnowledgeBaseConfigurationError as exc:

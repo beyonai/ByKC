@@ -638,6 +638,20 @@ async def test_update_file_entry_for_update_preserves_or_sets_description_explic
     assert "description = %(description)s" in clear_sql
     assert clear_params["description"] == ""
 
+    await repo.update_file_entry_for_update(
+        cursor,
+        fs_entry_id=81,
+        file_description="Updated description",
+        description_provided=True,
+        original_location=location,
+        file_size=128,
+        mime_type="application/pdf",
+        checksum="abc123",
+    )
+    set_sql, set_params = cursor.executed[-1]
+    assert "description = %(description)s" in set_sql
+    assert set_params["description"] == "Updated description"
+
 
 async def test_clear_markdown_metadata_nulls_markdown_location_and_line_count():
     repo = KnowledgeFsEntryRepository()

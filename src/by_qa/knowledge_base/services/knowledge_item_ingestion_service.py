@@ -553,10 +553,12 @@ class KnowledgeItemIngestionService:
                 )
             knowledge_base_id = self._row_id(kb_row)
 
-            file_row = await self.knowledge_fs_entry_repository.get_file_by_path(
-                cursor,
-                knowledge_base_id=knowledge_base_id,
-                full_path=normalized_file_path,
+            file_row = (
+                await self.knowledge_fs_entry_repository.get_file_by_path_for_update(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    full_path=normalized_file_path,
+                )
             )
             if file_row is None:
                 raise KnowledgeBaseValidationError(

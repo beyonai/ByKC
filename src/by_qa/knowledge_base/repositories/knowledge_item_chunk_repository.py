@@ -11,6 +11,25 @@ class KnowledgeItemChunkRepository:
     def __init__(self, embedding_table_name: str):
         self.embedding_table_name = embedding_table_name
 
+    async def delete_for_fs_entry(self, cursor: Any, *, fs_entry_id: int) -> None:
+        """Delete a file's embeddings before deleting its chunk rows."""
+        await cursor.execute(
+            f"""
+            DELETE FROM {self.embedding_table_name}
+            WHERE chunk_id IN (
+                SELECT kid FROM knowledge_chunk WHERE fs_entry_id = %(fs_entry_id)s
+            )
+            """,
+            {"fs_entry_id": fs_entry_id},
+        )
+        await cursor.execute(
+            """
+            DELETE FROM knowledge_chunk
+            WHERE fs_entry_id = %(fs_entry_id)s
+            """,
+            {"fs_entry_id": fs_entry_id},
+        )
+
     async def replace_for_version(
         self,
         cursor: Any,

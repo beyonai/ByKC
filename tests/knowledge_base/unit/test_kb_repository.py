@@ -4,8 +4,14 @@ from by_qa.knowledge_base.infrastructure.storage import StorageLocation
 from by_qa.knowledge_base.repositories.knowledge_base_repository import (
     KnowledgeBaseRepository,
 )
+from by_qa.knowledge_base.repositories.knowledge_build_task_repository import (
+    KnowledgeBuildTaskRepository,
+)
 from by_qa.knowledge_base.repositories.knowledge_fetch_cache_repository import (
     KnowledgeFetchCacheRepository,
+)
+from by_qa.knowledge_base.repositories.knowledge_file_reference_repository import (
+    KnowledgeFileReferenceRepository,
 )
 from by_qa.knowledge_base.repositories.knowledge_fs_entry_repository import (
     KnowledgeFsEntryRepository,
@@ -577,6 +583,109 @@ async def test_update_file_entry_storage_updates_new_storage_columns():
     assert "checksum = %(checksum)s" in sql
     assert params["fs_entry_id"] == 81
     assert params["file_bucket_name"] == "knowledge-base"
+
+
+async def test_get_file_by_path_for_update_locks_final_file_row():
+    repo = KnowledgeFsEntryRepository()
+    cursor = FakeCursor(
+        fetchone_results=[
+            {"kid": 10, "entry_type": "DIRECTORY"},
+            {"kid": 11, "entry_type": "FILE"},
+            {"kid": 11, "entry_type": "FILE"},
+        ]
+    )
+
+    row = await repo.get_file_by_path_for_update(
+        cursor, knowledge_base_id=7, full_path="docs/a.pdf"
+    )
+
+    assert row == {"kid": 11, "entry_type": "FILE"}
+    sql, params = cursor.executed[-1]
+    assert "FOR UPDATE" in sql
+    assert params == {"entry_id": 11}
+
+
+async def test_update_file_entry_for_update_preserves_or_sets_description_explicitly():
+    repo = KnowledgeFsEntryRepository()
+    cursor = FakeCursor()
+    location = StorageLocation(namespace="knowledge-base", key="updated.pdf")
+
+    await repo.update_file_entry_for_update(
+        cursor,
+        fs_entry_id=81,
+        file_description=None,
+        description_provided=False,
+        original_location=location,
+        file_size=128,
+        mime_type="application/pdf",
+        checksum="abc123",
+    )
+    preserve_sql, preserve_params = cursor.executed[-1]
+    assert "description =" not in preserve_sql
+    assert preserve_params["file_object_key"] == "updated.pdf"
+
+    await repo.update_file_entry_for_update(
+        cursor,
+        fs_entry_id=81,
+        file_description="",
+        description_provided=True,
+        original_location=location,
+        file_size=128,
+        mime_type="application/pdf",
+        checksum="abc123",
+    )
+    clear_sql, clear_params = cursor.executed[-1]
+    assert "description = %(description)s" in clear_sql
+    assert clear_params["description"] == ""
+
+
+async def test_clear_markdown_metadata_nulls_markdown_location_and_line_count():
+    repo = KnowledgeFsEntryRepository()
+    cursor = FakeCursor()
+
+    await repo.clear_markdown_metadata(cursor, fs_entry_id=81)
+
+    sql, params = cursor.executed[-1]
+    assert "markdown_bucket_name = NULL" in sql
+    assert "markdown_object_key = NULL" in sql
+    assert "line_count = NULL" in sql
+    assert params == {"fs_entry_id": 81}
+
+
+async def test_delete_for_fs_entry_deletes_embeddings_before_chunks():
+    repo = KnowledgeItemChunkRepository("knowledge_embedding_3")
+    cursor = FakeCursor()
+
+    await repo.delete_for_fs_entry(cursor, fs_entry_id=81)
+
+    assert len(cursor.executed) == 2
+    assert "DELETE FROM knowledge_embedding_3" in cursor.executed[0][0]
+    assert "DELETE FROM knowledge_chunk" in cursor.executed[1][0]
+    assert cursor.executed[0][1] == {"fs_entry_id": 81}
+    assert cursor.executed[1][1] == {"fs_entry_id": 81}
+
+
+async def test_delete_build_tasks_for_fs_entry_is_targeted():
+    repo = KnowledgeBuildTaskRepository()
+    cursor = FakeCursor()
+
+    await repo.delete_for_fs_entry_id(cursor, fs_entry_id=81)
+
+    assert "DELETE FROM knowledge_build_task" in cursor.executed[-1][0]
+    assert cursor.executed[-1][1] == {"fs_entry_id": 81}
+
+
+async def test_delete_references_for_source_does_not_target_inbound_references():
+    repo = KnowledgeFileReferenceRepository()
+    cursor = FakeCursor()
+
+    await repo.delete_for_source_fs_entry_id(cursor, source_fs_entry_id=81)
+
+    sql, params = cursor.executed[-1]
+    assert "DELETE FROM knowledge_file_reference" in sql
+    assert "source_fs_entry_id = %(source_fs_entry_id)s" in sql
+    assert "target_fs_entry_id" not in sql
+    assert params == {"source_fs_entry_id": 81}
 
 
 async def test_soft_delete_directory_subtree_updates_descendants():

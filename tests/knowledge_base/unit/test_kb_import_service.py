@@ -521,6 +521,20 @@ class FakeKnowledgeFsEntryRepository:
         )
         return self.file_entry_by_path.get(full_path)
 
+    async def get_file_by_path_for_update(
+        self, cursor, *, knowledge_base_id, full_path
+    ):
+        self.calls.append(
+            (
+                "get_file_by_path_for_update",
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "full_path": full_path,
+                },
+            )
+        )
+        return self.file_entry_by_path.get(full_path)
+
     async def get_entry_by_id(self, cursor, *, entry_id):
         self.calls.append(("get_entry_by_id", {"entry_id": entry_id}))
         return self.entry_by_id.get(entry_id)
@@ -3168,3 +3182,46 @@ async def test_files_exist_returns_subset_in_one_connection():
     )
     result = await service.files_exist("1", {"/docs/p/a.md", "/docs/p/missing.md"})
     assert result == {"/docs/p/a.md"}
+
+
+async def test_create_build_task_locks_file_before_reading_latest_task():
+    kb_repo = FakeKnowledgeBaseRepository(
+        default_lookup_result={"kid": 7, "kb_code": "1", "kb_name": "TestKB"}
+    )
+    fs_repo = FakeKnowledgeFsEntryRepository()
+    fs_repo.file_entry_by_path = {
+        "docs/a.pdf": {
+            "kid": 71,
+            "entry_type": "FILE",
+            "file_object_key": "kb/7/fs-entry/71/original.pdf",
+        }
+    }
+    build_task_repo = FakeKnowledgeBuildTaskRepository()
+    service = KnowledgeItemIngestionService(
+        connection_factory=lambda: _async_return(FakeConnection()),
+        knowledge_base_repository=kb_repo,
+        knowledge_fs_entry_repository=fs_repo,
+        knowledge_build_task_repository=build_task_repo,
+        knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        storage_provider=FakeStorageProvider(),
+        embedding_dimension=3,
+    )
+
+    task_id = await service.create_file_to_markdown_index_task(
+        FileToMarkdownIndexRequest.model_validate(
+            {"knCode": "1", "filePath": "/docs/a.pdf"}
+        )
+    )
+
+    assert task_id == 9901
+    assert fs_repo.calls == [
+        (
+            "get_file_by_path_for_update",
+            {"knowledge_base_id": 7, "full_path": "docs/a.pdf"},
+        )
+    ]
+    assert build_task_repo.calls[0] == (
+        "get_latest_by_fs_entry_id",
+        {"fs_entry_id": 71},
+    )

@@ -8,6 +8,18 @@ from typing import Any
 class KnowledgeFileReferenceRepository:
     """Repository for knowledge_file_reference rows."""
 
+    async def delete_for_source_fs_entry_id(
+        self, cursor: Any, *, source_fs_entry_id: int
+    ) -> None:
+        """Delete references emitted by a file without affecting inbound references."""
+        await cursor.execute(
+            """
+            DELETE FROM knowledge_file_reference
+            WHERE source_fs_entry_id = %(source_fs_entry_id)s
+            """,
+            {"source_fs_entry_id": source_fs_entry_id},
+        )
+
     async def create_reference(
         self,
         cursor: Any,

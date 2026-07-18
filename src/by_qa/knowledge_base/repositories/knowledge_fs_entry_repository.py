@@ -248,6 +248,65 @@ class KnowledgeFsEntryRepository:
             },
         )
 
+    async def update_file_entry_for_update(
+        self,
+        cursor: Any,
+        *,
+        fs_entry_id: int,
+        file_description: str | None,
+        description_provided: bool,
+        original_location: StorageLocation,
+        file_size: int,
+        mime_type: str,
+        checksum: str,
+    ) -> None:
+        """Persist an existing file's new original metadata without implicit text loss."""
+        set_clauses = [
+            "file_bucket_name = %(file_bucket_name)s",
+            "file_object_key = %(file_object_key)s",
+            "file_size = %(file_size)s",
+            "mime_type = %(mime_type)s",
+            "checksum = %(checksum)s",
+        ]
+        params: dict[str, Any] = {
+            "fs_entry_id": fs_entry_id,
+            "file_bucket_name": original_location.namespace,
+            "file_object_key": original_location.key,
+            "file_size": file_size,
+            "mime_type": mime_type,
+            "checksum": checksum,
+        }
+        if description_provided:
+            set_clauses.insert(0, "description = %(description)s")
+            params["description"] = file_description
+        set_clauses.append("updated_at = NOW()")
+        await cursor.execute(
+            f"""
+            UPDATE knowledge_fs_entry
+            SET {", ".join(set_clauses)}
+            WHERE kid = %(fs_entry_id)s
+              AND entry_type = 'FILE'
+              AND is_deleted = FALSE
+            """,
+            params,
+        )
+
+    async def clear_markdown_metadata(self, cursor: Any, *, fs_entry_id: int) -> None:
+        """Clear derived Markdown location and line count for an updated file."""
+        await cursor.execute(
+            """
+            UPDATE knowledge_fs_entry
+            SET markdown_bucket_name = NULL,
+                markdown_object_key = NULL,
+                line_count = NULL,
+                updated_at = NOW()
+            WHERE kid = %(fs_entry_id)s
+              AND entry_type = 'FILE'
+              AND is_deleted = FALSE
+            """,
+            {"fs_entry_id": fs_entry_id},
+        )
+
     async def _insert_directory_entry(
         self,
         cursor: Any,
@@ -419,6 +478,33 @@ class KnowledgeFsEntryRepository:
             return None
         return await self._get_entry_by_id(cursor, entry_id=self._row_id(current))
 
+    async def get_file_by_path_for_update(
+        self, cursor: Any, *, knowledge_base_id: int, full_path: str
+    ) -> dict[str, Any] | None:
+        """Look up and lock one live file row by knowledge-base-relative path."""
+        path_segments = [
+            segment for segment in full_path.strip("/").split("/") if segment
+        ]
+        if not path_segments:
+            return None
+        current_parent_id: int | None = None
+        current: dict[str, Any] | None = None
+        for segment in path_segments:
+            current = await self._get_child_entry(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                parent_entry_id=current_parent_id,
+                name=segment,
+            )
+            if current is None:
+                return None
+            current_parent_id = self._row_id(current)
+        if current is None or current.get("entry_type") != "FILE":
+            return None
+        return await self._get_entry_by_id(
+            cursor, entry_id=self._row_id(current), for_update=True
+        )
+
     async def get_file_reference_target_by_path(
         self, cursor: Any, *, knowledge_base_id: int, full_path: str
     ) -> dict[str, Any] | None:
@@ -495,7 +581,7 @@ class KnowledgeFsEntryRepository:
         return await self._fetchall(cursor)
 
     async def _get_entry_by_id(
-        self, cursor: Any, *, entry_id: int
+        self, cursor: Any, *, entry_id: int, for_update: bool = False
     ) -> dict[str, Any] | None:
         await cursor.execute(
             """
@@ -522,7 +608,8 @@ class KnowledgeFsEntryRepository:
             FROM knowledge_fs_entry
             WHERE kid = %(entry_id)s
               AND is_deleted = FALSE
-            """,
+            """
+            + (" FOR UPDATE" if for_update else ""),
             {"entry_id": entry_id},
         )
         return await cursor.fetchone()

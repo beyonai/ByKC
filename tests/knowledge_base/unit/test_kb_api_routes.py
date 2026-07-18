@@ -1290,6 +1290,70 @@ def test_document_update_route_does_not_schedule_timeline_backfill_for_non_markd
     assert service.update_timeline_repository.calls == []
 
 
+class _TransactionalBackfillConnection:
+    def __init__(self, *, commit_fails=False):
+        self.commit_fails = commit_fails
+        self.pending_summary = None
+        self.persisted_summary = None
+        self.rolled_back = False
+        self.closed = False
+
+    def cursor(self):
+        return self
+
+    async def commit(self):
+        if self.commit_fails:
+            raise RuntimeError("commit failed")
+        self.persisted_summary = self.pending_summary
+
+    async def rollback(self):
+        self.rolled_back = True
+        self.pending_summary = None
+
+    async def close(self):
+        self.closed = True
+
+
+class _TransactionalBackfillRepository:
+    def __init__(self, *, update_fails=False):
+        self.update_fails = update_fails
+
+    async def update_summary_from_llm(self, cursor, *, timeline_id, summary):
+        cursor.pending_summary = (timeline_id, summary)
+        if self.update_fails:
+            raise RuntimeError("update failed")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("update_fails", "commit_fails"), [(True, False), (False, True)]
+)
+async def test_markdown_timeline_backfill_rolls_back_failed_writes(
+    update_fails, commit_fails
+):
+    connection = _TransactionalBackfillConnection(commit_fails=commit_fails)
+    repository = _TransactionalBackfillRepository(update_fails=update_fails)
+
+    async def connection_factory():
+        return connection
+
+    await routes._backfill_markdown_update_timeline_summary(
+        markdown_update_summary_service=_MarkdownSummaryService(
+            result="本次更新补充了员工休假规则的适用范围，并明确了申请审批与生效时间要求，删除了已废止的说明内容。"
+        ),
+        connection_factory=connection_factory,
+        update_timeline_repository=repository,
+        timeline_id=84,
+        old_markdown_context="旧版",
+        new_markdown_context="新版",
+    )
+
+    assert connection.rolled_back is True
+    assert connection.pending_summary is None
+    assert connection.persisted_summary is None
+    assert connection.closed is True
+
+
 @pytest.mark.parametrize(
     "result,error", [(None, None), (None, RuntimeError("LLM unavailable"))]
 )

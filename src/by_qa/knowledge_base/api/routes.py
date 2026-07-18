@@ -141,6 +141,14 @@ async def _backfill_markdown_update_timeline_summary(
         )
         await connection.commit()
     except Exception:
+        if connection is not None:
+            try:
+                await connection.rollback()
+            except Exception:
+                logger.exception(
+                    "document update timeline backfill rollback failed: timeline_id=%s",
+                    timeline_id,
+                )
         logger.exception(
             "document update timeline LLM summary backfill failed: timeline_id=%s",
             timeline_id,

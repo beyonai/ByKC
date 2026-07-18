@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
+from pathlib import Path
+from types import ModuleType
 from uuid import uuid4
 
 import pytest
+from _userfs_provider import UserFSProvider
 from fastapi.testclient import TestClient
 
 import by_qa.main as main_module
 from by_qa.config import Settings
 from by_qa.core.model_config import ModelConfig
 from by_qa.knowledge_base.api.schemas import FileToMarkdownIndexRequest
+from by_qa.knowledge_base.infrastructure.database import build_connection_factory
 from by_qa.knowledge_base.infrastructure.runtime import (
     build_knowledge_item_search_service,
 )
@@ -206,6 +211,7 @@ def _reset_runtime(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
     monkeypatch.setattr(main_module, "_knowledge_base_service", None)
     monkeypatch.setattr(main_module, "_knowledge_item_ingestion_service", None)
     monkeypatch.setattr(main_module, "_knowledge_item_search_service", None)
+    monkeypatch.setattr(main_module, "_document_update_service", None)
     monkeypatch.setattr(main_module, "_knowledge_fetch_cache_cleanup_service", None)
     monkeypatch.setattr(main_module, "_document_chunking_service", None)
     monkeypatch.setattr(main_module, "_file_metadata_query_service", None)
@@ -229,6 +235,21 @@ def _set_document_chunking_service(
     monkeypatch.setattr(
         main_module, "_get_or_build_document_chunking_service", get_service
     )
+
+
+def _wire_userfs(
+    monkeypatch: pytest.MonkeyPatch, root: Path, settings: Settings
+) -> None:
+    """Use local filesystem storage so update state tests do not require MinIO credentials."""
+
+    def _make_userfs() -> UserFSProvider:
+        return UserFSProvider(root=root)
+
+    module = ModuleType("_document_update_userfs_provider")
+    module.make_userfs = _make_userfs
+    sys.modules[module.__name__] = module
+    monkeypatch.setenv("BY_QA_STORAGE_PROVIDER", f"{module.__name__}:make_userfs")
+    _reset_runtime(monkeypatch, settings)
 
 
 async def _set_search_service(
@@ -390,6 +411,90 @@ def _download_file_bytes(client: TestClient, *, kb_code: str, file_path: str) ->
     )
     assert response.status_code == 200, response.text
     return response.content
+
+
+def _update_file(
+    client: TestClient,
+    *,
+    kb_code: str,
+    file_path: str,
+    file_content: bytes,
+    upload_name: str | None = None,
+    content_type: str = "text/markdown",
+    process_front_matter: bool = True,
+) -> object:
+    """Replace one existing file through the public multipart update endpoint."""
+    return client.post(
+        "/api/v1/knowledgeItems/update",
+        data={
+            "knCode": kb_code,
+            "filePath": file_path,
+            "processFrontMatter": str(process_front_matter).lower(),
+        },
+        files={
+            "fileContent": (
+                upload_name or file_path.rsplit("/", 1)[-1],
+                file_content,
+                content_type,
+            )
+        },
+    )
+
+
+async def _latest_update_timeline(
+    settings: Settings, *, kb_code: str, file_path: str
+) -> dict:
+    """Read the persisted update event for a document after its HTTP request completes."""
+    _ = file_path
+
+    async def _read() -> dict:
+        connection = await build_connection_factory(settings)()
+        try:
+            cursor = connection.cursor()
+            await cursor.execute(
+                """
+                SELECT timeline.summary, timeline.summary_source,
+                       timeline.old_file_size, timeline.new_file_size
+                FROM knowledge_file_update_timeline AS timeline
+                WHERE timeline.knowledge_base_id = %(kb_code)s::bigint
+                ORDER BY timeline.kid DESC
+                LIMIT 1
+                """,
+                {"kb_code": kb_code},
+            )
+            row = await cursor.fetchone()
+            assert row is not None
+            return row
+        finally:
+            await connection.close()
+
+    return await _read()
+
+
+async def _create_running_build_task(
+    settings: Settings, *, kb_code: str, name: str
+) -> None:
+    """Seed a running task to verify updates reject concurrent builds at the HTTP boundary."""
+    connection = await build_connection_factory(settings)()
+    try:
+        cursor = connection.cursor()
+        await cursor.execute(
+            """
+            INSERT INTO knowledge_build_task (
+                knowledge_base_id, fs_entry_id, status, current_step, started_at
+            )
+            SELECT %(kb_code)s::bigint, kid, 'running', 'extract_text', NOW()
+            FROM knowledge_fs_entry
+            WHERE knowledge_base_id = %(kb_code)s::bigint
+              AND name = %(name)s
+              AND entry_type = 'FILE'
+              AND is_deleted = false
+            """,
+            {"kb_code": kb_code, "name": name},
+        )
+        await connection.commit()
+    finally:
+        await connection.close()
 
 
 def _search_items(
@@ -4082,3 +4187,267 @@ def test_import_zip_leaves_references_unchanged_when_unresolvable(
     assert all(d["success"] for d in resp.json()["resultObject"]["data"])
     # every reference is left exactly as written
     assert download.content == doc
+
+
+@pytest.mark.integration
+async def test_document_update_markdown_replaces_raw_content_and_invalidates_derived_state(
+    monkeypatch, tmp_path
+):
+    """Updating Markdown clears its build state but retains absent front-matter values."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _wire_userfs(monkeypatch, tmp_path / "userfs", settings)
+    _set_document_chunking_service(monkeypatch, EchoDocumentChunkingService())
+    await _set_search_service(monkeypatch, settings)
+
+    from by_qa.knowledge_base.services.markdown_update_summary_service import (
+        MarkdownUpdateSummaryService,
+    )
+
+    async def no_llm_summary(self, old_markdown, new_markdown):
+        _ = self, old_markdown, new_markdown
+        return None
+
+    monkeypatch.setattr(
+        MarkdownUpdateSummaryService, "generate_llm_summary", no_llm_summary
+    )
+
+    old = b"---\ntitle: Before\nowner: Platform\n---\n# Before\nold-only-token\n"
+    new = b"---\ntitle: After\n---\n# After\nnew-only-token\n"
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+        _upload_and_build_file(
+            client, kb_code=kb_code, file_path="/docs/guide.md", file_content=old
+        )
+        assert any(
+            "old-only-token" in text
+            for text in _search_chunk_texts(
+                client, kb_code=kb_code, query="old-only-token"
+            )
+        )
+
+        response = _update_file(
+            client, kb_code=kb_code, file_path="/docs/guide.md", file_content=new
+        )
+        raw_bytes = _download_file_bytes(
+            client, kb_code=kb_code, file_path="/docs/guide.md"
+        )
+        build_status = _file_build_status(
+            client, kb_code=kb_code, file_path="/docs/guide.md"
+        )
+        metadata = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={
+                "knCode": kb_code,
+                "filePath": "/docs/guide.md",
+                "metadataFieldList": ["title", "owner"],
+            },
+        )
+        search_after = _search_chunk_texts(
+            client, kb_code=kb_code, query="new-only-token"
+        )
+
+    assert response.status_code == 200
+    assert response.json()["resultCode"] == "0"
+    assert raw_bytes == new
+    assert build_status.json()["resultCode"] == "-1"
+    assert "build task not found" in build_status.json()["resultMsg"]
+    assert search_after == []
+    assert metadata.json()["resultObject"]["metadata"] == {
+        "title": {"valueType": "string", "value": "After"},
+        "owner": {"valueType": "string", "value": "Platform"},
+    }
+
+
+@pytest.mark.integration
+async def test_document_update_markdown_reregisters_stable_source_references_and_timeline(
+    monkeypatch, tmp_path
+):
+    """A Markdown update keeps its reference graph and emits a timeline event without building."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _wire_userfs(monkeypatch, tmp_path / "userfs", settings)
+    _set_document_chunking_service(monkeypatch, EchoDocumentChunkingService())
+
+    from by_qa.knowledge_base.services.markdown_update_summary_service import (
+        MarkdownUpdateSummaryService,
+    )
+
+    async def no_llm_summary(self, old_markdown, new_markdown):
+        _ = self, old_markdown, new_markdown
+        return None
+
+    monkeypatch.setattr(
+        MarkdownUpdateSummaryService, "generate_llm_summary", no_llm_summary
+    )
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/assets/logo.png",
+            file_content=b"png",
+            content_type="image/png",
+        )
+        _upload_and_build_file(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/source.md",
+            file_content=b"# Old\n![logo](../assets/logo.png)\n",
+        )
+        response = _update_file(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/source.md",
+            file_content=b"# New\n![logo](../assets/logo.png)\n",
+        )
+        references = _reference_result(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/source.md",
+            direction="outbound",
+        )
+        build_status = _file_build_status(
+            client, kb_code=kb_code, file_path="/docs/source.md"
+        )
+
+    timeline = await _latest_update_timeline(
+        settings, kb_code=kb_code, file_path="/docs/source.md"
+    )
+    assert response.status_code == 200
+    assert response.json()["resultCode"] == "0"
+    assert references["outbound"] == [
+        {
+            "sourcePath": "/docs/source.md",
+            "originalTarget": "../assets/logo.png",
+            "targetSuffix": "",
+            "targetPath": "/assets/logo.png",
+            "status": "resolved",
+        }
+    ]
+    assert build_status.json()["resultCode"] == "-1"
+    assert timeline["old_file_size"] > 0
+    assert timeline["new_file_size"] > 0
+    assert timeline["summary_source"] in {"RULE_BASED", "LLM"}
+
+
+@pytest.mark.integration
+async def test_document_update_non_markdown_and_validation_errors_use_http_200_envelope(
+    monkeypatch, tmp_path
+):
+    """Non-Markdown updates avoid LLM work; malformed updates retain the public error envelope."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _wire_userfs(monkeypatch, tmp_path / "userfs", settings)
+    _set_document_chunking_service(monkeypatch, EchoDocumentChunkingService())
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/assets/logo.png",
+            file_content=b"old-png",
+            content_type="image/png",
+        )
+        success = _update_file(
+            client,
+            kb_code=kb_code,
+            file_path="/assets/logo.png",
+            file_content=b"new-png",
+            content_type="image/png",
+        )
+        await _create_running_build_task(settings, kb_code=kb_code, name="logo.png")
+        zip_error = _update_file(
+            client,
+            kb_code=kb_code,
+            file_path="/assets/logo.png",
+            file_content=b"zip",
+            upload_name="batch.zip",
+            content_type="application/zip",
+        )
+        suffix_error = _update_file(
+            client,
+            kb_code=kb_code,
+            file_path="/assets/logo.png",
+            file_content=b"text",
+            upload_name="logo.md",
+        )
+        missing_error = _update_file(
+            client,
+            kb_code=kb_code,
+            file_path="/assets/missing.png",
+            file_content=b"missing",
+            content_type="image/png",
+        )
+        running_error = _update_file(
+            client,
+            kb_code=kb_code,
+            file_path="/assets/logo.png",
+            file_content=b"blocked",
+            content_type="image/png",
+        )
+        logo_bytes = _download_file_bytes(
+            client, kb_code=kb_code, file_path="/assets/logo.png"
+        )
+
+    assert success.status_code == 200
+    assert success.json()["resultCode"] == "0"
+    assert logo_bytes == b"new-png"
+    for response in (zip_error, suffix_error, missing_error, running_error):
+        assert response.status_code == 200
+        assert response.json()["resultCode"] == "-1"
+
+
+@pytest.mark.integration
+async def test_document_update_markdown_backfill_uses_llm_summary_and_keeps_fallback_on_failure(
+    monkeypatch, tmp_path
+):
+    """The background task persists a usable LLM summary but leaves rule fallback on failure."""
+    from by_qa.knowledge_base.services.markdown_update_summary_service import (
+        MarkdownUpdateSummaryService,
+    )
+
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _wire_userfs(monkeypatch, tmp_path / "userfs", settings)
+    _set_document_chunking_service(monkeypatch, EchoDocumentChunkingService())
+
+    async def llm_summary(self, old_markdown, new_markdown):
+        _ = self
+        assert "Old" in old_markdown and "New" in new_markdown
+        return "这是由模型生成的、足够长的文档更新摘要，用于验证后台回填能够持久化。"
+
+    monkeypatch.setattr(
+        MarkdownUpdateSummaryService, "generate_llm_summary", llm_summary
+    )
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
+        _upload_file(
+            client, kb_code=kb_code, file_path="/docs/a.md", file_content=b"# Old\n"
+        )
+        first = _update_file(
+            client, kb_code=kb_code, file_path="/docs/a.md", file_content=b"# New\n"
+        )
+
+    llm_timeline = await _latest_update_timeline(
+        settings, kb_code=kb_code, file_path="/docs/a.md"
+    )
+
+    async def failed_llm_summary(self, old_markdown, new_markdown):
+        _ = self, old_markdown, new_markdown
+        raise RuntimeError("simulated LLM outage")
+
+    monkeypatch.setattr(
+        MarkdownUpdateSummaryService, "generate_llm_summary", failed_llm_summary
+    )
+    with TestClient(main_module.app) as client:
+        second = _update_file(
+            client, kb_code=kb_code, file_path="/docs/a.md", file_content=b"# Newer\n"
+        )
+
+    fallback_timeline = await _latest_update_timeline(
+        settings, kb_code=kb_code, file_path="/docs/a.md"
+    )
+    assert first.json()["resultCode"] == "0"
+    assert llm_timeline["summary_source"] == "LLM"
+    assert llm_timeline["summary"].startswith("这是由模型生成")
+    assert second.json()["resultCode"] == "0"
+    assert fallback_timeline["summary_source"] == "RULE_BASED"

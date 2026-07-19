@@ -406,15 +406,20 @@ def _update_file(
     upload_name: str | None = None,
     content_type: str = "text/markdown",
     process_front_matter: bool = True,
+    file_description: str | None = None,
+    include_file_description: bool = False,
 ) -> object:
     """Replace one existing file through the public multipart update endpoint."""
+    data = {
+        "knCode": kb_code,
+        "filePath": file_path,
+        "processFrontMatter": str(process_front_matter).lower(),
+    }
+    if include_file_description:
+        data["fileDescription"] = file_description or ""
     return client.post(
         "/api/v1/knowledgeItems/update",
-        data={
-            "knCode": kb_code,
-            "filePath": file_path,
-            "processFrontMatter": str(process_front_matter).lower(),
-        },
+        data=data,
         files={
             "fileContent": (
                 upload_name or file_path.rsplit("/", 1)[-1],
@@ -423,6 +428,80 @@ def _update_file(
             )
         },
     )
+
+
+@pytest.mark.integration
+async def test_document_update_can_skip_front_matter_and_preserve_existing_metadata(
+    monkeypatch, tmp_path
+):
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Update KB {uuid4().hex[:12]}")
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/a.md",
+            file_content=b"---\ntitle: Before\n---\n# Old\n",
+        )
+        response = _update_file(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/a.md",
+            file_content=b"---\ntitle: After\n---\n# New\n",
+            process_front_matter=False,
+        )
+        raw_bytes = _download_file_bytes(
+            client, kb_code=kb_code, file_path="/docs/a.md"
+        )
+        metadata = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={
+                "knCode": kb_code,
+                "filePath": "/docs/a.md",
+                "metadataFieldList": ["title"],
+            },
+        )
+    assert response.json()["resultCode"] == "0"
+    assert raw_bytes.startswith(b"---\ntitle: After")
+    assert metadata.json()["resultObject"]["metadata"]["title"]["value"] == "Before"
+
+
+@pytest.mark.integration
+def test_document_update_rejects_invalid_paths_and_missing_multipart_fields(
+    monkeypatch, tmp_path
+):
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Update KB {uuid4().hex[:12]}")
+        _upload_file(
+            client, kb_code=kb_code, file_path="/docs/a.md", file_content=b"# Old\n"
+        )
+        responses = [
+            _update_file(
+                client, kb_code=kb_code, file_path="/", file_content=b"# New\n"
+            ),
+            _update_file(
+                client,
+                kb_code=kb_code,
+                file_path="/docs/./a.md",
+                file_content=b"# New\n",
+            ),
+            _update_file(
+                client,
+                kb_code=kb_code,
+                file_path="/docs/../a.md",
+                file_content=b"# New\n",
+            ),
+            client.post(
+                "/api/v1/knowledgeItems/update",
+                data={"knCode": kb_code, "filePath": "/docs/a.md"},
+            ),
+        ]
+    for response in responses:
+        assert response.status_code == 200
+        assert response.json()["resultCode"] == "-1"
 
 
 async def _latest_update_timeline(

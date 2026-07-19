@@ -88,9 +88,9 @@
 | UDT2 | 内容管理员 | 更新 Markdown 的稳定引用并写入时间线 | `import targets -> import+build source -> knowledgeItems/update(source) -> knowledgeItems/references -> DB timeline` | 更新后旧 outbound 引用消失、新引用解析正确；时间线关联 `fs_entry_id`、记录旧/新文件大小并写入规则摘要或 LLM 摘要；不触发构建 | 已写 |
 | UDT3 | 内容管理员 | 更新二进制文件与参数校验 | `import png -> knowledgeItems/update(png) -> downloadFile -> invalid update requests` | 二进制原始字节被覆盖；不调用 LLM；zip、文件格式变更、文件不存在及构建中更新均返回 HTTP 200 + `resultCode=-1`，构建中提示为 `File is being built and cannot be updated` | 已写 |
 | UDT4 | 内容管理员 | Markdown 时间线异步 LLM 回填与降级 | `import md -> update -> async backfill -> DB timeline` | 首先写入规则摘要；LLM 成功后同一条时间线更新为 `LLM` 摘要；LLM 报错时保留规则摘要，不影响更新接口成功 | 已写 |
-| UDT5 | 内容管理员 | `processFrontMatter=false` 更新 Markdown | `import(md 含 front matter) -> update(processFrontMatter=false) -> metadata/get -> downloadFile` | 原始 Markdown 被替换，但 front matter 不解析且既有元数据不被意外覆盖 | 待补 |
+| UDT5 | 内容管理员 | `processFrontMatter=false` 更新 Markdown | `import(md 含 front matter) -> update(processFrontMatter=false) -> metadata/get -> downloadFile` | 原始 Markdown 被替换，但 front matter 不解析且既有元数据不被意外覆盖 | 已写 |
 | UDT6 | 内容管理员 | 更新时描述字段的三态语义 | `import(description=old) -> update(未传/空串/新值) -> listDir 或 metadata/get` | 未传保留旧描述；空串清空；非空值覆盖 | 待补 |
-| UDT7 | 内容管理员 | 更新请求与路径校验 | `update(root path / dot segment / dotdot segment / 缺失 multipart field)` | 所有非法请求均遵循 HTTP 200 错误信封；路径不会产生别名或越界访问 | 待补 |
+| UDT7 | 内容管理员 | 更新请求与路径校验 | `update(root path / dot segment / dotdot segment / 缺失 multipart field)` | 所有非法请求均遵循 HTTP 200 错误信封；路径不会产生别名或越界访问 | 已写 |
 | UDT8 | 内容管理员 | 同一文件并发更新与文件级锁 | 两个并发 `knowledgeItems/update` 请求指向同一文件 | 更新串行化；每次时间线准确对应一次提交；对象内容、`fs_entry` 与时间线不交叉或丢失 | 待补 |
 | UDT9 | 存储运维 | 更新时存储/数据库失败的补偿 | 模拟原对象覆盖失败、数据库提交失败及 rollback 失败 | 不产生半更新；数据库失败后原对象字节恢复到原 locator；rollback 失败也尝试恢复并返回原始失败 | 待补（已有单元测试） |
 | UDT10 | 存储实现方 | 路径映射存储的原 locator 覆盖 | 使用 UserFS 等按路径映射的 provider：`import -> update -> downloadFile -> 文件系统检查` | 不生成新 key；原始文件仍在既有 locator 被覆盖，更新后可下载 | 待补（已有单元测试） |

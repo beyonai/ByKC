@@ -89,6 +89,16 @@ async def test_llm_summary_preserves_a_short_chinese_summary():
     assert await service.generate_llm_summary("# 概述\n旧", "# 概述\n新") == output
 
 
+async def test_llm_summary_prompt_targets_a_concise_40_to_140_character_output():
+    """The model remains guided toward concise summaries despite tolerant storage."""
+    llm = _FakeLLM("已更新概述。")
+    service = MarkdownUpdateSummaryService(llm_service=llm, timeout_seconds=1)
+
+    await service.generate_llm_summary("# 概述\n旧", "# 概述\n新")
+
+    assert "尽量在40至140个字符内" in llm.messages[0][0]["content"]
+
+
 async def test_llm_summary_truncates_an_overlong_plain_text_summary():
     """Valid output exceeding the storage bound keeps its leading content."""
     output = "已" * 501

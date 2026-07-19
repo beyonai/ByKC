@@ -226,7 +226,10 @@ def request(content=b"---\ntitle: New\n---\n# New\n![n](./new.png)\n", **kwargs)
 async def test_update_rejects_running_build_task_before_storage_mutation():
     calls = []
     service, connection, _ = build_service(calls, task_status="running")
-    with pytest.raises(KnowledgeBaseValidationError, match="文件正在构建，不能更新"):
+    with pytest.raises(
+        KnowledgeBaseValidationError,
+        match="File is being built and cannot be updated",
+    ):
         await service.update_file(request())
     assert not any(name == "write" for name, _ in calls)
     assert connection.rolled_back

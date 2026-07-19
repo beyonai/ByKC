@@ -4409,7 +4409,9 @@ async def test_document_update_non_markdown_and_validation_errors_use_http_200_e
     for response in (zip_error, suffix_error, missing_error, running_error):
         assert response.status_code == 200
         assert response.json()["resultCode"] == "-1"
-    assert "文件正在构建，不能更新" in running_error.json()["resultMsg"]
+    assert (
+        "File is being built and cannot be updated" in running_error.json()["resultMsg"]
+    )
 
 
 @pytest.mark.integration

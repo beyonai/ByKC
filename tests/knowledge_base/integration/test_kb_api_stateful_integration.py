@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import os
 from uuid import uuid4
 
@@ -504,6 +505,96 @@ def test_document_update_rejects_invalid_paths_and_missing_multipart_fields(
         assert response.json()["resultCode"] == "-1"
 
 
+@pytest.mark.integration
+async def test_document_update_file_description_preserves_clears_and_replaces(
+    monkeypatch, tmp_path
+):
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    from by_qa.knowledge_base.services.markdown_update_summary_service import (
+        MarkdownUpdateSummaryService,
+    )
+
+    async def no_llm(self, old_markdown, new_markdown):
+        _ = self, old_markdown, new_markdown
+        return None
+
+    monkeypatch.setattr(MarkdownUpdateSummaryService, "generate_llm_summary", no_llm)
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Update KB {uuid4().hex[:12]}")
+        _upload_file(
+            client, kb_code=kb_code, file_path="/docs/a.md", file_content=b"# Old\n"
+        )
+        _update_file(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/a.md",
+            file_content=b"# One\n",
+            file_description="first",
+            include_file_description=True,
+        )
+    assert (
+        await _file_description(settings, kb_code=kb_code, file_path="/docs/a.md")
+        == "first"
+    )
+    with TestClient(main_module.app) as client:
+        _update_file(
+            client, kb_code=kb_code, file_path="/docs/a.md", file_content=b"# Two\n"
+        )
+    assert (
+        await _file_description(settings, kb_code=kb_code, file_path="/docs/a.md")
+        == "first"
+    )
+    with TestClient(main_module.app) as client:
+        _update_file(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/a.md",
+            file_content=b"# Three\n",
+            file_description="",
+            include_file_description=True,
+        )
+    assert (
+        await _file_description(settings, kb_code=kb_code, file_path="/docs/a.md") == ""
+    )
+
+
+@pytest.mark.integration
+async def test_document_update_serializes_concurrent_updates_for_one_file(
+    monkeypatch, tmp_path
+):
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    from by_qa.knowledge_base.services.markdown_update_summary_service import (
+        MarkdownUpdateSummaryService,
+    )
+
+    async def no_llm(self, old_markdown, new_markdown):
+        _ = self, old_markdown, new_markdown
+        return None
+
+    monkeypatch.setattr(MarkdownUpdateSummaryService, "generate_llm_summary", no_llm)
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Update KB {uuid4().hex[:12]}")
+        _upload_file(
+            client, kb_code=kb_code, file_path="/docs/a.md", file_content=b"# Old\n"
+        )
+
+    def update(content: bytes):
+        with TestClient(main_module.app) as client:
+            return _update_file(
+                client, kb_code=kb_code, file_path="/docs/a.md", file_content=content
+            ).json()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(update, [b"# One\n", b"# Two\n"]))
+    assert [item["resultCode"] for item in results] == ["0", "0"]
+    assert (
+        await _update_timeline_count(settings, kb_code=kb_code, file_path="/docs/a.md")
+        == 2
+    )
+
+
 async def _latest_update_timeline(
     settings: Settings, *, kb_code: str, file_path: str
 ) -> dict:
@@ -537,6 +628,38 @@ async def _latest_update_timeline(
             await connection.close()
 
     return await _read()
+
+
+async def _file_description(settings: Settings, *, kb_code: str, file_path: str):
+    connection = await build_connection_factory(settings)()
+    try:
+        cursor = connection.cursor()
+        entry = await KnowledgeFsEntryRepository().get_file_by_path(
+            cursor, knowledge_base_id=int(kb_code), full_path=file_path.strip("/")
+        )
+        assert entry is not None
+        return entry["description"]
+    finally:
+        await connection.close()
+
+
+async def _update_timeline_count(
+    settings: Settings, *, kb_code: str, file_path: str
+) -> int:
+    connection = await build_connection_factory(settings)()
+    try:
+        cursor = connection.cursor()
+        entry = await KnowledgeFsEntryRepository().get_file_by_path(
+            cursor, knowledge_base_id=int(kb_code), full_path=file_path.strip("/")
+        )
+        assert entry is not None
+        await cursor.execute(
+            "SELECT COUNT(*) AS count FROM knowledge_file_update_timeline WHERE fs_entry_id = %(fs_entry_id)s",
+            {"fs_entry_id": entry["kid"]},
+        )
+        return int((await cursor.fetchone())["count"])
+    finally:
+        await connection.close()
 
 
 async def _create_running_build_task(

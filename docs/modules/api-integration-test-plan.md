@@ -89,11 +89,11 @@
 | UDT3 | 内容管理员 | 更新二进制文件与参数校验 | `import png -> knowledgeItems/update(png) -> downloadFile -> invalid update requests` | 二进制原始字节被覆盖；不调用 LLM；zip、文件格式变更、文件不存在及构建中更新均返回 HTTP 200 + `resultCode=-1`，构建中提示为 `File is being built and cannot be updated` | 已写 |
 | UDT4 | 内容管理员 | Markdown 时间线异步 LLM 回填与降级 | `import md -> update -> async backfill -> DB timeline` | 首先写入规则摘要；LLM 成功后同一条时间线更新为 `LLM` 摘要；LLM 报错时保留规则摘要，不影响更新接口成功 | 已写 |
 | UDT5 | 内容管理员 | `processFrontMatter=false` 更新 Markdown | `import(md 含 front matter) -> update(processFrontMatter=false) -> metadata/get -> downloadFile` | 原始 Markdown 被替换，但 front matter 不解析且既有元数据不被意外覆盖 | 已写 |
-| UDT6 | 内容管理员 | 更新时描述字段的三态语义 | `import(description=old) -> update(未传/空串/新值) -> listDir 或 metadata/get` | 未传保留旧描述；空串清空；非空值覆盖 | 待补 |
+| UDT6 | 内容管理员 | 更新时描述字段的三态语义 | `import(description=old) -> update(未传/空串/新值) -> listDir 或 metadata/get` | 未传保留旧描述；空串清空；非空值覆盖 | 已写 |
 | UDT7 | 内容管理员 | 更新请求与路径校验 | `update(root path / dot segment / dotdot segment / 缺失 multipart field)` | 所有非法请求均遵循 HTTP 200 错误信封；路径不会产生别名或越界访问 | 已写 |
-| UDT8 | 内容管理员 | 同一文件并发更新与文件级锁 | 两个并发 `knowledgeItems/update` 请求指向同一文件 | 更新串行化；每次时间线准确对应一次提交；对象内容、`fs_entry` 与时间线不交叉或丢失 | 待补 |
-| UDT9 | 存储运维 | 更新时存储/数据库失败的补偿 | 模拟原对象覆盖失败、数据库提交失败及 rollback 失败 | 不产生半更新；数据库失败后原对象字节恢复到原 locator；rollback 失败也尝试恢复并返回原始失败 | 待补（已有单元测试） |
-| UDT10 | 存储实现方 | 路径映射存储的原 locator 覆盖 | 使用 UserFS 等按路径映射的 provider：`import -> update -> downloadFile -> 文件系统检查` | 不生成新 key；原始文件仍在既有 locator 被覆盖，更新后可下载 | 待补（已有单元测试） |
+| UDT8 | 内容管理员 | 同一文件并发更新与文件级锁 | 两个并发 `knowledgeItems/update` 请求指向同一文件 | 更新串行化；每次时间线准确对应一次提交；对象内容、`fs_entry` 与时间线不交叉或丢失 | 已写 |
+| UDT9 | 存储运维 | 更新时存储/数据库失败的补偿 | 模拟原对象覆盖失败、数据库提交失败及 rollback 失败 | 不产生半更新；数据库失败后原对象字节恢复到原 locator；rollback 失败也尝试恢复并返回原始失败 | 已写（rollback 失败仍由单元测试覆盖） |
+| UDT10 | 存储实现方 | 路径映射存储的原 locator 覆盖 | 使用 UserFS 等按路径映射的 provider：`import -> update -> downloadFile -> 文件系统检查` | 不生成新 key；原始文件仍在既有 locator 被覆盖，更新后可下载 | 已写 |
 
 ## zip 批量导入与引用改写场景总表
 
@@ -447,11 +447,11 @@
 | 文件 | 覆盖重点 | 状态 |
 | --- | --- | --- |
 | `tests/knowledge_build/integration/test_api_integration.py` | ~~`knowledge_build` 三接口正常/异常与组合链路等价性~~ | 已弃用（`knowledge_build` 独立路由已移除） |
-| `tests/knowledge_base/integration/test_kb_api_stateful_integration.py` | 混合导入构建（`knowledgeItems/import` + `fileToMarkdownIndex`）、知识库改名、单文件/目录删除、多级目录改名删除、读取窗口校验、`downloadFile` 的中文文件名/二进制文件下载、真实搜索链路与失败保护；文档更新 UDT1–UDT4（真实 MinIO 原对象覆盖、派生状态清理、front matter 缺失字段保留、引用重登记、时间线规则/LLM 回填、二进制更新和参数错误信封）；zip 批量导入与引用改写（Z1–Z17：单文件分流与出参、zip 主链路、引用能/不能替换、zip 异常防护、不支持类型构建状态）；稳定 Markdown 引用（R1–R17：resolved/unresolved/broken/restore、readFile/download/search token 解析、suffix、行窗口、references inbound/outbound/all、目标文件和目录子树 move、source move unresolved 取舍、目录子树删除、目录链接、归一化、真实分片边界） | 有效 |
+| `tests/knowledge_base/integration/test_kb_api_stateful_integration.py` | 混合导入构建（`knowledgeItems/import` + `fileToMarkdownIndex`）、知识库改名、单文件/目录删除、多级目录改名删除、读取窗口校验、`downloadFile` 的中文文件名/二进制文件下载、真实搜索链路与失败保护；文档更新 UDT1–UDT8（真实 MinIO 原对象覆盖、派生状态清理、front matter 解析开关与缺失字段保留、描述字段三态、引用重登记、时间线规则/LLM 回填、二进制更新、参数错误信封和同文件并发锁）；zip 批量导入与引用改写（Z1–Z17：单文件分流与出参、zip 主链路、引用能/不能替换、zip 异常防护、不支持类型构建状态）；稳定 Markdown 引用（R1–R17：resolved/unresolved/broken/restore、readFile/download/search token 解析、suffix、行窗口、references inbound/outbound/all、目标文件和目录子树 move、source move unresolved 取舍、目录子树删除、目录链接、归一化、真实分片边界） | 有效 |
 | `tests/knowledge_base/integration/test_metadata_api_integration.py` | M1–M17 全场景:属性 CRUD/批量原子性/引用计数;文件元数据五类型 set/list 操作矩阵;`metadata/get` 错路径(unknown KB/file);YAML front matter(auto/拒绝/缺失/格式错容错);删除三档级联;`metadataFields/list`(KB 必填/多 KB 合并/单 KB 隔离);metadataSearch 接口约束(where 必填/topK 边界/KB scope/字段裁剪/knCodeList 必填);DSL 算子矩阵 + 三层布尔嵌套 + 德摩根;DSL 类型/结构/复杂度错误矩阵;系统字段(metadataSearch 单系统/混合 + chunk + searchFile 单系统/混合);search 升级版(三 mode/metadataFieldList/where 短路/前过滤证明);fileTypeList 兼容;searchFile(多 chunk 去重/where/系统字段/knCodeList 必填);跨接口一致;软删保护 | 有效 |
 | `tests/knowledge_base/integration/test_userfs_batch1.py` | U1–U9:基础读写路径、多级目录隔离、跨 KB 隔离 | 有效 |
 | `tests/knowledge_base/integration/test_userfs_batch2.py` | U10–U18:删除联动、目录改名路径迁移 | 有效 |
-| `tests/knowledge_base/integration/test_userfs_batch3.py` | U19–U27:跨接口一致性、异常补偿与边界（含 U24 commit 失败清理） | 有效 |
+| `tests/knowledge_base/integration/test_userfs_batch3.py` | U19–U27:跨接口一致性、异常补偿与边界（含 U24 commit 失败清理）；UDT9–UDT10：更新存储写失败/数据库提交失败的原对象补偿、路径映射存储原 locator 覆盖 | 有效 |
 
 ## 下一轮优先补充建议
 
@@ -460,8 +460,6 @@
 | P1 | `readFile` 未构建文件错误覆盖 | `readFile` 现在要求文件已通过 `fileToMarkdownIndex` 构建，需验证未构建时返回 "file not built" 错误 |
 | P1 | 搜索过滤组合扩展 | 当前已覆盖基础多 `knCodeList`/source/type 组合，后续可继续补更复杂组合 |
 | P1 | 配置异常覆盖面扩展 | 当前已覆盖 `knowledgeBases/create`、`listDir`、`readFile`、`knowledgeItems/search`，后续可继续补更多接口 |
-| P1 | 文档更新 UDT5–UDT8 | 覆盖 `processFrontMatter=false`、描述字段三态、非法路径/缺 multipart 与同文件并发锁，补齐更新接口的参数和并发边界 |
-| P1 | 文档更新 UDT9–UDT10 | 将现有更新补偿和路径映射存储的单元覆盖提升为接口级验证，降低不同存储实现的回归风险 |
 | P1 | 清理弃用测试代码 | `test_api_integration.py`（knowledge_build）及场景 10/11/26 对应的测试代码需清理或移除 |
 | P2 | `fileToMarkdownIndex` 构建失败保护扩展 | 已覆盖失败状态落库与失败后重试，后续可继续补充切片失败、向量化失败等更细分场景 |
 | P2 | 生命周期冲突扩展 | 当前已覆盖路径绑定、软删除复用，后续可继续补更多版本化冲突 |

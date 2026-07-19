@@ -156,6 +156,7 @@ def _reset_runtime(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
     )
     monkeypatch.setattr(main_module, "_knowledge_base_service", None)
     monkeypatch.setattr(main_module, "_knowledge_item_ingestion_service", None)
+    monkeypatch.setattr(main_module, "_document_update_service", None)
     monkeypatch.setattr(main_module, "_knowledge_item_search_service", None)
     monkeypatch.setattr(main_module, "_knowledge_fetch_cache_cleanup_service", None)
     monkeypatch.setattr(main_module, "_document_chunking_service", None)
@@ -292,6 +293,115 @@ def _upload_and_build_file(
         },
     )
     assert build_response.status_code == 200, build_response.text
+
+
+@pytest.mark.integration
+def test_udt10_update_overwrites_existing_userfs_original_locator(monkeypatch):
+    """A path-bound provider updates its existing raw path without creating a new key."""
+    from by_qa.knowledge_base.services.markdown_update_summary_service import (
+        MarkdownUpdateSummaryService,
+    )
+
+    async def no_llm(self, old_markdown, new_markdown):
+        _ = self, old_markdown, new_markdown
+        return None
+
+    monkeypatch.setattr(MarkdownUpdateSummaryService, "generate_llm_summary", no_llm)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        settings = _kb_settings(agent_data_path=root / "agent_data")
+        _wire_userfs(monkeypatch, root, settings)
+        with TestClient(main_module.app) as client:
+            kb_code = _create_kb(client, f"udt10-kb-{uuid4().hex[:12]}")
+            _upload_file(
+                client, kb_code=kb_code, file_path="/docs/a.md", file_content=b"# Old\n"
+            )
+            raw_path = root / kb_code / "raw" / "docs" / "a.md"
+            assert raw_path.read_bytes() == b"# Old\n"
+            response = client.post(
+                "/api/v1/knowledgeItems/update",
+                data={"knCode": kb_code, "filePath": "/docs/a.md"},
+                files={"fileContent": ("a.md", b"# New\n", "text/markdown")},
+            )
+            assert response.json()["resultCode"] == "0"
+        assert raw_path.read_bytes() == b"# New\n"
+
+
+@pytest.mark.integration
+def test_udt9_storage_write_failure_preserves_userfs_original(monkeypatch):
+    """A failed update write returns an API error and retains the old raw bytes."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        settings = _kb_settings(agent_data_path=root / "agent_data")
+        _wire_userfs(monkeypatch, root, settings)
+        with TestClient(main_module.app) as client:
+            kb_code = _create_kb(client, f"udt9-kb-{uuid4().hex[:12]}")
+            _upload_file(
+                client, kb_code=kb_code, file_path="/docs/a.md", file_content=b"# Old\n"
+            )
+        raw_path = root / kb_code / "raw" / "docs" / "a.md"
+
+        async def fail_new_write(self, location, content, *, content_type):
+            if content == b"# New\n":
+                raise RuntimeError("injected storage failure")
+            return await original_write(
+                self, location, content, content_type=content_type
+            )
+
+        original_write = UserFSProvider.write
+        monkeypatch.setattr(UserFSProvider, "write", fail_new_write)
+        with TestClient(main_module.app) as client:
+            response = client.post(
+                "/api/v1/knowledgeItems/update",
+                data={"knCode": kb_code, "filePath": "/docs/a.md"},
+                files={"fileContent": ("a.md", b"# New\n", "text/markdown")},
+            )
+        assert response.json()["resultCode"] == "-1"
+        assert raw_path.read_bytes() == b"# Old\n"
+
+
+@pytest.mark.integration
+def test_udt9_commit_failure_restores_userfs_original(monkeypatch):
+    """A database commit failure restores the overwritten raw object at its locator."""
+    from by_qa.knowledge_base.infrastructure import runtime as runtime_module
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        settings = _kb_settings(agent_data_path=root / "agent_data")
+        _wire_userfs(monkeypatch, root, settings)
+        with TestClient(main_module.app) as client:
+            kb_code = _create_kb(client, f"udt9-commit-{uuid4().hex[:12]}")
+            _upload_file(
+                client, kb_code=kb_code, file_path="/docs/a.md", file_content=b"# Old\n"
+            )
+            raw_path = root / kb_code / "raw" / "docs" / "a.md"
+            original_factory = runtime_module.build_connection_factory
+
+            def failing_factory(current_settings):
+                connect = original_factory(current_settings)
+
+                async def failing_connect():
+                    connection = await connect()
+
+                    async def fail_commit():
+                        raise RuntimeError("injected commit failure")
+
+                    connection.commit = fail_commit
+                    return connection
+
+                return failing_connect
+
+            monkeypatch.setattr(
+                runtime_module, "build_connection_factory", failing_factory
+            )
+            monkeypatch.setattr(main_module, "_document_update_service", None)
+            response = client.post(
+                "/api/v1/knowledgeItems/update",
+                data={"knCode": kb_code, "filePath": "/docs/a.md"},
+                files={"fileContent": ("a.md", b"# New\n", "text/markdown")},
+            )
+        assert response.json()["resultCode"] == "-1"
+        assert raw_path.read_bytes() == b"# Old\n"
 
 
 # ===================================================================

@@ -4,13 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sys
-from pathlib import Path
-from types import ModuleType
 from uuid import uuid4
 
 import pytest
-from _userfs_provider import UserFSProvider
 from fastapi.testclient import TestClient
 
 import by_qa.main as main_module
@@ -238,21 +234,6 @@ def _set_document_chunking_service(
     monkeypatch.setattr(
         main_module, "_get_or_build_document_chunking_service", get_service
     )
-
-
-def _wire_userfs(
-    monkeypatch: pytest.MonkeyPatch, root: Path, settings: Settings
-) -> None:
-    """Use local filesystem storage so update state tests do not require MinIO credentials."""
-
-    def _make_userfs() -> UserFSProvider:
-        return UserFSProvider(root=root)
-
-    module = ModuleType("_document_update_userfs_provider")
-    module.make_userfs = _make_userfs
-    sys.modules[module.__name__] = module
-    monkeypatch.setenv("BY_QA_STORAGE_PROVIDER", f"{module.__name__}:make_userfs")
-    _reset_runtime(monkeypatch, settings)
 
 
 async def _set_search_service(
@@ -4203,7 +4184,7 @@ async def test_document_update_markdown_replaces_raw_content_and_invalidates_der
 ):
     """Updating Markdown clears its build state but retains absent front-matter values."""
     settings = _kb_settings(agent_data_path=tmp_path)
-    _wire_userfs(monkeypatch, tmp_path / "userfs", settings)
+    _reset_runtime(monkeypatch, settings)
     _set_document_chunking_service(monkeypatch, EchoDocumentChunkingService())
     await _set_search_service(monkeypatch, settings)
 
@@ -4272,7 +4253,7 @@ async def test_document_update_markdown_reregisters_stable_source_references_and
 ):
     """A Markdown update keeps its reference graph and emits a timeline event without building."""
     settings = _kb_settings(agent_data_path=tmp_path)
-    _wire_userfs(monkeypatch, tmp_path / "userfs", settings)
+    _reset_runtime(monkeypatch, settings)
     _set_document_chunking_service(monkeypatch, EchoDocumentChunkingService())
 
     from by_qa.knowledge_base.services.markdown_update_summary_service import (
@@ -4351,7 +4332,7 @@ async def test_document_update_non_markdown_and_validation_errors_use_http_200_e
 ):
     """Non-Markdown updates avoid LLM work; malformed updates retain the public error envelope."""
     settings = _kb_settings(agent_data_path=tmp_path)
-    _wire_userfs(monkeypatch, tmp_path / "userfs", settings)
+    _reset_runtime(monkeypatch, settings)
     _set_document_chunking_service(monkeypatch, EchoDocumentChunkingService())
 
     from by_qa.knowledge_base.services.markdown_update_summary_service import (
@@ -4440,7 +4421,7 @@ async def test_document_update_markdown_backfill_uses_llm_summary_and_keeps_fall
     )
 
     settings = _kb_settings(agent_data_path=tmp_path)
-    _wire_userfs(monkeypatch, tmp_path / "userfs", settings)
+    _reset_runtime(monkeypatch, settings)
     _set_document_chunking_service(monkeypatch, EchoDocumentChunkingService())
 
     async def llm_summary(self, old_markdown, new_markdown):

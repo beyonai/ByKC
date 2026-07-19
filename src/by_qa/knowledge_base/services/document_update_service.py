@@ -95,7 +95,7 @@ class DocumentUpdateService:
             )
             if latest_task and latest_task.get("status") == BUILD_STATUS_RUNNING:
                 raise KnowledgeBaseValidationError(
-                    f"build task already exists for file: {request.file_path}"
+                    f"文件正在构建，不能更新：{request.file_path}"
                 )
 
             original_location = self._original_location(file_row, request.file_path)

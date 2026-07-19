@@ -53,7 +53,6 @@ def test_rule_summary_ignores_internal_reference_tokens():
         '{"summary":"更新"}',
         "- 更新了概述",
         "# 更新摘要",
-        "x" * 181,
         "Updated the overview section.",
         "已更新 byqa-ref://42 引用。",
         "```markdown\n已更新概述\n```",
@@ -80,9 +79,9 @@ async def test_llm_summary_times_out_and_returns_none():
     assert await service.generate_llm_summary("# 概述\n旧", "# 概述\n新") is None
 
 
-async def test_llm_summary_accepts_a_valid_40_character_chinese_summary():
-    """The lower output boundary accepts 40-character Chinese plain text."""
-    output = "已" * 40
+async def test_llm_summary_preserves_a_short_chinese_summary():
+    """A valid short summary remains useful and must be retained."""
+    output = "已更新概述。"
     service = MarkdownUpdateSummaryService(
         llm_service=_FakeLLM(output), timeout_seconds=1
     )
@@ -90,13 +89,14 @@ async def test_llm_summary_accepts_a_valid_40_character_chinese_summary():
     assert await service.generate_llm_summary("# 概述\n旧", "# 概述\n新") == output
 
 
-async def test_llm_summary_rejects_a_39_character_summary():
-    """The lower output boundary rejects incomplete short summaries."""
+async def test_llm_summary_truncates_an_overlong_plain_text_summary():
+    """Valid output exceeding the storage bound keeps its leading content."""
+    output = "已" * 501
     service = MarkdownUpdateSummaryService(
-        llm_service=_FakeLLM("已" * 39), timeout_seconds=1
+        llm_service=_FakeLLM(output), timeout_seconds=1
     )
 
-    assert await service.generate_llm_summary("# 概述\n旧", "# 概述\n新") is None
+    assert await service.generate_llm_summary("# 概述\n旧", "# 概述\n新") == "已" * 500
 
 
 def test_service_uses_configured_default_timeout(monkeypatch):

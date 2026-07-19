@@ -159,7 +159,7 @@ class Settings(BaseSettings):
         default=10 * 60, alias="KB_FETCH_CACHE_CLEANUP_INTERVAL_SECONDS"
     )
     kb_update_timeline_llm_timeout_seconds: float = Field(
-        default=15,
+        default=60,
         gt=0,
         alias="KB_UPDATE_TIMELINE_LLM_TIMEOUT_SECONDS",
     )

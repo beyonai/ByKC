@@ -104,6 +104,7 @@ def test_settings_expose_embedding_batch_max_texts_default():
 
 def test_settings_expose_positive_update_timeline_llm_timeout():
     """Timeline LLM generation has a bounded, configurable timeout."""
+    assert Settings().kb_update_timeline_llm_timeout_seconds == 60
     assert (
         Settings(
             KB_UPDATE_TIMELINE_LLM_TIMEOUT_SECONDS=8

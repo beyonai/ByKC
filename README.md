@@ -91,7 +91,7 @@ RAG / Vector DB / Doc System"]
 | **API Framework** | [FastAPI](https://fastapi.tiangolo.com/) 0.115+ · Pydantic v2 |
 | **AI Orchestration** | [LangGraph](https://github.com/langchain-ai/langgraph) 0.2+ · LangChain |
 | **LLM / Embedding** | OpenAI-compatible API (any compatible endpoint) |
-| **Document Parsing** | PyMuPDF (PDF) · python-docx (Word) · python-pptx (PPT) · openpyxl (Excel) |
+| **Document Parsing** | MarkItDown (HTML/Word/PPT) · PyMuPDF (PDF) · openpyxl (Excel) |
 | **Database** | [OpenGauss](https://opengauss.org/) (PostgreSQL-compatible, with vector search) |
 | **Full-text Search** | OpenGauss FTS · Jieba (Chinese tokenization) |
 | **Object Storage** | [MinIO](https://min.io/) (S3-compatible) |
@@ -283,7 +283,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/knowledgeBases/create \
   -d '{"knName": "my-docs", "knDescription": "Product docs"}'
 # → {"resultObject": {"knCode": "74", ...}}
 
-# 2. Import a file (PDF/Word/PPT/Excel/Markdown/CSV supported)
+# 2. Import a file (HTML/PDF/Word/PPT/Excel/Markdown/CSV supported)
 curl -X POST http://127.0.0.1:8000/api/v1/knowledgeItems/import \
   -F "knCode=74" \
   -F "filePath=/docs/handbook.md" \

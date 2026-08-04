@@ -11,6 +11,64 @@ class KnowledgeItemChunkRepository:
     def __init__(self, embedding_table_name: str):
         self.embedding_table_name = embedding_table_name
 
+    async def get_build_result_summary(
+        self, cursor: Any, *, fs_entry_id: int
+    ) -> dict[str, Any]:
+        """Return chunk, embedding, and retrieval-index counts for one file."""
+        await cursor.execute(
+            f"""
+            SELECT
+                COUNT(c.kid)::int AS chunk_count,
+                COUNT(e.chunk_id)::int AS embedded_chunk_count,
+                COUNT(r.chunk_id)::int AS indexed_chunk_count
+            FROM knowledge_chunk c
+            LEFT JOIN {self.embedding_table_name} e ON e.chunk_id = c.kid
+            LEFT JOIN knowledge_chunk_retrieval_mv r ON r.chunk_id = c.kid
+            WHERE c.fs_entry_id = %(fs_entry_id)s
+            """,
+            {"fs_entry_id": fs_entry_id},
+        )
+        row = await cursor.fetchone()
+        return row or {
+            "chunk_count": 0,
+            "embedded_chunk_count": 0,
+            "indexed_chunk_count": 0,
+        }
+
+    async def list_build_result_chunks(
+        self,
+        cursor: Any,
+        *,
+        fs_entry_id: int,
+        offset: int,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Return a page of chunks with embedding and retrieval-index flags."""
+        await cursor.execute(
+            f"""
+            SELECT
+                c.chunk_no,
+                c.start_line,
+                c.end_line,
+                c.chunk_text,
+                (e.chunk_id IS NOT NULL) AS has_embedding,
+                (r.chunk_id IS NOT NULL) AS retrieval_indexed
+            FROM knowledge_chunk c
+            LEFT JOIN {self.embedding_table_name} e ON e.chunk_id = c.kid
+            LEFT JOIN knowledge_chunk_retrieval_mv r ON r.chunk_id = c.kid
+            WHERE c.fs_entry_id = %(fs_entry_id)s
+            ORDER BY c.chunk_no ASC
+            OFFSET %(offset)s
+            LIMIT %(limit)s
+            """,
+            {
+                "fs_entry_id": fs_entry_id,
+                "offset": offset,
+                "limit": limit,
+            },
+        )
+        return list(await cursor.fetchall())
+
     async def delete_for_fs_entry(self, cursor: Any, *, fs_entry_id: int) -> None:
         """Delete a file's embeddings before deleting its chunk rows."""
         await cursor.execute(

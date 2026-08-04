@@ -41,12 +41,103 @@ def test_extract_text_from_file_accepts_text_types_case_insensitively():
     )
 
 
+def test_extract_text_from_html_preserves_markdown_structure():
+    """HTML headings, links, lists, and tables should become Markdown."""
+    service = _make_service()
+    html = b"""
+    <html><head><title>Ignored metadata title</title></head><body>
+      <h1>Product Guide</h1>
+      <p>Read the <a href="https://example.com/guide">full guide</a>.</p>
+      <ul><li>Install</li><li>Configure</li></ul>
+      <table><tr><th>Plan</th><th>Users</th></tr><tr><td>Pro</td><td>10</td></tr></table>
+    </body></html>
+    """
+
+    text = service.extract_text_from_file(html, "HTML")
+
+    assert "# Product Guide" in text
+    assert "[full guide](https://example.com/guide)" in text
+    assert "* Install" in text
+    assert "| Plan | Users |" in text
+
+
+def test_extract_text_from_html_emits_conversion_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """HTML conversion logs metadata and timing without logging document contents."""
+    service = _make_service()
+    html = b"<h1>Internal guide</h1><p>Do not log this document body.</p>"
+    info_messages: list[str] = []
+    monkeypatch.setattr(
+        core_logger,
+        "info",
+        lambda message, *args, **kwargs: info_messages.append(
+            message % args if args else message
+        ),
+    )
+
+    text = service.extract_text_from_file(html, "HTML")
+
+    assert "# Internal guide" in text
+    assert (
+        "document_chunking markitdown conversion started: "
+        f"source_extension=.html, input_bytes={len(html)}" in info_messages
+    )
+    assert any(
+        message.startswith(
+            "document_chunking markitdown conversion completed: "
+            f"source_extension=.html, input_bytes={len(html)}, "
+            f"output_chars={len(text)}, output_bytes={len(text.encode('utf-8'))}, "
+            "elapsed_ms="
+        )
+        for message in info_messages
+    )
+    assert all(
+        "Do not log this document body." not in message for message in info_messages
+    )
+
+
+def test_extract_text_from_html_logs_conversion_failures(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Failed conversions should include safe diagnostic metadata in logs."""
+    service = _make_service()
+    html = b"<h1>Internal guide</h1>"
+    exception_messages: list[str] = []
+
+    class FailingConverter:
+        """A deterministic converter failure for logging behavior coverage."""
+
+        def convert_stream(self, stream, *, stream_info):
+            raise RuntimeError("document conversion failed")
+
+    monkeypatch.setattr(chunking_module, "_markitdown_converter", FailingConverter())
+    monkeypatch.setattr(
+        core_logger,
+        "exception",
+        lambda message, *args, **kwargs: exception_messages.append(
+            message % args if args else message
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="document conversion failed"):
+        service.extract_text_from_file(html, "HTML")
+
+    assert len(exception_messages) == 1
+    assert exception_messages[0].startswith(
+        "document_chunking markitdown conversion failed: "
+        f"source_extension=.html, input_bytes={len(html)}, elapsed_ms="
+    )
+    assert exception_messages[0].endswith("error_type=RuntimeError")
+
+
 def test_extract_text_from_docx_includes_table_cells():
     """DOCX tables should be included in extracted markdown text."""
     docx = pytest.importorskip("docx")
     service = _make_service()
     buffer = io.BytesIO()
     document = docx.Document()
+    document.add_heading("产品说明", level=1)
     document.add_paragraph("正文段落")
     table = document.add_table(rows=2, cols=2)
     table.cell(0, 0).text = "措施"
@@ -57,9 +148,10 @@ def test_extract_text_from_docx_includes_table_cells():
 
     text = service.extract_text_from_file(buffer.getvalue(), "docx")
 
+    assert "# 产品说明" in text
     assert "正文段落" in text
-    assert "措施 | 内容" in text
-    assert "一 | 放宽准入" in text
+    assert "| 措施 | 内容 |" in text
+    assert "| 一 | 放宽准入 |" in text
 
 
 def test_extract_text_from_pptx_includes_slide_text():
@@ -68,17 +160,34 @@ def test_extract_text_from_pptx_includes_slide_text():
     service = _make_service()
     buffer = io.BytesIO()
     presentation = pptx.Presentation()
-    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
-    text_box = slide.shapes.add_textbox(0, 0, 1000000, 1000000)
-    text_box.text_frame.text = "季度汇报"
-    paragraph = text_box.text_frame.add_paragraph()
-    paragraph.text = "关键进展"
+    slide = presentation.slides.add_slide(presentation.slide_layouts[5])
+    slide.shapes.title.text = "季度汇报"
+    table = slide.shapes.add_table(2, 2, 0, 1000000, 2000000, 1000000).table
+    table.cell(0, 0).text = "事项"
+    table.cell(0, 1).text = "状态"
+    table.cell(1, 0).text = "关键进展"
+    table.cell(1, 1).text = "完成"
     presentation.save(buffer)
 
     text = service.extract_text_from_file(buffer.getvalue(), "pptx")
 
-    assert "季度汇报" in text
-    assert "关键进展" in text
+    assert "# 季度汇报" in text
+    assert "| 事项 | 状态 |" in text
+    assert "| 关键进展 | 完成 |" in text
+
+
+@pytest.mark.parametrize("ext", [".html", ".htm", ".docx", ".doc", ".pptx", ".ppt"])
+def test_converted_documents_are_chunked_as_markdown(ext):
+    """Generated Markdown headings should drive the existing heading-aware splitter."""
+    service = _make_service()
+
+    blocks = service._build_blocks(
+        "# Heading\n\nBody",
+        treat_as_markdown=ext in chunking_module.MARKDOWN_CONVERSION_EXTENSIONS,
+    )
+
+    assert blocks[0].kind == "heading"
+    assert blocks[0].level == 1
 
 
 def test_extract_text_from_xlsx_includes_sheet_rows():

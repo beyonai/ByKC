@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -32,6 +33,8 @@ from by_qa.knowledge_common.schemas import KnowledgeItemChunkPayload
 SUPPORTED_EXTENSIONS = {
     ".md",
     ".markdown",
+    ".html",
+    ".htm",
     ".txt",
     ".pdf",
     ".docx",
@@ -42,6 +45,41 @@ SUPPORTED_EXTENSIONS = {
     ".xls",
     ".csv",
 }
+
+MARKDOWN_CONVERSION_EXTENSIONS = {
+    ".html",
+    ".htm",
+    ".docx",
+    ".doc",
+    ".pptx",
+    ".ppt",
+}
+
+_markitdown_converter = None
+
+
+def _get_markitdown_converter():
+    """Return a shared MarkItDown converter without enabling third-party plugins."""
+    global _markitdown_converter
+    if _markitdown_converter is not None:
+        return _markitdown_converter
+    try:
+        import markitdown
+    except ImportError as exc:
+        raise KnowledgeConfigurationError(
+            "markitdown with DOCX and PPTX extras is required for HTML, DOCX, "
+            "and PPTX support: pip install 'markitdown[docx,pptx]==0.1.6'"
+        ) from exc
+    logger.info(
+        "document_chunking markitdown converter initializing: plugins_enabled=false"
+    )
+    _markitdown_converter = markitdown.MarkItDown(enable_plugins=False)
+    logger.info(
+        "document_chunking markitdown converter initialized: version=%s, "
+        "plugins_enabled=false",
+        getattr(markitdown, "__version__", "unknown"),
+    )
+    return _markitdown_converter
 
 
 def _strip_front_matter(text: str) -> str:
@@ -112,6 +150,8 @@ class DocumentChunkingService:
     FILE_TYPE_TO_EXT = {
         "txt": ".txt",
         "md": ".md",
+        "html": ".html",
+        "htm": ".htm",
         "csv": ".csv",
         "pdf": ".pdf",
         "docx": ".docx",
@@ -173,6 +213,8 @@ class DocumentChunkingService:
     def _extract_text(self, file_bytes: bytes, ext: str) -> str:
         if ext in (".md", ".markdown"):
             return _strip_front_matter(file_bytes.decode("utf-8"))
+        elif ext in (".html", ".htm"):
+            return self._extract_markdown(file_bytes, ext)
         elif ext == ".txt":
             return file_bytes.decode("utf-8")
         elif ext == ".pdf":
@@ -211,45 +253,68 @@ class DocumentChunkingService:
 
     @staticmethod
     def _extract_docx(file_bytes: bytes) -> str:
-        try:
-            from docx import Document
-        except ImportError as exc:
-            raise KnowledgeConfigurationError(
-                "python-docx is required for DOCX support: pip install python-docx"
-            ) from exc
-        doc = Document(io.BytesIO(file_bytes))
-        parts = [p.text for p in doc.paragraphs if p.text.strip()]
-        for table in doc.tables:
-            rows = []
-            for row in table.rows:
-                cells = [cell.text.strip() for cell in row.cells]
-                if any(cells):
-                    rows.append(" | ".join(cells))
-            if rows:
-                parts.append("\n".join(rows))
-        return "\n\n".join(parts)
+        return DocumentChunkingService._extract_markdown(file_bytes, ".docx")
 
     @staticmethod
     def _extract_pptx(file_bytes: bytes) -> str:
+        return DocumentChunkingService._extract_markdown(file_bytes, ".pptx")
+
+    @staticmethod
+    def _extract_markdown(file_bytes: bytes, ext: str) -> str:
+        """Convert a supported in-memory document to Markdown with MarkItDown."""
+        input_bytes = len(file_bytes)
+        started_at = time.perf_counter()
+        logger.info(
+            "document_chunking markitdown conversion started: "
+            "source_extension=%s, input_bytes=%s",
+            ext,
+            input_bytes,
+        )
         try:
-            from pptx import Presentation
+            from markitdown import StreamInfo
         except ImportError as exc:
-            raise KnowledgeConfigurationError(
-                "python-pptx is required for PPTX support: pip install python-pptx"
-            ) from exc
-        prs = Presentation(io.BytesIO(file_bytes))
-        slides: list[str] = []
-        for slide in prs.slides:
-            texts: list[str] = []
-            for shape in slide.shapes:
-                if shape.has_text_frame:
-                    for paragraph in shape.text_frame.paragraphs:
-                        text = paragraph.text.strip()
-                        if text:
-                            texts.append(text)
-            if texts:
-                slides.append("\n".join(texts))
-        return "\n\n".join(slides)
+            error = KnowledgeConfigurationError(
+                "markitdown with DOCX and PPTX extras is required for HTML, DOCX, "
+                "and PPTX support: pip install 'markitdown[docx,pptx]==0.1.6'"
+            )
+            logger.exception(
+                "document_chunking markitdown conversion failed: "
+                "source_extension=%s, input_bytes=%s, elapsed_ms=%.2f, error_type=%s",
+                ext,
+                input_bytes,
+                (time.perf_counter() - started_at) * 1000,
+                type(error).__name__,
+            )
+            raise error from exc
+
+        try:
+            result = _get_markitdown_converter().convert_stream(
+                io.BytesIO(file_bytes),
+                stream_info=StreamInfo(extension=ext),
+            )
+            markdown = result.markdown.strip()
+        except Exception as exc:
+            logger.exception(
+                "document_chunking markitdown conversion failed: "
+                "source_extension=%s, input_bytes=%s, elapsed_ms=%.2f, error_type=%s",
+                ext,
+                input_bytes,
+                (time.perf_counter() - started_at) * 1000,
+                type(exc).__name__,
+            )
+            raise
+
+        logger.info(
+            "document_chunking markitdown conversion completed: "
+            "source_extension=%s, input_bytes=%s, output_chars=%s, "
+            "output_bytes=%s, elapsed_ms=%.2f",
+            ext,
+            input_bytes,
+            len(markdown),
+            len(markdown.encode("utf-8")),
+            (time.perf_counter() - started_at) * 1000,
+        )
+        return markdown
 
     @staticmethod
     def _extract_xlsx(file_bytes: bytes) -> str:
@@ -468,7 +533,10 @@ class DocumentChunkingService:
         return "\n".join(rows)
 
     def _split_text(self, text: str, ext: str) -> list[dict]:
-        blocks = self._build_blocks(text, treat_as_markdown=ext in (".md", ".markdown"))
+        treat_as_markdown = (
+            ext in (".md", ".markdown") or ext in MARKDOWN_CONVERSION_EXTENSIONS
+        )
+        blocks = self._build_blocks(text, treat_as_markdown=treat_as_markdown)
         return self._build_chunks_from_blocks(text, blocks)
 
     def _build_blocks(self, text: str, *, treat_as_markdown: bool) -> list[_TextBlock]:

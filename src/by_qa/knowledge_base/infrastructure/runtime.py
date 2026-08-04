@@ -77,6 +77,9 @@ from by_qa.knowledge_base.services.markdown_reference_rewriter import (
 from by_qa.knowledge_base.services.markdown_update_summary_service import (
     MarkdownUpdateSummaryService,
 )
+from by_qa.knowledge_base.services.presentation_preview_service import (
+    PresentationPreviewService,
+)
 
 
 def validate_knowledge_base_settings(
@@ -205,11 +208,21 @@ async def build_knowledge_base_service(
         else None
     )
     validate_knowledge_base_settings(settings, embedding_config=embedding_config)
+    bootstrap = await build_bootstrap_service(settings, provider=provider)
+    embedding_dimension = (
+        embedding_config.dimension
+        if embedding_config is not None and embedding_config.dimension is not None
+        else settings.embedding_dimension
+    )
     return KnowledgeBaseService(
         connection_factory=build_connection_factory(settings),
         knowledge_base_repository=KnowledgeBaseRepository(),
         knowledge_fs_entry_repository=KnowledgeFsEntryRepository(),
         knowledge_build_task_repository=KnowledgeBuildTaskRepository(),
+        knowledge_item_chunk_repository=KnowledgeItemChunkRepository(
+            bootstrap.embedding_table_name
+        ),
+        embedding_dimension=embedding_dimension,
         retrieval_projection_repository=RetrievalProjectionRepository(),
         knowledge_fetch_cache_repository=KnowledgeFetchCacheRepository(),
         storage_provider=await build_storage_provider(
@@ -267,6 +280,7 @@ async def build_knowledge_item_ingestion_service(
         file_metadata_value_repository=FileMetadataValueRepository(),
         knowledge_file_reference_repository=KnowledgeFileReferenceRepository(),
         markdown_reference_rewriter=MarkdownReferenceRewriter(),
+        presentation_preview_service=PresentationPreviewService.from_environment(),
     )
 
 

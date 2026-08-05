@@ -44,8 +44,9 @@ class FakeKnowledgeBaseRepository:
 
 
 class FakeFsEntryRepository:
-    def __init__(self, calls):
+    def __init__(self, calls, *, duplicate_path=None):
         self.calls = calls
+        self.duplicate_path = duplicate_path
 
     async def create_file_entry(
         self, cursor, *, knowledge_base_id, full_path, file_description=None
@@ -110,6 +111,15 @@ class FakeFsEntryRepository:
             )
         )
         return None
+
+    async def lock_checksum_scope(self, cursor, **kwargs):
+        self.calls.append(("lock_checksum_scope", kwargs))
+
+    async def get_file_by_checksum(self, cursor, **kwargs):
+        self.calls.append(("get_file_by_checksum", kwargs))
+        if self.duplicate_path is None:
+            return None
+        return {"kid": 72, "virtual_path": self.duplicate_path}
 
 
 class FakeStorageProvider:
@@ -253,12 +263,15 @@ def _build_service(
     storage=None,
     reference_repository=None,
     rewriter=None,
+    duplicate_path=None,
 ):
     connection = FakeConnection(calls)
     service = KnowledgeItemIngestionService(
         connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=FakeKnowledgeBaseRepository(),
-        knowledge_fs_entry_repository=FakeFsEntryRepository(calls),
+        knowledge_fs_entry_repository=FakeFsEntryRepository(
+            calls, duplicate_path=duplicate_path
+        ),
         knowledge_item_chunk_repository=object(),
         retrieval_projection_repository=object(),
         storage_provider=storage or FakeStorageProvider(calls),
@@ -287,6 +300,13 @@ async def test_markdown_upload_rewrites_inside_transaction_before_storage_and_co
     )
 
     names = _call_names(calls)
+    lock_call = next(data for name, data in calls if name == "lock_checksum_scope")
+    assert lock_call == {
+        "knowledge_base_id": 7,
+        "checksum": hashlib.sha256(
+            b"---\ntitle: Doc\n---\n![later](./later.png)\n"
+        ).hexdigest(),
+    }
     assert names.index("create_file_entry") < names.index("rewrite")
     assert names.index("rewrite") < names.index("storage_write")
     assert names.index("update_file_entry_storage") < names.index(
@@ -350,6 +370,31 @@ async def test_storage_write_failure_rolls_back_references_and_runs_cleanup():
     assert "commit" not in names
     assert connection.rolled_back is True
     assert connection.committed is False
+
+
+async def test_upload_duplicate_guard_rejects_before_entry_or_storage_mutation():
+    calls = []
+    service, connection = _build_service(calls, duplicate_path="/archive/same.md")
+
+    with pytest.raises(
+        Exception,
+        match="duplicate file checksum in knowledge base: /archive/same.md",
+    ):
+        await service.upload_file(
+            KnowledgeItemUploadRequest(
+                knCode="kb-1",
+                filePath="/docs/readme.md",
+                fileContent=b"same content",
+                skipIfDuplicate=True,
+            )
+        )
+
+    names = _call_names(calls)
+    assert "lock_checksum_scope" in names
+    assert "get_file_by_checksum" in names
+    assert "create_file_entry" not in names
+    assert "storage_write" not in names
+    assert connection.rolled_back
 
 
 async def test_non_markdown_upload_does_not_call_rewriter_but_resolves_pending():

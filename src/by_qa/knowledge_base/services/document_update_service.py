@@ -88,6 +88,15 @@ class DocumentUpdateService:
                     f"file not found: {request.file_path}"
                 )
             fs_entry_id = self._row_id(file_row)
+            if (
+                request.refer_signature is not None
+                and file_row.get("checksum") != request.refer_signature
+            ):
+                raise KnowledgeBaseValidationError(
+                    "file signature mismatch: "
+                    f"expected {request.refer_signature}, "
+                    f"current {file_row.get('checksum') or ''}"
+                )
             latest_task = (
                 await self.knowledge_build_task_repository.get_latest_by_fs_entry_id(
                     cursor, fs_entry_id=fs_entry_id
@@ -125,6 +134,27 @@ class DocumentUpdateService:
                 new_markdown = None
                 summary = self.FIXED_SUMMARY
                 summary_source = "FIXED"
+
+            checksum = hashlib.sha256(final_bytes).hexdigest()
+            await self.knowledge_fs_entry_repository.lock_checksum_scope(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                checksum=checksum,
+            )
+            if request.skip_if_duplicate:
+                duplicate = (
+                    await self.knowledge_fs_entry_repository.get_file_by_checksum(
+                        cursor,
+                        knowledge_base_id=knowledge_base_id,
+                        checksum=checksum,
+                        exclude_fs_entry_id=fs_entry_id,
+                    )
+                )
+                if duplicate is not None:
+                    raise KnowledgeBaseValidationError(
+                        "duplicate file checksum in knowledge base: "
+                        f"{duplicate['virtual_path']}"
+                    )
 
             # Do this before changing durable derived state. A write failure is
             # rolled back without any committed DB mutation.
@@ -166,7 +196,6 @@ class DocumentUpdateService:
                 target_fs_entry_id=fs_entry_id,
             )
 
-            checksum = hashlib.sha256(final_bytes).hexdigest()
             await self.knowledge_fs_entry_repository.update_file_entry_for_update(
                 cursor,
                 fs_entry_id=fs_entry_id,

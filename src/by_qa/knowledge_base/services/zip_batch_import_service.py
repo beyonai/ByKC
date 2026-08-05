@@ -126,6 +126,7 @@ class ZipBatchImportService:
         zip_bytes: bytes,
         process_front_matter: bool = True,
         file_description: str | None = None,
+        skip_if_duplicate: bool = False,
         max_concurrency: int | None = None,
     ) -> ZipBatchImportResult:
         normalized_target = (target_dir or "").strip("/") or ""
@@ -167,6 +168,7 @@ class ZipBatchImportService:
             target_dir=normalized_target,
             process_front_matter=process_front_matter,
             file_description=file_description,
+            skip_if_duplicate=skip_if_duplicate,
         )
 
         # Phase 2: md concurrent after barrier.
@@ -177,6 +179,7 @@ class ZipBatchImportService:
             target_dir=normalized_target,
             process_front_matter=process_front_matter,
             file_description=file_description,
+            skip_if_duplicate=skip_if_duplicate,
         )
 
         imports = list(non_md_imports) + list(md_imports)
@@ -214,6 +217,7 @@ class ZipBatchImportService:
         target_dir: str,
         process_front_matter: bool,
         file_description: str | None,
+        skip_if_duplicate: bool,
     ) -> list[_ImportedItem]:
         async def one(name: str, data: bytes) -> _ImportedItem:
             async with sem:
@@ -224,6 +228,7 @@ class ZipBatchImportService:
                     data=data,
                     process_front_matter=process_front_matter,
                     file_description=file_description,
+                    skip_if_duplicate=skip_if_duplicate,
                 )
 
         return await asyncio.gather(*(one(n, d) for n, d in group))
@@ -298,6 +303,7 @@ class ZipBatchImportService:
         data: bytes,
         process_front_matter: bool,
         file_description: str | None,
+        skip_if_duplicate: bool,
     ) -> _ImportedItem:
         resolved = _resolve_within_target(target_dir, name)
         if resolved is None:
@@ -313,6 +319,22 @@ class ZipBatchImportService:
             # malformed md (UnicodeDecodeError) must NOT lose the original.
             if name.lower().endswith(_MD_SUFFIXES):
                 data.decode("utf-8")
+            if skip_if_duplicate:
+                duplicate_path = await self.ingestion_service.find_duplicate_file(
+                    kb_code=kb_code,
+                    file_content=data,
+                )
+                if duplicate_path is not None:
+                    return _ImportedItem(
+                        item=ImportItem(
+                            file_path=file_path,
+                            success=False,
+                            error=(
+                                "duplicate file checksum in knowledge base: "
+                                f"{duplicate_path}"
+                            ),
+                        )
+                    )
             if await self.ingestion_service.file_exists(kb_code, file_path):
                 await self.ingestion_service.delete_knowledge_item(
                     DeleteKnowledgeItemRequest(kb_code=kb_code, file_path=file_path)
@@ -323,6 +345,7 @@ class ZipBatchImportService:
                 file_description=file_description,
                 file_content=data,
                 process_front_matter=process_front_matter,
+                skip_if_duplicate=skip_if_duplicate,
             )
             upload_row = await self.ingestion_service.upload_file(request)
             return _ImportedItem(

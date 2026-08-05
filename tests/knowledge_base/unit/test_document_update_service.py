@@ -79,8 +79,9 @@ class KBRepo:
 
 
 class FsRepo:
-    def __init__(self, calls, *, markdown=True):
+    def __init__(self, calls, *, markdown=True, duplicate_path=None):
         self.calls, self.markdown = calls, markdown
+        self.duplicate_path = duplicate_path
 
     async def get_file_by_path_for_update(
         self, cursor, *, knowledge_base_id, full_path
@@ -102,6 +103,15 @@ class FsRepo:
 
     async def clear_markdown_metadata(self, cursor, **kwargs):
         self.calls.append(("clear_markdown", kwargs))
+
+    async def lock_checksum_scope(self, cursor, **kwargs):
+        self.calls.append(("lock_checksum_scope", kwargs))
+
+    async def get_file_by_checksum(self, cursor, **kwargs):
+        self.calls.append(("get_file_by_checksum", kwargs))
+        if self.duplicate_path is None:
+            return None
+        return {"kid": 9, "virtual_path": self.duplicate_path}
 
 
 class BuildTasks:
@@ -189,6 +199,7 @@ def build_service(
     fail_write=False,
     markdown=True,
     task_status=None,
+    duplicate_path=None,
 ):
     connection, storage = (
         Connection(calls, fail_commit, fail_rollback),
@@ -197,7 +208,9 @@ def build_service(
     service = DocumentUpdateService(
         connection_factory=lambda: _return(connection),
         knowledge_base_repository=KBRepo(),
-        knowledge_fs_entry_repository=FsRepo(calls, markdown=markdown),
+        knowledge_fs_entry_repository=FsRepo(
+            calls, markdown=markdown, duplicate_path=duplicate_path
+        ),
         knowledge_item_chunk_repository=Chunks(calls),
         retrieval_projection_repository=Projection(calls),
         knowledge_build_task_repository=BuildTasks(calls, task_status),
@@ -232,6 +245,43 @@ async def test_update_rejects_running_build_task_before_storage_mutation():
     ):
         await service.update_file(request())
     assert not any(name == "write" for name, _ in calls)
+    assert connection.rolled_back
+
+
+async def test_update_rejects_stale_refer_signature_before_storage_mutation():
+    calls = []
+    service, connection, _ = build_service(calls)
+
+    with pytest.raises(KnowledgeBaseValidationError, match="file signature mismatch"):
+        await service.update_file(request(referSignature="stale-checksum"))
+
+    assert not any(name in {"read", "write", "delete_refs"} for name, _ in calls)
+    assert connection.rolled_back
+
+
+async def test_update_accepts_matching_refer_signature():
+    calls = []
+    service, _, _ = build_service(calls)
+
+    await service.update_file(request(referSignature="old-checksum"))
+
+    assert any(name == "commit" for name, _ in calls)
+
+
+async def test_update_duplicate_guard_rejects_before_storage_write_and_rolls_back():
+    calls = []
+    service, connection, _ = build_service(calls, duplicate_path="/docs/existing.md")
+
+    with pytest.raises(
+        KnowledgeBaseValidationError,
+        match="duplicate file checksum in knowledge base: /docs/existing.md",
+    ):
+        await service.update_file(request(skipIfDuplicate=True))
+
+    names = [name for name, _ in calls]
+    assert "lock_checksum_scope" in names
+    assert "get_file_by_checksum" in names
+    assert "write" not in names
     assert connection.rolled_back
 
 
@@ -286,6 +336,11 @@ async def test_markdown_update_rewrites_final_bytes_cleans_state_and_records_bou
         updated["checksum"]
         == hashlib.sha256(storage.objects[storage.original]).hexdigest()
     )
+    lock_call = next(data for name, data in calls if name == "lock_checksum_scope")
+    assert lock_call == {
+        "knowledge_base_id": 7,
+        "checksum": updated["checksum"],
+    }
     assert updated["description_provided"] is True and updated["file_description"] == ""
     assert "frontmatter" in names and "delete_refs" in names and "resolve_refs" in names
     assert (

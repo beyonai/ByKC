@@ -23,6 +23,16 @@ from by_qa.knowledge_base.repositories.metadata_search_repository import (
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
 
 
+@dataclass(frozen=True)
+class MetadataSearchPage:
+    """One page of pure metadata search results."""
+
+    data: list[MetadataSearchHit]
+    total: int
+    page_num: int
+    page_size: int
+
+
 @dataclass
 class MetadataSearchService:
     """Pure metadata search: filter files by metadata, no semantic retrieval."""
@@ -31,7 +41,7 @@ class MetadataSearchService:
     knowledge_base_repository: KnowledgeBaseRepository
     metadata_search_repository: MetadataSearchRepository
 
-    async def search(self, request: MetadataSearchRequest) -> list[MetadataSearchHit]:
+    async def search(self, request: MetadataSearchRequest) -> MetadataSearchPage:
         logger.info(
             "metadata_search_service.search started: top_k=%s, where=%s",
             request.top_k,
@@ -61,12 +71,20 @@ class MetadataSearchService:
                 request.where, property_map=property_map
             )
 
+            total = await self.metadata_search_repository.count_files(
+                cursor,
+                kb_ids=kb_ids,
+                where_sql=where_sql,
+                where_params=where_params,
+            )
+            page_size = request.effective_page_size
             file_rows = await self.metadata_search_repository.search_files(
                 cursor,
                 kb_ids=kb_ids,
                 where_sql=where_sql,
                 where_params=where_params,
-                limit=request.top_k,
+                limit=page_size,
+                offset=(request.page_num - 1) * page_size,
             )
 
             results: list[MetadataSearchHit] = []
@@ -99,7 +117,12 @@ class MetadataSearchService:
                 "metadata_search_service.search finished: result_count=%s",
                 len(results),
             )
-            return results
+            return MetadataSearchPage(
+                data=results,
+                total=total,
+                page_num=request.page_num,
+                page_size=page_size,
+            )
         finally:
             await connection.close()
 

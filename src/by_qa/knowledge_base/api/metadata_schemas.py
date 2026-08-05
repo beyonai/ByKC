@@ -165,14 +165,34 @@ class MetadataSearchRequest(BaseModel):
         default=500,
         validation_alias=AliasChoices("topK", "top_k"),
     )
+    page_num: int = Field(
+        default=1,
+        validation_alias=AliasChoices("pageNum", "page_num", "pageNumber"),
+    )
+    page_size: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("pageSize", "page_size"),
+    )
 
     @model_validator(mode="after")
-    def validate_top_k(self) -> "MetadataSearchRequest":
+    def validate_pagination(self) -> "MetadataSearchRequest":
         if self.top_k <= 0:
             raise ValueError("topK must be greater than 0")
         if self.top_k > 10000:
             raise ValueError("topK must not exceed 10000")
+        if self.page_num <= 0:
+            raise ValueError("pageNum must be greater than 0")
+        if self.page_size is not None:
+            if self.page_size <= 0:
+                raise ValueError("pageSize must be greater than 0")
+            if self.page_size > 10000:
+                raise ValueError("pageSize must not exceed 10000")
         return self
+
+    @property
+    def effective_page_size(self) -> int:
+        """Use pageSize for pagination while retaining topK compatibility."""
+        return self.page_size if self.page_size is not None else self.top_k
 
 
 class SearchFileRequest(BaseModel):

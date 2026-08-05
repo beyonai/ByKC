@@ -374,6 +374,7 @@ module: karpathy
 | `fileDescription` | string | 否 | 文件描述；zip 批量上传时对所有文件统一使用该描述 |
 | `fileContent` | file | 是 | 文件二进制内容；文件名以 `.zip` 结尾且为合法 zip 时触发批量上传 |
 | `processFrontMatter` | boolean | 否 | 是否解析 YAML front matter 并自动录入元数据，默认 `true` |
+| `skipIfDuplicate` | boolean | 否 | 是否检查同一知识库内的文件 checksum；默认 `false`。为 `true` 且已存在相同 checksum 时跳过导入，并在错误信息中返回已存在文件路径 |
 
 表单示例（单文件）：
 
@@ -489,6 +490,8 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
 | `fileContent` | file | 是 | 更新后的文件内容；上传文件名扩展名必须与 `filePath` 的扩展名一致，且不能为 `.zip` |
 | `fileDescription` | string | 否 | 文件描述；字段未传入时保留原描述，传入空字符串时清空原描述 |
 | `processFrontMatter` | boolean | 否 | 是否解析 Markdown YAML front matter 并写入元数据，默认 `true`；非 Markdown 文件忽略该字段 |
+| `skipIfDuplicate` | boolean | 否 | 是否检查同一知识库内除目标文件外的相同 checksum；默认 `false`，命中时拒绝更新 |
+| `referSignature` | string | 否 | 乐观并发校验使用的目标文件 checksum；传入值与当前 `fileSignature` 不一致时拒绝更新 |
 
 行为描述：
 
@@ -497,6 +500,7 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
 - 成功更新会清理旧 Markdown sidecar、chunk、向量、检索投影、构建记录与抓取缓存；不会自动创建新的构建任务。
 - 更新会同步写入一条文件更新时间线。Markdown 初始写入规则摘要，后台任务可在大模型摘要成功后原地更新该摘要；模型失败时保留规则摘要。非 Markdown 文件写入固定格式摘要且不调用大模型。
 - 如果该文件存在运行中的构建任务，更新失败，避免旧构建结果覆盖新内容。
+- 更新在目标文件行锁内执行；数据库步骤使用单事务，存储写入失败不提交数据库，数据库提交失败会恢复旧文件内容，保证文件级更新的原子语义。
 
 表单示例：
 

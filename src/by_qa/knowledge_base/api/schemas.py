@@ -291,6 +291,15 @@ class KnowledgeItemUploadRequest(BaseModel):
         default=True,
         validation_alias=AliasChoices("processFrontMatter", "process_front_matter"),
     )
+    skip_if_duplicate: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "skipIfDuplicate",
+            "skip_if_duplicate",
+            "checkDuplicate",
+            "check_duplicate",
+        ),
+    )
 
 
 class DocumentUpdateRequest(BaseModel):
@@ -317,6 +326,20 @@ class DocumentUpdateRequest(BaseModel):
     process_front_matter: bool = Field(
         default=True,
         validation_alias=AliasChoices("processFrontMatter", "process_front_matter"),
+    )
+    skip_if_duplicate: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "skipIfDuplicate",
+            "skip_if_duplicate",
+            "checkDuplicate",
+            "check_duplicate",
+        ),
+    )
+    refer_signature: str | None = Field(
+        default=None,
+        min_length=1,
+        validation_alias=AliasChoices("referSignature", "refer_signature"),
     )
 
     @model_validator(mode="after")

@@ -579,6 +579,7 @@ def register_routes(
         file_description: str | None = Body(None, alias="fileDescription"),
         file_content: UploadFile | None = File(None, alias="fileContent"),
         process_front_matter: bool = Form(True, alias="processFrontMatter"),
+        skip_if_duplicate: bool = Form(False, alias="skipIfDuplicate"),
     ):
         try:
             payload = await file_content.read() if file_content is not None else None
@@ -589,6 +590,7 @@ def register_routes(
                     "fileDescription": file_description,
                     "fileContent": payload,
                     "processFrontMatter": process_front_matter,
+                    "skipIfDuplicate": skip_if_duplicate,
                 }
             )
         except ValidationError as exc:
@@ -621,6 +623,7 @@ def register_routes(
                     zip_bytes=payload,
                     process_front_matter=request.process_front_matter,
                     file_description=request.file_description,
+                    skip_if_duplicate=request.skip_if_duplicate,
                 )
                 result_object = {
                     "data": [item.model_dump(by_alias=True) for item in result.data],
@@ -684,6 +687,8 @@ def register_routes(
         file_description: str | None = Form(None, alias="fileDescription"),
         file_content: UploadFile | None = File(None, alias="fileContent"),
         process_front_matter: bool = Form(True, alias="processFrontMatter"),
+        skip_if_duplicate: bool = Form(False, alias="skipIfDuplicate"),
+        refer_signature: str | None = Form(None, alias="referSignature"),
     ):
         payload = await file_content.read() if file_content is not None else None
         request_data = {
@@ -691,6 +696,8 @@ def register_routes(
             "filePath": file_path,
             "fileContent": payload,
             "processFrontMatter": process_front_matter,
+            "skipIfDuplicate": skip_if_duplicate,
+            "referSignature": refer_signature,
         }
         # FastAPI converts an empty optional Form value to its default (None).
         # The parsed multipart form is cached, so inspect only field presence to
@@ -1394,14 +1401,15 @@ def register_routes(
                 status_code=422,
             )
         logger.info(
-            "metadata_search request received: kb_code_count=%s, top_k=%s, where=%s",
+            "metadata_search request received: kb_code_count=%s, page_num=%s, page_size=%s, where=%s",
             len(request.kb_code_list) if request.kb_code_list else 0,
-            request.top_k,
+            request.page_num,
+            request.effective_page_size,
             json.dumps(request.where, ensure_ascii=False),
         )
         try:
             service = await get_metadata_search_service()
-            results = await service.search(request)
+            page = await service.search(request)
         except DslValidationError as exc:
             return _documented_error_response(
                 result_msg=str(exc),
@@ -1415,7 +1423,12 @@ def register_routes(
                 result_msg=str(exc) or "internal error", result_object={}
             )
         return _documented_success_response(
-            result_object={"data": [r.model_dump(by_alias=True) for r in results]}
+            result_object={
+                "data": [r.model_dump(by_alias=True) for r in page.data],
+                "total": page.total,
+                "pageNum": page.page_num,
+                "pageSize": page.page_size,
+            }
         )
 
     @app.post("/api/v1/knowledgeItems/metadata/get")

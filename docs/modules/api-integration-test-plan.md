@@ -73,6 +73,10 @@
 | 28 | 异常与恢复 | 请求参数不合法 | 覆盖缺少必填、空字符串、重复 `chunk_no`、非法 line window 等 | 返回统一请求校验或业务校验错误 | 已写 |
 | 29 | 异常与恢复 | 运行时依赖未配置 | 覆盖 KB runtime/fetch runtime/embedding 配置缺失 | 返回 `configuration_error` 风格错误 | 已写 |
 | 30 | 异常与恢复 | 构建或落库失败不留下半成功状态 | `knowledgeItems/import failure` 或 `fileToMarkdownIndex failure` | 不留下可见但不可读、可检索但不可读等异常状态 | 已写 |
+| 31 | 内容管理员 | 默认允许导入相同内容 | 同一知识库先后导入 checksum 相同、路径不同的文件，均不传 `skipIfDuplicate` | `skipIfDuplicate` 默认 `false`，两个文件均导入成功 | 已写 |
+| 32 | 内容管理员 | 按知识库阻止重复内容导入 | 同一知识库再次导入相同内容并传 `skipIfDuplicate=true` | 返回重复 checksum 提示并包含已存在文件路径；目标路径不产生文件记录 | 已写 |
+| 33 | 内容管理员 | 重复内容判断保持知识库隔离 | 在另一个知识库导入相同内容并传 `skipIfDuplicate=true` | 跨知识库不视为重复，导入成功 | 已写 |
+| 34 | 内容管理员 | zip 批量导入逐项识别重复内容 | zip 中的文件与同知识库已有文件 checksum 相同，传 `skipIfDuplicate=true` | 接口批次正常返回；重复项标记失败并给出重复 checksum 提示，不落盘该项 | 已写 |
 
 ## 文档更新与时间线场景总表
 
@@ -94,6 +98,23 @@
 | UDT8 | 内容管理员 | 同一文件并发更新与文件级锁 | 两个并发 `knowledgeItems/update` 请求指向同一文件 | 更新串行化；每次时间线准确对应一次提交；对象内容、`fs_entry` 与时间线不交叉或丢失 | 已写 |
 | UDT9 | 存储运维 | 更新时存储/数据库失败的补偿 | 模拟原对象覆盖失败、数据库提交失败及 rollback 失败 | 不产生半更新；数据库失败后原对象字节恢复到原 locator；rollback 失败也尝试恢复并返回原始失败 | 已写（rollback 失败仍由单元测试覆盖） |
 | UDT10 | 存储实现方 | 路径映射存储的原 locator 覆盖 | 使用 UserFS 等按路径映射的 provider：`import -> update -> downloadFile -> 文件系统检查` | 不生成新 key；原始文件仍在既有 locator 被覆盖，更新后可下载 | 已写 |
+| UDT11 | 内容管理员 | 使用当前文件签名进行乐观更新 | `metadata/get(fileSignature) -> update(referSignature=current) -> metadata/get` | 更新成功；原始对象内容、`updatedAt` 和 `fileSignature` 一致切换到新版本 | 已写 |
+| UDT12 | 内容管理员 | 旧文件签名拒绝更新且不产生半更新 | 先成功更新一次，再用旧 `referSignature` 更新 | 返回文件签名不一致；对象字节和数据库中的 `fileSignature` 均保持为最近成功版本 | 已写 |
+| UDT13 | 内容管理员 | 更新时阻止同库其他文件的重复内容 | `import A,B -> update A(content=B, skipIfDuplicate=true)` | 返回重复 checksum 提示并包含 B 的路径；A 的对象和数据库状态不变 | 已写 |
+| UDT14 | 内容管理员 | 重复判断排除当前文件自身 | `update A(content=A, referSignature=current, skipIfDuplicate=true)` | 当前文件不与自身冲突，更新成功 | 已写 |
+
+### checksum 并发锁范围
+
+说明：
+
+- checksum 防重使用事务级 advisory lock，锁键范围为 `(knowledge_base_id, checksum)`；事务提交、回滚或连接异常结束时由数据库释放。
+- 本组场景直接使用真实 OpenGauss 连接验证阻塞关系，避免仅通过串行 HTTP 请求得到假阳性。
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| CLK1 | 存储实现方 | 同知识库同 checksum 串行化 | 连接 A 获取 `(KB-A, checksum-X)` 锁，连接 B 获取相同范围锁 | B 在 A 事务结束前阻塞；A 回滚后 B 自动获得锁 | 已写 |
+| CLK2 | 存储实现方 | 同知识库不同 checksum 可并行 | 两个连接分别获取 `(KB-A, checksum-X)` 与 `(KB-A, checksum-Y)` | 第二把锁无需等待第一笔事务结束 | 已写 |
+| CLK3 | 存储实现方 | 不同知识库相同 checksum 可并行 | 两个连接分别获取 `(KB-A, checksum-X)` 与 `(KB-B, checksum-X)` | 第二把锁无需等待第一笔事务结束 | 已写 |
 
 ## zip 批量导入与引用改写场景总表
 
@@ -179,10 +200,10 @@
 说明：
 
 - 这一组场景覆盖元数据属性定义、文件元数据增量更新、纯元数据检索、DSL 升级版 chunk/file 检索的端到端调用链。
-- 系统字段（`fileName`/`fileType`/`fileSize`/`mimeType`/`filePath`/`createdAt`/`updatedAt`）不需要 `metadataProperties/create`，但其余自定义属性必须先注册再使用。
-- `metadata/get` 返回自定义元数据 + 系统字段值；`metadataFields/list` 返回已使用的自定义属性 + 7 个系统字段定义。
+- 系统字段（`fileName`/`fileType`/`fileSize`/`mimeType`/`filePath`/`createdAt`/`updatedAt`/`fileSignature`）不需要 `metadataProperties/create`，但其余自定义属性必须先注册再使用。
+- `metadata/get` 返回自定义元数据 + 系统字段值；`metadataFields/list` 返回已使用的自定义属性 + 8 个系统字段定义。
 - 错误响应统一使用文档化信封：HTTP 200 + `resultCode="-1"` + `resultMsg="..."`（包括 Pydantic 校验失败）。
-- 编号与 `tests/knowledge_base/integration/test_metadata_api_integration.py` 的测试函数 1:1 对应。
+- M1–M17 为原元数据测试计划编号；本次新增的 M4.i–M4.j、M8.j–M8.k、M12.g 场景落在 `tests/knowledge_base/integration/test_kb_api_stateful_integration.py`。
 
 ### 元数据属性定义生命周期
 
@@ -217,8 +238,8 @@
 | M4.f | 内容管理员 | 错误 KB / 文件路径 | 未知 knCode / filePath | `resultCode=-1` `"knowledge base not found"` / `"file not found"` | 已写 |
 | M4.g | 内容管理员 | metadata/get 未知 KB | `metadata/get knCode=ghost` | `resultCode=-1` `"knowledge base not found"` | 已写 |
 | M4.h | 内容管理员 | metadata/get 未知文件 | `metadata/get filePath=/never.md` | `resultCode=-1` `"file not found"` | 已写 |
-| M4.i | 内容管理员 | metadata/get 返回系统字段值 | `import file -> metadata/get` | `metadata` 包含 `fileName`/`fileType`/`fileSize`/`mimeType`/`createdAt`/`updatedAt`/`filePath` 七个系统字段，`valueType` 与 `value` 正确 | 已写 |
-| M4.j | 内容管理员 | metadata/get metadataFieldList 过滤系统字段 | `import file -> metadata/get metadataFieldList=[fileName,fileSize]` | 仅返回命中的系统字段 | 已写 |
+| M4.i | 内容管理员 | metadata/get 返回系统字段值 | `import file -> metadata/get` | `metadata` 包含 `fileName`/`fileType`/`fileSize`/`mimeType`/`createdAt`/`updatedAt`/`filePath`/`fileSignature` 八个系统字段，`valueType` 与 `value` 正确 | 已写 |
+| M4.j | 内容管理员 | metadata/get metadataFieldList 过滤系统字段 | `import file -> metadata/get metadataFieldList=[createdAt,updatedAt,fileSignature]` | 仅返回命中的系统字段，时间字段和 checksum 的值可直接回读 | 已写 |
 | M5.a | 内容管理员 | append 去重 | `set [a,b] -> append [b,c]` | `[a,b,c]` | 已写 |
 | M5.b | 内容管理员 | remove 容忍不存在元素 | `set [a] -> remove [x,y]` | `[a]`，不报错 | 已写 |
 | M5.c | 内容管理员 | set 整值覆盖列表 | `set [a,b] -> set [x]` | `[x]` | 已写 |
@@ -241,7 +262,7 @@
 | M7.d | 知识库管理员 | metadataFields/list knCodeList 必填非空 | 不传 / `knCodeList=[]` | 文档化信封 | 已写 |
 | M7.e | 知识库管理员 | metadataFields/list 多 KB 合并 | `knCodeList=[A,B]`,各自用过 prop_x/prop_y | 返回 prop_x 与 prop_y 的并集 | 已写 |
 | M7.f | 知识库管理员 | metadataFields/list 单 KB scope 隔离 | `knCodeList=[A]`,A 用过 prop_x、B 用过 prop_y | 仅返 prop_x | 已写 |
-| M7.g | 知识库管理员 | metadataFields/list 始终返回系统字段定义 | `knowledgeBases/create -> metadataFields/list` | 7 个系统字段（`fileName`/`fileType`/`fileSize`/`mimeType`/`createdAt`/`updatedAt`/`filePath`）始终出现在结果末尾，含 `propertyName`/`valueType`/`description`，即使 KB 无任何用户自定义属性 | 已写 |
+| M7.g | 知识库管理员 | metadataFields/list 始终返回系统字段定义 | `knowledgeBases/create -> metadataFields/list` | 8 个系统字段（`fileName`/`fileType`/`fileSize`/`mimeType`/`createdAt`/`updatedAt`/`filePath`/`fileSignature`）始终出现在结果末尾，含 `propertyName`/`valueType`/`description`，即使 KB 无任何用户自定义属性 | 已写 |
 
 ### metadataSearch 接口约束
 
@@ -249,13 +270,15 @@
 | --- | --- | --- | --- | --- | --- |
 | M8.a | DSL 调用方 | where 必填 | 不传 where | 文档化信封 | 已写 |
 | M8.b | DSL 调用方 | where 为空对象 | `where={}` | DSL_VALIDATION_ERROR / INVALID_BOOLEAN_NODE | 已写 |
-| M8.c | DSL 调用方 | topK 默认 500 | 不传 topK | 请求被接受 | 已写 |
+| M8.c | DSL 调用方 | 保留 topK 兼容语义 | 不传 `pageSize`，仅传或省略 `topK` | `pageSize` 未提供时使用 `topK`，两者均省略时每页默认 500 条 | 已写 |
 | M8.d | DSL 调用方 | topK 上限 10000 | `topK=10001` 拒绝；`topK=10000` 通过 | 文档化信封 / 200 | 已写 |
 | M8.e | DSL 调用方 | topK 0 / 负数 | `topK=0/-1` | 文档化信封 | 已写 |
 | M8.f | DSL 调用方 | knCodeList 缩范围 | 两 KB 命中，knCodeList=[A] | 仅返 A | 已写 |
 | M8.g | DSL 调用方 | knCodeList 含未知 KB | `knCodeList=[ghost]` | `resultCode=-1` `"knowledge base not found"` | 已写 |
 | M8.h | DSL 调用方 | metadataFieldList 返回控制 | `metadataFieldList=[keep]` | 仅返 keep | 已写 |
 | M8.i | DSL 调用方 | knCodeList 必填非空 | 不传 / `knCodeList=[]` | 文档化信封 | 已写 |
+| M8.j | DSL 调用方 | metadataSearch 分页与总数 | 三个命中文件，依次请求 `pageNum=1/2/3,pageSize=2` | 返回 `data/total/pageNum/pageSize`；前两页无重复且覆盖全部命中，越界页 `data=[]`、`total` 保持 3 | 已写 |
+| M8.k | DSL 调用方 | 按更新时间从旧到新稳定排序 | 导入 A/B/C，更新 A 后重新分页查询 | 结果按 `updatedAt ASC`；A 移到最后；分页前后顺序一致 | 已写 |
 
 ### DSL 算子矩阵
 
@@ -318,6 +341,7 @@
 | M12.d | DSL 调用方 | gt createdAt | `gt createdAt ISO8601` | 时间窗口命中 | 已写 |
 | M12.e | DSL 调用方 | contains 用于系统字段 | `contains fileType "md"` | INVALID_FIELD_VALUE_TYPE | 已写 |
 | M12.f | DSL 调用方 | metadataSearch 系统+自定义混合 | `and: [eq custom status active, in fileType ["md"]]` | 仅 .md 且 status=active 的文件命中 | 已写 |
+| M12.g | DSL 调用方 | eq fileSignature | `metadata/get(fileSignature) -> metadataSearch where eq fileSignature` | 仅精确命中 checksum 相同的文件，并可通过 `metadataFieldList` 返回签名值 | 已写 |
 | M12.fp-eq | DSL 调用方 | eq filePath 精确匹配 | `eq filePath "/dsl/F1.md"` | 仅命中 `/dsl/F1.md` | 已写 |
 | M12.fp-prefix | DSL 调用方 | prefix filePath 目录过滤 | `prefix filePath "/dsl/"` | 命中 `/dsl/` 下所有文件含子目录，不含 `/other/` | 已写 |
 | M12.fp-wildcard | DSL 调用方 | wildcard filePath 单级 | `wildcard filePath "/dsl/F?.md"` | 命中 F1–F6.md，不含 F5.pdf 和 nested | 已写 |
@@ -447,7 +471,7 @@
 | 文件 | 覆盖重点 | 状态 |
 | --- | --- | --- |
 | `tests/knowledge_build/integration/test_api_integration.py` | ~~`knowledge_build` 三接口正常/异常与组合链路等价性~~ | 已弃用（`knowledge_build` 独立路由已移除） |
-| `tests/knowledge_base/integration/test_kb_api_stateful_integration.py` | 混合导入构建（`knowledgeItems/import` + `fileToMarkdownIndex`）、知识库改名、单文件/目录删除、多级目录改名删除、读取窗口校验、`downloadFile` 的中文文件名/二进制文件下载、真实搜索链路与失败保护；文档更新 UDT1–UDT8（真实 MinIO 原对象覆盖、派生状态清理、front matter 解析开关与缺失字段保留、描述字段三态、引用重登记、时间线规则/LLM 回填、二进制更新、参数错误信封和同文件并发锁）；zip 批量导入与引用改写（Z1–Z17：单文件分流与出参、zip 主链路、引用能/不能替换、zip 异常防护、不支持类型构建状态）；稳定 Markdown 引用（R1–R17：resolved/unresolved/broken/restore、readFile/download/search token 解析、suffix、行窗口、references inbound/outbound/all、目标文件和目录子树 move、source move unresolved 取舍、目录子树删除、目录链接、归一化、真实分片边界） | 有效 |
+| `tests/knowledge_base/integration/test_kb_api_stateful_integration.py` | 混合导入构建（`knowledgeItems/import` + `fileToMarkdownIndex`）、知识库改名、单文件/目录删除、多级目录改名删除、读取窗口校验、`downloadFile` 的中文文件名/二进制文件下载、真实搜索链路与失败保护；文档更新 UDT1–UDT8、UDT11–UDT14（真实 MinIO 原对象覆盖、派生状态清理、front matter、描述字段三态、引用重登记、时间线、二进制更新、同文件并发锁、`referSignature` 乐观更新、重复 checksum 拒绝及拒绝后的状态不变）；metadataSearch 新增覆盖 M4.i–M4.j、M8.j–M8.k、M12.g（分页、总数、越界空页、`updatedAt ASC`、`createdAt`/`updatedAt`/`fileSignature` 回读与精确过滤）；导入重复内容 31–34；真实 OpenGauss checksum 锁范围 CLK1–CLK3；zip 批量导入与引用改写（Z1–Z17）；稳定 Markdown 引用（R1–R17） | 有效 |
 | `tests/knowledge_base/integration/test_metadata_api_integration.py` | M1–M17 全场景:属性 CRUD/批量原子性/引用计数;文件元数据五类型 set/list 操作矩阵;`metadata/get` 错路径(unknown KB/file);YAML front matter(auto/拒绝/缺失/格式错容错);删除三档级联;`metadataFields/list`(KB 必填/多 KB 合并/单 KB 隔离);metadataSearch 接口约束(where 必填/topK 边界/KB scope/字段裁剪/knCodeList 必填);DSL 算子矩阵 + 三层布尔嵌套 + 德摩根;DSL 类型/结构/复杂度错误矩阵;系统字段(metadataSearch 单系统/混合 + chunk + searchFile 单系统/混合);search 升级版(三 mode/metadataFieldList/where 短路/前过滤证明);fileTypeList 兼容;searchFile(多 chunk 去重/where/系统字段/knCodeList 必填);跨接口一致;软删保护 | 有效 |
 | `tests/knowledge_base/integration/test_userfs_batch1.py` | U1–U9:基础读写路径、多级目录隔离、跨 KB 隔离 | 有效 |
 | `tests/knowledge_base/integration/test_userfs_batch2.py` | U10–U18:删除联动、目录改名路径迁移 | 有效 |

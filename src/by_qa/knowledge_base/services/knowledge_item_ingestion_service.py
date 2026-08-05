@@ -193,6 +193,25 @@ class KnowledgeItemIngestionService:
                     f"knowledge base not found: {request.kb_code}"
                 )
             knowledge_base_id = self._row_id(kb_row)
+            checksum = hashlib.sha256(request.file_content).hexdigest()
+            await self.knowledge_fs_entry_repository.lock_checksum_scope(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                checksum=checksum,
+            )
+            if request.skip_if_duplicate:
+                duplicate = (
+                    await self.knowledge_fs_entry_repository.get_file_by_checksum(
+                        cursor,
+                        knowledge_base_id=knowledge_base_id,
+                        checksum=checksum,
+                    )
+                )
+                if duplicate is not None:
+                    raise KnowledgeBaseValidationError(
+                        "duplicate file checksum in knowledge base: "
+                        f"{duplicate['virtual_path']}"
+                    )
 
             try:
                 file_entry_row = (
@@ -208,7 +227,6 @@ class KnowledgeItemIngestionService:
 
             fs_entry_id = self._row_id(file_entry_row)
             content = request.file_content
-            checksum = hashlib.sha256(request.file_content).hexdigest()
             if self._is_markdown_upload(normalized_object_path, mime_type):
                 content = await self._rewrite_markdown_references(
                     content,
@@ -272,6 +290,34 @@ class KnowledgeItemIngestionService:
             if original_location is not None:
                 await self.storage_provider.delete_quietly(original_location)
             raise
+        finally:
+            await connection.close()
+
+    async def find_duplicate_file(
+        self, *, kb_code: str, file_content: bytes
+    ) -> str | None:
+        """Return the path of a same-checksum file for guarded batch imports."""
+        connection = await self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            kb_row = await self.knowledge_base_repository.get_by_code(cursor, kb_code)
+            if not kb_row:
+                raise KnowledgeBaseValidationError(
+                    f"knowledge base not found: {kb_code}"
+                )
+            knowledge_base_id = self._row_id(kb_row)
+            checksum = hashlib.sha256(file_content).hexdigest()
+            await self.knowledge_fs_entry_repository.lock_checksum_scope(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                checksum=checksum,
+            )
+            duplicate = await self.knowledge_fs_entry_repository.get_file_by_checksum(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                checksum=checksum,
+            )
+            return duplicate["virtual_path"] if duplicate is not None else None
         finally:
             await connection.close()
 

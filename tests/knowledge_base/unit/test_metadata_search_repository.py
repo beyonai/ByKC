@@ -50,6 +50,7 @@ async def test_search_without_where():
     assert "knowledge_fs_entry" in sql
     assert "ltrim(fe.virtual_path, '/') as full_path" in sql
     assert "limit" in sql
+    assert "order by fe.updated_at asc, fe.kid asc" in sql
 
 
 @pytest.mark.asyncio
@@ -268,3 +269,78 @@ class FakeDateTime:
 
     def isoformat(self) -> str:
         return self.value
+
+
+@pytest.mark.asyncio
+async def test_search_applies_page_offset_and_counts_matches():
+    cursor = FakeCursor(
+        fetchall_results=[[]],
+    )
+    cursor.fetchone = _async_return_once({"total": 42})
+    repo = MetadataSearchRepository()
+
+    total = await repo.count_files(
+        cursor,
+        kb_ids=[2],
+        where_sql="fe.checksum = %(dsl_p1)s",
+        where_params={"dsl_p1": "abc"},
+    )
+    await repo.search_files(
+        cursor,
+        kb_ids=[2],
+        where_sql="",
+        where_params={},
+        limit=10,
+        offset=20,
+    )
+
+    assert total == 42
+    _, page_params = cursor.executed[-1]
+    assert page_params["limit"] == 10
+    assert page_params["offset"] == 20
+
+
+def _async_return_once(value):
+    async def fetchone():
+        return value
+
+    return fetchone
+
+
+@pytest.mark.asyncio
+async def test_backfill_metadata_returns_requested_system_values():
+    repo = MetadataSearchRepository()
+    cursor = FakeCursor(
+        fetchall_results=[
+            [
+                {
+                    "kid": 10,
+                    "name": "test.md",
+                    "file_size": 12,
+                    "mime_type": "text/markdown",
+                    "checksum": "abc123",
+                    "virtual_path": "/docs/test.md",
+                    "created_at": FakeDateTime("2026-01-01T00:00:00+00:00"),
+                    "updated_at": FakeDateTime("2026-02-01T00:00:00+00:00"),
+                }
+            ]
+        ]
+    )
+
+    result = await repo.backfill_metadata(
+        cursor,
+        fs_entry_ids=[10],
+        property_names=["createdAt", "updatedAt", "fileSignature"],
+    )
+
+    assert result[10] == {
+        "createdAt": {
+            "valueType": "datetime",
+            "value": "2026-01-01T00:00:00+00:00",
+        },
+        "updatedAt": {
+            "valueType": "datetime",
+            "value": "2026-02-01T00:00:00+00:00",
+        },
+        "fileSignature": {"valueType": "string", "value": "abc123"},
+    }

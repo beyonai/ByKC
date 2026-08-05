@@ -54,6 +54,7 @@ SYSTEM_FIELD_TO_FE_EXPR: Final[dict[str, tuple[str, str]]] = {
     "mimeType": ("fe.mime_type", "string"),
     "createdAt": ("fe.created_at", "datetime"),
     "updatedAt": ("fe.updated_at", "datetime"),
+    "fileSignature": ("fe.checksum", "string"),
     "filePath": ("fe.virtual_path", "string"),
 }
 
@@ -69,8 +70,45 @@ SYSTEM_FIELD_DESCRIPTIONS: Final[dict[str, str]] = {
     "mimeType": "MIME type",
     "createdAt": "Creation time",
     "updatedAt": "Last update time",
+    "fileSignature": "File checksum",
     "filePath": "Full file path within the knowledge base",
 }
+
+
+SYSTEM_FIELD_TO_ENTRY_KEY: Final[dict[str, str]] = {
+    "fileName": "name",
+    "fileSize": "file_size",
+    "mimeType": "mime_type",
+    "createdAt": "created_at",
+    "updatedAt": "updated_at",
+    "fileSignature": "checksum",
+    "filePath": "virtual_path",
+}
+
+
+def extract_system_metadata(
+    entry: dict[str, Any],
+    property_names: list[str] | None,
+) -> dict[str, dict[str, Any]]:
+    """Format requested knowledge_fs_entry columns as metadata values."""
+    requested = (
+        set(property_names)
+        if property_names is not None
+        else set(SYSTEM_FIELD_VALUE_TYPES)
+    )
+    metadata: dict[str, dict[str, Any]] = {}
+    for name, value_type in SYSTEM_FIELD_VALUE_TYPES.items():
+        if name not in requested:
+            continue
+        if name == "fileType":
+            file_name = str(entry.get("name") or "")
+            value = file_name.rsplit(".", 1)[1].lower() if "." in file_name else ""
+        else:
+            value = entry.get(SYSTEM_FIELD_TO_ENTRY_KEY[name])
+        if value_type == "datetime" and hasattr(value, "isoformat"):
+            value = value.isoformat()
+        metadata[name] = {"valueType": value_type, "value": value}
+    return metadata
 
 
 def infer_metadata_value_type(value: Any) -> str:

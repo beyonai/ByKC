@@ -5,6 +5,11 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
+from by_qa.knowledge_base.metadata_types import (
+    SYSTEM_FIELD_VALUE_TYPES,
+    extract_system_metadata,
+)
+
 
 def _extract_value(row: dict[str, Any]) -> Any:
     vt = row["value_type"]
@@ -40,6 +45,7 @@ class MetadataSearchRepository:
         where_sql: str,
         where_params: dict[str, Any],
         limit: int,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
         conditions = [
             "fe.knowledge_base_id = ANY(%(kb_ids)s)",
@@ -58,12 +64,47 @@ class MetadataSearchRepository:
             FROM knowledge_fs_entry fe
             JOIN knowledge_base kb ON kb.kid = fe.knowledge_base_id
             WHERE {full_where}
-            ORDER BY kid DESC
+            ORDER BY fe.updated_at ASC, fe.kid ASC
             LIMIT %(limit)s
+            OFFSET %(offset)s
         """
-        params = {**where_params, "kb_ids": kb_ids, "limit": limit}
+        params = {
+            **where_params,
+            "kb_ids": kb_ids,
+            "limit": limit,
+            "offset": offset,
+        }
         await cursor.execute(sql, params)
         return await cursor.fetchall()
+
+    async def count_files(
+        self,
+        cursor: Any,
+        *,
+        kb_ids: list[int],
+        where_sql: str,
+        where_params: dict[str, Any],
+    ) -> int:
+        """Count live matching files for stable pagination metadata."""
+        conditions = [
+            "fe.knowledge_base_id = ANY(%(kb_ids)s)",
+            "fe.entry_type = 'FILE'",
+            "fe.is_deleted = false",
+        ]
+        if where_sql:
+            conditions.append(where_sql)
+        await cursor.execute(
+            f"""
+            SELECT COUNT(*) AS total
+            FROM knowledge_fs_entry fe
+            WHERE {" AND ".join(conditions)}
+            """,
+            {**where_params, "kb_ids": kb_ids},
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return 0
+        return int(row["total"])
 
     async def backfill_metadata(
         self,
@@ -75,11 +116,43 @@ class MetadataSearchRepository:
         if not fs_entry_ids:
             return {}
 
+        requested_names = (
+            set(property_names)
+            if property_names is not None
+            else set(SYSTEM_FIELD_VALUE_TYPES)
+        )
+        system_names = requested_names.intersection(SYSTEM_FIELD_VALUE_TYPES)
+        result: dict[int, dict[str, Any]] = {}
+        if system_names:
+            await cursor.execute(
+                """
+                SELECT kid, name, file_size, mime_type, checksum, virtual_path,
+                       created_at, updated_at
+                FROM knowledge_fs_entry
+                WHERE kid = ANY(%(entry_ids)s)
+                  AND entry_type = 'FILE'
+                  AND is_deleted = false
+                """,
+                {"entry_ids": fs_entry_ids},
+            )
+            for row in await cursor.fetchall():
+                result[row["kid"]] = extract_system_metadata(row, list(system_names))
+
+        custom_names = (
+            None
+            if property_names is None
+            else [
+                name for name in property_names if name not in SYSTEM_FIELD_VALUE_TYPES
+            ]
+        )
+        if custom_names == []:
+            return result
+
         name_filter = ""
         params: dict[str, Any] = {"entry_ids": fs_entry_ids}
-        if property_names:
+        if custom_names:
             name_filter = "AND v.property_name = ANY(%(prop_names)s)"
-            params["prop_names"] = property_names
+            params["prop_names"] = custom_names
 
         sql = f"""
             SELECT v.fs_entry_id, v.property_name, v.value_type,
@@ -93,7 +166,6 @@ class MetadataSearchRepository:
         await cursor.execute(sql, params)
         rows = await cursor.fetchall()
 
-        result: dict[int, dict[str, Any]] = {}
         for row in rows:
             entry_id = row["fs_entry_id"]
             if entry_id not in result:

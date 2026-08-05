@@ -34,6 +34,10 @@ class FakeFsEntryRepository:
             "kid": 10,
             "knowledge_base_id": knowledge_base_id,
             "virtual_path": full_path,
+            "name": "1.md",
+            "checksum": "abc123",
+            "created_at": datetime(2026, 5, 1),
+            "updated_at": datetime(2026, 5, 25),
         }
 
 
@@ -111,3 +115,33 @@ async def test_get_metadata_returns_formatted_file_metadata():
             "property_names": ["会议主题", "会议日期"],
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_get_metadata_returns_system_file_signature_and_times_without_eav_query():
+    metadata_repo = FakeFileMetadataValueRepository()
+
+    async def connection_factory():
+        return FakeConnection()
+
+    service = FileMetadataQueryService(
+        connection_factory=connection_factory,
+        knowledge_base_repository=FakeKnowledgeBaseRepository(),
+        knowledge_fs_entry_repository=FakeFsEntryRepository(),
+        file_metadata_value_repository=metadata_repo,
+    )
+
+    result = await service.get_metadata(
+        GetFileMetadataRequest(
+            kb_code="1",
+            file_path="/1.md",
+            metadata_field_list=["createdAt", "updatedAt", "fileSignature"],
+        )
+    )
+
+    assert result == {
+        "createdAt": {"valueType": "datetime", "value": "2026-05-01T00:00:00"},
+        "updatedAt": {"valueType": "datetime", "value": "2026-05-25T00:00:00"},
+        "fileSignature": {"valueType": "string", "value": "abc123"},
+    }
+    assert metadata_repo.calls == []

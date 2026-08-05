@@ -20,6 +20,35 @@ class _RecordingCursor:
 
 
 @pytest.mark.asyncio
+async def test_checksum_lock_key_is_scoped_by_kb_and_checksum():
+    repo = KnowledgeFsEntryRepository()
+    first_cursor = _RecordingCursor([])
+    same_cursor = _RecordingCursor([])
+    other_checksum_cursor = _RecordingCursor([])
+    other_kb_cursor = _RecordingCursor([])
+
+    await repo.lock_checksum_scope(
+        first_cursor, knowledge_base_id=1, checksum="checksum-a"
+    )
+    await repo.lock_checksum_scope(
+        same_cursor, knowledge_base_id=1, checksum="checksum-a"
+    )
+    await repo.lock_checksum_scope(
+        other_checksum_cursor, knowledge_base_id=1, checksum="checksum-b"
+    )
+    await repo.lock_checksum_scope(
+        other_kb_cursor, knowledge_base_id=2, checksum="checksum-a"
+    )
+
+    first_key = first_cursor.executed[0][1]["lock_key"]
+    assert first_key == same_cursor.executed[0][1]["lock_key"]
+    assert first_key != other_checksum_cursor.executed[0][1]["lock_key"]
+    assert first_key != other_kb_cursor.executed[0][1]["lock_key"]
+    assert -(2**63) <= first_key < 2**63
+    assert "pg_advisory_xact_lock" in first_cursor.executed[0][0]
+
+
+@pytest.mark.asyncio
 async def test_move_entry_reparents_and_rewrites_subtree_paths():
     repo = KnowledgeFsEntryRepository()
     cursor = _RecordingCursor(

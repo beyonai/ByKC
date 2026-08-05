@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from by_qa.knowledge_base.api import routes
-from by_qa.knowledge_base.api.metadata_schemas import SearchFileHit
+from by_qa.knowledge_base.api.metadata_schemas import MetadataSearchHit, SearchFileHit
 from by_qa.knowledge_base.api.schemas import (
     CreateKnowledgeBaseResponse,
     KnowledgeItemListDirItem,
@@ -24,6 +24,7 @@ from by_qa.knowledge_base.services.errors import (
     KnowledgeBaseConfigurationError,
     KnowledgeBaseValidationError,
 )
+from by_qa.knowledge_base.services.metadata_search_service import MetadataSearchPage
 from by_qa.knowledge_base.services.zip_batch_import_service import (
     ImportItem,
     ImportSummary,
@@ -335,6 +336,69 @@ def test_metadata_get_route_returns_file_metadata(monkeypatch):
     }
     assert service.metadata_get_requests[0].kb_code == "1"
     assert service.metadata_get_requests[0].file_path == "/1.md"
+
+
+def test_metadata_search_route_returns_pagination_metadata():
+    class MetadataPageService(FakeKBService):
+        async def search(self, request):
+            assert request.page_num == 2
+            assert request.effective_page_size == 10
+            return MetadataSearchPage(
+                data=[
+                    MetadataSearchHit(
+                        kb_code="1",
+                        file_path="/docs/old.md",
+                        metadata={
+                            "fileSignature": {
+                                "valueType": "string",
+                                "value": "abc",
+                            }
+                        },
+                    )
+                ],
+                total=21,
+                page_num=request.page_num,
+                page_size=request.effective_page_size,
+            )
+
+    service = MetadataPageService()
+    route_app = FastAPI()
+
+    async def get_service():
+        return service
+
+    routes.register_routes(
+        route_app,
+        get_knowledge_base_service=get_service,
+        get_knowledge_item_ingestion_service=get_service,
+        get_knowledge_item_search_service=get_service,
+        get_document_chunking_service=get_service,
+        get_metadata_search_service=get_service,
+        get_file_metadata_query_service=get_service,
+    )
+    response = TestClient(route_app).post(
+        "/api/v1/knowledgeItems/metadataSearch",
+        json={
+            "knCodeList": ["1"],
+            "where": {"exists": {"fieldName": "fileSignature"}},
+            "metadataFieldList": ["fileSignature"],
+            "pageNum": 2,
+            "pageSize": 10,
+        },
+    )
+
+    assert response.json()["resultObject"] == {
+        "data": [
+            {
+                "knCode": "1",
+                "filePath": "/docs/old.md",
+                "metadata": {"fileSignature": {"valueType": "string", "value": "abc"}},
+            }
+        ],
+        "total": 21,
+        "pageNum": 2,
+        "pageSize": 10,
+    }
 
 
 def test_create_knowledge_base_route_returns_business_response(monkeypatch):
@@ -1154,6 +1218,8 @@ def test_document_update_route_returns_documented_success_shape():
             "filePath": "//docs//readme.md",
             "fileDescription": "updated description",
             "processFrontMatter": "false",
+            "skipIfDuplicate": "true",
+            "referSignature": "old-signature",
         },
         files={"fileContent": ("README.md", b"# Updated\n", "text/markdown")},
     )
@@ -1177,6 +1243,8 @@ def test_document_update_route_returns_documented_success_shape():
     assert request.file_path == "/docs/readme.md"
     assert request.file_description == "updated description"
     assert request.process_front_matter is False
+    assert request.skip_if_duplicate is True
+    assert request.refer_signature == "old-signature"
 
 
 class _TimelineConnection:
@@ -1566,6 +1634,7 @@ def test_upload_file_route_passes_markdown_bytes_to_ingestion(monkeypatch):
             "knCode": "hr-policy",
             "filePath": "/docs/readme.md",
             "processFrontMatter": "true",
+            "skipIfDuplicate": "true",
         },
         files={
             "fileContent": (
@@ -1580,6 +1649,7 @@ def test_upload_file_route_passes_markdown_bytes_to_ingestion(monkeypatch):
     assert response.json()["resultCode"] == "0"
     assert len(service.import_calls) == 1
     assert service.import_calls[0].file_content == b"![later](./later.png)\n"
+    assert service.import_calls[0].skip_if_duplicate is True
 
 
 def test_upload_zip_route_includes_post_process_errors(monkeypatch):

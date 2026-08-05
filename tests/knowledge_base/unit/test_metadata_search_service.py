@@ -50,7 +50,10 @@ class FakeConnection:
 @pytest.mark.asyncio
 async def test_metadata_search_no_where():
     cursor = FakeCursor(
-        fetchone_results=[{"kid": 2}],  # kb lookup
+        fetchone_results=[
+            {"kid": 2},  # kb lookup
+            {"total": 1},  # count
+        ],
         fetchall_results=[
             # search_files result
             [{"kid": 10, "kb_code": "2", "full_path": "docs/test.md"}],
@@ -93,10 +96,13 @@ async def test_metadata_search_no_where():
         metadata_field_list=["status"],
         where={"exists": {"fieldName": "fileName"}},
     )
-    results = await service.search(request)
+    page = await service.search(request)
 
-    assert len(results) == 1
-    assert results[0].kb_code == "2"
+    assert len(page.data) == 1
+    assert page.data[0].kb_code == "2"
+    assert page.total == 1
+    assert page.page_num == 1
+    assert page.page_size == 20
 
 
 def test_metadata_search_request_requires_where():
@@ -148,4 +154,24 @@ def test_metadata_search_request_rejects_top_k_zero():
             kb_code_list=["1"],
             where={"exists": {"fieldName": "fileName"}},
             top_k=0,
+        )
+
+
+def test_metadata_search_request_accepts_and_validates_pagination():
+    request = MetadataSearchRequest(
+        kb_code_list=["1"],
+        where={"exists": {"fieldName": "fileName"}},
+        page_num=3,
+        page_size=25,
+    )
+    assert request.page_num == 3
+    assert request.effective_page_size == 25
+
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        MetadataSearchRequest(
+            kb_code_list=["1"],
+            where={"exists": {"fieldName": "fileName"}},
+            page_num=0,
         )

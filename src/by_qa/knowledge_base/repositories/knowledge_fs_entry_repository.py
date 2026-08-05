@@ -430,6 +430,63 @@ class KnowledgeFsEntryRepository:
             "LOCK TABLE knowledge_fs_entry IN SHARE ROW EXCLUSIVE MODE"
         )
 
+    async def lock_checksum_scope(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        checksum: str,
+    ) -> None:
+        """Serialize writes for one checksum within one knowledge base."""
+        lock_key = self._checksum_lock_key(
+            knowledge_base_id=knowledge_base_id,
+            checksum=checksum,
+        )
+        await cursor.execute(
+            "SELECT pg_advisory_xact_lock(%(lock_key)s)",
+            {"lock_key": lock_key},
+        )
+
+    @staticmethod
+    def _checksum_lock_key(*, knowledge_base_id: int, checksum: str) -> int:
+        """Build a deterministic signed bigint advisory-lock key."""
+        payload = f"byqa:checksum:{knowledge_base_id}:{checksum}".encode()
+        digest = hashlib.sha256(payload).digest()[:8]
+        return int.from_bytes(digest, byteorder="big", signed=True)
+
+    async def get_file_by_checksum(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        checksum: str,
+        exclude_fs_entry_id: int | None = None,
+    ) -> dict[str, Any] | None:
+        """Find one live file with the checksum in the same knowledge base."""
+        exclude_sql = ""
+        params: dict[str, Any] = {
+            "knowledge_base_id": knowledge_base_id,
+            "checksum": checksum,
+        }
+        if exclude_fs_entry_id is not None:
+            exclude_sql = "AND kid <> %(exclude_fs_entry_id)s"
+            params["exclude_fs_entry_id"] = exclude_fs_entry_id
+        await cursor.execute(
+            f"""
+            SELECT kid, virtual_path, checksum
+            FROM knowledge_fs_entry
+            WHERE knowledge_base_id = %(knowledge_base_id)s
+              AND entry_type = 'FILE'
+              AND is_deleted = FALSE
+              AND checksum = %(checksum)s
+              {exclude_sql}
+            ORDER BY kid
+            LIMIT 1
+            """,
+            params,
+        )
+        return await cursor.fetchone()
+
     async def get_directory_by_path(
         self, cursor: Any, *, knowledge_base_id: int, full_path: str
     ) -> dict[str, Any] | None:

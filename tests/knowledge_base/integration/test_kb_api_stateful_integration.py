@@ -212,6 +212,7 @@ def _reset_runtime(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
     monkeypatch.setattr(main_module, "_knowledge_item_ingestion_service", None)
     monkeypatch.setattr(main_module, "_knowledge_item_search_service", None)
     monkeypatch.setattr(main_module, "_document_update_service", None)
+    monkeypatch.setattr(main_module, "_metadata_search_service", None)
     monkeypatch.setattr(main_module, "_knowledge_fetch_cache_cleanup_service", None)
     monkeypatch.setattr(main_module, "_document_chunking_service", None)
     monkeypatch.setattr(main_module, "_file_metadata_query_service", None)
@@ -396,6 +397,26 @@ def _download_file_bytes(client: TestClient, *, kb_code: str, file_path: str) ->
     )
     assert response.status_code == 200, response.text
     return response.content
+
+
+def _get_file_metadata(
+    client: TestClient,
+    *,
+    kb_code: str,
+    file_path: str,
+    field_names: list[str],
+) -> dict:
+    response = client.post(
+        "/api/v1/knowledgeItems/metadata/get",
+        json={
+            "knCode": kb_code,
+            "filePath": file_path,
+            "metadataFieldList": field_names,
+        },
+    )
+    payload = response.json()
+    assert payload["resultCode"] == "0", payload
+    return payload["resultObject"]["metadata"]
 
 
 def _update_file(
@@ -4670,3 +4691,457 @@ async def test_document_update_markdown_backfill_uses_llm_summary_and_keeps_fall
     assert llm_timeline["summary"].startswith("这是由模型生成")
     assert second.json()["resultCode"] == "0"
     assert fallback_timeline["summary_source"] == "RULE_BASED"
+
+
+@pytest.mark.integration
+async def test_metadata_pagination_system_signatures_and_file_guards(
+    monkeypatch, tmp_path
+):
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(monkeypatch, EchoDocumentChunkingService())
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Metadata guards {uuid4().hex[:12]}")
+        for path, content in (
+            ("/docs/first.md", b"# First\n"),
+            ("/docs/second.md", b"# Second\n"),
+            ("/docs/third.md", b"# Third\n"),
+        ):
+            _upload_file(
+                client,
+                kb_code=kb_code,
+                file_path=path,
+                file_content=content,
+            )
+
+        page_response = client.post(
+            "/api/v1/knowledgeItems/metadataSearch",
+            json={
+                "knCodeList": [kb_code],
+                "where": {"exists": {"fieldName": "fileSignature"}},
+                "metadataFieldList": [
+                    "createdAt",
+                    "updatedAt",
+                    "fileSignature",
+                ],
+                "pageNum": 1,
+                "pageSize": 2,
+            },
+        )
+        page = page_response.json()["resultObject"]
+        assert page["total"] == 3
+        assert page["pageNum"] == 1
+        assert page["pageSize"] == 2
+        assert [item["filePath"] for item in page["data"]] == [
+            "/docs/first.md",
+            "/docs/second.md",
+        ]
+        first_metadata = page["data"][0]["metadata"]
+        assert first_metadata["createdAt"]["value"]
+        assert first_metadata["updatedAt"]["value"]
+        signature = first_metadata["fileSignature"]["value"]
+
+        metadata_response = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={
+                "knCode": kb_code,
+                "filePath": "/docs/first.md",
+                "metadataFieldList": [
+                    "createdAt",
+                    "updatedAt",
+                    "fileSignature",
+                ],
+            },
+        )
+        assert metadata_response.json()["resultObject"]["metadata"] == first_metadata
+
+        duplicate_import = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={
+                "knCode": kb_code,
+                "filePath": "/docs/duplicate.md",
+                "skipIfDuplicate": "true",
+            },
+            files={"fileContent": ("duplicate.md", b"# First\n", "text/markdown")},
+        )
+        assert duplicate_import.json()["resultCode"] == "-1"
+        assert "/docs/first.md" in duplicate_import.json()["resultMsg"]
+
+        stale_update = client.post(
+            "/api/v1/knowledgeItems/update",
+            data={
+                "knCode": kb_code,
+                "filePath": "/docs/first.md",
+                "referSignature": "stale",
+            },
+            files={"fileContent": ("first.md", b"# Updated\n", "text/markdown")},
+        )
+        assert stale_update.json()["resultCode"] == "-1"
+        assert "file signature mismatch" in stale_update.json()["resultMsg"]
+
+        duplicate_update = client.post(
+            "/api/v1/knowledgeItems/update",
+            data={
+                "knCode": kb_code,
+                "filePath": "/docs/first.md",
+                "referSignature": signature,
+                "skipIfDuplicate": "true",
+            },
+            files={"fileContent": ("first.md", b"# Second\n", "text/markdown")},
+        )
+        assert duplicate_update.json()["resultCode"] == "-1"
+        assert "/docs/second.md" in duplicate_update.json()["resultMsg"]
+
+
+@pytest.mark.integration
+async def test_metadata_search_paginates_and_sorts_by_updated_at_ascending(
+    monkeypatch, tmp_path
+):
+    from by_qa.knowledge_base.services.markdown_update_summary_service import (
+        MarkdownUpdateSummaryService,
+    )
+
+    async def no_llm(self, old_markdown, new_markdown):
+        _ = self, old_markdown, new_markdown
+        return None
+
+    monkeypatch.setattr(MarkdownUpdateSummaryService, "generate_llm_summary", no_llm)
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(monkeypatch, EchoDocumentChunkingService())
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Metadata paging {uuid4().hex[:12]}")
+        for path in ("/docs/first.md", "/docs/second.md", "/docs/third.md"):
+            _upload_file(
+                client,
+                kb_code=kb_code,
+                file_path=path,
+                file_content=f"# {path}\n".encode(),
+            )
+
+        def search_page(page_num: int) -> dict:
+            response = client.post(
+                "/api/v1/knowledgeItems/metadataSearch",
+                json={
+                    "knCodeList": [kb_code],
+                    "where": {"exists": {"fieldName": "fileSignature"}},
+                    "pageNum": page_num,
+                    "pageSize": 2,
+                },
+            )
+            payload = response.json()
+            assert payload["resultCode"] == "0", payload
+            return payload["resultObject"]
+
+        first_page = search_page(1)
+        second_page = search_page(2)
+        assert first_page["total"] == second_page["total"] == 3
+        assert [item["filePath"] for item in first_page["data"]] == [
+            "/docs/first.md",
+            "/docs/second.md",
+        ]
+        assert [item["filePath"] for item in second_page["data"]] == ["/docs/third.md"]
+
+        update_response = _update_file(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/first.md",
+            file_content=b"# First updated\n",
+        )
+        assert update_response.json()["resultCode"] == "0"
+
+        reordered_first_page = search_page(1)
+        reordered_second_page = search_page(2)
+        empty_page = search_page(3)
+        assert [item["filePath"] for item in reordered_first_page["data"]] == [
+            "/docs/second.md",
+            "/docs/third.md",
+        ]
+        assert [item["filePath"] for item in reordered_second_page["data"]] == [
+            "/docs/first.md"
+        ]
+        assert empty_page["total"] == 3
+        assert empty_page["data"] == []
+
+
+@pytest.mark.integration
+async def test_refer_signature_success_stale_rejection_and_exact_metadata_filter(
+    monkeypatch, tmp_path
+):
+    from by_qa.knowledge_base.services.markdown_update_summary_service import (
+        MarkdownUpdateSummaryService,
+    )
+
+    async def no_llm(self, old_markdown, new_markdown):
+        _ = self, old_markdown, new_markdown
+        return None
+
+    monkeypatch.setattr(MarkdownUpdateSummaryService, "generate_llm_summary", no_llm)
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(monkeypatch, EchoDocumentChunkingService())
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Refer signature {uuid4().hex[:12]}")
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/a.md",
+            file_content=b"# Old\n",
+        )
+        old_metadata = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/a.md",
+            field_names=["updatedAt", "fileSignature"],
+        )
+        old_signature = old_metadata["fileSignature"]["value"]
+
+        exact_match = client.post(
+            "/api/v1/knowledgeItems/metadataSearch",
+            json={
+                "knCodeList": [kb_code],
+                "where": {
+                    "eq": {
+                        "fieldName": "fileSignature",
+                        "value": old_signature,
+                    }
+                },
+                "metadataFieldList": ["fileSignature"],
+                "pageNum": 1,
+                "pageSize": 10,
+            },
+        ).json()
+        assert exact_match["resultCode"] == "0"
+        assert [item["filePath"] for item in exact_match["resultObject"]["data"]] == [
+            "/docs/a.md"
+        ]
+
+        successful_update = client.post(
+            "/api/v1/knowledgeItems/update",
+            data={
+                "knCode": kb_code,
+                "filePath": "/docs/a.md",
+                "referSignature": old_signature,
+            },
+            files={"fileContent": ("a.md", b"# New\n", "text/markdown")},
+        )
+        assert successful_update.json()["resultCode"] == "0"
+        new_metadata = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/a.md",
+            field_names=["updatedAt", "fileSignature"],
+        )
+        assert new_metadata["fileSignature"]["value"] != old_signature
+        assert new_metadata["updatedAt"]["value"] >= old_metadata["updatedAt"]["value"]
+        assert (
+            _download_file_bytes(client, kb_code=kb_code, file_path="/docs/a.md")
+            == b"# New\n"
+        )
+
+        stale_update = client.post(
+            "/api/v1/knowledgeItems/update",
+            data={
+                "knCode": kb_code,
+                "filePath": "/docs/a.md",
+                "referSignature": old_signature,
+            },
+            files={"fileContent": ("a.md", b"# Stale\n", "text/markdown")},
+        )
+        assert stale_update.json()["resultCode"] == "-1"
+        assert (
+            _download_file_bytes(client, kb_code=kb_code, file_path="/docs/a.md")
+            == b"# New\n"
+        )
+        assert (
+            _get_file_metadata(
+                client,
+                kb_code=kb_code,
+                file_path="/docs/a.md",
+                field_names=["fileSignature"],
+            )["fileSignature"]["value"]
+            == new_metadata["fileSignature"]["value"]
+        )
+
+
+@pytest.mark.integration
+async def test_duplicate_checksum_flag_scope_zip_and_self_update(monkeypatch, tmp_path):
+    import io
+    import zipfile
+
+    from by_qa.knowledge_base.services.markdown_update_summary_service import (
+        MarkdownUpdateSummaryService,
+    )
+
+    async def no_llm(self, old_markdown, new_markdown):
+        _ = self, old_markdown, new_markdown
+        return None
+
+    monkeypatch.setattr(MarkdownUpdateSummaryService, "generate_llm_summary", no_llm)
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(monkeypatch, EchoDocumentChunkingService())
+
+    with TestClient(main_module.app) as client:
+        first_kb = _create_kb(client, f"Duplicate A {uuid4().hex[:12]}")
+        second_kb = _create_kb(client, f"Duplicate B {uuid4().hex[:12]}")
+        content = b"# Same\n"
+        _upload_file(
+            client,
+            kb_code=first_kb,
+            file_path="/docs/source.md",
+            file_content=content,
+        )
+
+        allowed_duplicate = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": first_kb, "filePath": "/docs/allowed.md"},
+            files={"fileContent": ("allowed.md", content, "text/markdown")},
+        )
+        assert allowed_duplicate.json()["resultCode"] == "0"
+
+        rejected_duplicate = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={
+                "knCode": first_kb,
+                "filePath": "/docs/rejected.md",
+                "skipIfDuplicate": "true",
+            },
+            files={"fileContent": ("rejected.md", content, "text/markdown")},
+        )
+        assert rejected_duplicate.json()["resultCode"] == "-1"
+        rejected_metadata = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={"knCode": first_kb, "filePath": "/docs/rejected.md"},
+        ).json()
+        assert rejected_metadata["resultCode"] == "-1"
+
+        cross_kb_duplicate = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={
+                "knCode": second_kb,
+                "filePath": "/docs/source.md",
+                "skipIfDuplicate": "true",
+            },
+            files={"fileContent": ("source.md", content, "text/markdown")},
+        )
+        assert cross_kb_duplicate.json()["resultCode"] == "0"
+
+        second_signature = _get_file_metadata(
+            client,
+            kb_code=second_kb,
+            file_path="/docs/source.md",
+            field_names=["fileSignature"],
+        )["fileSignature"]["value"]
+        self_update = client.post(
+            "/api/v1/knowledgeItems/update",
+            data={
+                "knCode": second_kb,
+                "filePath": "/docs/source.md",
+                "referSignature": second_signature,
+                "skipIfDuplicate": "true",
+            },
+            files={"fileContent": ("source.md", content, "text/markdown")},
+        )
+        assert self_update.json()["resultCode"] == "0"
+
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zip_file:
+            zip_file.writestr("zip-duplicate.md", content)
+        zip_duplicate = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={
+                "knCode": first_kb,
+                "filePath": "/docs",
+                "skipIfDuplicate": "true",
+            },
+            files={
+                "fileContent": (
+                    "duplicates.zip",
+                    archive.getvalue(),
+                    "application/zip",
+                )
+            },
+        ).json()
+        assert zip_duplicate["resultCode"] == "0"
+        assert zip_duplicate["resultObject"]["summary"] == {
+            "total": 1,
+            "succeeded": 0,
+            "failed": 1,
+        }
+        assert (
+            "duplicate file checksum"
+            in zip_duplicate["resultObject"]["data"][0]["error"]
+        )
+
+
+@pytest.mark.integration
+async def test_checksum_advisory_lock_blocks_same_scope_only(monkeypatch, tmp_path):
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    connection_factory = build_connection_factory(settings)
+    first_connection = await connection_factory()
+    second_connection = await connection_factory()
+    repository = KnowledgeFsEntryRepository()
+    blocked_task = None
+    try:
+        first_cursor = first_connection.cursor()
+        second_cursor = second_connection.cursor()
+        await repository.lock_checksum_scope(
+            first_cursor,
+            knowledge_base_id=91001,
+            checksum="same-checksum",
+        )
+        blocked_task = asyncio.create_task(
+            repository.lock_checksum_scope(
+                second_cursor,
+                knowledge_base_id=91001,
+                checksum="same-checksum",
+            )
+        )
+        _, pending = await asyncio.wait({blocked_task}, timeout=0.2)
+        assert blocked_task in pending
+
+        await first_connection.rollback()
+        await asyncio.wait_for(blocked_task, timeout=2)
+        await second_connection.rollback()
+
+        await repository.lock_checksum_scope(
+            first_cursor,
+            knowledge_base_id=91001,
+            checksum="checksum-a",
+        )
+        await asyncio.wait_for(
+            repository.lock_checksum_scope(
+                second_cursor,
+                knowledge_base_id=91001,
+                checksum="checksum-b",
+            ),
+            timeout=1,
+        )
+        await first_connection.rollback()
+        await second_connection.rollback()
+
+        await repository.lock_checksum_scope(
+            first_cursor,
+            knowledge_base_id=91001,
+            checksum="cross-kb",
+        )
+        await asyncio.wait_for(
+            repository.lock_checksum_scope(
+                second_cursor,
+                knowledge_base_id=91002,
+                checksum="cross-kb",
+            ),
+            timeout=1,
+        )
+    finally:
+        if blocked_task is not None and not blocked_task.done():
+            blocked_task.cancel()
+        await first_connection.rollback()
+        await second_connection.rollback()
+        await first_connection.close()
+        await second_connection.close()

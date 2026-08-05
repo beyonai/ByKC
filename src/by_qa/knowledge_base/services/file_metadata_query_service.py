@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from by_qa.knowledge_base.api.metadata_schemas import GetFileMetadataRequest
+from by_qa.knowledge_base.metadata_types import (
+    SYSTEM_FIELD_VALUE_TYPES,
+    extract_system_metadata,
+)
 from by_qa.knowledge_base.repositories.file_metadata_value_repository import (
     FileMetadataValueRepository,
 )
@@ -49,12 +53,26 @@ class FileMetadataQueryService:
                     f"file not found: {request.file_path}"
                 )
 
-            rows = await self.file_metadata_value_repository.get_file_metadata(
-                cursor,
-                fs_entry_id=file_entry["kid"],
-                property_names=request.metadata_field_list,
+            custom_names = (
+                None
+                if request.metadata_field_list is None
+                else [
+                    name
+                    for name in request.metadata_field_list
+                    if name not in SYSTEM_FIELD_VALUE_TYPES
+                ]
             )
-            return _format_metadata(rows)
+            rows = []
+            if custom_names is None or custom_names:
+                rows = await self.file_metadata_value_repository.get_file_metadata(
+                    cursor,
+                    fs_entry_id=file_entry["kid"],
+                    property_names=custom_names,
+                )
+            return {
+                **extract_system_metadata(file_entry, request.metadata_field_list),
+                **_format_metadata(rows),
+            }
         finally:
             await connection.close()
 

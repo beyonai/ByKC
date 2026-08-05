@@ -76,6 +76,29 @@
 - `boolean`
 - `datetime`
 
+### 系统文件属性
+
+系统文件属性由服务根据 `knowledge_fs_entry` 文件记录提供，不需要通过元数据属性管理接口注册。调用方应将这些名称视为保留字段，避免在 Markdown front matter 等自定义元数据中复用。当前共有以下 8 个字段：
+
+| 属性名 | 元数据类型 | 来源 | 含义 |
+| --- | --- | --- | --- |
+| `fileName` | `string` | `knowledge_fs_entry.name` | 文件名，包含扩展名 |
+| `fileType` | `string` | 根据 `knowledge_fs_entry.name` 计算 | 小写文件扩展名，不包含前导点；无扩展名时为空字符串 |
+| `fileSize` | `number` | `knowledge_fs_entry.file_size` | 原始文件大小，单位为字节 |
+| `mimeType` | `string` | `knowledge_fs_entry.mime_type` | 文件的 MIME 类型 |
+| `createdAt` | `datetime` | `knowledge_fs_entry.created_at` | 文件记录创建时间 |
+| `updatedAt` | `datetime` | `knowledge_fs_entry.updated_at` | 文件记录最近更新时间 |
+| `fileSignature` | `string` | `knowledge_fs_entry.checksum` | 原始文件内容的 SHA-256 校验值 |
+| `filePath` | `string` | `knowledge_fs_entry.virtual_path` | 文件在知识库内的完整路径，以 `/` 开头 |
+
+使用约定：
+
+- `POST /api/v1/knowledgeItems/metadata/get`：可在 `metadataFieldList` 中指定系统文件属性；省略该参数时，系统文件属性会与自定义元数据一起返回。
+- `POST /api/v1/knowledgeItems/metadataSearch`：系统文件属性既可用于 `where` 过滤，也可通过 `metadataFieldList` 返回。
+- `POST /api/v1/knowledgeItems/search` 和 `POST /api/v1/knowledgeItems/searchFile`：系统文件属性可用于 `where` 过滤；需要返回属性值时可通过 `metadataFieldList` 指定。
+- 系统文件属性遵循其元数据类型对应的 DSL 操作符规则。例如 `fileSignature` 支持 `eq` 精确匹配，`fileSize` 支持数值比较，`createdAt` 和 `updatedAt` 支持时间比较。
+- 字段名使用现有的 `createdAt` 和 `updatedAt`，不提供 `createTime`、`updateTime` 等别名。
+
 ### 检索模式约定
 
 当前支持以下检索模式：
@@ -438,7 +461,9 @@ Agent DSL 版纯元数据检索，只返回文件级结果。
 | `knCodeList` | array[string] | 否 | 知识库范围 |
 | `where` | object | 是 | Agent DSL 过滤 AST |
 | `metadataFieldList` | array[string] | 否 | 需要返回的元数据字段 |
-| `topK` | integer | 否 | 返回条数，省略时默认 500，最大 10000 |
+| `topK` | integer | 否 | 兼容参数；未传 `pageSize` 时作为每页条数，默认 500，最大 10000 |
+| `pageNum` | integer | 否 | 页码，从 1 开始，默认 1 |
+| `pageSize` | integer | 否 | 每页条数，最大 10000；传入时优先于 `topK` |
 
 请求示例：
 
@@ -451,8 +476,9 @@ Agent DSL 版纯元数据检索，只返回文件级结果。
       {"contains": {"fieldName": "tags", "value": "contract"}}
     ]
   },
-  "metadataFieldList": ["status", "tags"],
-  "topK": 20
+  "metadataFieldList": ["status", "tags", "fileSignature"],
+  "pageNum": 1,
+  "pageSize": 20
 }
 ```
 
@@ -478,10 +504,17 @@ Agent DSL 版纯元数据检索，只返回文件级结果。
           }
         }
       }
-    ]
+    ],
+    "total": 1,
+    "pageNum": 1,
+    "pageSize": 20
   }
 }
 ```
+
+结果固定按 `knowledge_fs_entry.updated_at` 从旧到新排序；更新时间相同时按文件 `kid` 从小到大排序，确保分页稳定。
+
+完整的系统文件属性清单见“系统文件属性”章节。所有系统文件属性均可用于 `where` 过滤，也可通过 `metadataFieldList` 获取值。
 
 失败响应示例：
 

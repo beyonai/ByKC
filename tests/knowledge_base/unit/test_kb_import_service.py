@@ -386,6 +386,9 @@ class FakeKnowledgeFsEntryRepository:
             ),
         }
 
+    async def lock_checksum_scope(self, cursor, **kwargs):
+        self.calls.append(("lock_checksum_scope", kwargs))
+
     async def create_file_entry(
         self, cursor, *, knowledge_base_id, full_path, file_description=None
     ):

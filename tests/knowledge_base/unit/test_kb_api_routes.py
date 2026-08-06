@@ -2274,16 +2274,3 @@ def test_build_result_validates_chunk_page_size(monkeypatch):
     assert response.status_code == 200
     assert response.json()["resultCode"] == "-1"
     assert response.json()["resultMsg"] == "request validation failed"
-
-
-def test_build_preview_returns_pdf(monkeypatch):
-    client = make_test_client(monkeypatch, FakeKBService())
-
-    response = client.post(
-        "/api/v1/buildPreview",
-        json={"knCode": "1", "filePath": "/制度/人事/请假制度.pptx"},
-    )
-
-    assert response.status_code == 200
-    assert response.headers["content-type"] == "application/pdf"
-    assert response.content == b"%PDF-1.7\npreview"

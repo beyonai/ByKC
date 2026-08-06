@@ -77,9 +77,6 @@ from by_qa.knowledge_base.services.markdown_reference_rewriter import (
 from by_qa.knowledge_base.services.markdown_update_summary_service import (
     MarkdownUpdateSummaryService,
 )
-from by_qa.knowledge_base.services.presentation_preview_service import (
-    PresentationPreviewService,
-)
 
 
 def validate_knowledge_base_settings(
@@ -280,7 +277,6 @@ async def build_knowledge_item_ingestion_service(
         file_metadata_value_repository=FileMetadataValueRepository(),
         knowledge_file_reference_repository=KnowledgeFileReferenceRepository(),
         markdown_reference_rewriter=MarkdownReferenceRewriter(),
-        presentation_preview_service=PresentationPreviewService.from_environment(),
     )
 
 

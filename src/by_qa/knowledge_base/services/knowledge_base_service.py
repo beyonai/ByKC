@@ -8,7 +8,6 @@ from typing import Any, Callable
 
 from by_qa.core import logger
 from by_qa.knowledge_base.api.schemas import (
-    BuildPreviewRequest,
     BuildResultRequest,
     CreateDirectoryRequest,
     CreateKnowledgeBaseRequest,
@@ -33,15 +32,8 @@ from by_qa.knowledge_base.api.schemas import (
     UpdateKnowledgeBaseRequest,
 )
 from by_qa.knowledge_base.build_status import STATUS_DICT, STEP_DICT
-from by_qa.knowledge_base.infrastructure.storage import (
-    StorageLocation,
-    StorageNotFoundError,
-    StorageOperationError,
-)
+from by_qa.knowledge_base.infrastructure.storage import StorageLocation
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
-from by_qa.knowledge_base.services.presentation_preview_service import (
-    build_presentation_preview_location,
-)
 
 
 def _optional_location(row, namespace_key, key_key):
@@ -487,26 +479,6 @@ class KnowledgeBaseService:
                     if old_markdown is not None:
                         await self.storage_provider.move(old_markdown, new_markdown)
                         moved.append((old_markdown, new_markdown))
-                    if PurePosixPath(old_path).suffix.lower() in {".ppt", ".pptx"}:
-                        old_preview = build_presentation_preview_location(
-                            self.storage_provider,
-                            kb_code=request.kb_code,
-                            knowledge_base_id=knowledge_base_id,
-                            fs_entry_id=int(row["kid"]),
-                            file_path=old_path,
-                        )
-                        new_preview = build_presentation_preview_location(
-                            self.storage_provider,
-                            kb_code=request.kb_code,
-                            knowledge_base_id=knowledge_base_id,
-                            fs_entry_id=int(row["kid"]),
-                            file_path=new_path,
-                        )
-                        try:
-                            await self.storage_provider.move(old_preview, new_preview)
-                            moved.append((old_preview, new_preview))
-                        except StorageNotFoundError:
-                            pass
                     locator_updates.append(
                         dict(
                             fs_entry_id=int(row["kid"]),
@@ -737,27 +709,6 @@ class KnowledgeBaseService:
                 if old_markdown is not None:
                     await self.storage_provider.move(old_markdown, new_markdown)
                     moved.append((old_markdown, new_markdown))
-                old_file_path = str(row["virtual_path"])
-                if PurePosixPath(old_file_path).suffix.lower() in {".ppt", ".pptx"}:
-                    old_preview = build_presentation_preview_location(
-                        self.storage_provider,
-                        kb_code=request.kb_code,
-                        knowledge_base_id=knowledge_base_id,
-                        fs_entry_id=int(row["kid"]),
-                        file_path=old_file_path,
-                    )
-                    new_preview = build_presentation_preview_location(
-                        self.storage_provider,
-                        kb_code=request.kb_code,
-                        knowledge_base_id=knowledge_base_id,
-                        fs_entry_id=int(row["kid"]),
-                        file_path=new_file_path,
-                    )
-                    try:
-                        await self.storage_provider.move(old_preview, new_preview)
-                        moved.append((old_preview, new_preview))
-                    except StorageNotFoundError:
-                        pass
                 locator_updates.append(
                     dict(
                         fs_entry_id=int(row["kid"]),
@@ -1216,75 +1167,6 @@ class KnowledgeBaseService:
             len(markdown_text) if markdown_text is not None else None,
         )
         return result
-
-    async def build_preview(self, request: BuildPreviewRequest) -> bytes:
-        """Read the generated PDF sidecar for a PPTX file."""
-        logger.info(
-            "knowledge_base_service.build_preview started: kb_code=%s, file_path=%s",
-            request.kb_code,
-            request.file_path,
-        )
-        if self.storage_provider is None:
-            raise KnowledgeBaseValidationError(
-                "build preview storage runtime is not configured"
-            )
-        normalized_file_path = request.file_path.strip()
-        if not normalized_file_path.startswith("/"):
-            raise KnowledgeBaseValidationError("filePath must start with /")
-        if PurePosixPath(normalized_file_path).suffix.lower() not in {".ppt", ".pptx"}:
-            raise KnowledgeBaseValidationError(
-                "PDF build preview is only available for PPT/PPTX files"
-            )
-
-        connection = await self.connection_factory()
-        try:
-            cursor = connection.cursor()
-            kb_row = await self.knowledge_base_repository.get_by_code(
-                cursor, request.kb_code
-            )
-            if not kb_row:
-                raise KnowledgeBaseValidationError(
-                    f"knowledge base not found: {request.kb_code}"
-                )
-            knowledge_base_id = self._row_id(kb_row)
-            file_row = await self.knowledge_fs_entry_repository.get_file_by_path(
-                cursor,
-                knowledge_base_id=knowledge_base_id,
-                full_path=normalized_file_path.strip("/"),
-            )
-            if file_row is None:
-                raise KnowledgeBaseValidationError(
-                    f"file not found: {request.file_path}"
-                )
-            preview_location = build_presentation_preview_location(
-                self.storage_provider,
-                kb_code=request.kb_code,
-                knowledge_base_id=knowledge_base_id,
-                fs_entry_id=self._row_id(file_row),
-                file_path=normalized_file_path.strip("/"),
-            )
-        finally:
-            await connection.close()
-
-        try:
-            preview_bytes = await self.storage_provider.read(preview_location)
-        except (StorageNotFoundError, StorageOperationError) as exc:
-            logger.warning(
-                "knowledge_base_service.build_preview unavailable: "
-                "file_path=%s, storage_error=%s",
-                request.file_path,
-                type(exc).__name__,
-            )
-            raise KnowledgeBaseValidationError(
-                "build preview not found; rebuild the PPT/PPTX file first: "
-                f"{request.file_path}"
-            ) from exc
-        logger.info(
-            "knowledge_base_service.build_preview finished: file_path=%s, output_bytes=%s",
-            request.file_path,
-            len(preview_bytes),
-        )
-        return preview_bytes
 
     async def glob(
         self, request: KnowledgeItemGlobRequest

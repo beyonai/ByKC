@@ -20,9 +20,6 @@ from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
 from by_qa.knowledge_base.services.knowledge_item_ingestion_service import (
     _parse_front_matter,
 )
-from by_qa.knowledge_base.services.presentation_preview_service import (
-    build_presentation_preview_location,
-)
 
 
 @dataclass(frozen=True)
@@ -199,15 +196,6 @@ class DocumentUpdateService:
             old_sidecar = self._markdown_location(file_row)
             if old_sidecar is not None:
                 await self.storage_provider.delete_quietly(old_sidecar)
-            if PurePosixPath(normalized_path).suffix.lower() in {".ppt", ".pptx"}:
-                preview_location = build_presentation_preview_location(
-                    self.storage_provider,
-                    kb_code=request.kb_code,
-                    knowledge_base_id=knowledge_base_id,
-                    fs_entry_id=fs_entry_id,
-                    file_path=normalized_path,
-                )
-                await self.storage_provider.delete_quietly(preview_location)
             return DocumentUpdateResult(
                 timeline_id=self._row_id(timeline),
                 is_markdown=is_markdown,

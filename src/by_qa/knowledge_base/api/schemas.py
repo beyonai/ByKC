@@ -296,21 +296,6 @@ class BuildResultRequest(BaseModel):
     )
 
 
-class BuildPreviewRequest(BaseModel):
-    """Request body for downloading a generated file preview."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    kb_code: str = Field(
-        min_length=1,
-        validation_alias=AliasChoices("knCode", "kb_code"),
-    )
-    file_path: str = Field(
-        min_length=1,
-        validation_alias=AliasChoices("filePath", "file_path"),
-    )
-
-
 class KnowledgeItemUploadRequest(BaseModel):
     """Request body for multipart file upload aligned with the public API."""
 

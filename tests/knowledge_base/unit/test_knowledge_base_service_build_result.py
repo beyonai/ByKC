@@ -4,9 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from by_qa.knowledge_base.api.schemas import BuildPreviewRequest, BuildResultRequest
-from by_qa.knowledge_base.infrastructure.storage import StorageOperationError
-from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
+from by_qa.knowledge_base.api.schemas import BuildResultRequest
 from by_qa.knowledge_base.services.knowledge_base_service import KnowledgeBaseService
 
 
@@ -87,14 +85,12 @@ class FakeChunkRepository:
 
 
 class FakeStorageProvider:
-    def build_markdown_location(self, **kwargs):
+    def build_markdown_location(self, **_kwargs):
         return type("Location", (), {"namespace": "kb", "key": "demo.md"})()
 
     async def read(self, location):
-        if location.key == "demo.md":
-            return b"# Demo\nFirst\nSecond\nEnd"
-        assert (location.namespace, location.key) == ("kb", "demo.preview.pdf")
-        return b"%PDF-1.7\npreview"
+        assert location.key == "demo.md"
+        return b"# Demo\nFirst\nSecond\nEnd"
 
 
 @pytest.mark.asyncio
@@ -140,46 +136,6 @@ async def test_build_result_aggregates_markdown_chunks_and_index_coverage():
         "indexedChunkCount": 2,
         "coverageRate": 66.67,
     }
-    assert connection.closed is True
-
-
-@pytest.mark.asyncio
-async def test_build_preview_reads_pdf_sidecar():
-    connection = FakeConnection()
-    service = KnowledgeBaseService(
-        connection_factory=lambda: _async_return(connection),
-        knowledge_base_repository=FakeKnowledgeBaseRepository(),
-        knowledge_fs_entry_repository=FakeFsEntryRepository(),
-        storage_provider=FakeStorageProvider(),
-    )
-
-    content = await service.build_preview(
-        BuildPreviewRequest(knCode="7", filePath="/slides/demo.pptx")
-    )
-
-    assert content == b"%PDF-1.7\npreview"
-    assert connection.closed is True
-
-
-@pytest.mark.asyncio
-async def test_build_preview_normalizes_storage_operation_failure():
-    class FailingStorageProvider(FakeStorageProvider):
-        async def read(self, location):
-            raise StorageOperationError("userfs returned 500")
-
-    connection = FakeConnection()
-    service = KnowledgeBaseService(
-        connection_factory=lambda: _async_return(connection),
-        knowledge_base_repository=FakeKnowledgeBaseRepository(),
-        knowledge_fs_entry_repository=FakeFsEntryRepository(),
-        storage_provider=FailingStorageProvider(),
-    )
-
-    with pytest.raises(KnowledgeBaseValidationError, match="rebuild the PPT/PPTX"):
-        await service.build_preview(
-            BuildPreviewRequest(knCode="7", filePath="/slides/demo.pptx")
-        )
-
     assert connection.closed is True
 
 

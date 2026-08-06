@@ -32,9 +32,6 @@ from by_qa.knowledge_base.metadata_types import (
     normalize_metadata_value,
 )
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
-from by_qa.knowledge_base.services.presentation_preview_service import (
-    build_presentation_preview_location,
-)
 from by_qa.knowledge_build.services.document_chunking_service import (
     SUPPORTED_EXTENSIONS,
 )
@@ -152,7 +149,6 @@ class KnowledgeItemIngestionService:
     file_metadata_value_repository: Any | None = None
     knowledge_file_reference_repository: Any | None = None
     markdown_reference_rewriter: Any | None = None
-    presentation_preview_service: Any | None = None
 
     async def convert_uploaded_file_to_markdown(
         self,
@@ -636,8 +632,6 @@ class KnowledgeItemIngestionService:
 
         connection = await self.connection_factory()
         markdown_location: StorageLocation | None = None
-        preview_location: StorageLocation | None = None
-        preview_written = False
         try:
             cursor = connection.cursor()
 
@@ -674,18 +668,6 @@ class KnowledgeItemIngestionService:
             original_name = (
                 file_row.get("name") or PurePosixPath(normalized_file_path).name
             )
-            preview_pdf: bytes | None = None
-            if (
-                file_type in {"ppt", "pptx"}
-                and self.presentation_preview_service is not None
-            ):
-                preview_pdf = (
-                    await self.presentation_preview_service.convert_pptx_to_pdf(
-                        file_bytes,
-                        filename=str(original_name),
-                        build_task_id=build_task_id,
-                    )
-                )
 
             logger.info(
                 "file_to_markdown_index stage started: build_task_id=%s, stage=extract_text, file_type=%s, file_size=%s",
@@ -765,43 +747,6 @@ class KnowledgeItemIngestionService:
                 markdown_bytes,
                 content_type="text/markdown; charset=utf-8",
             )
-            if (
-                file_type in {"ppt", "pptx"}
-                and self.presentation_preview_service is not None
-            ):
-                preview_location = build_presentation_preview_location(
-                    self.storage_provider,
-                    kb_code=request.kb_code,
-                    knowledge_base_id=knowledge_base_id,
-                    fs_entry_id=fs_entry_id,
-                    file_path=normalized_file_path,
-                )
-                if preview_pdf is not None:
-                    try:
-                        await self.storage_provider.write(
-                            preview_location,
-                            preview_pdf,
-                            content_type="application/pdf",
-                        )
-                        preview_written = True
-                        logger.info(
-                            "presentation_preview stored: build_task_id=%s, file_path=%s, output_bytes=%s",
-                            build_task_id,
-                            request.file_path,
-                            len(preview_pdf),
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "presentation_preview storage failed: build_task_id=%s, file_path=%s, error=%s",
-                            build_task_id,
-                            request.file_path,
-                            exc,
-                        )
-                        await self.storage_provider.delete_quietly(preview_location)
-                else:
-                    # A newly built file must never retain a preview generated
-                    # from older source bytes.
-                    await self.storage_provider.delete_quietly(preview_location)
 
             chunk_rows = (
                 await self.knowledge_item_chunk_repository.replace_for_fs_entry(
@@ -857,8 +802,6 @@ class KnowledgeItemIngestionService:
             await connection.rollback()
             if markdown_location is not None:
                 await self.storage_provider.delete_quietly(markdown_location)
-            if preview_written and preview_location is not None:
-                await self.storage_provider.delete_quietly(preview_location)
             if build_task_id is not None:
                 retry_cursor = connection.cursor()
                 await self._update_build_task(
@@ -957,18 +900,6 @@ class KnowledgeItemIngestionService:
                 )
                 if markdown_location is not None:
                     await self.storage_provider.delete_quietly(markdown_location)
-                if PurePosixPath(request.file_path).suffix.lower() in {
-                    ".ppt",
-                    ".pptx",
-                }:
-                    preview_location = build_presentation_preview_location(
-                        self.storage_provider,
-                        kb_code=request.kb_code,
-                        knowledge_base_id=knowledge_base_id,
-                        fs_entry_id=fs_entry_id,
-                        file_path=request.file_path.strip("/"),
-                    )
-                    await self.storage_provider.delete_quietly(preview_location)
         except Exception:
             await connection.rollback()
             raise

@@ -21,7 +21,6 @@ from by_qa.knowledge_base.api.metadata_schemas import (
     SearchFileRequest,
 )
 from by_qa.knowledge_base.api.schemas import (
-    BuildPreviewRequest,
     BuildResultRequest,
     CreateDirectoryRequest,
     CreateKnowledgeBaseRequest,
@@ -1052,58 +1051,6 @@ def register_routes(
             result.get("chunks", {}).get("total"),
         )
         return _documented_success_response(result_object=result)
-
-    @app.post("/api/v1/buildPreview")
-    async def build_preview(body: dict[str, Any] = Body(...)):
-        try:
-            request = BuildPreviewRequest.model_validate(body)
-        except ValidationError as exc:
-            return _documented_error_response(
-                result_msg="request validation failed",
-                result_object={"errors": json.loads(exc.json())},
-                status_code=422,
-            )
-        logger.info(
-            "build_preview request received: kb_code=%s, file_path=%s",
-            request.kb_code,
-            request.file_path,
-        )
-        try:
-            service = await get_knowledge_base_service()
-            content = await service.build_preview(request)
-        except KnowledgeBaseConfigurationError as exc:
-            return _documented_error_response(
-                result_msg=str(exc), result_object={}, status_code=503
-            )
-        except KnowledgeBaseValidationError as exc:
-            return _documented_error_response(
-                result_msg=str(exc), result_object={}, status_code=422
-            )
-        except Exception as exc:
-            logger.exception(
-                "build_preview unexpected error: kb_code=%s, file_path=%s, error=%s",
-                request.kb_code,
-                request.file_path,
-                exc,
-            )
-            return _documented_error_response(
-                result_msg=str(exc) or "internal error",
-                result_object={},
-                status_code=500,
-            )
-        filename = f"{PurePosixPath(request.file_path).stem}.pdf"
-        logger.info(
-            "build_preview response ready: code=200, file_path=%s, output_bytes=%s",
-            request.file_path,
-            len(content),
-        )
-        return Response(
-            content=content,
-            media_type="application/pdf",
-            headers={
-                "Content-Disposition": f"inline; filename*=UTF-8''{quote(filename)}"
-            },
-        )
 
     @app.post("/api/v1/knowledgeItems/search")
     @app.post("/api/v1/knowledge-items/search")

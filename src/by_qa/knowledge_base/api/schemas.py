@@ -266,6 +266,36 @@ class FileBuildStatusRequest(BaseModel):
     )
 
 
+class BuildResultRequest(BaseModel):
+    """Request body for querying a file's complete build result."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kb_code: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("knCode", "kb_code"),
+    )
+    file_path: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("filePath", "file_path"),
+    )
+    chunk_page: int = Field(
+        default=1,
+        ge=1,
+        validation_alias=AliasChoices("chunkPage", "chunk_page"),
+    )
+    chunk_page_size: int = Field(
+        default=20,
+        ge=1,
+        le=100,
+        validation_alias=AliasChoices("chunkPageSize", "chunk_page_size"),
+    )
+    include_markdown: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("includeMarkdown", "include_markdown"),
+    )
+
+
 class KnowledgeItemUploadRequest(BaseModel):
     """Request body for multipart file upload aligned with the public API."""
 

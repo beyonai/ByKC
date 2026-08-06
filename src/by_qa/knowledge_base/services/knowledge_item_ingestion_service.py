@@ -711,9 +711,13 @@ class KnowledgeItemIngestionService:
             file_bytes = await self.storage_provider.read(original_location)
 
             file_type = self._derive_file_type(file_row, normalized_file_path)
+            original_name = (
+                file_row.get("name") or PurePosixPath(normalized_file_path).name
+            )
 
             logger.info(
-                "file_to_markdown_index stage started: stage=extract_text, file_type=%s, file_size=%s",
+                "file_to_markdown_index stage started: build_task_id=%s, stage=extract_text, file_type=%s, file_size=%s",
+                build_task_id,
                 file_type,
                 len(file_bytes),
             )
@@ -741,7 +745,8 @@ class KnowledgeItemIngestionService:
                 await connection.commit()
                 return
             logger.info(
-                "file_to_markdown_index stage completed: stage=extract_text, md_length=%s",
+                "file_to_markdown_index stage completed: build_task_id=%s, stage=extract_text, md_length=%s",
+                build_task_id,
                 len(markdown_content),
             )
             await self._update_build_task(
@@ -752,12 +757,10 @@ class KnowledgeItemIngestionService:
             )
 
             markdown_bytes = markdown_content.encode("utf-8")
-            original_name = (
-                file_row.get("name") or PurePosixPath(normalized_file_path).name
-            )
             chunk_filename = PurePosixPath(original_name).stem + ".md"
             logger.info(
-                "file_to_markdown_index stage started: stage=chunk_and_embed, filename=%s",
+                "file_to_markdown_index stage started: build_task_id=%s, stage=chunk_and_embed, filename=%s",
+                build_task_id,
                 chunk_filename,
             )
             chunks = await asyncio.to_thread(
@@ -766,7 +769,8 @@ class KnowledgeItemIngestionService:
                 filename=chunk_filename,
             )
             logger.info(
-                "file_to_markdown_index stage completed: stage=chunk_and_embed, chunk_count=%s",
+                "file_to_markdown_index stage completed: build_task_id=%s, stage=chunk_and_embed, chunk_count=%s",
+                build_task_id,
                 len(chunks),
             )
             await self._update_build_task(

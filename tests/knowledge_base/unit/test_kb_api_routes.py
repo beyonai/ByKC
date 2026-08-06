@@ -165,6 +165,38 @@ class FakeKBService:
             ],
         }
 
+    async def build_result(self, request):
+        return {
+            "knCode": request.kb_code,
+            "filePath": request.file_path,
+            "fileName": "请假制度.pptx",
+            "fileType": "pptx",
+            "build": {"status": "complete", "currentStep": "complete"},
+            "markdown": {"available": True, "data": "# 请假制度\n", "lineCount": 1},
+            "chunks": {
+                "data": [
+                    {
+                        "chunkNo": 1,
+                        "startLine": 1,
+                        "endLine": 1,
+                        "content": "# 请假制度",
+                        "hasEmbedding": True,
+                        "retrievalIndexed": True,
+                    }
+                ],
+                "page": request.chunk_page,
+                "pageSize": request.chunk_page_size,
+                "total": 1,
+                "reachedEof": True,
+            },
+            "embedding": {"dimension": 1024, "embeddedChunkCount": 1},
+            "retrieval": {"indexedChunkCount": 1},
+        }
+
+    async def build_preview(self, request):
+        assert request.file_path.endswith(".pptx")
+        return b"%PDF-1.7\npreview"
+
     async def search(self, request):
         return [
             SearchHit(
@@ -2272,3 +2304,43 @@ def test_file_build_status_validation_error(monkeypatch):
     body = response.json()
     assert body["resultCode"] == "-1"
     assert body["resultMsg"] == "request validation failed"
+
+
+def test_build_result_success(monkeypatch):
+    """POST /api/v1/buildResult returns Markdown and paged chunk diagnostics."""
+    client = make_test_client(monkeypatch, FakeKBService())
+
+    response = client.post(
+        "/api/v1/buildResult",
+        json={
+            "knCode": "1",
+            "filePath": "/制度/人事/请假制度.pptx",
+            "chunkPage": 1,
+            "chunkPageSize": 10,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["resultCode"] == "0"
+    assert body["resultObject"]["build"]["status"] == "complete"
+    assert body["resultObject"]["markdown"]["data"] == "# 请假制度\n"
+    assert body["resultObject"]["chunks"]["total"] == 1
+    assert body["resultObject"]["embedding"]["dimension"] == 1024
+
+
+def test_build_result_validates_chunk_page_size(monkeypatch):
+    client = make_test_client(monkeypatch, FakeKBService())
+
+    response = client.post(
+        "/api/v1/buildResult",
+        json={
+            "knCode": "1",
+            "filePath": "/制度/人事/请假制度.pptx",
+            "chunkPageSize": 101,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["resultCode"] == "-1"
+    assert response.json()["resultMsg"] == "request validation failed"

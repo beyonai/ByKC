@@ -92,7 +92,7 @@ graph TD
 | **AI 编排** | [LangGraph](https://github.com/langchain-ai/langgraph) 0.2+ · LangChain |
 | **LLM 接入 / 向量化** | OpenAI-compatible API（支持任意兼容接口） |
 | **数据库** | [OpenGauss](https://opengauss.org/)（PostgreSQL 兼容，内置向量检索） |
-| **文档解析** | PyMuPDF（PDF）· python-docx（Word）· python-pptx（PPT）· openpyxl（Excel）|
+| **文档解析** | MarkItDown（HTML/Word/PPT）· PyMuPDF（PDF）· openpyxl（Excel）|
 | **全文检索** | OpenGauss FTS · Jieba 中文分词 |
 | **对象存储** | [MinIO](https://min.io/)（S3 兼容） |
 | **缓存 / 服务发现** | Redis |
@@ -282,7 +282,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/knowledgeBases/create \
   -d '{"knName": "my-docs", "knDescription": "产品文档库"}'
 # → {"resultObject": {"knCode": "74", ...}}
 
-# 2. 导入文件（支持 PDF/Word/PPT/Excel/Markdown/CSV）
+# 2. 导入文件（支持 HTML/PDF/Word/PPT/Excel/Markdown/CSV）
 curl -X POST http://127.0.0.1:8000/api/v1/knowledgeItems/import \
   -F "knCode=74" \
   -F "filePath=/docs/handbook.md" \

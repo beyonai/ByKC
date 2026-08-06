@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from by_qa.core import logger
 from by_qa.knowledge_base.api.schemas import (
+    BuildResultRequest,
     CreateDirectoryRequest,
     CreateKnowledgeBaseRequest,
     CreateKnowledgeBaseResponse,
@@ -56,6 +57,8 @@ class KnowledgeBaseService:
     knowledge_base_repository: Any
     knowledge_fs_entry_repository: Any
     knowledge_build_task_repository: Any | None = None
+    knowledge_item_chunk_repository: Any | None = None
+    embedding_dimension: int | None = None
     retrieval_projection_repository: Any | None = None
     knowledge_fetch_cache_repository: Any | None = None
     storage_provider: Any | None = None
@@ -981,6 +984,190 @@ class KnowledgeBaseService:
         finally:
             await connection.close()
 
+    async def build_result(self, request: BuildResultRequest) -> dict[str, Any]:
+        """Return Markdown, build diagnostics, and paged chunk details."""
+        logger.info(
+            "knowledge_base_service.build_result started: kb_code=%s, file_path=%s, chunk_page=%s, chunk_page_size=%s, include_markdown=%s",
+            request.kb_code,
+            request.file_path,
+            request.chunk_page,
+            request.chunk_page_size,
+            request.include_markdown,
+        )
+        if self.knowledge_build_task_repository is None:
+            raise KnowledgeBaseValidationError(
+                "file build status runtime is not configured"
+            )
+        if self.knowledge_item_chunk_repository is None:
+            raise KnowledgeBaseValidationError(
+                "file build result runtime is not configured"
+            )
+
+        normalized_file_path = request.file_path.strip()
+        if not normalized_file_path.startswith("/"):
+            raise KnowledgeBaseValidationError("filePath must start with /")
+
+        connection = await self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            kb_row = await self.knowledge_base_repository.get_by_code(
+                cursor,
+                request.kb_code,
+            )
+            if not kb_row:
+                raise KnowledgeBaseValidationError(
+                    f"knowledge base not found: {request.kb_code}"
+                )
+            knowledge_base_id = self._row_id(kb_row)
+            file_row = await self.knowledge_fs_entry_repository.get_file_by_path(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                full_path=normalized_file_path.strip("/"),
+            )
+            if file_row is None:
+                raise KnowledgeBaseValidationError(
+                    f"file not found: {request.file_path}"
+                )
+            fs_entry_id = self._row_id(file_row)
+            latest_task = (
+                await self.knowledge_build_task_repository.get_latest_by_fs_entry_id(
+                    cursor,
+                    fs_entry_id=fs_entry_id,
+                )
+            )
+            if latest_task is None:
+                raise KnowledgeBaseValidationError(
+                    f"build task not found: {request.file_path}"
+                )
+
+            summary = (
+                await self.knowledge_item_chunk_repository.get_build_result_summary(
+                    cursor,
+                    fs_entry_id=fs_entry_id,
+                )
+            )
+            offset = (request.chunk_page - 1) * request.chunk_page_size
+            chunk_rows = (
+                await self.knowledge_item_chunk_repository.list_build_result_chunks(
+                    cursor,
+                    fs_entry_id=fs_entry_id,
+                    offset=offset,
+                    limit=request.chunk_page_size,
+                )
+            )
+        finally:
+            await connection.close()
+
+        markdown_available = bool(file_row.get("markdown_object_key"))
+        markdown_text: str | None = None
+        if request.include_markdown and markdown_available:
+            if self.storage_provider is None:
+                raise KnowledgeBaseValidationError(
+                    "read file runtime is not configured"
+                )
+            location = StorageLocation(
+                namespace=str(file_row.get("markdown_bucket_name") or ""),
+                key=str(file_row["markdown_object_key"]),
+            )
+            markdown_text = (await self.storage_provider.read(location)).decode("utf-8")
+            if (
+                self.markdown_reference_resolver is not None
+                and "byqa-ref://" in markdown_text
+            ):
+                markdown_text = (
+                    await self.markdown_reference_resolver.resolve_texts(
+                        knowledge_base_id=knowledge_base_id,
+                        texts=[markdown_text],
+                    )
+                )[0]
+
+        chunk_count = int(summary.get("chunk_count") or 0)
+        embedded_chunk_count = int(summary.get("embedded_chunk_count") or 0)
+        indexed_chunk_count = int(summary.get("indexed_chunk_count") or 0)
+        started_at = latest_task.get("started_at")
+        finished_at = latest_task.get("finished_at")
+        duration_ms = None
+        if started_at is not None and finished_at is not None:
+            duration_ms = round((finished_at - started_at).total_seconds() * 1000)
+
+        chunks = []
+        for row in chunk_rows:
+            content = str(row.get("chunk_text") or "")
+            chunks.append(
+                {
+                    "chunkNo": int(row.get("chunk_no") or 0),
+                    "startLine": int(row.get("start_line") or 0),
+                    "endLine": int(row.get("end_line") or 0),
+                    "content": content,
+                    "characterCount": len(content),
+                    "hasEmbedding": bool(row.get("has_embedding")),
+                    "retrievalIndexed": bool(row.get("retrieval_indexed")),
+                }
+            )
+
+        line_count = int(file_row.get("line_count") or 0)
+        if markdown_text is not None and line_count <= 0:
+            line_count = markdown_text.count("\n") + (1 if markdown_text else 0)
+        result = {
+            "knCode": request.kb_code,
+            "filePath": request.file_path,
+            "fileName": str(
+                file_row.get("name") or PurePosixPath(request.file_path).name
+            ),
+            "fileType": PurePosixPath(request.file_path).suffix.lower().lstrip("."),
+            "fileSize": int(file_row.get("file_size") or 0),
+            "mimeType": file_row.get("mime_type"),
+            "build": {
+                "status": latest_task.get("status"),
+                "currentStep": latest_task.get("current_step"),
+                "errorMessage": latest_task.get("error_message"),
+                "startedAt": self._isoformat(latest_task.get("started_at")),
+                "finishedAt": self._isoformat(latest_task.get("finished_at")),
+                "durationMs": duration_ms,
+                "statusDict": STATUS_DICT,
+                "stepDict": STEP_DICT,
+            },
+            "markdown": {
+                "available": markdown_available,
+                "data": markdown_text,
+                "lineCount": line_count,
+                "characterCount": len(markdown_text)
+                if markdown_text is not None
+                else None,
+                "byteCount": (
+                    len(markdown_text.encode("utf-8"))
+                    if markdown_text is not None
+                    else None
+                ),
+            },
+            "chunks": {
+                "data": chunks,
+                "page": request.chunk_page,
+                "pageSize": request.chunk_page_size,
+                "total": chunk_count,
+                "reachedEof": offset + len(chunks) >= chunk_count,
+            },
+            "embedding": {
+                "dimension": self.embedding_dimension,
+                "embeddedChunkCount": embedded_chunk_count,
+                "coverageRate": self._coverage_rate(embedded_chunk_count, chunk_count),
+            },
+            "retrieval": {
+                "indexedChunkCount": indexed_chunk_count,
+                "coverageRate": self._coverage_rate(indexed_chunk_count, chunk_count),
+            },
+        }
+        logger.info(
+            "knowledge_base_service.build_result finished: file_path=%s, status=%s, chunk_count=%s, embedded_chunk_count=%s, indexed_chunk_count=%s, markdown_chars=%s",
+            request.file_path,
+            result["build"]["status"],
+            chunk_count,
+            embedded_chunk_count,
+            indexed_chunk_count,
+            len(markdown_text) if markdown_text is not None else None,
+        )
+        return result
+
     async def glob(
         self, request: KnowledgeItemGlobRequest
     ) -> KnowledgeItemListDirResponse:
@@ -1346,6 +1533,17 @@ class KnowledgeBaseService:
         if "kid" in row:
             return int(row["kid"])
         return int(row["id"])
+
+    def _isoformat(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        isoformat = getattr(value, "isoformat", None)
+        return isoformat() if callable(isoformat) else str(value)
+
+    def _coverage_rate(self, covered: int, total: int) -> float:
+        if total <= 0:
+            return 0.0
+        return round(covered / total * 100, 2)
 
     async def _glob_relative_path_segments(
         self,

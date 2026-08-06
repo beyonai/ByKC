@@ -659,6 +659,7 @@ class KnowledgeFsEntryRepository:
                 file_size,
                 mime_type,
                 checksum,
+                line_count,
                 virtual_path,
                 created_at,
                 updated_at

@@ -102,6 +102,25 @@ def test_settings_expose_embedding_batch_max_texts_default():
     assert settings.embedding_batch_max_texts == 10
 
 
+def test_settings_expose_configurable_dsl_limits():
+    defaults = Settings(_env_file=None)
+    configured = Settings(
+        _env_file=None,
+        DSL_MAX_DEPTH=5,
+        DSL_MAX_LEAF_COUNT=20,
+    )
+
+    assert defaults.dsl_max_depth == 3
+    assert defaults.dsl_max_leaf_count == 12
+    assert configured.dsl_max_depth == 5
+    assert configured.dsl_max_leaf_count == 20
+
+    with pytest.raises(ValidationError, match="DSL_MAX_DEPTH"):
+        Settings(_env_file=None, DSL_MAX_DEPTH=0)
+    with pytest.raises(ValidationError, match="DSL_MAX_LEAF_COUNT"):
+        Settings(_env_file=None, DSL_MAX_LEAF_COUNT=0)
+
+
 def test_settings_expose_positive_update_timeline_llm_timeout():
     """Timeline LLM generation has a bounded, configurable timeout."""
     assert Settings().kb_update_timeline_llm_timeout_seconds == 60

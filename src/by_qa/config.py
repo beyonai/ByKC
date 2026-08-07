@@ -114,6 +114,8 @@ class Settings(BaseSettings):
     embedding_batch_max_texts: int = Field(
         default=10, alias="EMBEDDING_BATCH_MAX_TEXTS"
     )
+    dsl_max_depth: int = Field(default=3, gt=0, alias="DSL_MAX_DEPTH")
+    dsl_max_leaf_count: int = Field(default=12, gt=0, alias="DSL_MAX_LEAF_COUNT")
 
     llm_base_url: str = Field(default="https://api.openai.com/v1", alias="LLM_BASE_URL")
     llm_api_key: str = Field(default="", alias="LLM_API_KEY")

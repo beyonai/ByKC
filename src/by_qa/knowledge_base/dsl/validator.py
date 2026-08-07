@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from by_qa.config import get_settings
 from by_qa.knowledge_base.dsl.errors import DslValidationDetail, DslValidationError
 
 BOOLEAN_OPERATORS = {"and", "or", "not"}
@@ -24,8 +25,6 @@ LEAF_OPERATORS = {
 COMPARISON_OPERATORS = {"eq", "ne", "gt", "gte", "lt", "lte"}
 ORDER_OPERATORS = {"gt", "gte", "lt", "lte"}
 ORDER_VALUE_TYPES = {"number", "datetime"}
-MAX_DEPTH = 3
-MAX_LEAF_COUNT = 12
 
 
 def validate_where_clause(
@@ -35,9 +34,19 @@ def validate_where_clause(
 ) -> None:
     if where is None:
         return
+    settings = get_settings()
     errors: list[DslValidationDetail] = []
     leaf_count = [0]
-    _validate_node(where, known_fields, errors, leaf_count, path="where", depth=0)
+    _validate_node(
+        where,
+        known_fields,
+        errors,
+        leaf_count,
+        path="where",
+        depth=0,
+        max_depth=settings.dsl_max_depth,
+        max_leaf_count=settings.dsl_max_leaf_count,
+    )
     if errors:
         raise DslValidationError(error_list=errors)
 
@@ -50,6 +59,8 @@ def _validate_node(
     *,
     path: str,
     depth: int,
+    max_depth: int,
+    max_leaf_count: int,
 ) -> None:
     if not isinstance(node, dict) or len(node) != 1:
         errors.append(
@@ -64,12 +75,12 @@ def _validate_node(
     operator = next(iter(node))
 
     if operator in BOOLEAN_OPERATORS:
-        if depth >= MAX_DEPTH:
+        if depth >= max_depth:
             errors.append(
                 DslValidationDetail(
                     path=path,
                     code="TOO_DEEP_BOOLEAN_NESTING",
-                    message=f"boolean nesting depth exceeds limit {MAX_DEPTH}",
+                    message=f"boolean nesting depth exceeds limit {max_depth}",
                 )
             )
             return
@@ -92,6 +103,8 @@ def _validate_node(
                 leaf_count,
                 path=f"{path}.not",
                 depth=depth + 1,
+                max_depth=max_depth,
+                max_leaf_count=max_leaf_count,
             )
         else:
             if not isinstance(operand, list) or len(operand) == 0:
@@ -111,16 +124,18 @@ def _validate_node(
                     leaf_count,
                     path=f"{path}.{operator}[{i}]",
                     depth=depth + 1,
+                    max_depth=max_depth,
+                    max_leaf_count=max_leaf_count,
                 )
 
     elif operator in LEAF_OPERATORS:
         leaf_count[0] += 1
-        if leaf_count[0] > MAX_LEAF_COUNT:
+        if leaf_count[0] > max_leaf_count:
             errors.append(
                 DslValidationDetail(
                     path=path,
                     code="TOO_MANY_CONDITIONS",
-                    message=f"leaf condition count exceeds limit {MAX_LEAF_COUNT}",
+                    message=f"leaf condition count exceeds limit {max_leaf_count}",
                 )
             )
             return

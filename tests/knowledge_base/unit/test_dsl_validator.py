@@ -53,12 +53,69 @@ def test_too_deep_nesting_raises():
     assert exc_info.value.error_list[0].code == "TOO_DEEP_BOOLEAN_NESTING"
 
 
+def test_configurable_max_depth(monkeypatch):
+    from by_qa.config import Settings
+    from by_qa.knowledge_base.dsl import validator
+
+    monkeypatch.setattr(
+        validator,
+        "get_settings",
+        lambda: Settings(
+            _env_file=None,
+            DSL_MAX_DEPTH=1,
+            DSL_MAX_LEAF_COUNT=12,
+        ),
+    )
+    where = {
+        "and": [
+            {
+                "and": [
+                    {"eq": {"fieldName": "status", "value": "active"}},
+                ]
+            }
+        ]
+    }
+
+    with pytest.raises(DslValidationError) as exc_info:
+        validator.validate_where_clause(where, known_fields=KNOWN_FIELDS)
+
+    assert exc_info.value.error_list[0].code == "TOO_DEEP_BOOLEAN_NESTING"
+    assert "limit 1" in exc_info.value.error_list[0].message
+
+
 def test_too_many_conditions_raises():
     leaves = [{"eq": {"fieldName": "status", "value": f"v{i}"}} for i in range(13)]
     where = {"and": leaves}
     with pytest.raises(DslValidationError) as exc_info:
         validate_where_clause(where, known_fields=KNOWN_FIELDS)
     assert exc_info.value.error_list[0].code == "TOO_MANY_CONDITIONS"
+
+
+def test_configurable_max_leaf_count(monkeypatch):
+    from by_qa.config import Settings
+    from by_qa.knowledge_base.dsl import validator
+
+    monkeypatch.setattr(
+        validator,
+        "get_settings",
+        lambda: Settings(
+            _env_file=None,
+            DSL_MAX_DEPTH=3,
+            DSL_MAX_LEAF_COUNT=1,
+        ),
+    )
+    where = {
+        "and": [
+            {"eq": {"fieldName": "status", "value": "active"}},
+            {"eq": {"fieldName": "status", "value": "draft"}},
+        ]
+    }
+
+    with pytest.raises(DslValidationError) as exc_info:
+        validator.validate_where_clause(where, known_fields=KNOWN_FIELDS)
+
+    assert exc_info.value.error_list[0].code == "TOO_MANY_CONDITIONS"
+    assert "limit 1" in exc_info.value.error_list[0].message
 
 
 def test_invalid_boolean_node_raises():

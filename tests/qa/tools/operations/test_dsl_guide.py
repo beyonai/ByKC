@@ -24,6 +24,26 @@ def test_dsl_guide_content_describes_nesting_and_leaf_limits():
     assert "leaf conditions: 12" in DSL_GUIDE_CONTENT
 
 
+def test_dsl_guide_tool_uses_configured_limits(monkeypatch):
+    from by_qa.config import Settings
+    from by_qa.qa.tools import dsl_guide
+
+    monkeypatch.setattr(
+        dsl_guide,
+        "get_settings",
+        lambda: Settings(
+            _env_file=None,
+            DSL_MAX_DEPTH=5,
+            DSL_MAX_LEAF_COUNT=20,
+        ),
+    )
+
+    content = dsl_guide.get_dsl_guide.invoke({})
+
+    assert "nesting depth: 5" in content
+    assert "leaf conditions: 20" in content
+
+
 def test_dsl_guide_operation_registry_tool_name():
     spec = OPERATION_REGISTRY[OperationType.DSL_GUIDE]
     assert spec.tool_name == "get_dsl_guide"

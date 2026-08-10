@@ -330,6 +330,8 @@ async def test_markdown_update_rewrites_final_bytes_cleans_state_and_records_bou
     result = await service.update_file(request(fileDescription=""))
     names = [name for name, _ in calls]
     assert result.timeline_id == 99 and result.is_markdown
+    assert storage.objects[storage.original].startswith(b"# New\n")
+    assert b"title: New" not in storage.objects[storage.original]
     assert storage.objects[storage.original].endswith(b"byqa-ref://9)\n")
     updated = next(data for name, data in calls if name == "update_entry")
     assert (

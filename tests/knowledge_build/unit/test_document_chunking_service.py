@@ -1303,14 +1303,12 @@ def test_split_inline_table_preserves_header_in_each_chunk():
         assert len(part.text) <= max_body, f"Chunk {i} exceeds limit: {len(part.text)}"
 
 
-def test_extract_text_strips_front_matter_for_markdown():
-    """Markdown front matter is the metadata source and must not reach chunks."""
+def test_extract_text_does_not_special_case_front_matter_for_markdown():
+    """The storage layer already removes front matter before building."""
     service = _make_service()
 
     md = "---\ntitle: hello\ntags: [a, b]\n---\n# Heading\n\nbody text"
-    assert service.extract_text_from_file(md.encode("utf-8"), "md") == (
-        "# Heading\n\nbody text"
-    )
+    assert service.extract_text_from_file(md.encode("utf-8"), "md") == md
 
 
 def test_extract_text_keeps_front_matter_in_txt():

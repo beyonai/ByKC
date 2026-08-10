@@ -8,8 +8,6 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, Callable
 
-import yaml
-
 from by_qa.core import logger
 from by_qa.knowledge_base.api.schemas import (
     DeleteKnowledgeItemRequest,
@@ -32,6 +30,10 @@ from by_qa.knowledge_base.metadata_types import (
     normalize_metadata_value,
 )
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
+from by_qa.knowledge_base.services.markdown_front_matter import (
+    parse_front_matter,
+    split_front_matter,
+)
 from by_qa.knowledge_build.services.document_chunking_service import (
     SUPPORTED_EXTENSIONS,
 )
@@ -43,32 +45,6 @@ def _guess_mime_type(path: str) -> str:
     if suffix in {".md", ".markdown"}:
         return "text/markdown"
     return mimetypes.guess_type(path)[0] or "application/octet-stream"
-
-
-def _parse_front_matter(content: bytes) -> dict[str, Any]:
-    """Extract YAML front matter from Markdown content.
-
-    Returns an empty dict if no valid front matter is found.
-    """
-    try:
-        text = content.decode("utf-8")
-    except UnicodeDecodeError:
-        return {}
-    if not text.startswith("---"):
-        return {}
-    end_idx = text.find("---", 3)
-    if end_idx == -1:
-        return {}
-    yaml_block = text[3:end_idx].strip()
-    if not yaml_block:
-        return {}
-    try:
-        parsed = yaml.safe_load(yaml_block)
-    except yaml.YAMLError:
-        return {}
-    if not isinstance(parsed, dict):
-        return {}
-    return parsed
 
 
 def _build_optional_location(
@@ -228,6 +204,7 @@ class KnowledgeItemIngestionService:
             fs_entry_id = self._row_id(file_entry_row)
             content = request.file_content
             if self._is_markdown_upload(normalized_object_path, mime_type):
+                _, content = split_front_matter(content)
                 content = await self._rewrite_markdown_references(
                     content,
                     cursor=cursor,
@@ -265,7 +242,7 @@ class KnowledgeItemIngestionService:
                     cursor,
                     fs_entry_id=fs_entry_id,
                     knowledge_base_id=knowledge_base_id,
-                    content=content,
+                    content=request.file_content,
                     file_path=normalized_file_path,
                 )
 
@@ -548,7 +525,7 @@ class KnowledgeItemIngestionService:
         if suffix not in {".md", ".markdown"}:
             return
 
-        front_matter = _parse_front_matter(content)
+        front_matter = parse_front_matter(content)
         if not front_matter:
             return
 

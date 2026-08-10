@@ -1,10 +1,14 @@
 """Service for creating and updating knowledge bases."""
 
 import fnmatch
+import json
 import mimetypes
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
+
+import yaml
 
 from by_qa.core import logger
 from by_qa.knowledge_base.api.schemas import (
@@ -34,6 +38,7 @@ from by_qa.knowledge_base.api.schemas import (
 from by_qa.knowledge_base.build_status import STATUS_DICT, STEP_DICT
 from by_qa.knowledge_base.infrastructure.storage import StorageLocation
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
+from by_qa.knowledge_base.services.markdown_front_matter import split_front_matter
 
 
 def _optional_location(row, namespace_key, key_key):
@@ -64,6 +69,7 @@ class KnowledgeBaseService:
     storage_provider: Any | None = None
     markdown_reference_resolver: Any | None = None
     knowledge_file_reference_repository: Any | None = None
+    file_metadata_value_repository: Any | None = None
     cache_root: Path | None = None
     cache_ttl_seconds: int = 24 * 60 * 60
 
@@ -1388,6 +1394,20 @@ class KnowledgeBaseService:
                 raise KnowledgeBaseValidationError(
                     f"file not found: {request.file_path}"
                 )
+            metadata_rows = []
+            if (
+                self.file_metadata_value_repository is not None
+                and self._is_markdown_file(
+                    filename=PurePosixPath(normalized_file_path).name,
+                    media_type=str(file_row.get("mime_type") or ""),
+                )
+            ):
+                metadata_rows = (
+                    await self.file_metadata_value_repository.get_file_metadata(
+                        cursor,
+                        fs_entry_id=self._row_id(file_row),
+                    )
+                )
         finally:
             await connection.close()
 
@@ -1398,9 +1418,10 @@ class KnowledgeBaseService:
         payload = await self.storage_provider.read(location)
         filename = PurePosixPath(normalized_file_path).name or "download"
         media_type = str(file_row.get("mime_type") or self._guess_media_type(filename))
+        is_markdown = self._is_markdown_file(filename=filename, media_type=media_type)
         if (
             self.markdown_reference_resolver is not None
-            and self._is_markdown_file(filename=filename, media_type=media_type)
+            and is_markdown
             and b"byqa-ref://" in payload
         ):
             text = payload.decode("utf-8")
@@ -1411,6 +1432,10 @@ class KnowledgeBaseService:
                 )
             )[0]
             payload = resolved_text.encode("utf-8")
+        if is_markdown:
+            _, payload = split_front_matter(payload)
+        if metadata_rows:
+            payload = self._prepend_yaml_front_matter(payload, metadata_rows)
         logger.info(
             "knowledge_base_service.download_file finished: file_path=%s, filename=%s, returned_bytes=%s",
             request.file_path,
@@ -1422,6 +1447,37 @@ class KnowledgeBaseService:
             "media_type": media_type,
             "content": payload,
         }
+
+    @staticmethod
+    def _prepend_yaml_front_matter(
+        payload: bytes, metadata_rows: list[dict[str, Any]]
+    ) -> bytes:
+        metadata: dict[str, Any] = {}
+        for row in metadata_rows:
+            value_type = str(row["value_type"])
+            value = row.get(
+                {
+                    "string": "value_string",
+                    "number": "value_number",
+                    "boolean": "value_boolean",
+                    "datetime": "value_datetime",
+                    "stringList": "value_string_list",
+                }.get(value_type, "")
+            )
+            if isinstance(value, Decimal):
+                value = float(value)
+            elif hasattr(value, "isoformat"):
+                value = value.isoformat()
+            elif value_type == "stringList" and isinstance(value, str):
+                value = json.loads(value)
+            metadata[str(row["property_name"])] = value
+        yaml_text = yaml.safe_dump(
+            metadata,
+            allow_unicode=True,
+            sort_keys=False,
+            default_flow_style=False,
+        )
+        return f"---\n{yaml_text}---\n".encode("utf-8") + payload
 
     async def read_file(self, request: ReadFileRequest) -> dict[str, Any]:
         """Read built markdown content for a knowledge-base-relative file path."""

@@ -1902,7 +1902,7 @@ async def test_upload_file_writes_via_provider_and_persists_locator():
 
 
 async def test_upload_file_imports_front_matter_without_registered_properties():
-    """Markdown front matter should be stored as free-form metadata."""
+    """Markdown front matter becomes metadata while storage receives only body."""
     connection = FakeConnection()
     storage = FakeStorageProvider()
     knowledge_fs_entry_repository = FakeKnowledgeFsEntryRepository()
@@ -1956,6 +1956,7 @@ async def test_upload_file_imports_front_matter_without_registered_properties():
         {"property_name": "tags", "value_type": "stringList", "value": ["hr"]},
     ]
     assert connection.committed is True
+    assert storage.written[0][1] == b"# Hello"
 
 
 async def test_list_dir_root_returns_top_level_entries():

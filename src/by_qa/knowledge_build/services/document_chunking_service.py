@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 import httpx
-import yaml
 
 from by_qa.core import logger
 from by_qa.knowledge_build.services.heading_patterns import (
@@ -80,36 +79,6 @@ def _get_markitdown_converter():
         getattr(markitdown, "__version__", "unknown"),
     )
     return _markitdown_converter
-
-
-def _strip_front_matter(text: str) -> str:
-    """Drop a leading YAML front matter block from Markdown text.
-
-    Front matter is the metadata source; keeping it in the chunked body
-    would index field names/values as searchable text and skew scoring.
-    Only a valid YAML mapping between leading `---` fences is treated as
-    front matter, mirroring knowledge_base's _parse_front_matter so the
-    same block consumed for metadata is excluded here. Invalid or
-    non-mapping content is left untouched.
-    """
-    if not text.startswith("---"):
-        return text
-    end_idx = text.find("---", 3)
-    if end_idx == -1:
-        return text
-    yaml_block = text[3:end_idx].strip()
-    if not yaml_block:
-        return text
-    try:
-        parsed = yaml.safe_load(yaml_block)
-    except yaml.YAMLError:
-        return text
-    if not isinstance(parsed, dict):
-        return text
-    after = end_idx + 3
-    if after < len(text) and text[after] == "\n":
-        after += 1
-    return text[after:]
 
 
 @dataclass
@@ -212,7 +181,7 @@ class DocumentChunkingService:
 
     def _extract_text(self, file_bytes: bytes, ext: str) -> str:
         if ext in (".md", ".markdown"):
-            return _strip_front_matter(file_bytes.decode("utf-8"))
+            return file_bytes.decode("utf-8")
         elif ext in (".html", ".htm"):
             return self._extract_markdown(file_bytes, ext)
         elif ext == ".txt":

@@ -230,6 +230,7 @@ async def build_knowledge_base_service(
             reference_repository=KnowledgeFileReferenceRepository(),
         ),
         knowledge_file_reference_repository=KnowledgeFileReferenceRepository(),
+        file_metadata_value_repository=FileMetadataValueRepository(),
         cache_root=settings.kb_cache_path,
         cache_ttl_seconds=settings.kb_fetch_cache_ttl_seconds,
     )

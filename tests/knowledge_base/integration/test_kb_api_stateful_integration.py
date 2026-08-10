@@ -22,6 +22,7 @@ from by_qa.knowledge_base.repositories.knowledge_fs_entry_repository import (
     KnowledgeFsEntryRepository,
 )
 from by_qa.knowledge_base.services.errors import KnowledgeBaseConfigurationError
+from by_qa.knowledge_base.services.markdown_front_matter import split_front_matter
 from by_qa.knowledge_build.services.document_chunking_service import (
     DocumentChunkingService,
 )
@@ -485,7 +486,8 @@ async def test_document_update_can_skip_front_matter_and_preserve_existing_metad
             },
         )
     assert response.json()["resultCode"] == "0"
-    assert raw_bytes.startswith(b"---\ntitle: After")
+    assert raw_bytes.startswith(b"---\ntitle: Before")
+    assert raw_bytes.endswith(b"# New\n")
     assert metadata.json()["resultObject"]["metadata"]["title"]["value"] == "Before"
 
 
@@ -4402,7 +4404,7 @@ def test_import_zip_leaves_references_unchanged_when_unresolvable(
 
 
 @pytest.mark.integration
-async def test_document_update_markdown_replaces_raw_content_and_invalidates_derived_state(
+async def test_document_update_markdown_replaces_content_and_invalidates_derived_state(
     monkeypatch, tmp_path
 ):
     """Updating Markdown clears its build state but retains absent front-matter values."""
@@ -4460,7 +4462,9 @@ async def test_document_update_markdown_replaces_raw_content_and_invalidates_der
 
     assert response.status_code == 200
     assert response.json()["resultCode"] == "0"
-    assert raw_bytes == new
+    downloaded_metadata, downloaded_body = split_front_matter(raw_bytes)
+    assert downloaded_metadata == {"title": "After", "owner": "Platform"}
+    assert downloaded_body == b"# After\nnew-only-token\n"
     assert build_status.json()["resultCode"] == "-1"
     assert "build task not found" in build_status.json()["resultMsg"]
     assert search_after == []

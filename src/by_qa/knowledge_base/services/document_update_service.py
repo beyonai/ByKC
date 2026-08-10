@@ -17,8 +17,9 @@ from by_qa.knowledge_base.metadata_types import (
     normalize_metadata_value,
 )
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
-from by_qa.knowledge_base.services.knowledge_item_ingestion_service import (
-    _parse_front_matter,
+from by_qa.knowledge_base.services.markdown_front_matter import (
+    parse_front_matter,
+    split_front_matter,
 )
 
 
@@ -115,11 +116,12 @@ class DocumentUpdateService:
             final_bytes = request.file_content
 
             if is_markdown:
+                _, final_bytes = split_front_matter(final_bytes)
                 await self.knowledge_file_reference_repository.delete_for_source_fs_entry_id(
                     cursor, source_fs_entry_id=fs_entry_id
                 )
                 final_bytes = await self._rewrite_markdown(
-                    request.file_content,
+                    final_bytes,
                     cursor=cursor,
                     knowledge_base_id=knowledge_base_id,
                     fs_entry_id=fs_entry_id,
@@ -187,7 +189,7 @@ class DocumentUpdateService:
                     cursor,
                     fs_entry_id=fs_entry_id,
                     knowledge_base_id=knowledge_base_id,
-                    content=final_bytes,
+                    content=request.file_content,
                 )
             await self.knowledge_file_reference_repository.resolve_pending_for_path(
                 cursor,
@@ -280,7 +282,7 @@ class DocumentUpdateService:
         return rewritten.encode("utf-8")
 
     async def _apply_front_matter(self, cursor: Any, **kwargs: Any) -> None:
-        for name, value in _parse_front_matter(kwargs["content"]).items():
+        for name, value in parse_front_matter(kwargs["content"]).items():
             value_type = infer_metadata_value_type(value)
             await self.file_metadata_value_repository.upsert_value(
                 cursor,

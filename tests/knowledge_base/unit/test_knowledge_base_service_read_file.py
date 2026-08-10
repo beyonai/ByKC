@@ -1,5 +1,7 @@
 from typing import Any
 
+import yaml
+
 from by_qa.knowledge_base.api.schemas import (
     KnowledgeItemDownloadRequest,
     ReadFileRequest,
@@ -67,11 +69,25 @@ class FakeMarkdownReferenceResolver:
         return [self.output]
 
 
+class FakeMetadataRepository:
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
+        self.rows = rows
+        self.calls: list[int] = []
+
+    async def get_file_metadata(
+        self, cursor: Any, *, fs_entry_id: int
+    ) -> list[dict[str, Any]]:
+        del cursor
+        self.calls.append(fs_entry_id)
+        return self.rows
+
+
 def _service(
     *,
     file_row: dict[str, Any],
     payloads: dict[tuple[str, str], bytes],
     resolver: FakeMarkdownReferenceResolver | None,
+    metadata_repository: FakeMetadataRepository | None = None,
 ) -> tuple[KnowledgeBaseService, FakeStorageProvider, FakeFsEntryRepository]:
     connection = FakeConnection()
     storage = FakeStorageProvider(payloads)
@@ -82,6 +98,7 @@ def _service(
         knowledge_fs_entry_repository=fs_repository,
         storage_provider=storage,
         markdown_reference_resolver=resolver,
+        file_metadata_value_repository=metadata_repository,
     )
     return service, storage, fs_repository
 
@@ -199,3 +216,56 @@ async def test_download_file_does_not_resolve_non_markdown_bytes():
         {"knowledge_base_id": 7, "full_path": "docs/source.pdf"}
     ]
     assert resolver.calls == []
+
+
+async def test_download_file_prepends_current_metadata_as_yaml_front_matter():
+    metadata_repository = FakeMetadataRepository(
+        [
+            {
+                "property_name": "title",
+                "value_type": "string",
+                "value_string": "中文标题",
+            },
+            {
+                "property_name": "published",
+                "value_type": "boolean",
+                "value_boolean": True,
+            },
+            {
+                "property_name": "tags",
+                "value_type": "stringList",
+                "value_string_list": '["hr", "policy"]',
+            },
+        ]
+    )
+    service, _, _ = _service(
+        file_row={
+            "kid": 71,
+            "file_bucket_name": "original",
+            "file_object_key": "kb/7/fs-entry/71/original.md",
+            "mime_type": "text/markdown",
+        },
+        payloads={
+            (
+                "original",
+                "kb/7/fs-entry/71/original.md",
+            ): b"---\ntitle: stale storage value\n---\n# Body\n"
+        },
+        resolver=None,
+        metadata_repository=metadata_repository,
+    )
+
+    response = await service.download_file(
+        KnowledgeItemDownloadRequest(kb_code="kb", file_path="/docs/source.md")
+    )
+
+    opening, yaml_text, body = response["content"].decode("utf-8").split("---\n")
+    assert opening == ""
+    assert yaml.safe_load(yaml_text) == {
+        "title": "中文标题",
+        "published": True,
+        "tags": ["hr", "policy"],
+    }
+    assert body == "# Body\n"
+    assert response["content"].count(b"---\n") == 2
+    assert metadata_repository.calls == [71]

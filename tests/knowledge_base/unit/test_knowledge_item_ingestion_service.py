@@ -315,9 +315,7 @@ async def test_markdown_upload_rewrites_inside_transaction_before_storage_and_co
     assert names.index("resolve_pending_for_path") < names.index("commit")
 
     storage_call = calls[names.index("storage_write")][1]
-    assert storage_call["content"] == (
-        b"---\ntitle: Doc\n---\n![later](byqa-ref://501)\n"
-    )
+    assert storage_call["content"] == b"![later](byqa-ref://501)\n"
     assert storage_call["content_type"] == "text/markdown"
 
     update_call = calls[names.index("update_file_entry_storage")][1]

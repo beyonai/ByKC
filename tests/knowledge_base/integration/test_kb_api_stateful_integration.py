@@ -951,7 +951,7 @@ Body
                         "propertyName": "publishedAt",
                         "operation": "set",
                         "valueType": "datetime",
-                        "value": "2026-08-10T12:30:00Z",
+                        "value": "2026-01-01T00:00:00Z",
                     },
                 ],
             },
@@ -966,7 +966,14 @@ Body
             client,
             kb_code=kb_code,
             file_path="/meeting.md",
-            field_names=["status", "tags", "owner", "publishedAt"],
+            field_names=[
+                "status",
+                "tags",
+                "owner",
+                "publishedAt",
+                "createdAt",
+                "updatedAt",
+            ],
         )
         assert metadata["status"] == {"valueType": "string", "value": "active"}
         assert metadata["tags"] == {
@@ -974,8 +981,12 @@ Body
             "value": ["existing", "contract", "renewal"],
         }
         assert "owner" not in metadata
-        assert metadata["publishedAt"]["valueType"] == "datetime"
-        assert metadata["publishedAt"]["value"].startswith("2026-08-10T12:30:00")
+        assert metadata["publishedAt"] == {
+            "valueType": "datetime",
+            "value": "2026-01-01T08:00:00+08:00",
+        }
+        assert metadata["createdAt"]["value"].endswith("+08:00")
+        assert metadata["updatedAt"]["value"].endswith("+08:00")
 
         failed = client.post(
             "/api/v1/knowledgeItems/metadata/update",
@@ -1017,7 +1028,7 @@ Body
     assert downloaded_metadata["status"] == "active"
     assert downloaded_metadata["tags"] == ["existing", "contract", "renewal"]
     assert "owner" not in downloaded_metadata
-    assert downloaded_metadata["publishedAt"].startswith("2026-08-10T12:30:00")
+    assert downloaded_metadata["publishedAt"] == "2026-01-01T08:00:00+08:00"
     assert downloaded_body == b"\n# Meeting\nBody\n"
 
 

@@ -21,7 +21,7 @@ def test_settings_build_opengauss_dsn_from_db_parts():
     assert params["dbname"] == "byqa"
     assert params["user"] == "gaussdb"
     assert params["password"] == "Admin@123"
-    assert params["options"] == "-c search_path=byai,public"
+    assert params["options"] == ("-c search_path=byai,public -c timezone=Asia/Shanghai")
 
 
 def test_settings_build_opengauss_dsn_defaults_database_to_postgres():
@@ -38,7 +38,7 @@ def test_settings_build_opengauss_dsn_defaults_database_to_postgres():
     assert params["dbname"] == "postgres"
 
 
-def test_settings_build_opengauss_dsn_omits_search_path_when_schema_blank():
+def test_settings_build_opengauss_dsn_keeps_timezone_when_schema_blank():
     settings = Settings(
         DB_HOST="10.10.168.204",
         DB_PORT=5432,
@@ -50,7 +50,7 @@ def test_settings_build_opengauss_dsn_omits_search_path_when_schema_blank():
     params = conninfo_to_dict(settings.build_opengauss_dsn())
 
     assert params["host"] == "10.10.168.204"
-    assert "options" not in params
+    assert params["options"] == "-c timezone=Asia/Shanghai"
 
 
 async def test_connection_factory_uses_normalized_dsn(monkeypatch):
@@ -91,7 +91,7 @@ async def test_connection_factory_uses_normalized_dsn(monkeypatch):
     await build_connection_factory(settings)()
 
     params = conninfo_to_dict(calls[0])
-    assert params["options"] == "-c search_path=byai,public"
+    assert params["options"] == ("-c search_path=byai,public -c timezone=Asia/Shanghai")
 
 
 async def test_connection_factory_creates_configured_schema(monkeypatch):
@@ -177,6 +177,20 @@ async def test_connection_factory_adds_extension_schemas_to_search_path(monkeypa
         "SELECT set_config('search_path', %(search_path)s, false)",
         {"search_path": "byai,gaussdb,public"},
     )
+
+
+def test_settings_build_opengauss_dsn_uses_configured_timezone():
+    settings = Settings(
+        DB_HOST="10.10.168.204",
+        DB_SCHEMA="",
+        DB_USER="gaussdb",
+        DB_PASS="Admin@123",
+        DB_TIMEZONE="UTC",
+    )
+
+    params = conninfo_to_dict(settings.build_opengauss_dsn())
+
+    assert params["options"] == "-c timezone=UTC"
 
 
 async def test_connection_factory_skips_schema_creation_when_schema_blank(monkeypatch):

@@ -7,6 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import quote, urlencode
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 from pydantic import Field, field_validator
@@ -94,6 +95,7 @@ class Settings(BaseSettings):
     db_schema: str = Field(default="", alias="DB_SCHEMA")
     db_user: str = Field(default="", alias="DB_USER")
     db_pass: str = Field(default="", alias="DB_PASS")
+    db_timezone: str = Field(default="Asia/Shanghai", alias="DB_TIMEZONE")
 
     kb_minio_endpoint: str = Field(default="127.0.0.1:19000", alias="MINIO_ENDPOINT")
     kb_minio_access_key: str = Field(default="", alias="MINIO_ACCESS_KEY")
@@ -176,6 +178,17 @@ class Settings(BaseSettings):
             return _detect_host_machine_ip()
         return value
 
+    @field_validator("db_timezone")
+    @classmethod
+    def validate_db_timezone(cls, value: str) -> str:
+        """Require an IANA timezone accepted before building DB options."""
+        timezone_name = value.strip()
+        try:
+            ZoneInfo(timezone_name)
+        except (ValueError, ZoneInfoNotFoundError) as exc:
+            raise ValueError(f"invalid DB_TIMEZONE: {value}") from exc
+        return timezone_name
+
     @field_validator("embedding_batch_max_texts")
     @classmethod
     def _validate_embedding_batch_max_texts(cls, value: int) -> int:
@@ -245,16 +258,18 @@ class Settings(BaseSettings):
         password = quote(self.db_pass, safe="")
         database = quote(self.db_database.strip() or "postgres", safe="")
         dsn = f"postgresql://{user}:{password}@{self.db_host}:{self.db_port}/{database}"
+        options = [f"-c timezone={self.db_timezone}"]
         schema = self.db_schema.strip()
         if schema:
             search_path = schema
             if "public" not in [part.strip().lower() for part in schema.split(",")]:
                 search_path = f"{schema},public"
-            query = urlencode(
-                {"options": f"-c search_path={search_path}"},
-                quote_via=quote,
-            )
-            dsn = f"{dsn}?{query}"
+            options.insert(0, f"-c search_path={search_path}")
+        query = urlencode(
+            {"options": " ".join(options)},
+            quote_via=quote,
+        )
+        dsn = f"{dsn}?{query}"
         return dsn
 
     def ensure_directories(self) -> None:

@@ -52,10 +52,17 @@ def test_settings_accept_shared_db_env_vars():
     assert settings.db_schema == "byai"
     assert settings.db_user == "gaussdb"
     assert settings.db_pass == "Admin@123"
+    assert settings.db_timezone == "Asia/Shanghai"
     assert settings.resolved_kb_opengauss_dsn == settings.build_opengauss_dsn()
     assert (
         settings.resolved_checkpointer_opengauss_dsn == settings.build_opengauss_dsn()
     )
+
+
+def test_settings_validate_database_timezone():
+    assert Settings(DB_TIMEZONE="UTC").db_timezone == "UTC"
+    with pytest.raises(ValidationError, match="invalid DB_TIMEZONE"):
+        Settings(DB_TIMEZONE="not-a-timezone")
 
 
 def test_settings_ignore_removed_database_env_vars():

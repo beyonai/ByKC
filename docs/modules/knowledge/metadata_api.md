@@ -76,6 +76,8 @@
 - `boolean`
 - `datetime`
 
+`datetime` 输入使用 ISO 8601 字符串，建议显式携带时区偏移；未携带偏移时按 `DB_TIMEZONE` 解释。查询和下载接口会将时间统一转换到 `DB_TIMEZONE` 指定的时区，默认为 `Asia/Shanghai`。例如 `2026-01-01T00:00:00Z` 返回为 `2026-01-01T08:00:00+08:00`。系统字段 `createdAt` 和 `updatedAt` 使用相同规则。
+
 ### 系统文件属性
 
 系统文件属性由服务根据 `knowledge_fs_entry` 文件记录提供，不需要通过元数据属性管理接口注册。调用方应将这些名称视为保留字段，避免在 Markdown front matter 等自定义元数据中复用。当前共有以下 8 个字段：

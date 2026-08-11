@@ -19,6 +19,7 @@ from by_qa.knowledge_base.api.metadata_schemas import (
     GetFileMetadataRequest,
     MetadataSearchRequest,
     SearchFileRequest,
+    UpdateFileMetadataRequest,
 )
 from by_qa.knowledge_base.api.schemas import (
     BuildResultRequest,
@@ -197,6 +198,7 @@ def register_routes(
     get_document_chunking_service,
     get_metadata_search_service,
     get_file_metadata_query_service,
+    get_file_metadata_update_service=None,
 ):
     """Register knowledge base API routes on the FastAPI app."""
 
@@ -1495,6 +1497,38 @@ def register_routes(
                 "pageSize": page.page_size,
             }
         )
+
+    @app.post("/api/v1/knowledgeItems/metadata/update")
+    async def update_file_metadata(body: dict[str, Any] = Body(...)):
+        try:
+            request = UpdateFileMetadataRequest.model_validate(body)
+        except ValidationError:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={},
+                status_code=422,
+            )
+        logger.info(
+            "update_file_metadata request received: kb_code=%s, file_path=%s, operation_count=%s",
+            request.kb_code,
+            request.file_path,
+            len(request.operation_list),
+        )
+        try:
+            if get_file_metadata_update_service is None:
+                raise KnowledgeBaseConfigurationError(
+                    "file metadata update service is not configured"
+                )
+            service = await _resolve_maybe_async(get_file_metadata_update_service)
+            await service.update_metadata(request)
+        except (KnowledgeBaseConfigurationError, KnowledgeBaseValidationError) as exc:
+            return _documented_error_response(result_msg=str(exc), result_object={})
+        except Exception as exc:
+            logger.exception("update_file_metadata error: %s", exc)
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error", result_object={}
+            )
+        return _documented_success_response(result_object={})
 
     @app.post("/api/v1/knowledgeItems/metadata/get")
     async def get_file_metadata(body: dict[str, Any] = Body(...)):

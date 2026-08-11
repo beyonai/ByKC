@@ -32,6 +32,7 @@ _knowledge_fetch_cache_cleanup_service: Any | None = None
 _document_chunking_service: Any | None = None
 _metadata_search_service: Any | None = None
 _file_metadata_query_service: Any | None = None
+_file_metadata_update_service: Any | None = None
 _knowledge_base_schema_initialized = False
 _knowledge_base_schema_lock = asyncio.Lock()
 
@@ -63,6 +64,7 @@ API_MODULES = (
             "get_document_chunking_service": resolve_document_chunking_service,
             "get_metadata_search_service": resolve_metadata_search_service,
             "get_file_metadata_query_service": resolve_file_metadata_query_service,
+            "get_file_metadata_update_service": resolve_file_metadata_update_service,
         },
     ),
 )
@@ -483,6 +485,31 @@ async def _get_or_build_file_metadata_query_service():
 async def resolve_file_metadata_query_service():
     """Resolve the read-only file metadata query service dynamically."""
     return await _get_or_build_file_metadata_query_service()
+
+
+async def _get_or_build_file_metadata_update_service():
+    """Get or build the transactional file metadata update service."""
+    global _file_metadata_update_service
+    request_provider = _get_request_model_config_provider()
+    if request_provider is not None:
+        await _ensure_knowledge_base_schema_initialized(provider=request_provider)
+
+    if _file_metadata_update_service is None:
+        from by_qa.knowledge_base.infrastructure.runtime import (
+            build_file_metadata_update_service,
+        )
+
+        if request_provider is None:
+            await _ensure_knowledge_base_schema_initialized()
+        _file_metadata_update_service = await build_file_metadata_update_service(
+            settings
+        )
+    return _file_metadata_update_service
+
+
+async def resolve_file_metadata_update_service():
+    """Resolve the transactional file metadata update service dynamically."""
+    return await _get_or_build_file_metadata_update_service()
 
 
 def _detect_missing_packages(required_packages: tuple[str, ...]) -> list[str]:

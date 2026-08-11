@@ -12,11 +12,11 @@
 
 说明：
 
-- `状态` 分为 `已写`、`已写部分`、`已写`、`已弃用`
+- `状态` 分为 `已写`、`已写部分`、`待补`、`已弃用`
 - `已写` 表示当前仓库已经有对应集成测试代码
 - `已写部分` 表示该用户场景只覆盖了其中一部分链路
+- `待补` 表示已纳入计划，但当前仓库尚无对应集成测试
 - `已弃用` 表示对应路由已移除，场景不再适用
-- 本轮只写方案和测试代码，不执行测试
 
 ## 多级目录专项场景总表
 
@@ -199,70 +199,37 @@
 
 说明：
 
-- 这一组场景覆盖元数据属性定义、文件元数据增量更新、纯元数据检索、DSL 升级版 chunk/file 检索的端到端调用链。
-- 系统字段（`fileName`/`fileType`/`fileSize`/`mimeType`/`filePath`/`createdAt`/`updatedAt`/`fileSignature`）不需要 `metadataProperties/create`，但其余自定义属性必须先注册再使用。
-- `metadata/get` 返回自定义元数据 + 系统字段值；`metadataFields/list` 返回已使用的自定义属性 + 8 个系统字段定义。
+- 这一组场景覆盖单文件元数据批量更新、Markdown front matter、纯元数据检索、DSL 升级版 chunk/file 检索的端到端调用链。
+- 文件元数据写入统一使用 `POST /api/v1/knowledgeItems/metadata/update`；单次请求只操作一个文件，可批量处理不同属性。
+- `metadata/get` 返回自定义元数据及请求的系统字段值。
 - 错误响应统一使用文档化信封：HTTP 200 + `resultCode="-1"` + `resultMsg="..."`（包括 Pydantic 校验失败）。
-- M1–M17 为原元数据测试计划编号；本次新增的 M4.i–M4.j、M8.j–M8.k、M12.g 场景落在 `tests/knowledge_base/integration/test_kb_api_stateful_integration.py`。
-
-### 元数据属性定义生命周期
-
-| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
-| --- | --- | --- | --- | --- | --- |
-| M1.a | 元数据管理员 | 创建多个属性后全量列出 | `metadataProperties/create * 3 -> metadataProperties/list` | 三者都出现在结果中 | 已写 |
-| M1.b | 元数据管理员 | 按 propertyNameList 过滤 | `create A,B -> list propertyNameList=[A]` | 仅返回 A | 已写 |
-| M1.c | 元数据管理员 | propertyNameList 含未知名 | `list propertyNameList=[ghost]` | 返回 `data=[]`，不报错 | 已写 |
-| M1.d | 元数据管理员 | 重复创建冲突 | `create A -> create A` | 第二次返回 `resultCode=-1` `"already exists"` | 已写 |
-| M1.e | 元数据管理员 | 系统字段同名拒绝 | `create propertyName=fileName` 等 | `resultCode=-1` `"conflicts with system field"` | 已写 |
-| M1.f | 元数据管理员 | propertyName 边界 | `create propertyName=""` 或 129 字符 | 文档化信封 | 已写 |
-| M1.g | 元数据管理员 | 非法 valueType | `create valueType=int/json/STRING` | 文档化信封 | 已写 |
-| M1.h | 元数据管理员 | 删除不存在属性 | `metadataProperties/delete propertyName=ghost` | `resultCode=-1` `"not found"` | 已写 |
-| M1.i | 元数据管理员 | 删除无引用属性 | `create -> delete -> list` | 删除成功；list 不再返回 | 已写 |
-| M2.a | 元数据管理员 | 批量创建多项成功 | `batchCreate [A,B]` | 全部入库 | 已写 |
-| M2.b | 元数据管理员 | 批量含冲突项整批回滚 | `create A -> batchCreate [B,A]` | 全失败；B 不留下 | 已写 |
-| M2.c | 元数据管理员 | 批量含非法 valueType 整批回滚 | `batchCreate [ok,bad]` | 文档化信封；ok 不留下 | 已写 |
-| M2.d | 元数据管理员 | 批量 propertyList 为空 | `batchCreate {propertyList:[]}` | 文档化信封 | 已写 |
-| M3.a | 元数据管理员 | 被引用时拒绝删除 | `create P -> metadata/update set P -> metadataProperties/delete P` | `resultCode=-1` `"still referenced"` | 已写 |
-| M3.b | 元数据管理员 | 释放引用后允许删除 | 续 M3.a:`metadata/update unset P -> delete P` | 删除成功 | 已写 |
-| M3.c | 元数据管理员 | clear 后仍计为引用 | `set list -> clear -> delete` | 仍拒删 | 已写 |
+- 本组新增场景落在 `tests/knowledge_base/integration/test_kb_api_stateful_integration.py`。
 
 ### 文件元数据增量更新
 
 | 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| M4.a | 内容管理员 | 五种类型 set+get 回读 | 分别 set string/number/boolean/datetime/stringList → `metadata/get` | `valueType` 与 `value` 都正确 | 已写 |
-| M4.b | 内容管理员 | 未注册属性写入被拒 | `metadata/update set undefined` | `resultCode=-1` `"not defined"` | 已写 |
-| M4.c | 内容管理员 | 非法 operation 字面量 | `operation=upsert` | 文档化信封 | 已写 |
-| M4.d | 内容管理员 | 同请求多 op 同属性按序生效 | 一次请求里 `[set v1, set v2]` | 最终为 v2 | 已写 |
-| M4.e | 内容管理员 | unset 不存在属性幂等 | 文件无该属性时 `unset` | 成功；`metadata/get` 仍无该属性 | 已写 |
-| M4.f | 内容管理员 | 错误 KB / 文件路径 | 未知 knCode / filePath | `resultCode=-1` `"knowledge base not found"` / `"file not found"` | 已写 |
-| M4.g | 内容管理员 | metadata/get 未知 KB | `metadata/get knCode=ghost` | `resultCode=-1` `"knowledge base not found"` | 已写 |
-| M4.h | 内容管理员 | metadata/get 未知文件 | `metadata/get filePath=/never.md` | `resultCode=-1` `"file not found"` | 已写 |
-| M4.i | 内容管理员 | metadata/get 返回系统字段值 | `import file -> metadata/get` | `metadata` 包含 `fileName`/`fileType`/`fileSize`/`mimeType`/`createdAt`/`updatedAt`/`filePath`/`fileSignature` 八个系统字段，`valueType` 与 `value` 正确 | 已写 |
-| M4.j | 内容管理员 | metadata/get metadataFieldList 过滤系统字段 | `import file -> metadata/get metadataFieldList=[createdAt,updatedAt,fileSignature]` | 仅返回命中的系统字段，时间字段和 checksum 的值可直接回读 | 已写 |
-| M5.a | 内容管理员 | append 去重 | `set [a,b] -> append [b,c]` | `[a,b,c]` | 已写 |
-| M5.b | 内容管理员 | remove 容忍不存在元素 | `set [a] -> remove [x,y]` | `[a]`，不报错 | 已写 |
-| M5.c | 内容管理员 | set 整值覆盖列表 | `set [a,b] -> set [x]` | `[x]` | 已写 |
-| M5.d | 内容管理员 | clear 后保留 valueType | `set [a,b] -> clear -> get` | `valueType=stringList, value=[]` | 已写 |
-| M5.e | 内容管理员 | 列表/标量 op 类型不匹配 | string 字段 `append`、number 字段 `append` 等 | `resultCode=-1` `"not allowed"` | 已写 |
-| M6.a | 内容管理员 | front matter 自动注入 | `import md(--- prop: active ---)` | metadata 自动写入 | 已写 |
-| M6.b | 内容管理员 | front matter 未注册字段 | `import md(--- ghost: 1 ---)` | `resultCode=-1` `"not a defined metadata property"` | 已写 |
-| M6.c | 内容管理员 | front matter 多类型 | string + number + stringList 一起 | 全部正确 | 已写 |
-| M6.d | 内容管理员 | 无 front matter 仍可导入 | `import md(无 --- 块)` | 导入成功；metadata 为空 | 已写 |
-| M6.e | 内容管理员 | front matter 格式错容错 | 缺收尾 ---、YAML 语法错、顶层非 dict | 导入成功；metadata 为空（fail-soft） | 已写 |
-| M6.f | 内容管理员 | front matter 的 stringList 取 null | `import md(--- tags: null ---)` | 导入成功；`metadata/get` 返回 `valueType=stringList, value=null` | 已写 |
+| MU1 | 内容管理员 | 单文件批量新增、修改和删除 | `import(front matter) -> metadata/update(set/append/unset) -> metadata/get -> downloadFile` | 字符串与时间值正确写入；list 追加去重；unset 后属性不再返回；下载的 front matter 与查询一致 | 已写 |
+| MU2 | 内容管理员 | remove、clear 与属性类型变更 | `import -> metadata/update(remove/clear/set new type) -> metadata/get` | remove 忽略不存在元素；clear 返回空列表；set 可修改属性类型 | 已写 |
+| MU3 | 内容管理员 | 重试相同请求 | 连续两次执行相同 `remove/clear/set/unset` 批次 | 两次均成功，最终元数据不重复、不丢失 | 已写 |
+| MU4 | 内容管理员 | 批量原子失败 | `metadata/update(set valid + append missing list)` | 整批返回失败，前面的 set 不保留 | 已写 |
+| MU5 | 内容管理员 | 请求形式和资源校验 | 未知 KB/文件、只读系统字段、同属性重复操作、非法 operation/valueType/value；另提交 101 个不同属性操作 | 非法请求返回 HTTP 200 错误信封；101 个操作的非空批次成功 | 已写 |
+| MU6 | 内容管理员 | 并发追加同一文件的列表属性 | 两个并发 `metadata/update append tags` | 两个请求均成功，最终列表包含两次追加值，无丢失更新 | 已写 |
+
+### Markdown front matter
+
+| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| MF1 | 内容管理员 | 导入 front matter 后查询元数据 | `knowledgeItems/import(md with front matter) -> metadata/get` | string、datetime、stringList 值及类型正确 | 已写 |
+| MF2 | 内容管理员 | 更新元数据后下载 Markdown | `import -> metadata/update -> downloadFile` | 下载内容包含最新 front matter，正文保持不变 | 已写 |
 
 ### 删除联动
 
 | 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| M7.a | 内容管理员 | 删除文件清理元数据 | `metadata/update -> knowledgeItems/delete -> metadataSearch / metadata/get` | metadataSearch 不命中；metadata/get 报 file not found | 已写 |
-| M7.b | 目录管理员 | 删除目录联动 | `import 多个 -> directories/delete -> metadataSearch / metadataFields/list` | 子树文件全部从读接口消失 | 已写 |
-| M7.c | 知识库管理员 | 删除知识库联动 | `knowledgeBases/delete -> metadataFields/list` | KB 级 KB not found，元数据全部失效 | 已写 |
-| M7.d | 知识库管理员 | metadataFields/list knCodeList 必填非空 | 不传 / `knCodeList=[]` | 文档化信封 | 已写 |
-| M7.e | 知识库管理员 | metadataFields/list 多 KB 合并 | `knCodeList=[A,B]`,各自用过 prop_x/prop_y | 返回 prop_x 与 prop_y 的并集 | 已写 |
-| M7.f | 知识库管理员 | metadataFields/list 单 KB scope 隔离 | `knCodeList=[A]`,A 用过 prop_x、B 用过 prop_y | 仅返 prop_x | 已写 |
-| M7.g | 知识库管理员 | metadataFields/list 始终返回系统字段定义 | `knowledgeBases/create -> metadataFields/list` | 8 个系统字段（`fileName`/`fileType`/`fileSize`/`mimeType`/`createdAt`/`updatedAt`/`filePath`/`fileSignature`）始终出现在结果末尾，含 `propertyName`/`valueType`/`description`，即使 KB 无任何用户自定义属性 | 已写 |
+| MD1 | 内容管理员 | 删除文件后元数据失效 | `import(front matter) -> knowledgeItems/delete` | 文件删除成功，不再存在有效元数据 | 已写 |
+| MD2 | 目录管理员 | 删除目录后子树元数据失效 | `import multiple files with front matter -> directories/delete` | 子树文件的元数据全部失效 | 已写 |
+| MD3 | 知识库管理员 | 删除知识库后元数据失效 | `import(front matter) -> knowledgeBases/delete` | 知识库下不再存在有效元数据 | 已写 |
 
 ### metadataSearch 接口约束
 
@@ -373,17 +340,6 @@
 | M15.e | DSL 调用方 | system field gt createdAt（file） | `searchFile where gt createdAt past/future` | 时间窗口命中/不中 | 已写 |
 | M15.f | DSL 调用方 | searchFile 系统+自定义混合 | `and: [eq custom status active, in fileType ["md","txt"]]`,收紧 fileType 后取空 | 自定义+系统两侧都生效 | 已写 |
 
-### 跨接口一致 / 软删保护
-
-| 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
-| --- | --- | --- | --- | --- | --- |
-| M16.a | 跨接口一致性 | update→search→get 三向一致 | set/unset 后三向比对 | 三方观察一致 | 已写 |
-| M16.b | 跨接口一致性 | metadataFields/list 与值同步 | set 后含；unset 后无 | 同步反映 | 已写 |
-| M16.c | 跨接口一致性 | clear 后字段仍出现在 fields/list | set→clear→list | 仍含该 propertyName | 已写 |
-| M17.a | DSL 调用方 | 软删文件不在 metadataSearch | `update -> delete -> metadataSearch` | 不命中已删文件 | 已写 |
-| M17.b | DSL 调用方 | 软删文件不在 search/searchFile | `delete -> search/searchFile` | 不命中 | 已写 |
-| M17.c | DSL 调用方 | 重新导入同路径仅命中新文件 | `delete -> import same path -> metadataSearch` | 旧值 0 命中、新值精确 1 命中 | 已写 |
-
 ## knowledge_build 场景总表
 
 > **已弃用：** `knowledge_build` 独立路由（`file-to-markdown`、`build-markdown-index`、`file-to-markdown-index`）已全部移除。构建功能已整合到 `/api/v1/fileToMarkdownIndex`，作为 `knowledge_base` 模块的一部分。以下场景仅作历史参考。
@@ -471,8 +427,7 @@
 | 文件 | 覆盖重点 | 状态 |
 | --- | --- | --- |
 | `tests/knowledge_build/integration/test_api_integration.py` | ~~`knowledge_build` 三接口正常/异常与组合链路等价性~~ | 已弃用（`knowledge_build` 独立路由已移除） |
-| `tests/knowledge_base/integration/test_kb_api_stateful_integration.py` | 混合导入构建（`knowledgeItems/import` + `fileToMarkdownIndex`）、知识库改名、单文件/目录删除、多级目录改名删除、读取窗口校验、`downloadFile` 的中文文件名/二进制文件下载、真实搜索链路与失败保护；文档更新 UDT1–UDT8、UDT11–UDT14（真实 MinIO 原对象覆盖、派生状态清理、front matter、描述字段三态、引用重登记、时间线、二进制更新、同文件并发锁、`referSignature` 乐观更新、重复 checksum 拒绝及拒绝后的状态不变）；metadataSearch 新增覆盖 M4.i–M4.j、M8.j–M8.k、M12.g（分页、总数、越界空页、`updatedAt ASC`、`createdAt`/`updatedAt`/`fileSignature` 回读与精确过滤）；导入重复内容 31–34；真实 OpenGauss checksum 锁范围 CLK1–CLK3；zip 批量导入与引用改写（Z1–Z17）；稳定 Markdown 引用（R1–R17） | 有效 |
-| `tests/knowledge_base/integration/test_metadata_api_integration.py` | M1–M17 全场景:属性 CRUD/批量原子性/引用计数;文件元数据五类型 set/list 操作矩阵;`metadata/get` 错路径(unknown KB/file);YAML front matter(auto/拒绝/缺失/格式错容错);删除三档级联;`metadataFields/list`(KB 必填/多 KB 合并/单 KB 隔离);metadataSearch 接口约束(where 必填/topK 边界/KB scope/字段裁剪/knCodeList 必填);DSL 算子矩阵 + 三层布尔嵌套 + 德摩根;DSL 类型/结构/复杂度错误矩阵;系统字段(metadataSearch 单系统/混合 + chunk + searchFile 单系统/混合);search 升级版(三 mode/metadataFieldList/where 短路/前过滤证明);fileTypeList 兼容;searchFile(多 chunk 去重/where/系统字段/knCodeList 必填);跨接口一致;软删保护 | 有效 |
+| `tests/knowledge_base/integration/test_kb_api_stateful_integration.py` | 混合导入构建（`knowledgeItems/import` + `fileToMarkdownIndex`）、知识库改名、单文件/目录删除、多级目录改名删除、读取窗口校验、`downloadFile` 下载、真实搜索链路与失败保护；文档更新 UDT1–UDT8、UDT11–UDT14；文件元数据 MU1–MU6、MF1–MF2、MD1–MD3（批量操作、原子失败、幂等、校验、front matter、删除联动和并发更新）；metadataSearch 分页、系统字段与精确过滤；导入重复内容 31–34；真实 OpenGauss checksum 锁范围 CLK1–CLK3；zip 批量导入与引用改写 Z1–Z17；稳定 Markdown 引用 R1–R17 | 有效 |
 | `tests/knowledge_base/integration/test_userfs_batch1.py` | U1–U9:基础读写路径、多级目录隔离、跨 KB 隔离 | 有效 |
 | `tests/knowledge_base/integration/test_userfs_batch2.py` | U10–U18:删除联动、目录改名路径迁移 | 有效 |
 | `tests/knowledge_base/integration/test_userfs_batch3.py` | U19–U27:跨接口一致性、异常补偿与边界（含 U24 commit 失败清理）；UDT9–UDT10：更新存储写失败/数据库提交失败的原对象补偿、路径映射存储原 locator 覆盖 | 有效 |

@@ -217,6 +217,7 @@ def _reset_runtime(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
     monkeypatch.setattr(main_module, "_knowledge_fetch_cache_cleanup_service", None)
     monkeypatch.setattr(main_module, "_document_chunking_service", None)
     monkeypatch.setattr(main_module, "_file_metadata_query_service", None)
+    monkeypatch.setattr(main_module, "_file_metadata_update_service", None)
     monkeypatch.setattr(main_module, "_knowledge_base_schema_initialized", False)
     monkeypatch.setattr(main_module, "_knowledge_base_schema_lock", asyncio.Lock())
 
@@ -418,6 +419,43 @@ def _get_file_metadata(
     payload = response.json()
     assert payload["resultCode"] == "0", payload
     return payload["resultObject"]["metadata"]
+
+
+def _update_file_metadata(
+    client: TestClient,
+    *,
+    kb_code: str,
+    file_path: str,
+    operation_list: list[dict],
+):
+    return client.post(
+        "/api/v1/knowledgeItems/metadata/update",
+        json={
+            "knCode": kb_code,
+            "filePath": file_path,
+            "operationList": operation_list,
+        },
+    )
+
+
+async def _metadata_row_counts(settings: Settings, *, kb_code: str) -> tuple[int, int]:
+    connection = await build_connection_factory(settings)()
+    try:
+        cursor = connection.cursor()
+        await cursor.execute(
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE is_deleted = false) AS active_count,
+                COUNT(*) FILTER (WHERE is_deleted = true) AS deleted_count
+            FROM knowledge_file_metadata_value
+            WHERE knowledge_base_id = %(knowledge_base_id)s
+            """,
+            {"knowledge_base_id": int(kb_code)},
+        )
+        row = await cursor.fetchone()
+        return int(row["active_count"]), int(row["deleted_count"])
+    finally:
+        await connection.close()
 
 
 def _update_file(
@@ -860,6 +898,407 @@ DataCloud\xe5\xb9\xb3\xe5\x8f\xb0\xe9\x9c\x80\xe6\xb1\x82\xe7\xa1\xae\xe8\xae\xa
         "valueType": "stringList",
         "value": ["Alice", "Bob"],
     }
+
+
+@pytest.mark.integration
+def test_metadata_update_is_atomic_and_downloads_current_front_matter(monkeypatch):
+    settings = _kb_settings()
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch,
+        FakeDocumentChunkingService(markdown_text="# meeting\n"),
+    )
+    markdown = b"""---
+status: draft
+tags:
+  - existing
+  - contract
+owner: Alice
+---
+
+# Meeting
+Body
+"""
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Metadata update {uuid4().hex[:12]}")
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/meeting.md",
+            file_content=markdown,
+        )
+
+        response = client.post(
+            "/api/v1/knowledgeItems/metadata/update",
+            json={
+                "knCode": kb_code,
+                "filePath": "/meeting.md",
+                "operationList": [
+                    {
+                        "propertyName": "status",
+                        "operation": "set",
+                        "valueType": "string",
+                        "value": "active",
+                    },
+                    {
+                        "propertyName": "tags",
+                        "operation": "append",
+                        "value": ["contract", "renewal"],
+                    },
+                    {"propertyName": "owner", "operation": "unset"},
+                    {
+                        "propertyName": "publishedAt",
+                        "operation": "set",
+                        "valueType": "datetime",
+                        "value": "2026-08-10T12:30:00Z",
+                    },
+                ],
+            },
+        )
+        assert response.json() == {
+            "resultCode": "0",
+            "resultMsg": "success",
+            "resultObject": {},
+        }
+
+        metadata = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/meeting.md",
+            field_names=["status", "tags", "owner", "publishedAt"],
+        )
+        assert metadata["status"] == {"valueType": "string", "value": "active"}
+        assert metadata["tags"] == {
+            "valueType": "stringList",
+            "value": ["existing", "contract", "renewal"],
+        }
+        assert "owner" not in metadata
+        assert metadata["publishedAt"]["valueType"] == "datetime"
+        assert metadata["publishedAt"]["value"].startswith("2026-08-10T12:30:00")
+
+        failed = client.post(
+            "/api/v1/knowledgeItems/metadata/update",
+            json={
+                "knCode": kb_code,
+                "filePath": "/meeting.md",
+                "operationList": [
+                    {
+                        "propertyName": "status",
+                        "operation": "set",
+                        "valueType": "string",
+                        "value": "must-rollback",
+                    },
+                    {
+                        "propertyName": "missingTags",
+                        "operation": "append",
+                        "value": ["new"],
+                    },
+                ],
+            },
+        )
+        assert failed.json()["resultCode"] == "-1"
+
+        after_failure = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/meeting.md",
+            field_names=["status"],
+        )
+        assert after_failure["status"] == {
+            "valueType": "string",
+            "value": "active",
+        }
+
+        downloaded_metadata, downloaded_body = split_front_matter(
+            _download_file_bytes(client, kb_code=kb_code, file_path="/meeting.md")
+        )
+
+    assert downloaded_metadata["status"] == "active"
+    assert downloaded_metadata["tags"] == ["existing", "contract", "renewal"]
+    assert "owner" not in downloaded_metadata
+    assert downloaded_metadata["publishedAt"].startswith("2026-08-10T12:30:00")
+    assert downloaded_body == b"\n# Meeting\nBody\n"
+
+
+@pytest.mark.integration
+def test_metadata_update_remove_clear_type_change_and_idempotence(monkeypatch):
+    settings = _kb_settings()
+    _reset_runtime(monkeypatch, settings)
+    markdown = b"""---
+tags: [a, b, c]
+reviewers: [Alice, Bob]
+priority: high
+---
+# Metadata operations
+"""
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Metadata operations {uuid4().hex[:12]}")
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/operations.md",
+            file_content=markdown,
+        )
+        operations = [
+            {
+                "propertyName": "tags",
+                "operation": "remove",
+                "value": ["b", "missing"],
+            },
+            {"propertyName": "reviewers", "operation": "clear"},
+            {
+                "propertyName": "priority",
+                "operation": "set",
+                "valueType": "number",
+                "value": 7,
+            },
+            {"propertyName": "missing", "operation": "unset"},
+        ]
+
+        first = _update_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/operations.md",
+            operation_list=operations,
+        )
+        second = _update_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/operations.md",
+            operation_list=operations,
+        )
+        metadata = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/operations.md",
+            field_names=["tags", "reviewers", "priority", "missing"],
+        )
+
+    assert first.json()["resultCode"] == "0"
+    assert second.json()["resultCode"] == "0"
+    assert metadata == {
+        "tags": {"valueType": "stringList", "value": ["a", "c"]},
+        "reviewers": {"valueType": "stringList", "value": []},
+        "priority": {"valueType": "number", "value": 7},
+    }
+
+
+@pytest.mark.integration
+def test_metadata_update_rejects_invalid_requests_and_missing_resources(monkeypatch):
+    settings = _kb_settings()
+    _reset_runtime(monkeypatch, settings)
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Metadata guards {uuid4().hex[:12]}")
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/guards.md",
+            file_content=b"# Guards\n",
+        )
+        cases = [
+            (
+                "unknown knowledge base",
+                "999999999",
+                "/guards.md",
+                [{"propertyName": "status", "operation": "unset"}],
+                "knowledge base not found",
+            ),
+            (
+                "unknown file",
+                kb_code,
+                "/missing.md",
+                [{"propertyName": "status", "operation": "unset"}],
+                "file not found",
+            ),
+            (
+                "read-only field",
+                kb_code,
+                "/guards.md",
+                [
+                    {
+                        "propertyName": "fileName",
+                        "operation": "set",
+                        "valueType": "string",
+                        "value": "changed.md",
+                    }
+                ],
+                "metadata field is read-only",
+            ),
+            (
+                "duplicate property",
+                kb_code,
+                "/guards.md",
+                [
+                    {"propertyName": "status", "operation": "unset"},
+                    {"propertyName": "status", "operation": "unset"},
+                ],
+                "request validation failed",
+            ),
+            (
+                "invalid operation",
+                kb_code,
+                "/guards.md",
+                [{"propertyName": "status", "operation": "upsert"}],
+                "request validation failed",
+            ),
+            (
+                "value type mismatch",
+                kb_code,
+                "/guards.md",
+                [
+                    {
+                        "propertyName": "priority",
+                        "operation": "set",
+                        "valueType": "number",
+                        "value": True,
+                    }
+                ],
+                "request validation failed",
+            ),
+            (
+                "invalid value type",
+                kb_code,
+                "/guards.md",
+                [
+                    {
+                        "propertyName": "payload",
+                        "operation": "set",
+                        "valueType": "json",
+                        "value": {},
+                    }
+                ],
+                "request validation failed",
+            ),
+        ]
+
+        for label, target_kb, file_path, operations, message in cases:
+            response = _update_file_metadata(
+                client,
+                kb_code=target_kb,
+                file_path=file_path,
+                operation_list=operations,
+            )
+            payload = response.json()
+            assert response.status_code == 200, label
+            assert payload["resultCode"] == "-1", label
+            assert message in payload["resultMsg"], label
+            assert payload["resultObject"] == {}, label
+
+        large_batch = _update_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/guards.md",
+            operation_list=[
+                {"propertyName": f"field{index}", "operation": "unset"}
+                for index in range(101)
+            ],
+        )
+        assert large_batch.json()["resultCode"] == "0"
+
+
+@pytest.mark.integration
+async def test_metadata_is_deactivated_with_file_directory_and_kb_deletion(monkeypatch):
+    settings = _kb_settings()
+    _reset_runtime(monkeypatch, settings)
+
+    with TestClient(main_module.app) as client:
+        file_kb = _create_kb(client, f"Metadata file delete {uuid4().hex[:12]}")
+        _upload_file(
+            client,
+            kb_code=file_kb,
+            file_path="/file.md",
+            file_content=b"---\nstatus: active\n---\n# File\n",
+        )
+        assert await _metadata_row_counts(settings, kb_code=file_kb) == (1, 0)
+        file_delete = client.post(
+            "/api/v1/knowledgeItems/delete",
+            json={"knCode": file_kb, "filePath": "/file.md"},
+        )
+        assert file_delete.json()["resultCode"] == "0"
+        assert await _metadata_row_counts(settings, kb_code=file_kb) == (0, 1)
+
+        directory_kb = _create_kb(
+            client, f"Metadata directory delete {uuid4().hex[:12]}"
+        )
+        _create_directory(client, kb_code=directory_kb, directory_path="/docs")
+        for name in ("a.md", "b.md"):
+            _upload_file(
+                client,
+                kb_code=directory_kb,
+                file_path=f"/docs/{name}",
+                file_content=f"---\nowner: {name}\n---\n# Doc\n".encode(),
+            )
+        assert await _metadata_row_counts(settings, kb_code=directory_kb) == (2, 0)
+        directory_delete = client.post(
+            "/api/v1/directories/delete",
+            json={"knCode": directory_kb, "directoryPath": "/docs"},
+        )
+        assert directory_delete.json()["resultCode"] == "0"
+        assert await _metadata_row_counts(settings, kb_code=directory_kb) == (0, 2)
+
+        deleted_kb = _create_kb(client, f"Metadata KB delete {uuid4().hex[:12]}")
+        _upload_file(
+            client,
+            kb_code=deleted_kb,
+            file_path="/kb.md",
+            file_content=b"---\ncategory: policy\n---\n# KB\n",
+        )
+        assert await _metadata_row_counts(settings, kb_code=deleted_kb) == (1, 0)
+        kb_delete = client.post(
+            "/api/v1/knowledgeBases/delete",
+            json={"knCode": deleted_kb},
+        )
+        assert kb_delete.json()["resultCode"] == "0"
+        assert await _metadata_row_counts(settings, kb_code=deleted_kb) == (0, 1)
+
+
+@pytest.mark.integration
+def test_metadata_update_serializes_concurrent_appends(monkeypatch):
+    settings = _kb_settings()
+    _reset_runtime(monkeypatch, settings)
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Metadata concurrency {uuid4().hex[:12]}")
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/concurrent.md",
+            file_content=b"---\ntags: [base]\n---\n# Concurrent\n",
+        )
+
+    def append_tag(tag: str):
+        with TestClient(main_module.app) as client:
+            return _update_file_metadata(
+                client,
+                kb_code=kb_code,
+                file_path="/concurrent.md",
+                operation_list=[
+                    {
+                        "propertyName": "tags",
+                        "operation": "append",
+                        "value": [tag],
+                    }
+                ],
+            ).json()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(append_tag, ["one", "two"]))
+
+    with TestClient(main_module.app) as client:
+        metadata = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/concurrent.md",
+            field_names=["tags"],
+        )
+
+    assert [result["resultCode"] for result in results] == ["0", "0"]
+    assert metadata["tags"]["valueType"] == "stringList"
+    assert metadata["tags"]["value"][0] == "base"
+    assert set(metadata["tags"]["value"]) == {"base", "one", "two"}
 
 
 @pytest.mark.integration

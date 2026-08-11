@@ -58,6 +58,9 @@ from by_qa.knowledge_base.services.errors import KnowledgeBaseConfigurationError
 from by_qa.knowledge_base.services.file_metadata_query_service import (
     FileMetadataQueryService,
 )
+from by_qa.knowledge_base.services.file_metadata_update_service import (
+    FileMetadataUpdateService,
+)
 from by_qa.knowledge_base.services.knowledge_base_service import KnowledgeBaseService
 from by_qa.knowledge_base.services.knowledge_fetch_cache_cleanup_service import (
     KnowledgeFetchCacheCleanupService,
@@ -360,6 +363,19 @@ async def build_file_metadata_query_service(
     """Build the read-only file metadata query service."""
     validate_knowledge_base_settings(settings, require_embedding=False)
     return FileMetadataQueryService(
+        connection_factory=build_connection_factory(settings),
+        knowledge_base_repository=KnowledgeBaseRepository(),
+        knowledge_fs_entry_repository=KnowledgeFsEntryRepository(),
+        file_metadata_value_repository=FileMetadataValueRepository(),
+    )
+
+
+async def build_file_metadata_update_service(
+    settings: Settings,
+) -> FileMetadataUpdateService:
+    """Build the transactional file metadata update service."""
+    validate_knowledge_base_settings(settings, require_embedding=False)
+    return FileMetadataUpdateService(
         connection_factory=build_connection_factory(settings),
         knowledge_base_repository=KnowledgeBaseRepository(),
         knowledge_fs_entry_repository=KnowledgeFsEntryRepository(),

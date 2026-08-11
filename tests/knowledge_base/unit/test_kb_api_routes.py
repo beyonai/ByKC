@@ -41,6 +41,7 @@ class FakeKBService:
         self.created_directory_requests = []
         self.import_calls = []
         self.metadata_get_requests = []
+        self.metadata_update_requests = []
         self.file_to_markdown_calls = []
         self.file_build_task_requests = []
         self.file_build_task_runs = []
@@ -93,6 +94,10 @@ class FakeKBService:
 
     async def update_file(self, request):
         self.document_update_requests.append(request)
+        return None
+
+    async def update_metadata(self, request):
+        self.metadata_update_requests.append(request)
         return None
 
     async def convert_uploaded_file_to_markdown(
@@ -294,6 +299,9 @@ def make_test_client(monkeypatch, service):
     monkeypatch.setattr(
         "by_qa.main._get_or_build_file_metadata_query_service", get_service
     )
+    monkeypatch.setattr(
+        "by_qa.main._get_or_build_file_metadata_update_service", get_service
+    )
 
     chunking_service = FakeRouteDocumentChunkingService()
 
@@ -368,6 +376,54 @@ def test_metadata_get_route_returns_file_metadata(monkeypatch):
     }
     assert service.metadata_get_requests[0].kb_code == "1"
     assert service.metadata_get_requests[0].file_path == "/1.md"
+
+
+def test_metadata_update_route_applies_single_file_batch(monkeypatch):
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/knowledgeItems/metadata/update",
+        json={
+            "knCode": "1",
+            "filePath": "/1.md",
+            "operationList": [
+                {
+                    "propertyName": "status",
+                    "operation": "set",
+                    "valueType": "string",
+                    "value": "active",
+                },
+                {"propertyName": "owner", "operation": "unset"},
+            ],
+        },
+    )
+
+    assert response.json() == {
+        "resultCode": "0",
+        "resultMsg": "success",
+        "resultObject": {},
+    }
+    request = service.metadata_update_requests[0]
+    assert request.kb_code == "1"
+    assert request.file_path == "/1.md"
+    assert [item.property_name for item in request.operation_list] == [
+        "status",
+        "owner",
+    ]
+
+
+def test_metadata_update_route_returns_standard_validation_error(monkeypatch):
+    response = make_test_client(monkeypatch, FakeKBService()).post(
+        "/api/v1/knowledgeItems/metadata/update",
+        json={"knCode": "1", "filePath": "/1.md", "operationList": []},
+    )
+
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "request validation failed",
+        "resultObject": {},
+    }
 
 
 def test_metadata_search_route_returns_pagination_metadata():

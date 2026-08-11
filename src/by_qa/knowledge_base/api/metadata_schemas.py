@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
@@ -85,9 +87,14 @@ class MetadataOperation(BaseModel):
 
     property_name: str = Field(
         min_length=1,
+        max_length=128,
         validation_alias=AliasChoices("propertyName", "property_name"),
     )
     operation: str
+    value_type: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("valueType", "value_type"),
+    )
     value: Any = None
 
     @model_validator(mode="after")
@@ -97,6 +104,26 @@ class MetadataOperation(BaseModel):
             raise ValueError(f"operation must be one of {', '.join(sorted(allowed))}")
         if self.operation in {"set", "append", "remove"} and self.value is None:
             raise ValueError(f"value is required for operation '{self.operation}'")
+        if self.operation == "set":
+            if self.value_type not in METADATA_VALUE_TYPES:
+                raise ValueError(
+                    "valueType must be one of "
+                    f"{', '.join(sorted(METADATA_VALUE_TYPES))} for operation 'set'"
+                )
+            if not _matches_metadata_value_type(self.value, self.value_type):
+                raise ValueError("value does not match valueType")
+        elif "value_type" in self.model_fields_set:
+            raise ValueError(
+                f"valueType is not allowed for operation '{self.operation}'"
+            )
+        if self.operation in {"append", "remove"} and not _is_string_list(
+            self.value, require_non_empty=True
+        ):
+            raise ValueError(
+                f"value must be a non-empty string array for operation '{self.operation}'"
+            )
+        if self.operation in {"unset", "clear"} and "value" in self.model_fields_set:
+            raise ValueError(f"value is not allowed for operation '{self.operation}'")
         return self
 
 
@@ -115,6 +142,49 @@ class UpdateFileMetadataRequest(BaseModel):
         min_length=1,
         validation_alias=AliasChoices("operationList", "operation_list"),
     )
+
+    @model_validator(mode="after")
+    def validate_unique_properties(self) -> "UpdateFileMetadataRequest":
+        if not self.file_path.startswith("/"):
+            raise ValueError("filePath must start with '/'")
+        seen: set[str] = set()
+        for operation in self.operation_list:
+            if operation.property_name in seen:
+                raise ValueError(
+                    f"duplicate metadata operation: {operation.property_name}"
+                )
+            seen.add(operation.property_name)
+        return self
+
+
+def _matches_metadata_value_type(value: Any, value_type: str) -> bool:
+    if value is None:
+        return False
+    if value_type == "string":
+        return isinstance(value, str)
+    if value_type == "stringList":
+        return _is_string_list(value)
+    if value_type == "number":
+        return isinstance(value, (int, float, Decimal)) and not isinstance(value, bool)
+    if value_type == "boolean":
+        return isinstance(value, bool)
+    if value_type == "datetime":
+        if not isinstance(value, str):
+            return False
+        try:
+            datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        return True
+    return False
+
+
+def _is_string_list(value: Any, *, require_non_empty: bool = False) -> bool:
+    if not isinstance(value, list):
+        return False
+    if require_non_empty and not value:
+        return False
+    return all(isinstance(item, str) for item in value)
 
 
 class GetFileMetadataRequest(BaseModel):

@@ -187,7 +187,7 @@ async def test_list_files_without_prefix_keeps_query_parameterized():
     )
 
     sql, params = cursor.executed[0]
-    assert "%(path_prefix)s IS NULL" in sql
+    assert "%(path_prefix)s::text IS NULL" in sql
     assert params["path_prefix"] is None
     assert "7" not in sql
 
@@ -324,6 +324,7 @@ async def test_list_entity_surfaces_supports_systemwide_and_same_kb_snapshots():
     assert "document_kind.property_name = 'documentKind'" in system_sql
     assert "document_kind.value_string = 'knowledgeEntity'" in system_sql
     assert system_sql.count("SELECT") == 1
+    assert "%(knowledge_base_id)s::bigint IS NULL" in system_sql
     assert system_params["knowledge_base_id"] is None
     assert cursor.executed[1][1]["knowledge_base_id"] == 7
 

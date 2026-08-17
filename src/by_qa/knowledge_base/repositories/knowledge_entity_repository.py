@@ -82,7 +82,7 @@ class KnowledgeEntityRepository:
               AND fe.entry_type = 'FILE'
               AND fe.is_deleted = FALSE
               AND (
-                    %(path_prefix)s IS NULL
+                    %(path_prefix)s::text IS NULL
                     OR %(path_prefix)s = '/'
                     OR fe.virtual_path = %(path_prefix)s
                     OR LEFT(
@@ -172,7 +172,7 @@ class KnowledgeEntityRepository:
             WHERE fe.entry_type = 'FILE'
               AND fe.is_deleted = FALSE
               AND (
-                    %(knowledge_base_id)s IS NULL
+                    %(knowledge_base_id)s::bigint IS NULL
                     OR fe.knowledge_base_id = %(knowledge_base_id)s
                   )
             ORDER BY fe.knowledge_base_id ASC, fe.virtual_path ASC, fe.kid ASC,

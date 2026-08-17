@@ -363,29 +363,6 @@ class KnowledgeFileReferenceRepository:
             discovered_by=producers,
         )
 
-    async def delete_semantic_for_source_task_id(
-        self,
-        cursor: Any,
-        *,
-        knowledge_base_id: int,
-        source_task_id: int,
-    ) -> list[dict[str, Any]]:
-        """Compatibility adapter deleting assertions owned by one task."""
-        await cursor.execute(
-            """
-            DELETE FROM knowledge_file_reference
-            WHERE knowledge_base_id = %(knowledge_base_id)s
-              AND source_task_id = %(source_task_id)s
-            RETURNING kid, source_fs_entry_id, target_fs_entry_id,
-                      relation_code, discovered_by, producer_run_id
-            """,
-            {
-                "knowledge_base_id": knowledge_base_id,
-                "source_task_id": source_task_id,
-            },
-        )
-        return await self._fetchall(cursor)
-
     async def list_assertions_by_source(
         self,
         cursor: Any,

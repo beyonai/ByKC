@@ -25,7 +25,7 @@
 - 任务查询结果是最终事实来源，Callback 只是进程内通知；
 - 无草稿、审核和发布接口；
 - 模板覆盖不足不作为 Enrich 接口失败条件；
-- 语义关系与 Markdown 物理引用分开查询、分类型处理；v1 允许复用同一物理表。
+- Markdown 引用是带正文位置证据的 `MENTIONS` 断言，与 Discovery/Enrich 关系共用一套持久化和生命周期；兼容引用接口只是物理出现视图。
 
 ## 3. 通用约定
 
@@ -512,11 +512,11 @@ HTTP 请求中不包含 `callback` 或模板正文。模板由 `enrichVersion` �
 
 知识库存在但没有匹配任务时返回 `total=0` 和空 `data`，不是 `TASK_NOT_FOUND`；传入的 `filePath` 本身不存在时返回 `DOCUMENT_NOT_FOUND`。
 
-## 8. 语义关系查询接口
+## 8. 文档逻辑关系查询接口
 
 ### `POST /api/v1/knowledgeItems/semanticRelations`
 
-查询指定文档的 `MENTIONS`、`PART_OF`、`IS_A` 和 `DEPENDS_ON` 关系。该接口不返回普通 Markdown 物理引用；物理引用继续使用现有 `knowledgeItems/references`。
+查询指定文档的 `MENTIONS`、`PART_OF`、`IS_A` 和 `DEPENDS_ON` 逻辑关系。Markdown 引用作为 `MARKDOWN_PARSER` 生产的 `MENTIONS` 参与逻辑去重；现有 `knowledgeItems/references` 仍作为“物理 Markdown 引用出现”的兼容视图。
 
 请求字段：
 
@@ -555,7 +555,7 @@ HTTP 请求中不包含 `callback` 或模板正文。模板由 `enrichVersion` �
     "pageSize": 50,
     "data": [
       {
-        "relationId": "3001",
+        "relationId": "lr_e83691f6c1ef4d5288e652a0",
         "relationCode": "MENTIONS",
         "direction": "INCOMING",
         "source": {
@@ -570,13 +570,23 @@ HTTP 请求中不包含 `callback` 或模板正文。模板由 `enrichVersion` �
           "filePath": "/KnowledgeEntity/OSOT.md",
           "documentKind": "knowledgeEntity"
         },
+        "assertionCount": 2,
         "confidence": 1.0,
-        "discoveredBy": "AC_EXACT",
-        "definitionVersion": "ke/1.0",
-        "sourceTaskId": "9001"
+        "discoveredBy": "MARKDOWN_PARSER",
+        "definitionVersion": null,
+        "sourceTaskId": null,
+        "representativeEvidence": {
+          "producerRunId": "markdown-update:9001",
+          "evidenceFingerprint": "f4a3...",
+          "sourceHeadingPath": "组织模式 / OSOT",
+          "startLine": 30,
+          "endLine": 30,
+          "startOffset": 816,
+          "endOffset": 842
+        }
       },
       {
-        "relationId": "3002",
+        "relationId": "lr_b4750ce075076a141a0a5470",
         "relationCode": "PART_OF",
         "direction": "INCOMING",
         "source": {
@@ -591,19 +601,29 @@ HTTP 请求中不包含 `callback` 或模板正文。模板由 `enrichVersion` �
           "filePath": "/KnowledgeEntity/OSOT.md",
           "documentKind": "knowledgeEntity"
         },
+        "assertionCount": 1,
         "confidence": 0.96,
-        "discoveredBy": "ENRICH_LLM",
+        "discoveredBy": "ENTITY_ENRICH",
         "definitionVersion": "ke/1.0",
-        "sourceTaskId": "9101"
+        "sourceTaskId": "9101",
+        "representativeEvidence": {
+          "producerRunId": "entity-enrich:9101",
+          "evidenceFingerprint": "9ba1...",
+          "sourceHeadingPath": null,
+          "startLine": null,
+          "endLine": null,
+          "startOffset": null,
+          "endOffset": null
+        }
       }
     ]
   }
 }
 ```
 
-关系查询执行目标文档和相邻文档的权限过滤。调用方无权访问的边不返回，也不以数量暴露。
+关系查询执行目标文档和相邻文档的权限过滤。调用方无权访问的边不返回，也不以数量暴露。`relationId` 是由 source/relation/target 派生的稳定逻辑 ID，不随某条物理断言重建而变化；`assertionCount` 是当前聚合的物理断言数。如果存在 Markdown 位置断言，`representativeEvidence` 优先返回其章节、行和偏移。
 
-v1 不提供独立关系证据查询，也不实现 `knowledge_document_relation_evidence`。最低追溯链为 `sourceTaskId`、任务结果摘要，以及 KnowledgeEntity Markdown 正文中的原始文档引用；后续只有在关系级审计、证据失效检测或多证据聚合成为明确需求时，再增加独立证据层。
+v1 不提供独立证据正文查询，也不实现 `knowledge_document_relation_evidence`。当前返回的是聚合数量和一条代表性轻量位置；若后续需要展开所有证据出现、证据 checksum 失效检测或长期关系审计，再增加独立证据层。
 
 ## 9. 内部 Python/SDK 接口
 
@@ -750,13 +770,13 @@ KnowledgeEntity v1 **不新增实体主表、语义关系表或关系证据表**
 | --- | --- | --- |
 | 文档主数据 | `knowledge_fs_entry` | 直接复用，不改表 |
 | 实体/原始文档属性 | `knowledge_metadata_property_def`、`knowledge_file_metadata_value` | 复用；新增属性定义数据，不改表结构 |
-| Markdown 物理引用 | `knowledge_file_reference` | 继续复用；现有数据默认为 `MARKDOWN` |
+| Markdown 引用 / `MENTIONS` 断言 | `knowledge_file_reference` | 继续复用；历史行由增量脚本回填为 `MENTIONS` |
 | 文档 chunk 和向量检索 | `knowledge_chunk`、embedding 表 | 直接复用 |
 | Enrich 文档更新时间线 | `knowledge_file_update_timeline` | v1 直接复用，不改表 |
 | 文件构建任务 | `knowledge_build_task`（SQL `006`） | 保留现有表与仓储语义，不修改旧 SQL |
 | Discovery/Enrich 异步任务 | `knowledge_semantic_processing_task`（增量 SQL `029`） | 新增一张语义处理任务表，两种任务共用生命周期 |
-| 文档语义关系 | `knowledge_file_reference`（增量 SQL `030`） | 增量扩展，用 `reference_type` 与 Markdown 引用隔离；原 `026` 不变 |
-| 关系证据 | - | v1 不实现 `knowledge_document_relation_evidence` |
+| 文档关系断言 | `knowledge_file_reference`（增量 SQL `030`） | 增量扩展为统一断言投影；原 `026` 不变 |
+| 轻量关系证据 | `knowledge_file_reference`（增量 SQL `030`） | 保存标题路径、行/偏移、生产者运行和证据指纹；不实现独立 evidence 表 |
 | 全系统实体词面投影 | `knowledge_entity_surface` | 生产规模强烈建议新增；PoC 可暂时从 metadata 重建 |
 | 合并后的旧 ID 重定向 | `knowledge_document_redirect` | v1 不需要，实体合并/拆分阶段再增加 |
 
@@ -792,14 +812,15 @@ KnowledgeEntity v1 **不新增实体主表、语义关系表或关系证据表**
 
 #### `knowledge_file_reference`
 
-SQL `026` 已经具备同库 source/target 文档 ID、状态和双向查询所需基础索引，因此 v1 复用它承载 Markdown 引用和语义关系。复用的前提是增加 `reference_type`，不能再把表中每一行都当成 Markdown 链接：
+SQL `026` 已经具备同库 source/target 文档 ID、状态和双向查询所需基础索引，因此 v1 复用它承载统一关系断言：
 
 ```text
-MARKDOWN：正文中真实存在的文件链接，继续参与路径解析、移动修复和断链处理
-SEMANTIC：MENTIONS / PART_OF / IS_A / DEPENDS_ON，不参与 Markdown 路径维护
+Markdown 链接：MENTIONS + MARKDOWN_PARSER + KB_PATH 恢复定位 + 章节/行/偏移证据
+Discovery 命中：MENTIONS + ENTITY_DISCOVERY + ENTITY_SURFACE 恢复定位
+Enrich 关系：MENTIONS / PART_OF / IS_A / DEPENDS_ON + ENTITY_ENRICH + ENTITY_SURFACE 恢复定位
 ```
 
-“文档有链接”仍不等于存在语义关系；两者只是共用物理表，语义和 repository 方法必须隔离。
+一行表示一次断言或证据出现，不直接等于一条唯一逻辑边。同一 source/relation/target 可以同时有 Markdown 证据和 Discovery/Enrich 证据；查询层聚合为一条逻辑关系，但保留断言数量和代表性证据信息。
 
 #### `knowledge_file_update_timeline`
 
@@ -863,55 +884,62 @@ Discovery 和 Enrich 共用批次、状态、幂等、Callback 与分页查询�
 
 | 字段 | 建议 | 说明 |
 | --- | --- | --- |
-| `reference_type` | `varchar(16) NOT NULL DEFAULT 'MARKDOWN'` | `MARKDOWN` 或 `SEMANTIC`，历史数据自动兼容 |
-| `relation_code` | `varchar(32) NULL` | semantic 行必填，v1 四种关系之一 |
+| `relation_code` | `varchar(32) NOT NULL DEFAULT 'MENTIONS'` | v1 四种关系之一；历史 Markdown 行回填为 `MENTIONS` |
 | `confidence` | `numeric(5,4) NULL` | 精确 `MENTIONS` 可为 1.0 |
-| `discovered_by` | `varchar(32) NULL` | `AC_EXACT`、`LLM_DISCOVERY`、`ENRICH_LLM` 等 |
+| `discovered_by` | `varchar(32) NOT NULL DEFAULT 'MARKDOWN_PARSER'` | `MARKDOWN_PARSER`、`ENTITY_DISCOVERY`、`ENTITY_ENRICH` 等生产者 |
+| `producer_run_id` | `varchar(64) NULL` | 一次 parser/update/task 运行的稳定标识，用于范围替换和重试幂等 |
+| `evidence_fingerprint` | `varchar(128) NOT NULL` | 同一生产者运行内证据出现的稳定指纹 |
+| `source_heading_path` | `text NULL` | Markdown 引用所在标题路径 |
+| `start_line`、`end_line` | `integer NULL` | 1 基行号，成对出现 |
+| `start_offset`、`end_offset` | `bigint NULL` | 0 基字符偏移，区间为左闭右开 |
+| `target_locator_type` | `varchar(32) NOT NULL` | `KB_PATH`、`ENTITY_SURFACE` 或兼容性 `FS_ENTRY_ID` |
+| `target_locator_value` | `text NOT NULL` | 目标删除后仍可用的恢复键；与当前是否已解析到 ID 解耦 |
+| `target_suffix`（现有） | 改为 `text NULL` | openGauss A 兼容模式把空字符串视为 `NULL`；读取层继续归一为空后缀 |
 | `definition_version` | `varchar(64) NULL` | 生成关系时使用的定义版本 |
-| `source_task_id` | `bigint NULL REFERENCES knowledge_semantic_processing_task(kid) ON DELETE SET NULL` | 最近生成或确认该关系的语义处理任务 |
+| `source_task_id` | `bigint NULL REFERENCES knowledge_semantic_processing_task(kid) ON DELETE SET NULL` | 生成该断言的语义处理任务 |
 
-semantic 行沿用现有约束的写法：
+目标 ID 是当前解析结果，locator 是稳定恢复依据，两者不能混为一个概念：
 
 ```text
-reference_type = SEMANTIC
-status = resolved
-target_fs_entry_id = 目标文档 ID
-target_path = NULL
-original_target = 写入当时目标文档的规范路径或名称
-target_suffix = ''
-target_kind = FILE
+已解析 Markdown：target_fs_entry_id = 当前文件 ID，locator = KB_PATH + 规范路径
+已解析实体关系：target_fs_entry_id = 当前实体文档 ID，locator = ENTITY_SURFACE + 实体名
+未解析/已断开：target_fs_entry_id = NULL，target_path 保存可解析值，locator 仍保留
 ```
 
-`original_target` 对 semantic 行只是满足现有非空契约并保留可读快照，不参与解析或身份判断。v1 关系限定同一知识库，服务层校验 source、target 的 `knowledge_base_id` 都等于该行 `knowledge_base_id`。
+`original_target` 保留正文或模型输出中的原始表达。v1 关系限定同一知识库，服务层校验 source、target 的 `knowledge_base_id` 一致。
 
 建议约束和索引：
 
-- `reference_type` 仅允许 `MARKDOWN`、`SEMANTIC`；
-- `SEMANTIC` 行必须 `status='resolved'`、`target_fs_entry_id IS NOT NULL`、`relation_code` 非空；
-- semantic 唯一键：`(source_fs_entry_id, relation_code, target_fs_entry_id) WHERE reference_type='SEMANTIC'`；
-- semantic source 出边和 target 入边分别建立部分索引；
+- `relation_code` 仅允许 `MENTIONS`、`PART_OF`、`IS_A`、`DEPENDS_ON`；
+- 行号和偏移必须成对出现且区间有效；
+- 精确断言唯一键包含 knowledgeBase、source、relation、locator、discoveredBy、producerRunId 和 evidenceFingerprint；
+- 逻辑关系查询按 source、relation、target 分组去重，这与物理断言的唯一约束是两个层次；
+- source 出边、target 入边、producer 范围和 sourceTask 分别建立索引；
 - source 和 target 不能相同，由约束或服务层校验；
 - `MENTIONS` 的 source 必须是 original、target 必须是 KnowledgeEntity；其他三种关系两端都必须是 KnowledgeEntity。
 
-现有 repository 必须同步隔离，否则复用会破坏语义边：
+生命周期与 repository 统一为一套逻辑：
 
-- `delete_for_source_fs_entry_id`、`resolve_pending_for_path`、`rebind_deleted_target_for_path`、`mark_targets_deleted`、`mark_target_restored` 只处理 `reference_type='MARKDOWN'`；
-- 现有 Markdown 正向/反向引用接口只返回 `MARKDOWN`；
-- 新增 semantic 专用的幂等 upsert、按 source/target 查询和按生成任务清理方法；
-- 文档移动只维护 Markdown 路径引用；semantic 关系依赖稳定 `fs_entry_id`，不做路径重写；
-- 文档软删除后，semantic 查询通过 source/target 的删除状态隐藏关系，必要时由清理任务硬删除。
+- 所有生产者通过 `upsert_relation_assertion` 写入，按 source/target 的列表和计数查询默认返回逻辑去重结果；
+- 文档移动时，已解析关系继续依赖稳定 `fs_entry_id`，locator 按类型保留或更新可恢复值；
+- 目标删除时不直接删边，而是将断言转为 broken，用 locator 回填可恢复值；目标恢复或重建后用 `KB_PATH` 或 `ENTITY_SURFACE` 重绑；
+- 更新一份文档时只替换它拥有的全部出边，不删除其他文档的入边；
+- Enrich 在一个事务中执行“物化旧令牌→删除 source 全部出边→重写 Markdown `MENTIONS`→写入 Enrich 关系”；
+- Discovery 不修改文档正文，只替换同 source 上 `discovered_by='ENTITY_DISCOVERY'` 的 `MENTIONS`，不误删 Markdown 断言。
 
 不在数据库中保存反向边；`PART_OF` 的“包含”、`IS_A` 的“具有实例/下位类型”和 `MENTIONS` 的“被提及于”由查询层派生。
 
-### 11.5 v1 不实现：关系证据层
+### 11.5 v1 的轻量证据边界
 
-当前版本不新增 `knowledge_document_relation_evidence`，也不向 `knowledge_file_reference` 填充大段 evidence JSON。先保留三层最低追溯能力：
+当前版本不新增 `knowledge_document_relation_evidence`，也不向 `knowledge_file_reference` 填充大段 evidence JSON。先保留四层最低追溯能力：
 
-- 关系行的 `source_task_id` 指向生成任务；
+- 断言行的 `discovered_by`、`producer_run_id`、`evidence_fingerprint` 标识生产者和证据出现；
+- Markdown Parser 断言保存标题路径、行号和字符偏移；
+- `source_task_id` 指向 Discovery/Enrich 生成任务；
 - `knowledge_semantic_processing_task.result_payload` 保留有界的任务结果和丢弃原因，主要用于调试，不作为长期证据主数据；
 - KnowledgeEntity Markdown 正文使用现有文件引用指向原始证据文档。
 
-代价是 v1 暂不支持按关系返回多个证据片段、证据 checksum 失效检测和关系级审计。出现明确的审计、失效重算或多证据查询需求后，再把任务结果中的证据提升为独立投影表，不影响现有关系 ID。
+代价是 v1 不保存证据片段正文，也不承诺证据 checksum 失效检测和长期关系审计。出现明确的审计、失效重算或多证据正文查询需求后，再增加独立证据投影表，不影响现有关系语义。
 
 ### 11.6 生产规模强烈建议：`knowledge_entity_surface`
 
@@ -988,4 +1016,4 @@ v1 最小组合
 
 因此，回答“是否需要增改数据表”：
 
-> v1 新增一张 `knowledge_semantic_processing_task` 承载按文件的 Discovery/Enrich 任务，保持 `006_knowledge_build_task`、`013` 不变；通过增量脚本 `030` 扩展 `knowledge_file_reference` 以区分 Markdown 引用和语义关系，原 `026` 不变；不实现 `knowledge_document_relation_evidence`。生产级全系统词表仍建议新增可重建的 `knowledge_entity_surface` 投影。`knowledge_fs_entry`、metadata 表和更新时间线不需要改结构。
+> v1 新增一张 `knowledge_semantic_processing_task` 承载按文件的 Discovery/Enrich 任务，保持 `006_knowledge_build_task`、`013` 不变；通过增量脚本 `030` 把 `knowledge_file_reference` 扩展为 Markdown/Discovery/Enrich 共用的统一关系断言投影，原 `026` 不变；保存轻量位置证据，不实现独立 `knowledge_document_relation_evidence`。生产级全系统词表仍建议新增可重建的 `knowledge_entity_surface` 投影。`knowledge_fs_entry`、metadata 表和更新时间线不需要改结构。

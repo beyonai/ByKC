@@ -407,7 +407,7 @@ LLM 主要发现 AC 未覆盖但对理解文档显著的稳定主体。每个候
 - 同一原始文档、同一 checksum、同一 `definitionVersion` 的重复任务可复用结果；
 - 创建新实体前对派生身份键使用事务级互斥或等价机制；
 - 并发创建冲突时重新读取已创建实体并转为锚定；
-- `MENTIONS` 按 source、relation、target 幂等；
+- 关系断言按“生产者运行 + 证据指纹”精确幂等；查询层再按 source、relation、target 合并为逻辑边；
 - Callback 不参与核心事务。
 
 ## 10. 初始关系模型
@@ -416,7 +416,7 @@ LLM 主要发现 AC 未覆盖但对理解文档显著的稳定主体。每个候
 
 - 关系必须能直接读成“source relation target”；
 - 只持久化一个方向，反向展示由查询层派生；
-- 语义关系与 Markdown 物理引用在逻辑类型、处理流程和查询接口上分开；v1 可以通过类型字段复用同一物理表；
+- Markdown 引用就是带正文位置证据的 `MENTIONS` 断言，与 Discovery/Enrich 关系共用一套写入、去重、查询、移动、删除和恢复逻辑；
 - 除 `MENTIONS` 的精确命中外，语义关系必须有明确证据；
 - 无法映射到精确关系时只保留自然语言和文档引用，不创建“相关”；
 - 无效关系被丢弃并记录 warning，不使整个 Enrich 失败。
@@ -495,7 +495,7 @@ source 的稳定能力、运行或成立明确要求 target 存在；去掉 targ
 - `ALIAS_OF`：确认同一身份后应合并文档并写入 `aliases`；
 - `BROADER_ENTITY` 或“上位实体”：方向容易混淆，应按真实语义使用 `PART_OF` 或 `IS_A`。
 
-### 10.5 关系证据
+### 10.5 关系断言与证据
 
 关系生成阶段仍必须基于明确原文，不因为 v1 暂缓独立证据表而放宽关系判定。每条持久化语义关系至少保存以下最低追溯字段：
 
@@ -503,15 +503,16 @@ source 的稳定能力、运行或成立明确要求 target 存在；去掉 targ
 sourceFileId
 relationCode
 targetFileId
-discoveredBy
-confidence
-definitionVersion
-sourceTaskId
+targetLocatorType / targetLocatorValue
+discoveredBy / producerRunId
+evidenceFingerprint
+sourceHeadingPath / startLine / endLine / startOffset / endOffset
+confidence / definitionVersion / sourceTaskId
 ```
 
-证据文档与片段可以作为有界任务结果参与生成和调试，重要依据通过 KnowledgeEntity Markdown 引用回原始文档。v1 不实现 `knowledge_document_relation_evidence`，也不提供关系级证据查询；因此暂不承诺多证据聚合、关系证据 checksum 失效检测或关系级审计。
+每个物理行表示一次关系断言或证据出现，同一 source/relation/target 可以有多行；对外查询再聚合成一条逻辑边。Markdown Parser 记录标题路径、行号和字符偏移，Discovery/Enrich 记录生产任务和证据指纹。v1 仍不建设独立 `knowledge_document_relation_evidence`，也不在关系行中保存大段 evidence JSON。
 
-关系投影不是新的内容主体。同一 source/relation/target 只创建一条逻辑边。后续确有审计和证据失效治理需求时，再把任务结果中的证据提升为独立投影，不改变关系语义。
+关系投影不是新的内容主体。逻辑边的去重键是 source/relation/target，断言去重键另包含 discoveredBy、producerRunId 和 evidenceFingerprint。后续确有证据片段正文、checksum 失效治理和长期审计需求时，再增加独立证据投影，不改变关系语义。
 
 ## 11. KnowledgeEntity Enrich
 
@@ -597,10 +598,14 @@ discardedRelationCount
 
 1. 生成期间不修改当前文档；
 2. 验证完成后重新校验 checksum；
-3. 原子替换 Markdown 对象并更新文件摘要；
-4. 成功后写入文件更新时间线；
-5. 提交成功后发送 `task.succeeded` Callback；
-6. 任何失败都保留上一版有效文档。
+3. 先将旧正文中的内部引用令牌还原为可重新解析的路径；
+4. 删除本次更新文档的全部出边，不删除其他文档指向它的入边；
+5. 重写 Markdown 引用为带章节/行/偏移证据的 `MENTIONS`，并写入当次 Enrich 产生的结构化关系；
+6. 在同一数据库事务中更新文件摘要、派生状态和更新时间线，对象存储失败时恢复旧字节；
+7. 提交成功后才发送 `task.succeeded` Callback；
+8. 任何失败都保留上一版有效文档及其出边快照。
+
+出边所有权遵循“source 文档管理自己的出边”。Enrich 更新文档，因此对该 source 做全量替换；Discovery 不改正文，因此只替换该 source 上由 `ENTITY_DISCOVERY` 生产的 `MENTIONS` 断言，不删除 Markdown Parser 生产的断言。
 
 现有时间线基础见 [`knowledge_file_update_timeline`](../../../src/by_qa/knowledge_base/sql/027_knowledge_file_update_timeline.sql)。
 
@@ -893,7 +898,7 @@ Enrich 使用独立 `enrichVersion`，索引使用独立 `indexVersion`。
 - 原始文档和 KnowledgeEntity 共用文档主模型；
 - 建立最小有效实体文档格式；
 - 保留 `knowledge_build_task` 专用于文件构建，新增 `knowledge_semantic_processing_task` 统一承载 discovery/enrich，并支持同批文件共享 `batchId`；
-- 保留原 `026` 不变，通过增量脚本扩展 `knowledge_file_reference`，以 `referenceType` 隔离 Markdown 引用和语义关系；
+- 保留原 `026` 不变，通过增量脚本把 `knowledge_file_reference` 扩展为统一关系断言投影；
 - 支持内部 Python/SDK Callback。
 
 ### 阶段 2：AC 与实体发现
@@ -937,7 +942,7 @@ Enrich 使用独立 `enrichVersion`，索引使用独立 `indexVersion`。
 - 全系统词表使用 AC snapshot + delta，索引不是业务主数据；
 - 向量召回只产生同义候选，不直接自动合并；
 - v1 关系只有 `MENTIONS`、`PART_OF`、`IS_A`、`DEPENDS_ON`；
-- v1 复用类型化的 `knowledge_file_reference` 保存关系，不建设独立关系证据层；
+- v1 复用扩展后的 `knowledge_file_reference` 保存统一关系断言和轻量位置证据，不建设独立关系证据层；
 - 共现、相似和“相关”是检索或统计信号，不是持久化业务关系；
 - Enrich 保护身份和证据边界，模板只做软约束；
 - Callback v1 只支持进程内 Python/SDK callable，失败不影响主任务；

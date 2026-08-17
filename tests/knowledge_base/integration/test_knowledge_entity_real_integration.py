@@ -16,6 +16,7 @@ import re
 import time
 from collections.abc import Iterable
 from contextlib import contextmanager
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -2098,6 +2099,51 @@ def test_knowledge_entity_real_whole_enrich_refresh_and_stale_write() -> None:
                 content=_entity_markdown(entity_name=f"NoEvidence{token}"),
             )
             _build_markdown_index(client, kb_code=kb_code, file_path=no_evidence_path)
+            subject_file_id = int(
+                _db_rows(
+                    """
+                    SELECT kid
+                    FROM knowledge_fs_entry
+                    WHERE knowledge_base_id = %(knowledge_base_id)s
+                      AND virtual_path = %(file_path)s
+                      AND is_deleted = FALSE
+                    """,
+                    {
+                        "knowledge_base_id": int(kb_code),
+                        "file_path": no_evidence_path,
+                    },
+                )[0]["kid"]
+            )
+            _update_metadata(
+                client,
+                kb_code=kb_code,
+                file_path=entity_path,
+                operations=[
+                    {
+                        "propertyName": "subjectFileId",
+                        "operation": "set",
+                        "valueType": "number",
+                        "value": subject_file_id,
+                    }
+                ],
+            )
+            stored_subject = _db_rows(
+                """
+                SELECT metadata.value_number
+                FROM knowledge_file_metadata_value metadata
+                JOIN knowledge_fs_entry entry ON entry.kid = metadata.fs_entry_id
+                WHERE entry.knowledge_base_id = %(knowledge_base_id)s
+                  AND entry.virtual_path = %(file_path)s
+                  AND metadata.property_name = 'subjectFileId'
+                  AND metadata.is_deleted = FALSE
+                """,
+                {
+                    "knowledge_base_id": int(kb_code),
+                    "file_path": entity_path,
+                },
+            )[0]["value_number"]
+            assert isinstance(stored_subject, Decimal)
+            assert stored_subject == subject_file_id
             _upload_file(
                 client,
                 kb_code=kb_code,
@@ -2121,6 +2167,18 @@ integration subject described by this current-KB source.
                 content=evidence_v1,
             )
             _build_markdown_index(client, kb_code=kb_code, file_path=evidence_path)
+
+            # OpenGauss returns EAV NUMERIC as Decimal. Entity Enrich
+            # fingerprinting must canonicalize the subject identity before JSON
+            # serialization while preserving the real TIMESTAMPTZ relation version.
+            subject_local_eligibility = _eligibility(
+                client,
+                kb_code=kb_code,
+                file_path=entity_path,
+                capability="entityEnrich",
+            )
+            assert subject_local_eligibility["eligibility"] == "ELIGIBLE_AND_STALE"
+            assert subject_local_eligibility["reasonCode"] == "NEVER_PROCESSED"
 
             _upload_markdown(
                 client,

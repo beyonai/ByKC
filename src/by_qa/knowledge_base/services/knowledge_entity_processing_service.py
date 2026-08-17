@@ -11,6 +11,7 @@ from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import PurePosixPath
 from typing import Any, Protocol
 from uuid import uuid4
@@ -51,6 +52,87 @@ _TEXT_DOCUMENT_SUFFIXES = frozenset(
     {".csv", ".htm", ".html", ".markdown", ".md", ".txt"}
 )
 _MARKDOWN_DOCUMENT_SUFFIXES = frozenset({".markdown", ".md"})
+
+
+def _canonical_subject_file_id(value: Any) -> int | None:
+    """Normalize the EAV NUMERIC identity into the domain's positive bigint."""
+
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise TypeError("subjectFileId must be an integer, not boolean")
+    if isinstance(value, Decimal):
+        if not value.is_finite() or value != value.to_integral_value():
+            raise ValueError("subjectFileId numeric metadata must be an integer")
+        normalized = int(value)
+    elif isinstance(value, int):
+        normalized = value
+    elif isinstance(value, str):
+        if not value.isascii() or not value.isdigit():
+            raise ValueError("subjectFileId string metadata must be a positive integer")
+        normalized = int(value)
+    else:
+        raise TypeError(
+            "subjectFileId must be returned as int, Decimal, or digit string, got "
+            f"{type(value).__name__}"
+        )
+    if normalized <= 0:
+        raise ValueError("subjectFileId must be positive")
+    return normalized
+
+
+def _canonical_relation_timestamp(value: Any) -> str | None:
+    """Normalize OpenGauss TIMESTAMPTZ values to one UTC representation."""
+
+    if value is None:
+        return None
+    if not isinstance(value, datetime):
+        raise TypeError(
+            f"semantic relation updated_at must be datetime, got {type(value).__name__}"
+        )
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("semantic relation updated_at must be timezone-aware")
+    return (
+        value.astimezone(timezone.utc)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
+
+
+def _canonical_json_value(value: Any, *, path: str = "$") -> Any:
+    """Accept only explicitly normalized JSON-native fingerprint values."""
+
+    if value is None or isinstance(value, str | bool | int):
+        return value
+    if isinstance(value, Mapping):
+        normalized: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise TypeError(
+                    f"fingerprint mapping key at {path} must be str, got "
+                    f"{type(key).__name__}"
+                )
+            normalized[key] = _canonical_json_value(item, path=f"{path}.{key}")
+        return normalized
+    if isinstance(value, list | tuple):
+        return [
+            _canonical_json_value(item, path=f"{path}[{index}]")
+            for index, item in enumerate(value)
+        ]
+    raise TypeError(
+        f"unsupported fingerprint value at {path}: {type(value).__name__}; "
+        "normalize database types explicitly before hashing"
+    )
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(
+        _canonical_json_value(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
 
 
 @dataclass(frozen=True)
@@ -921,13 +1003,17 @@ class KnowledgeEntityProcessingOrchestrator:
             )
             if not evidence_files:
                 reason = "NO_EVIDENCE"
-        fingerprint = self._fingerprint(
-            file_row,
-            capability,
-            resolved_definition,
-            resolved_enrich,
-            evidence_rows,
-            evidence_files,
+        fingerprint = (
+            self._fingerprint(
+                file_row,
+                capability,
+                resolved_definition,
+                resolved_enrich,
+                evidence_rows,
+                evidence_files,
+            )
+            if reason is None
+            else ""
         )
         latest = await self._latest_successful(
             cursor, knowledge_base_id, file_id, task_type
@@ -1116,22 +1202,25 @@ class KnowledgeEntityProcessingOrchestrator:
                     "entityName": file_row.get("entity_name"),
                     "aliases": sorted(file_row.get("aliases") or []),
                     "definitionVersion": file_row.get("definition_version"),
-                    "subjectFileId": file_row.get("subject_file_id"),
+                    "subjectFileId": _canonical_subject_file_id(
+                        file_row.get("subject_file_id")
+                    ),
                 },
                 "evidenceFileIdsAndChecksums": [
                     [file_id, checksums[file_id]] for file_id in sorted(checksums)
                 ],
                 "semanticRelationVersions": [
-                    [self._row_id(row), str(row.get("updated_at"))]
+                    [
+                        self._row_id(row),
+                        _canonical_relation_timestamp(row.get("updated_at")),
+                    ]
                     for row in sorted(evidence_rows, key=self._row_id)
                 ],
                 "enrichVersion": enrich_version,
                 "enrichMethodVersion": ENRICH_METHOD_VERSION,
                 "templateVersion": ENRICH_TEMPLATE_VERSION,
             }
-        encoded = json.dumps(
-            value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-        )
+        encoded = _canonical_json(value)
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     def _capability_enabled(
@@ -1196,11 +1285,18 @@ class KnowledgeEntityProcessingOrchestrator:
         return suffix in _MARKDOWN_DOCUMENT_SUFFIXES
 
     def _identity_complete(self, row: Mapping[str, Any]) -> bool:
-        return bool(
+        basics_complete = bool(
             str(row.get("entity_name") or "").strip()
             and str(row.get("definition_version") or "").strip()
             and isinstance(row.get("aliases"), list)
         )
+        if not basics_complete:
+            return False
+        try:
+            _canonical_subject_file_id(row.get("subject_file_id"))
+        except (TypeError, ValueError):
+            return False
+        return True
 
     def _task_item(
         self, row: Mapping[str, Any], include_details: bool

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 
@@ -274,6 +276,99 @@ async def test_eligibility_uses_content_fingerprint_and_reports_fresh_task():
     )
     assert fresh.eligibility == ProcessingEligibility.ELIGIBLE_BUT_FRESH
     assert fresh.last_successful_task_id == "80"
+
+
+async def test_enrich_fingerprint_canonicalizes_opengauss_identity_and_timestamp():
+    service, _ = make_service([original()])
+    entity = original(
+        21,
+        "/KnowledgeEntity/child.md",
+        document_kind="knowledgeEntity",
+        entity_name="Child",
+        aliases=["Child alias"],
+        definition_version="v1",
+    )
+    evidence_files = [original(10, checksum="evidence-checksum")]
+    utc_timestamp = datetime(2026, 8, 17, 9, 30, 0, 123456, tzinfo=timezone.utc)
+    local_timestamp = utc_timestamp.astimezone(timezone(timedelta(hours=8)))
+
+    fingerprints = {
+        service._fingerprint(
+            {**entity, "subject_file_id": subject_value},
+            ProcessingCapability.ENTITY_ENRICH,
+            None,
+            "ke-enrich/1.0",
+            [{"kid": 31, "updated_at": timestamp}],
+            evidence_files,
+        )
+        for subject_value, timestamp in (
+            (21, utc_timestamp),
+            ("21", local_timestamp),
+            (Decimal("21"), local_timestamp),
+            (Decimal("21.0"), utc_timestamp),
+        )
+    }
+
+    assert len(fingerprints) == 1
+
+
+async def test_enrich_fingerprint_rejects_fractional_subject_file_id():
+    service, _ = make_service([original()])
+    entity = original(
+        21,
+        "/KnowledgeEntity/child.md",
+        document_kind="knowledgeEntity",
+        entity_name="Child",
+        definition_version="v1",
+        subject_file_id=Decimal("21.5"),
+    )
+
+    with pytest.raises(
+        ValueError, match="subjectFileId numeric metadata must be an integer"
+    ):
+        service._fingerprint(
+            entity,
+            ProcessingCapability.ENTITY_ENRICH,
+            None,
+            "ke-enrich/1.0",
+            [],
+            [],
+        )
+
+
+async def test_invalid_subject_file_id_is_ineligible_instead_of_json_failure():
+    entity = original(
+        21,
+        "/KnowledgeEntity/child.md",
+        document_kind="knowledgeEntity",
+        entity_name="Child",
+        aliases=[],
+        definition_version="v1",
+        subject_file_id="21.5",
+    )
+    service, _ = make_service([entity])
+
+    result = await service.evaluate_processing_eligibility(
+        ProcessingEligibilityRequest(
+            knCode="7",
+            filePath=entity["file_path"],
+            capability="entityEnrich",
+        )
+    )
+
+    assert result.eligibility == ProcessingEligibility.INELIGIBLE
+    assert result.reason_code == "IDENTITY_METADATA_INCOMPLETE"
+
+
+@pytest.mark.parametrize(
+    "raw_database_value",
+    [Decimal("21"), datetime.now(timezone.utc), uuid4()],
+)
+async def test_canonical_json_rejects_database_types_without_domain_normalization(
+    raw_database_value,
+):
+    with pytest.raises(TypeError, match="normalize database types explicitly"):
+        processing_module._canonical_json({"value": raw_database_value})
 
 
 async def test_explicit_empty_capabilities_disable_default_and_content_must_be_ready():

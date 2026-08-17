@@ -6,6 +6,8 @@ import asyncio
 import hashlib
 import inspect
 import json
+import time
+from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -112,7 +114,33 @@ class AsyncioTaskScheduler:
     def schedule(self, task_factory: Callable[[], Awaitable[None]]) -> None:
         task = asyncio.create_task(task_factory())
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        logger.debug(
+            "knowledge_entity_task_scheduler task scheduled: active_task_count=%s",
+            len(self._tasks),
+        )
+        task.add_done_callback(self._task_done)
+
+    def _task_done(self, task: asyncio.Task[None]) -> None:
+        self._tasks.discard(task)
+        if task.cancelled():
+            logger.warning(
+                "knowledge_entity_task_scheduler task cancelled: active_task_count=%s",
+                len(self._tasks),
+            )
+            return
+        failure = task.exception()
+        if failure is not None:
+            logger.error(
+                "knowledge_entity_task_scheduler task failed: error_type=%s, active_task_count=%s",
+                type(failure).__name__,
+                len(self._tasks),
+                exc_info=(type(failure), failure, failure.__traceback__),
+            )
+            return
+        logger.debug(
+            "knowledge_entity_task_scheduler task completed: active_task_count=%s",
+            len(self._tasks),
+        )
 
 
 @dataclass
@@ -145,6 +173,16 @@ class KnowledgeEntityProcessingOrchestrator:
                 request.capability,
                 definition_version=request.definition_version,
                 enrich_version=request.enrich_version,
+            )
+            logger.info(
+                "knowledge_entity_processing_service eligibility evaluated: knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, capability=%s, eligibility=%s, reason_code=%s",
+                knowledge_base_id,
+                request.kb_code,
+                evaluation.result.file_id,
+                evaluation.result.file_path,
+                request.capability.value,
+                evaluation.result.eligibility.value,
+                evaluation.result.reason_code,
             )
             return evaluation.result
         finally:
@@ -207,7 +245,7 @@ class KnowledgeEntityProcessingOrchestrator:
                 limit=request.page_size,
                 offset=(request.page_num - 1) * request.page_size,
             )
-            return ProcessingTaskPage(
+            result = ProcessingTaskPage(
                 knowledge_base_id=str(knowledge_base_id),
                 kb_code=request.kb_code,
                 file_path=request.file_path,
@@ -216,6 +254,21 @@ class KnowledgeEntityProcessingOrchestrator:
                 page_size=request.page_size,
                 data=[self._task_item(row, request.include_details) for row in rows],
             )
+            logger.info(
+                "knowledge_entity_processing_service task status queried: knowledge_base_id=%s, kb_code=%s, file_path=%s, batch_id=%s, task_type=%s, status_count=%s, latest_only=%s, page_num=%s, page_size=%s, total=%s, returned_count=%s",
+                knowledge_base_id,
+                request.kb_code,
+                request.file_path,
+                request.batch_id,
+                request.task_type.value if request.task_type else None,
+                len(request.status_list or []),
+                request.latest_only,
+                request.page_num,
+                request.page_size,
+                total,
+                len(rows),
+            )
+            return result
         finally:
             await connection.close()
 
@@ -308,13 +361,29 @@ class KnowledgeEntityProcessingOrchestrator:
                 self._relation_item(row, direction, request.kb_code, endpoints)
                 for row, direction in tagged
             ]
-            return SemanticRelationPage(
+            result = SemanticRelationPage(
                 file_id=str(file_id),
                 total=outgoing_count + incoming_count,
                 page_num=request.page_num,
                 page_size=request.page_size,
                 data=data,
             )
+            logger.info(
+                "knowledge_entity_processing_service semantic relations queried: knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, direction=%s, relation_code_count=%s, page_num=%s, page_size=%s, outgoing_count=%s, incoming_count=%s, total=%s, returned_count=%s",
+                knowledge_base_id,
+                request.kb_code,
+                file_id,
+                request.file_path,
+                request.direction.value,
+                len(codes or []),
+                request.page_num,
+                request.page_size,
+                outgoing_count,
+                incoming_count,
+                result.total,
+                len(data),
+            )
+            return result
         finally:
             await connection.close()
 
@@ -327,10 +396,30 @@ class KnowledgeEntityProcessingOrchestrator:
         callback: TaskCallback | None,
     ) -> ProcessingBatchAccepted:
         batch_id = self._batch_id(task_type)
+        acceptance_started_at = time.perf_counter()
+        scope = (
+            ProcessingScope.SINGLE_FILE
+            if request.file_path
+            else ProcessingScope.WHOLE_KB
+        )
+        logger.info(
+            "knowledge_entity_processing_service batch acceptance started: batch_id=%s, kb_code=%s, file_path=%s, task_type=%s, scope=%s, force=%s, callback_configured=%s",
+            batch_id,
+            request.kb_code,
+            request.file_path,
+            task_type.value,
+            scope.value,
+            request.force,
+            callback is not None,
+        )
         connection = await self.connection_factory()
         contexts: list[TaskExecutionContext] = []
         summaries: list[ProcessingTaskSummary] = []
         eligible_count = reused_count = skipped_count = 0
+        eligibility_counts: Counter[str] = Counter()
+        reason_counts: Counter[str] = Counter()
+        knowledge_base_id: int | None = None
+        files: list[Mapping[str, Any]] = []
         try:
             cursor = connection.cursor()
             knowledge_base_id = await self._resolve_kb(cursor, request.kb_code)
@@ -349,12 +438,23 @@ class KnowledgeEntityProcessingOrchestrator:
                     knowledge_base_id=knowledge_base_id,
                     path_prefix=prefix,
                 )
+            logger.info(
+                "knowledge_entity_processing_service batch candidates selected: batch_id=%s, knowledge_base_id=%s, kb_code=%s, file_path=%s, task_type=%s, scope=%s, candidate_count=%s",
+                batch_id,
+                knowledge_base_id,
+                request.kb_code,
+                request.file_path,
+                task_type.value,
+                scope.value,
+                len(files),
+            )
             for file_row in files:
                 if (
                     capability == ProcessingCapability.ENTITY_DISCOVERY
                     and self._inside_entity_directory(str(file_row["file_path"]))
                 ):
                     skipped_count += 1
+                    reason_counts["ENTITY_DIRECTORY_EXCLUDED"] += 1
                     continue
                 evaluation = await self._evaluate_file(
                     cursor,
@@ -364,6 +464,19 @@ class KnowledgeEntityProcessingOrchestrator:
                     capability,
                     definition_version=getattr(request, "definition_version", None),
                     enrich_version=getattr(request, "enrich_version", None),
+                )
+                eligibility_counts[evaluation.result.eligibility.value] += 1
+                reason_counts[evaluation.result.reason_code or "NONE"] += 1
+                logger.debug(
+                    "knowledge_entity_processing_service file eligibility evaluated: batch_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s, eligibility=%s, reason_code=%s",
+                    batch_id,
+                    knowledge_base_id,
+                    request.kb_code,
+                    evaluation.result.file_id,
+                    evaluation.result.file_path,
+                    task_type.value,
+                    evaluation.result.eligibility.value,
+                    evaluation.result.reason_code,
                 )
                 if evaluation.result.eligibility == ProcessingEligibility.INELIGIBLE:
                     skipped_count += 1
@@ -387,6 +500,16 @@ class KnowledgeEntityProcessingOrchestrator:
                 if reusable is not None:
                     reused_count += 1
                     summaries.append(self._task_summary(reusable, reused=True))
+                    logger.debug(
+                        "knowledge_entity_processing_service task reused: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_path=%s, task_type=%s, status=%s",
+                        batch_id,
+                        self._row_id(reusable),
+                        knowledge_base_id,
+                        request.kb_code,
+                        file_row["file_path"],
+                        task_type.value,
+                        reusable["status"],
+                    )
                     continue
                 params = request.model_dump(mode="json", by_alias=True)
                 created = await self.knowledge_semantic_processing_task_repository.create_processing_task(
@@ -422,6 +545,16 @@ class KnowledgeEntityProcessingOrchestrator:
                     request_params=params,
                 )
                 contexts.append(context)
+                logger.info(
+                    "knowledge_entity_processing_service task created: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s, status=pending",
+                    batch_id,
+                    context.task_id,
+                    knowledge_base_id,
+                    request.kb_code,
+                    context.source_file_id,
+                    context.file_path,
+                    task_type.value,
+                )
                 summaries.append(
                     ProcessingTaskSummary(
                         task_id=str(context.task_id),
@@ -431,24 +564,63 @@ class KnowledgeEntityProcessingOrchestrator:
                     )
                 )
             await connection.commit()
-        except Exception:
+        except Exception as exc:
             await connection.rollback()
+            logger.exception(
+                "knowledge_entity_processing_service batch acceptance rolled back: batch_id=%s, knowledge_base_id=%s, kb_code=%s, file_path=%s, task_type=%s, error_type=%s, elapsed_ms=%.2f",
+                batch_id,
+                knowledge_base_id,
+                request.kb_code,
+                request.file_path,
+                task_type.value,
+                type(exc).__name__,
+                (time.perf_counter() - acceptance_started_at) * 1000,
+            )
             raise
         finally:
             await connection.close()
+        logger.info(
+            "knowledge_entity_processing_service batch accepted: batch_id=%s, knowledge_base_id=%s, kb_code=%s, file_path=%s, task_type=%s, scope=%s, candidate_count=%s, eligible_count=%s, accepted_count=%s, reused_count=%s, skipped_count=%s, eligibility_counts=%s, reason_counts=%s, elapsed_ms=%.2f",
+            batch_id,
+            knowledge_base_id,
+            request.kb_code,
+            request.file_path,
+            task_type.value,
+            scope.value,
+            len(files),
+            eligible_count,
+            len(contexts),
+            reused_count,
+            skipped_count,
+            dict(eligibility_counts),
+            dict(reason_counts),
+            (time.perf_counter() - acceptance_started_at) * 1000,
+        )
         for context in contexts:
-            await self._notify(callback, self._event(context, "task.accepted", 0, 0))
+            await self._notify(
+                callback,
+                self._event(context, "task.accepted", 0, 0),
+                context=context,
+            )
             try:
                 self.task_scheduler.schedule(
                     lambda current=context: self._run_task(current, callback)
+                )
+                logger.info(
+                    "knowledge_entity_processing_service task scheduled: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s",
+                    context.batch_id,
+                    context.task_id,
+                    context.knowledge_base_id,
+                    context.kb_code,
+                    context.source_file_id,
+                    context.file_path,
+                    context.task_type.value,
                 )
             except Exception as exc:
                 await self._fail_scheduling(context, callback, exc)
         return ProcessingBatchAccepted(
             batch_id=batch_id,
-            scope=ProcessingScope.SINGLE_FILE
-            if request.file_path
-            else ProcessingScope.WHOLE_KB,
+            scope=scope,
             task_type=task_type,
             definition_version=(
                 getattr(request, "definition_version", None)
@@ -476,6 +648,17 @@ class KnowledgeEntityProcessingOrchestrator:
     async def _run_task(
         self, context: TaskExecutionContext, callback: TaskCallback | None
     ) -> None:
+        task_started_at = time.perf_counter()
+        logger.info(
+            "knowledge_entity_processing_service task execution started: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s",
+            context.batch_id,
+            context.task_id,
+            context.knowledge_base_id,
+            context.kb_code,
+            context.source_file_id,
+            context.file_path,
+            context.task_type.value,
+        )
         await self._update_task(
             context,
             status="running",
@@ -483,7 +666,11 @@ class KnowledgeEntityProcessingOrchestrator:
             progress=1,
             started=True,
         )
-        await self._notify(callback, self._event(context, "task.started", 1, 1))
+        await self._notify(
+            callback,
+            self._event(context, "task.started", 1, 1),
+            context=context,
+        )
         try:
             worker_result = await self.worker.run_task(context)
             result, targets, index_version = self._worker_result(worker_result)
@@ -506,6 +693,20 @@ class KnowledgeEntityProcessingOrchestrator:
                     target_file_ids=targets,
                     result_summary=result,
                 ),
+                context=context,
+            )
+            logger.info(
+                "knowledge_entity_processing_service task execution succeeded: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s, target_count=%s, index_version=%s, elapsed_ms=%.2f",
+                context.batch_id,
+                context.task_id,
+                context.knowledge_base_id,
+                context.kb_code,
+                context.source_file_id,
+                context.file_path,
+                context.task_type.value,
+                len(targets),
+                index_version,
+                (time.perf_counter() - task_started_at) * 1000,
             )
         except Exception as exc:
             error = {
@@ -513,6 +714,20 @@ class KnowledgeEntityProcessingOrchestrator:
                 "message": str(exc),
                 "retryable": bool(getattr(exc, "retryable", True)),
             }
+            logger.exception(
+                "knowledge_entity_processing_service task execution failed: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s, error_code=%s, error_type=%s, retryable=%s, elapsed_ms=%.2f",
+                context.batch_id,
+                context.task_id,
+                context.knowledge_base_id,
+                context.kb_code,
+                context.source_file_id,
+                context.file_path,
+                context.task_type.value,
+                error["errorCode"],
+                type(exc).__name__,
+                error["retryable"],
+                (time.perf_counter() - task_started_at) * 1000,
+            )
             try:
                 await self._update_task(
                     context,
@@ -527,6 +742,7 @@ class KnowledgeEntityProcessingOrchestrator:
                 await self._notify(
                     callback,
                     self._event(context, "task.failed", 2, 100, error=error),
+                    context=context,
                 )
 
     async def _fail_scheduling(
@@ -540,6 +756,18 @@ class KnowledgeEntityProcessingOrchestrator:
             "message": str(exc),
             "retryable": True,
         }
+        logger.error(
+            "knowledge_entity_processing_service task scheduling failed: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s, error_type=%s",
+            context.batch_id,
+            context.task_id,
+            context.knowledge_base_id,
+            context.kb_code,
+            context.source_file_id,
+            context.file_path,
+            context.task_type.value,
+            type(exc).__name__,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
         await self._update_task(
             context,
             status="failed",
@@ -550,7 +778,9 @@ class KnowledgeEntityProcessingOrchestrator:
             finished=True,
         )
         await self._notify(
-            callback, self._event(context, "task.failed", 1, 100, error=error)
+            callback,
+            self._event(context, "task.failed", 1, 100, error=error),
+            context=context,
         )
 
     async def _update_task(self, context: TaskExecutionContext, **updates: Any) -> None:
@@ -564,8 +794,34 @@ class KnowledgeEntityProcessingOrchestrator:
                 **updates,
             )
             await connection.commit()
-        except Exception:
+            logger.debug(
+                "knowledge_entity_processing_service task state persisted: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s, status=%s, current_stage=%s, progress=%s",
+                context.batch_id,
+                context.task_id,
+                context.knowledge_base_id,
+                context.kb_code,
+                context.source_file_id,
+                context.file_path,
+                context.task_type.value,
+                updates.get("status"),
+                updates.get("current_stage"),
+                updates.get("progress"),
+            )
+        except Exception as exc:
             await connection.rollback()
+            logger.exception(
+                "knowledge_entity_processing_service task state persistence failed: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s, target_status=%s, target_stage=%s, error_type=%s",
+                context.batch_id,
+                context.task_id,
+                context.knowledge_base_id,
+                context.kb_code,
+                context.source_file_id,
+                context.file_path,
+                context.task_type.value,
+                updates.get("status"),
+                updates.get("current_stage"),
+                type(exc).__name__,
+            )
             raise
         finally:
             await connection.close()
@@ -1040,18 +1296,44 @@ class KnowledgeEntityProcessingOrchestrator:
             error=error,
         )
 
-    async def _notify(self, callback: TaskCallback | None, event: TaskEvent) -> None:
+    async def _notify(
+        self,
+        callback: TaskCallback | None,
+        event: TaskEvent,
+        *,
+        context: TaskExecutionContext,
+    ) -> None:
         if callback is None:
             return
         try:
             result = callback(event)
             if inspect.isawaitable(result):
                 await result
-        except Exception:
-            logger.warning(
-                "knowledge entity callback failed: task_id=%s event_type=%s",
-                event.task_id,
+            logger.debug(
+                "knowledge_entity_processing_service callback delivered: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s, event_type=%s, status=%s",
+                context.batch_id,
+                context.task_id,
+                context.knowledge_base_id,
+                context.kb_code,
+                context.source_file_id,
+                context.file_path,
+                context.task_type.value,
                 event.event_type,
+                event.status.value,
+            )
+        except Exception as exc:
+            logger.warning(
+                "knowledge_entity_processing_service callback failed: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s, event_type=%s, status=%s, error_type=%s",
+                context.batch_id,
+                context.task_id,
+                context.knowledge_base_id,
+                context.kb_code,
+                context.source_file_id,
+                context.file_path,
+                context.task_type.value,
+                event.event_type,
+                event.status.value,
+                type(exc).__name__,
                 exc_info=True,
             )
 

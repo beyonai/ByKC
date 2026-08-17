@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 import pytest
@@ -13,7 +14,11 @@ from by_qa.knowledge_base.api.knowledge_entity_schemas import (
     ProcessingTaskStatusRequest,
     SemanticRelationsRequest,
 )
+from by_qa.knowledge_base.services import (
+    knowledge_entity_processing_service as processing_module,
+)
 from by_qa.knowledge_base.services.knowledge_entity_processing_service import (
+    AsyncioTaskScheduler,
     KnowledgeEntityProcessingOrchestrator,
     TaskWorkerResult,
 )
@@ -342,6 +347,72 @@ async def test_accept_creates_per_file_task_and_worker_lifecycle_callbacks():
     assert tasks.rows[0]["index_version"] == "ac/4"
     assert connection.locked_ids == [10]
     assert connection.rollbacks == 0
+
+
+async def test_lifecycle_logs_correlation_without_callback_or_result_payload(
+    monkeypatch,
+):
+    captured = []
+
+    def capture(level):
+        def record(message, *args, **kwargs):
+            del kwargs
+            captured.append((level, message % args if args else message))
+
+        return record
+
+    monkeypatch.setattr(processing_module.logger, "debug", capture("debug"))
+    monkeypatch.setattr(processing_module.logger, "info", capture("info"))
+    monkeypatch.setattr(processing_module.logger, "warning", capture("warning"))
+    scheduler = Scheduler()
+    worker = Worker(TaskWorkerResult({"secretResult": "do-not-log"}, (22,), "ac/4"))
+    service, _ = make_service([original()], worker=worker, scheduler=scheduler)
+
+    def callback(event):
+        if event.event_type == "task.started":
+            raise RuntimeError("sensitive callback detail")
+
+    accepted = await service.discover_knowledge_entities(
+        EntityDiscoveryRequest(knCode="7", filePath="/docs/source.md"),
+        callback=callback,
+    )
+    await scheduler.run_all()
+
+    rendered = "\n".join(message for _, message in captured)
+    assert f"batch_id={accepted.batch_id}" in rendered
+    assert "task_id=100" in rendered
+    assert "knowledge_base_id=7" in rendered
+    assert "file_path=/docs/source.md" in rendered
+    assert "task_type=ENTITY_DISCOVERY" in rendered
+    assert "batch accepted" in rendered
+    assert "task state persisted" in rendered
+    assert "callback delivered" in rendered
+    assert "callback failed" in rendered
+    assert "error_type=RuntimeError" in rendered
+    assert "do-not-log" not in rendered
+    assert "sensitive callback detail" not in rendered
+    assert "sha-source" not in rendered
+
+
+async def test_asyncio_scheduler_observes_failure_without_error_detail(monkeypatch):
+    captured = []
+
+    def capture(message, *args, **kwargs):
+        del kwargs
+        captured.append(message % args)
+
+    monkeypatch.setattr(processing_module.logger, "error", capture)
+    scheduler = AsyncioTaskScheduler()
+
+    async def fail():
+        raise RuntimeError("sensitive scheduler detail")
+
+    scheduler.schedule(fail)
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert any("error_type=RuntimeError" in message for message in captured)
+    assert all("sensitive scheduler detail" not in message for message in captured)
 
 
 async def test_same_fingerprint_succeeded_task_is_reused_without_scheduling():

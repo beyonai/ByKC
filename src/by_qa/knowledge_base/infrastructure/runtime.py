@@ -6,6 +6,7 @@ from os import getenv
 from typing import Any
 
 from by_qa.config import Settings
+from by_qa.core import logger
 from by_qa.core.model_config import LLMModelProfile, ModelConfig, ModelConfigProvider
 from by_qa.knowledge_base.infrastructure.database import build_connection_factory
 from by_qa.knowledge_base.infrastructure.object_storage import (
@@ -369,6 +370,11 @@ async def build_knowledge_entity_processing_service(
     The chunking service is injected by the application entrypoint so the
     ``knowledge_base`` package remains independent from ``knowledge_build``.
     """
+    logger.info(
+        "knowledge_entity_runtime build started: model_provider_configured=%s, document_chunking_service_type=%s",
+        provider is not None,
+        type(document_chunking_service).__name__,
+    )
     embedding_config = (
         await provider.get_config(LLMModelProfile.EMBEDDING)
         if provider is not None
@@ -407,7 +413,7 @@ async def build_knowledge_entity_processing_service(
         knowledge_entity_discovery=KnowledgeEntityDiscovery(llm),
         knowledge_entity_enricher=KnowledgeEntityEnricher(llm),
     )
-    return KnowledgeEntityProcessingOrchestrator(
+    service = KnowledgeEntityProcessingOrchestrator(
         connection_factory=connection_factory,
         knowledge_base_repository=knowledge_base_repository,
         knowledge_entity_repository=knowledge_entity_repository,
@@ -415,6 +421,13 @@ async def build_knowledge_entity_processing_service(
         knowledge_file_reference_repository=knowledge_file_reference_repository,
         worker=worker,
     )
+    logger.info(
+        "knowledge_entity_runtime build completed: orchestrator_type=%s, worker_type=%s, scheduler_type=%s",
+        type(service).__name__,
+        type(worker).__name__,
+        type(service.task_scheduler).__name__,
+    )
+    return service
 
 
 async def build_metadata_search_service(

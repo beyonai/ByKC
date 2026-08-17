@@ -448,6 +448,9 @@ async def _get_or_build_knowledge_entity_processing_service(
     global _knowledge_entity_processing_service
     request_provider = _get_request_model_config_provider()
     if request_provider is not None and provider is None:
+        logger.info(
+            "knowledge_entity_processing_service resolving: scope=request, cache_state=bypass"
+        )
         from by_qa.knowledge_base.infrastructure.runtime import (
             build_knowledge_entity_processing_service,
         )
@@ -464,6 +467,9 @@ async def _get_or_build_knowledge_entity_processing_service(
         )
 
     if _knowledge_entity_processing_service is None:
+        logger.info(
+            "knowledge_entity_processing_service resolving: scope=application, cache_state=miss"
+        )
         from by_qa.knowledge_base.infrastructure.runtime import (
             build_knowledge_entity_processing_service,
         )
@@ -479,6 +485,10 @@ async def _get_or_build_knowledge_entity_processing_service(
                 active_provider,
                 document_chunking_service=chunker,
             )
+        )
+    else:
+        logger.debug(
+            "knowledge_entity_processing_service resolving: scope=application, cache_state=hit"
         )
     return _knowledge_entity_processing_service
 

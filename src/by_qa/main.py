@@ -33,6 +33,7 @@ _document_chunking_service: Any | None = None
 _metadata_search_service: Any | None = None
 _file_metadata_query_service: Any | None = None
 _file_metadata_update_service: Any | None = None
+_knowledge_entity_processing_service: Any | None = None
 _knowledge_base_schema_initialized = False
 _knowledge_base_schema_lock = asyncio.Lock()
 
@@ -65,6 +66,9 @@ API_MODULES = (
             "get_metadata_search_service": resolve_metadata_search_service,
             "get_file_metadata_query_service": resolve_file_metadata_query_service,
             "get_file_metadata_update_service": resolve_file_metadata_update_service,
+            "get_knowledge_entity_processing_service": (
+                resolve_knowledge_entity_processing_service
+            ),
         },
     ),
 )
@@ -392,10 +396,11 @@ async def _get_or_build_document_chunking_service(provider: Any | None = None):
     """Get or build the document chunking service with configured embedding provider."""
     global _document_chunking_service
     request_provider = _get_request_model_config_provider()
-    if request_provider is not None and provider is None:
+    if request_provider is not None:
         from by_qa.knowledge_build.runtime import build_document_chunking_service
 
-        embedding_config = await request_provider.get_config(LLMModelProfile.EMBEDDING)
+        active_provider = provider or request_provider
+        embedding_config = await active_provider.get_config(LLMModelProfile.EMBEDDING)
         return build_document_chunking_service(
             settings, embedding_config=embedding_config
         )
@@ -434,6 +439,53 @@ async def resolve_document_update_service():
 async def resolve_document_chunking_service():
     """Resolve the document chunking service dynamically for optional modules."""
     return await _get_or_build_document_chunking_service()
+
+
+async def _get_or_build_knowledge_entity_processing_service(
+    provider: Any | None = None,
+):
+    """Get or build KnowledgeEntity processing with matching model dependencies."""
+    global _knowledge_entity_processing_service
+    request_provider = _get_request_model_config_provider()
+    if request_provider is not None and provider is None:
+        from by_qa.knowledge_base.infrastructure.runtime import (
+            build_knowledge_entity_processing_service,
+        )
+
+        active_provider = request_provider
+        await _ensure_knowledge_base_schema_initialized(provider=active_provider)
+        chunker = await _get_or_build_document_chunking_service(
+            provider=active_provider
+        )
+        return await build_knowledge_entity_processing_service(
+            settings,
+            active_provider,
+            document_chunking_service=chunker,
+        )
+
+    if _knowledge_entity_processing_service is None:
+        from by_qa.knowledge_base.infrastructure.runtime import (
+            build_knowledge_entity_processing_service,
+        )
+
+        active_provider = provider or _build_model_config_provider()
+        await _ensure_knowledge_base_schema_initialized(provider=active_provider)
+        chunker = await _get_or_build_document_chunking_service(
+            provider=active_provider
+        )
+        _knowledge_entity_processing_service = (
+            await build_knowledge_entity_processing_service(
+                settings,
+                active_provider,
+                document_chunking_service=chunker,
+            )
+        )
+    return _knowledge_entity_processing_service
+
+
+async def resolve_knowledge_entity_processing_service():
+    """Resolve KnowledgeEntity processing for the knowledge-base API."""
+    return await _get_or_build_knowledge_entity_processing_service()
 
 
 def get_metadata_search_service():

@@ -25,6 +25,9 @@ from by_qa.knowledge_base.repositories.knowledge_base_repository import (
 from by_qa.knowledge_base.repositories.knowledge_build_task_repository import (
     KnowledgeBuildTaskRepository,
 )
+from by_qa.knowledge_base.repositories.knowledge_entity_repository import (
+    KnowledgeEntityRepository,
+)
 from by_qa.knowledge_base.repositories.knowledge_fetch_cache_repository import (
     KnowledgeFetchCacheRepository,
 )
@@ -62,6 +65,17 @@ from by_qa.knowledge_base.services.file_metadata_update_service import (
     FileMetadataUpdateService,
 )
 from by_qa.knowledge_base.services.knowledge_base_service import KnowledgeBaseService
+from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
+    KnowledgeEntityDiscovery,
+    KnowledgeEntityEnricher,
+    OpenAICompatibleKnowledgeEntityLLM,
+)
+from by_qa.knowledge_base.services.knowledge_entity_processing_service import (
+    KnowledgeEntityProcessingOrchestrator,
+)
+from by_qa.knowledge_base.services.knowledge_entity_task_worker import (
+    KnowledgeEntityTaskWorker,
+)
 from by_qa.knowledge_base.services.knowledge_fetch_cache_cleanup_service import (
     KnowledgeFetchCacheCleanupService,
 )
@@ -338,6 +352,65 @@ async def build_knowledge_item_search_service(
             connection_factory=build_connection_factory(settings),
             reference_repository=KnowledgeFileReferenceRepository(),
         ),
+    )
+
+
+async def build_knowledge_entity_processing_service(
+    settings: Settings,
+    provider: ModelConfigProvider | None = None,
+    *,
+    document_chunking_service: Any,
+) -> KnowledgeEntityProcessingOrchestrator:
+    """Build the real discovery/enrichment orchestration service.
+
+    The chunking service is injected by the application entrypoint so the
+    ``knowledge_base`` package remains independent from ``knowledge_build``.
+    """
+    embedding_config = (
+        await provider.get_config(LLMModelProfile.EMBEDDING)
+        if provider is not None
+        else None
+    )
+    validate_knowledge_base_settings(settings, embedding_config=embedding_config)
+
+    connection_factory = build_connection_factory(settings)
+    knowledge_base_repository = KnowledgeBaseRepository()
+    knowledge_entity_repository = KnowledgeEntityRepository()
+    knowledge_build_task_repository = KnowledgeBuildTaskRepository()
+    knowledge_file_reference_repository = KnowledgeFileReferenceRepository()
+    storage_provider = await build_storage_provider(
+        settings, embedding_config=embedding_config
+    )
+    ingestion_service = await build_knowledge_item_ingestion_service(
+        settings, provider=provider
+    )
+    document_update_service = await build_document_update_service(
+        settings, provider=provider
+    )
+    search_service = await build_knowledge_item_search_service(
+        settings, provider=provider
+    )
+
+    llm = OpenAICompatibleKnowledgeEntityLLM(provider=provider)
+    worker = KnowledgeEntityTaskWorker(
+        connection_factory=connection_factory,
+        knowledge_entity_repository=knowledge_entity_repository,
+        knowledge_file_reference_repository=knowledge_file_reference_repository,
+        storage_provider=storage_provider,
+        knowledge_item_ingestion_service=ingestion_service,
+        document_update_service=document_update_service,
+        document_chunking_service=document_chunking_service,
+        knowledge_item_search_service=search_service,
+        knowledge_entity_discovery=KnowledgeEntityDiscovery(llm),
+        knowledge_entity_enricher=KnowledgeEntityEnricher(llm),
+    )
+    return KnowledgeEntityProcessingOrchestrator(
+        connection_factory=connection_factory,
+        knowledge_base_repository=knowledge_base_repository,
+        knowledge_entity_repository=knowledge_entity_repository,
+        knowledge_build_task_repository=knowledge_build_task_repository,
+        knowledge_file_reference_repository=knowledge_file_reference_repository,
+        worker=worker,
     )
 
 

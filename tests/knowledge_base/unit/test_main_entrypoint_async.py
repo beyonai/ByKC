@@ -18,6 +18,7 @@ def reset_main_runtime_state(monkeypatch):
     monkeypatch.setattr(main_module, "_document_update_service", None, raising=False)
     monkeypatch.setattr(main_module, "_knowledge_fetch_cache_cleanup_service", None)
     monkeypatch.setattr(main_module, "_document_chunking_service", None)
+    monkeypatch.setattr(main_module, "_knowledge_entity_processing_service", None)
     monkeypatch.setattr(main_module, "_knowledge_base_schema_initialized", False)
     monkeypatch.setattr(main_module, "_knowledge_base_schema_lock", asyncio.Lock())
 
@@ -162,6 +163,88 @@ async def test_document_update_service_is_built_and_cached_with_model_config_pro
     )
     assert recorded["build"] == (main_module.settings, provider)
     assert recorded["ensured"] == [provider]
+
+
+@pytest.mark.asyncio
+async def test_knowledge_entity_processing_service_is_built_and_cached(monkeypatch):
+    provider = object()
+    events = []
+
+    async def fake_ensure_schema(provider=None):
+        events.append(("schema", provider))
+
+    async def fake_get_chunker(provider=None):
+        events.append(("chunker", provider))
+        return "chunker"
+
+    async def fake_builder(settings, active_provider, *, document_chunking_service):
+        events.append(("builder", settings, active_provider, document_chunking_service))
+        return object()
+
+    monkeypatch.setattr(main_module, "_build_model_config_provider", lambda: provider)
+    monkeypatch.setattr(
+        main_module, "_ensure_knowledge_base_schema_initialized", fake_ensure_schema
+    )
+    monkeypatch.setattr(
+        main_module, "_get_or_build_document_chunking_service", fake_get_chunker
+    )
+    monkeypatch.setattr(
+        "by_qa.knowledge_base.infrastructure.runtime.build_knowledge_entity_processing_service",
+        fake_builder,
+    )
+
+    first = await main_module.resolve_knowledge_entity_processing_service()
+    second = await main_module.resolve_knowledge_entity_processing_service()
+
+    assert first is second
+    assert events == [
+        ("schema", provider),
+        ("chunker", provider),
+        ("builder", main_module.settings, provider, "chunker"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_knowledge_entity_processing_service_is_request_bound(monkeypatch):
+    provider = object()
+    recorded = {"schema": [], "chunker": [], "builder": []}
+
+    async def fake_ensure_schema(provider=None):
+        recorded["schema"].append(provider)
+
+    async def fake_get_chunker(provider=None):
+        recorded["chunker"].append(provider)
+        return object()
+
+    async def fake_builder(settings, active_provider, *, document_chunking_service):
+        recorded["builder"].append(
+            (settings, active_provider, document_chunking_service)
+        )
+        return object()
+
+    monkeypatch.setattr(
+        main_module, "_ensure_knowledge_base_schema_initialized", fake_ensure_schema
+    )
+    monkeypatch.setattr(
+        main_module, "_get_or_build_document_chunking_service", fake_get_chunker
+    )
+    monkeypatch.setattr(
+        "by_qa.knowledge_base.infrastructure.runtime.build_knowledge_entity_processing_service",
+        fake_builder,
+    )
+
+    token = main_module._set_request_model_config_provider(provider)
+    try:
+        first = await main_module.resolve_knowledge_entity_processing_service()
+        second = await main_module.resolve_knowledge_entity_processing_service()
+    finally:
+        main_module._reset_request_model_config_provider(token)
+
+    assert first is not second
+    assert recorded["schema"] == [provider, provider]
+    assert recorded["chunker"] == [provider, provider]
+    assert [item[1] for item in recorded["builder"]] == [provider, provider]
+    assert recorded["builder"][0][2] is not recorded["builder"][1][2]
 
 
 @pytest.mark.asyncio

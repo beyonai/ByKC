@@ -98,3 +98,14 @@ def test_knowledge_base_module_injects_document_update_resolver():
     assert definition.register_kwargs_factory()[
         "get_document_update_service"
     ].__name__ == ("resolve_document_update_service")
+
+
+def test_knowledge_base_module_injects_entity_processing_resolver():
+    definition = next(item for item in API_MODULES if item.name == "knowledge_base")
+
+    assert (
+        definition.register_kwargs_factory()[
+            "get_knowledge_entity_processing_service"
+        ].__name__
+        == "resolve_knowledge_entity_processing_service"
+    )

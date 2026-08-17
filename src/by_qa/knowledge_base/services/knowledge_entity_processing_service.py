@@ -838,7 +838,7 @@ class KnowledgeEntityProcessingOrchestrator:
         enrich_version: str | None,
     ) -> _Evaluation:
         file_id = self._row_id(file_row)
-        document_kind = str(file_row.get("document_kind") or "unknown")
+        document_kind = self._effective_document_kind(file_row)
         expected_kind = (
             "original"
             if capability == ProcessingCapability.ENTITY_DISCOVERY
@@ -1127,6 +1127,26 @@ class KnowledgeEntityProcessingOrchestrator:
         }
         return defaults.get(document_kind) == capability.value
 
+    def _effective_document_kind(self, row: Mapping[str, Any]) -> str:
+        """Resolve a safe processing default for documents without metadata.
+
+        Historical and newly imported ordinary documents may not have an EAV
+        ``documentKind`` row.  They retain the original-document default.  Only
+        files in the reserved entity directory resolve to ``knowledgeEntity``;
+        identity metadata alone does not change the kind.  An explicitly
+        configured blank/invalid value remains ``unknown`` and is rejected
+        instead of silently receiving a default.
+        """
+        configured_value = str(row.get("document_kind") or "").strip()
+        if configured_value:
+            return configured_value
+        if row.get("document_kind_configured"):
+            return "unknown"
+        file_path = str(row.get("file_path") or "")
+        if self._inside_entity_directory(file_path):
+            return "knowledgeEntity"
+        return "original"
+
     def _content_ready(self, row: Mapping[str, Any]) -> bool:
         return bool(
             row.get("markdown_bucket_name")
@@ -1193,7 +1213,7 @@ class KnowledgeEntityProcessingOrchestrator:
                 file_id=str(file_id),
                 kb_code=kb_code,
                 file_path=str(value["file_path"]),
-                document_kind=str(value.get("document_kind") or "unknown"),
+                document_kind=self._effective_document_kind(value),
             )
 
         source_file_id = int(row["source_fs_entry_id"])

@@ -237,6 +237,7 @@ class KnowledgeEntityRepository:
                     "line_count": row["line_count"],
                     "updated_at": row["updated_at"],
                     "document_kind": None,
+                    "document_kind_configured": False,
                     "processing_capabilities": [],
                     "processing_capabilities_configured": False,
                     "entity_name": None,
@@ -282,6 +283,8 @@ class KnowledgeEntityRepository:
         value = cls._metadata_value(row)
         if property_name in cls._LIST_METADATA_FIELDS:
             value = cls._normalize_string_list(value)
+        if property_name == "documentKind":
+            record["document_kind_configured"] = True
         if property_name == "processingCapabilities":
             record["processing_capabilities_configured"] = True
         record[output_name] = value

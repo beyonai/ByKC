@@ -127,6 +127,7 @@ async def test_get_file_with_metadata_folds_eav_values_and_storage_fields():
         "line_count": 20,
         "updated_at": datetime(2026, 8, 17, tzinfo=UTC),
         "document_kind": "knowledgeEntity",
+        "document_kind_configured": True,
         "processing_capabilities": ["entityEnrich"],
         "processing_capabilities_configured": True,
         "entity_name": "OSOT-OCG",
@@ -223,6 +224,36 @@ async def test_missing_processing_capabilities_is_distinct_from_explicit_empty_l
     assert missing[0]["processing_capabilities_configured"] is False
     assert disabled[0]["processing_capabilities"] == []
     assert disabled[0]["processing_capabilities_configured"] is True
+
+
+async def test_missing_document_kind_is_distinct_from_explicit_empty_value():
+    cursor = FakeCursor(
+        fetchall_results=[
+            [file_row(kid=10, file_path="/missing.md")],
+            [
+                file_row(
+                    kid=11,
+                    file_path="/invalid.md",
+                    property_name="documentKind",
+                    value_type="string",
+                    value_string="",
+                )
+            ],
+        ]
+    )
+    repo = KnowledgeEntityRepository()
+
+    missing = await repo.list_files_with_metadata(
+        cursor, knowledge_base_id=7, path_prefix="/missing.md"
+    )
+    invalid = await repo.list_files_with_metadata(
+        cursor, knowledge_base_id=7, path_prefix="/invalid.md"
+    )
+
+    assert missing[0]["document_kind"] is None
+    assert missing[0]["document_kind_configured"] is False
+    assert invalid[0]["document_kind"] == ""
+    assert invalid[0]["document_kind_configured"] is True
 
 
 async def test_list_entity_surfaces_supports_systemwide_and_same_kb_snapshots():

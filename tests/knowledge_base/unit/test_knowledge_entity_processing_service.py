@@ -295,6 +295,105 @@ async def test_explicit_empty_capabilities_disable_default_and_content_must_be_r
     assert result.reason_code == "CONTENT_NOT_READY"
 
 
+async def test_missing_metadata_defaults_ordinary_document_to_discovery_input():
+    unclassified = original(document_kind=None)
+    service, _ = make_service([unclassified])
+
+    result = await service.evaluate_processing_eligibility(
+        ProcessingEligibilityRequest(
+            knCode="7",
+            filePath=unclassified["file_path"],
+            capability="entityDiscovery",
+        )
+    )
+
+    assert result.document_kind == "original"
+    assert result.eligibility == ProcessingEligibility.ELIGIBLE_AND_STALE
+    assert result.reason_code == "NEVER_PROCESSED"
+
+
+async def test_whole_kb_discovery_accepts_unclassified_ordinary_files_only():
+    scheduler = Scheduler()
+    files = [
+        original(10, "/docs/legacy.md", document_kind=None),
+        original(11, "/KnowledgeEntity/legacy-entity.md", document_kind=None),
+    ]
+    service, _ = make_service(files, scheduler=scheduler)
+
+    accepted = await service.discover_knowledge_entities(
+        EntityDiscoveryRequest(knCode="7")
+    )
+
+    assert accepted.eligible_count == 1
+    assert accepted.accepted_count == 1
+    assert accepted.skipped_count == 1
+    assert len(scheduler.factories) == 1
+
+
+async def test_missing_kind_in_entity_directory_never_defaults_to_original():
+    entity = original(
+        20,
+        "/KnowledgeEntity/incomplete.md",
+        document_kind=None,
+    )
+    service, _ = make_service([entity])
+
+    result = await service.evaluate_processing_eligibility(
+        ProcessingEligibilityRequest(
+            knCode="7",
+            filePath=entity["file_path"],
+            capability="entityEnrich",
+        )
+    )
+
+    assert result.document_kind == "knowledgeEntity"
+    assert result.eligibility == ProcessingEligibility.INELIGIBLE
+    assert result.reason_code == "IDENTITY_METADATA_INCOMPLETE"
+
+
+async def test_identity_metadata_outside_entity_directory_defaults_to_original():
+    ordinary = original(
+        document_kind=None,
+        entity_name="legacy-name",
+        aliases=["legacy-alias"],
+        definition_version="ke/1.0",
+        subject_file_id="42",
+    )
+    service, _ = make_service([ordinary])
+
+    result = await service.evaluate_processing_eligibility(
+        ProcessingEligibilityRequest(
+            knCode="7",
+            filePath=ordinary["file_path"],
+            capability="entityDiscovery",
+        )
+    )
+
+    assert result.document_kind == "original"
+    assert result.eligibility == ProcessingEligibility.ELIGIBLE_AND_STALE
+    assert result.reason_code == "NEVER_PROCESSED"
+
+
+async def test_explicit_blank_document_kind_remains_invalid_instead_of_defaulting():
+    invalid = original(
+        document_kind="",
+        document_kind_configured=True,
+    )
+    service, _ = make_service([invalid])
+
+    result = await service.evaluate_processing_eligibility(
+        ProcessingEligibilityRequest(
+            knCode="7",
+            filePath=invalid["file_path"],
+            capability="entityDiscovery",
+        )
+    )
+
+    assert result.document_kind == "unknown"
+    assert result.eligibility == ProcessingEligibility.INELIGIBLE
+    assert result.reason_code == "DOCUMENT_KIND_MISMATCH"
+
+
 async def test_enrich_accepts_resolved_markdown_reference_as_evidence():
     entity = original(
         20,
@@ -563,7 +662,10 @@ async def test_both_relation_direction_merges_by_relation_id_before_paging():
 
 
 async def test_relation_preserves_zero_confidence_and_worker_result_is_duck_typed():
-    files = [original(10), original(11, "/KnowledgeEntity/A.md")]
+    files = [
+        original(10, document_kind=None),
+        original(11, "/KnowledgeEntity/A.md", document_kind=None),
+    ]
     edge = {
         "kid": 1,
         "source_fs_entry_id": 10,
@@ -592,6 +694,8 @@ async def test_relation_preserves_zero_confidence_and_worker_result_is_duck_type
     )
     assert page.data[0].confidence == 0
     assert page.data[0].assertion_count == 2
+    assert page.data[0].source.document_kind == "original"
+    assert page.data[0].target.document_kind == "knowledgeEntity"
     assert page.data[0].representative_evidence.source_heading_path == (
         "Guide / Concepts"
     )

@@ -245,6 +245,16 @@ def test_processing_task_migration_adds_columns_and_rebuilds_running_index():
     ):
         assert column in migration
         assert column in schema
+        assert f"column_name = '{column}'" in migration
+        assert f"column_name = '{column}'" in schema
+    assert "ADD COLUMN IF NOT EXISTS" not in migration
+    assert "ADD COLUMN IF NOT EXISTS" not in schema
+    assert "information_schema.columns" in migration
+    assert "information_schema.columns" in schema
+    for sql in (schema, migration):
+        assert "SET task_type = 'FILE_BUILD'" in sql
+        assert "ALTER COLUMN task_type SET DEFAULT 'FILE_BUILD'" in sql
+        assert "ALTER COLUMN task_type SET NOT NULL" in sql
     assert "DROP INDEX IF EXISTS uq_knowledge_build_task_running_per_file" in migration
     assert "(fs_entry_id, task_type)" in migration
     assert "(fs_entry_id, task_type)" in indexes

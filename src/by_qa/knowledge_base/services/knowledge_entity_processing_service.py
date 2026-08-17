@@ -28,6 +28,7 @@ from by_qa.knowledge_base.api.knowledge_entity_schemas import (
     ProcessingTaskStatusRequest,
     ProcessingTaskSummary,
     ProcessingTaskType,
+    RelationAssertionEvidence,
     SemanticRelationDirection,
     SemanticRelationEndpoint,
     SemanticRelationItem,
@@ -242,7 +243,7 @@ class KnowledgeEntityProcessingOrchestrator:
                 SemanticRelationDirection.OUTGOING,
                 SemanticRelationDirection.BOTH,
             }:
-                outgoing_count = await self.knowledge_file_reference_repository.count_semantic_by_source(
+                outgoing_count = await self.knowledge_file_reference_repository.count_relations_by_source(
                     cursor,
                     knowledge_base_id=knowledge_base_id,
                     source_fs_entry_id=file_id,
@@ -252,14 +253,14 @@ class KnowledgeEntityProcessingOrchestrator:
                 SemanticRelationDirection.INCOMING,
                 SemanticRelationDirection.BOTH,
             }:
-                incoming_count = await self.knowledge_file_reference_repository.count_semantic_by_target(
+                incoming_count = await self.knowledge_file_reference_repository.count_relations_by_target(
                     cursor,
                     knowledge_base_id=knowledge_base_id,
                     target_fs_entry_id=file_id,
                     relation_code=codes,
                 )
             if request.direction == SemanticRelationDirection.OUTGOING:
-                outgoing = await self.knowledge_file_reference_repository.list_semantic_by_source(
+                outgoing = await self.knowledge_file_reference_repository.list_relations_by_source(
                     cursor,
                     knowledge_base_id=knowledge_base_id,
                     source_fs_entry_id=file_id,
@@ -268,7 +269,7 @@ class KnowledgeEntityProcessingOrchestrator:
                     offset=offset,
                 )
             elif request.direction == SemanticRelationDirection.INCOMING:
-                incoming = await self.knowledge_file_reference_repository.list_semantic_by_target(
+                incoming = await self.knowledge_file_reference_repository.list_relations_by_target(
                     cursor,
                     knowledge_base_id=knowledge_base_id,
                     target_fs_entry_id=file_id,
@@ -278,10 +279,10 @@ class KnowledgeEntityProcessingOrchestrator:
                 )
             else:
                 end = offset + request.page_size
-                outgoing = await self._semantic_prefix(
+                outgoing = await self._relation_prefix(
                     cursor, "source", knowledge_base_id, file_id, codes, end
                 )
-                incoming = await self._semantic_prefix(
+                incoming = await self._relation_prefix(
                     cursor, "target", knowledge_base_id, file_id, codes, end
                 )
             tagged = [(row, SemanticRelationDirection.OUTGOING) for row in outgoing] + [
@@ -622,7 +623,7 @@ class KnowledgeEntityProcessingOrchestrator:
         evidence_rows: list[dict[str, Any]] = []
         evidence_files: list[dict[str, Any]] = []
         if reason is None and capability == ProcessingCapability.ENTITY_ENRICH:
-            evidence_rows = await self._semantic_prefix(
+            evidence_rows = await self._relation_prefix(
                 cursor, "target", knowledge_base_id, file_id, ["MENTIONS"], 501
             )
             markdown_sources = (
@@ -755,7 +756,7 @@ class KnowledgeEntityProcessingOrchestrator:
             (row for row in rows if row.get("input_fingerprint") == fingerprint), None
         )
 
-    async def _semantic_prefix(
+    async def _relation_prefix(
         self,
         cursor: Any,
         direction: str,
@@ -768,7 +769,7 @@ class KnowledgeEntityProcessingOrchestrator:
         while len(rows) < count:
             limit = min(500, count - len(rows))
             if direction == "source":
-                chunk = await self.knowledge_file_reference_repository.list_semantic_by_source(
+                chunk = await self.knowledge_file_reference_repository.list_relations_by_source(
                     cursor,
                     knowledge_base_id=knowledge_base_id,
                     source_fs_entry_id=file_id,
@@ -777,7 +778,7 @@ class KnowledgeEntityProcessingOrchestrator:
                     offset=len(rows),
                 )
             else:
-                chunk = await self.knowledge_file_reference_repository.list_semantic_by_target(
+                chunk = await self.knowledge_file_reference_repository.list_relations_by_target(
                     cursor,
                     knowledge_base_id=knowledge_base_id,
                     target_fs_entry_id=file_id,
@@ -939,12 +940,34 @@ class KnowledgeEntityProcessingOrchestrator:
                 document_kind=str(value.get("document_kind") or "unknown"),
             )
 
+        source_file_id = int(row["source_fs_entry_id"])
+        target_file_id = int(row["target_fs_entry_id"])
+        relation_code = str(row["relation_code"])
+        evidence_values = {
+            "producer_run_id": row.get("producer_run_id"),
+            "evidence_fingerprint": row.get("evidence_fingerprint"),
+            "source_heading_path": row.get("source_heading_path"),
+            "start_line": row.get("start_line"),
+            "end_line": row.get("end_line"),
+            "start_offset": row.get("start_offset"),
+            "end_offset": row.get("end_offset"),
+        }
+        representative_evidence = (
+            RelationAssertionEvidence(**evidence_values)
+            if any(value is not None for value in evidence_values.values())
+            else None
+        )
+        logical_key = f"{source_file_id}:{relation_code}:{target_file_id}"
+        relation_id = (
+            "lr_" + hashlib.sha256(logical_key.encode("utf-8")).hexdigest()[:24]
+        )
         return SemanticRelationItem(
-            relation_id=str(self._row_id(row)),
-            relation_code=str(row["relation_code"]),
+            relation_id=relation_id,
+            relation_code=relation_code,
             direction=direction,
-            source=endpoint(int(row["source_fs_entry_id"])),
-            target=endpoint(int(row["target_fs_entry_id"])),
+            source=endpoint(source_file_id),
+            target=endpoint(target_file_id),
+            assertion_count=int(row.get("assertion_count") or 1),
             confidence=float(
                 1.0 if row.get("confidence") is None else row["confidence"]
             ),
@@ -953,6 +976,7 @@ class KnowledgeEntityProcessingOrchestrator:
             source_task_id=str(row["source_task_id"])
             if row.get("source_task_id") is not None
             else None,
+            representative_evidence=representative_evidence,
         )
 
     def _worker_result(

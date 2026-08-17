@@ -697,9 +697,14 @@ async def test_delete_references_for_source_does_not_target_inbound_references()
 
     sql, params = cursor.executed[-1]
     assert "DELETE FROM knowledge_file_reference" in sql
-    assert "source_fs_entry_id = %(source_fs_entry_id)s" in sql
-    assert "target_fs_entry_id" not in sql
-    assert params == {"source_fs_entry_id": 81}
+    where_clause = sql.split("RETURNING", maxsplit=1)[0]
+    assert "source_fs_entry_id = %(source_fs_entry_id)s" in where_clause
+    assert "target_fs_entry_id" not in where_clause
+    assert "discovered_by = ANY(%(discovered_by_values)s)" in where_clause
+    assert params == {
+        "source_fs_entry_id": 81,
+        "discovered_by_values": ["MARKDOWN_PARSER"],
+    }
 
 
 async def test_soft_delete_directory_subtree_updates_descendants():

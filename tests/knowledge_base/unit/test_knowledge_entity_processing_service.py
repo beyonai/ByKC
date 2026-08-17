@@ -168,19 +168,19 @@ class Relations:
         self.incoming = incoming or []
         self.markdown_sources = markdown_sources or []
 
-    async def list_semantic_by_source(self, cursor, *, limit, offset, **kwargs):
+    async def list_relations_by_source(self, cursor, *, limit, offset, **kwargs):
         del cursor, kwargs
         return self.outgoing[offset : offset + limit]
 
-    async def list_semantic_by_target(self, cursor, *, limit, offset, **kwargs):
+    async def list_relations_by_target(self, cursor, *, limit, offset, **kwargs):
         del cursor, kwargs
         return self.incoming[offset : offset + limit]
 
-    async def count_semantic_by_source(self, cursor, **kwargs):
+    async def count_relations_by_source(self, cursor, **kwargs):
         del cursor, kwargs
         return len(self.outgoing)
 
-    async def count_semantic_by_target(self, cursor, **kwargs):
+    async def count_relations_by_target(self, cursor, **kwargs):
         del cursor, kwargs
         return len(self.incoming)
 
@@ -486,7 +486,8 @@ async def test_both_relation_direction_merges_by_relation_id_before_paging():
         )
     )
     assert page.total == 2
-    assert [item.relation_id for item in page.data] == ["1"]
+    assert page.data[0].relation_id.startswith("lr_")
+    assert page.data[0].source.file_id == "11"
     assert page.data[0].direction.value == "INCOMING"
 
 
@@ -499,6 +500,14 @@ async def test_relation_preserves_zero_confidence_and_worker_result_is_duck_type
         "relation_code": "MENTIONS",
         "confidence": 0,
         "discovered_by": "LLM",
+        "assertion_count": 2,
+        "producer_run_id": "markdown:7",
+        "evidence_fingerprint": "fingerprint-1",
+        "source_heading_path": "Guide / Concepts",
+        "start_line": 8,
+        "end_line": 8,
+        "start_offset": 100,
+        "end_offset": 120,
         "definition_version": None,
         "source_task_id": None,
     }
@@ -511,6 +520,11 @@ async def test_relation_preserves_zero_confidence_and_worker_result_is_duck_type
         )
     )
     assert page.data[0].confidence == 0
+    assert page.data[0].assertion_count == 2
+    assert page.data[0].representative_evidence.source_heading_path == (
+        "Guide / Concepts"
+    )
+    assert page.data[0].representative_evidence.start_line == 8
 
     class ForeignResult:
         result_payload = {"ok": True}

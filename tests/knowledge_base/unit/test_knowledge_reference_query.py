@@ -521,7 +521,12 @@ async def test_repository_default_source_query_excludes_deleted_source_files():
     normalized_sql = " ".join(sql.split())
     assert "JOIN knowledge_fs_entry source" in normalized_sql
     assert "source.is_deleted = FALSE" in normalized_sql
-    assert params == {"knowledge_base_id": 7, "target_fs_entry_id": 99}
+    assert params == {
+        "knowledge_base_id": 7,
+        "target_fs_entry_id": 99,
+        "relation_codes": ["MENTIONS"],
+        "discovered_by_values": ["MARKDOWN_PARSER"],
+    }
 
 
 @pytest.mark.asyncio
@@ -538,4 +543,9 @@ async def test_repository_path_query_includes_unresolved_and_broken_sources():
     sql, params = cursor.executed[0]
     normalized_sql = " ".join(sql.split())
     assert "kfr.status IN ('unresolved', 'broken')" in normalized_sql
-    assert params == {"knowledge_base_id": 7, "target_path": "/docs/missing.md"}
+    assert params == {
+        "knowledge_base_id": 7,
+        "target_path": "/docs/missing.md",
+        "relation_codes": ["MENTIONS"],
+        "discovered_by_values": ["MARKDOWN_PARSER"],
+    }

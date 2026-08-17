@@ -1,27 +1,201 @@
-"""Persistence helpers for Markdown references and semantic document relations."""
+"""Persistence helpers for unified document relation assertions."""
 
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Sequence
 from typing import Any
 
 
 class KnowledgeFileReferenceRepository:
-    """Repository for knowledge_file_reference rows."""
+    """Repository for exact assertions and deduplicated logical relations."""
 
-    _SEMANTIC_RELATION_CODES = frozenset({"MENTIONS", "PART_OF", "IS_A", "DEPENDS_ON"})
+    MARKDOWN_PRODUCER = "MARKDOWN_PARSER"
+    DISCOVERY_PRODUCER = "ENTITY_DISCOVERY"
+    ENRICH_PRODUCER = "ENTITY_ENRICH"
+    _RELATION_CODES = frozenset({"MENTIONS", "PART_OF", "IS_A", "DEPENDS_ON"})
+    _TARGET_LOCATOR_TYPES = frozenset({"FS_ENTRY_ID", "KB_PATH", "ENTITY_SURFACE"})
 
-    async def delete_for_source_fs_entry_id(
-        self, cursor: Any, *, source_fs_entry_id: int
-    ) -> None:
-        """Delete references emitted by a file without affecting inbound references."""
-        await cursor.execute(
-            """
-            DELETE FROM knowledge_file_reference
-            WHERE source_fs_entry_id = %(source_fs_entry_id)s
-              AND reference_type = 'MARKDOWN'
-            """,
-            {"source_fs_entry_id": source_fs_entry_id},
+    async def upsert_relation_assertion(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        source_fs_entry_id: int,
+        original_target: str,
+        discovered_by: str,
+        target_fs_entry_id: int | None = None,
+        relation_code: str = "MENTIONS",
+        target_path: str | None = None,
+        target_suffix: str = "",
+        target_kind: str = "FILE",
+        status: str = "resolved",
+        confidence: float | None = None,
+        producer_run_id: str | None = None,
+        evidence_fingerprint: str | None = None,
+        source_heading_path: str | None = None,
+        start_line: int | None = None,
+        end_line: int | None = None,
+        start_offset: int | None = None,
+        end_offset: int | None = None,
+        target_locator_type: str | None = None,
+        target_locator_value: str | None = None,
+        definition_version: str | None = None,
+        source_task_id: int | None = None,
+    ) -> dict[str, Any] | None:
+        """Insert or refresh one exact producer-owned relation assertion."""
+        normalized_relation = self._normalize_relation_code(relation_code)
+        normalized_producer = self._normalize_producer(discovered_by)
+        normalized_run_id = self._normalize_optional_text(producer_run_id)
+        if not original_target:
+            raise ValueError("original_target must not be empty")
+        if target_kind != "FILE":
+            raise ValueError("target_kind must be FILE")
+        if confidence is not None and not 0 <= confidence <= 1:
+            raise ValueError("confidence must be between 0 and 1")
+        self._validate_source_range(
+            start_line=start_line,
+            end_line=end_line,
+            start_offset=start_offset,
+            end_offset=end_offset,
         )
+        locator_type, locator_value = self._normalize_target_locator(
+            target_fs_entry_id=target_fs_entry_id,
+            target_path=target_path,
+            target_locator_type=target_locator_type,
+            target_locator_value=target_locator_value,
+        )
+        self._validate_target_state(
+            target_fs_entry_id=target_fs_entry_id,
+            target_path=target_path,
+            status=status,
+        )
+        fingerprint = evidence_fingerprint or self._build_evidence_fingerprint(
+            original_target=original_target,
+            target_suffix=target_suffix,
+            source_heading_path=source_heading_path,
+            start_line=start_line,
+            end_line=end_line,
+            start_offset=start_offset,
+            end_offset=end_offset,
+            target_locator_type=locator_type,
+            target_locator_value=locator_value,
+        )
+
+        await cursor.execute(
+            f"""
+            INSERT INTO knowledge_file_reference (
+                knowledge_base_id,
+                source_fs_entry_id,
+                target_fs_entry_id,
+                original_target,
+                target_path,
+                target_suffix,
+                target_kind,
+                status,
+                relation_code,
+                confidence,
+                discovered_by,
+                producer_run_id,
+                evidence_fingerprint,
+                source_heading_path,
+                start_line,
+                end_line,
+                start_offset,
+                end_offset,
+                target_locator_type,
+                target_locator_value,
+                definition_version,
+                source_task_id,
+                last_resolved_at,
+                created_at,
+                updated_at
+            )
+            SELECT
+                %(knowledge_base_id)s,
+                source.kid,
+                target.kid,
+                %(original_target)s,
+                %(target_path)s,
+                %(target_suffix)s,
+                %(target_kind)s,
+                %(status)s,
+                %(relation_code)s,
+                %(confidence)s,
+                %(discovered_by)s,
+                %(producer_run_id)s,
+                %(evidence_fingerprint)s,
+                %(source_heading_path)s,
+                %(start_line)s,
+                %(end_line)s,
+                %(start_offset)s,
+                %(end_offset)s,
+                %(target_locator_type)s,
+                %(target_locator_value)s,
+                %(definition_version)s,
+                %(source_task_id)s,
+                CASE WHEN %(status)s = 'resolved' THEN NOW() ELSE NULL END,
+                NOW(),
+                NOW()
+            FROM knowledge_fs_entry source
+            LEFT JOIN knowledge_fs_entry target
+              ON target.kid = %(target_fs_entry_id)s
+             AND target.knowledge_base_id = %(knowledge_base_id)s
+            WHERE source.kid = %(source_fs_entry_id)s
+              AND source.knowledge_base_id = %(knowledge_base_id)s
+              AND (
+                  (%(target_fs_entry_id)s IS NULL AND target.kid IS NULL)
+                  OR target.kid IS NOT NULL
+              )
+            ON DUPLICATE KEY UPDATE
+                target_fs_entry_id = EXCLUDED.target_fs_entry_id,
+                original_target = EXCLUDED.original_target,
+                target_path = EXCLUDED.target_path,
+                target_suffix = EXCLUDED.target_suffix,
+                target_kind = EXCLUDED.target_kind,
+                status = EXCLUDED.status,
+                confidence = EXCLUDED.confidence,
+                source_heading_path = EXCLUDED.source_heading_path,
+                start_line = EXCLUDED.start_line,
+                end_line = EXCLUDED.end_line,
+                start_offset = EXCLUDED.start_offset,
+                end_offset = EXCLUDED.end_offset,
+                definition_version = EXCLUDED.definition_version,
+                source_task_id = EXCLUDED.source_task_id,
+                last_resolved_at = CASE
+                    WHEN EXCLUDED.status = 'resolved' THEN NOW()
+                    ELSE knowledge_file_reference.last_resolved_at
+                END,
+                updated_at = NOW()
+            RETURNING {self._assertion_columns()}
+            """,
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "source_fs_entry_id": source_fs_entry_id,
+                "target_fs_entry_id": target_fs_entry_id,
+                "original_target": original_target,
+                "target_path": target_path,
+                "target_suffix": target_suffix,
+                "target_kind": target_kind,
+                "status": status,
+                "relation_code": normalized_relation,
+                "confidence": confidence,
+                "discovered_by": normalized_producer,
+                "producer_run_id": normalized_run_id,
+                "evidence_fingerprint": fingerprint,
+                "source_heading_path": source_heading_path,
+                "start_line": start_line,
+                "end_line": end_line,
+                "start_offset": start_offset,
+                "end_offset": end_offset,
+                "target_locator_type": locator_type,
+                "target_locator_value": locator_value,
+                "definition_version": definition_version,
+                "source_task_id": source_task_id,
+            },
+        )
+        return await cursor.fetchone()
 
     async def create_reference(
         self,
@@ -35,88 +209,40 @@ class KnowledgeFileReferenceRepository:
         target_suffix: str = "",
         target_kind: str = "FILE",
         status: str,
+        discovered_by: str = MARKDOWN_PRODUCER,
+        producer_run_id: str | None = None,
+        evidence_fingerprint: str | None = None,
+        source_heading_path: str | None = None,
+        start_line: int | None = None,
+        end_line: int | None = None,
+        start_offset: int | None = None,
+        end_offset: int | None = None,
+        target_locator_type: str | None = None,
+        target_locator_value: str | None = None,
     ) -> dict[str, Any] | None:
-        """Insert one parsed Markdown file reference."""
-        await cursor.execute(
-            """
-            INSERT INTO knowledge_file_reference (
-                knowledge_base_id,
-                source_fs_entry_id,
-                target_fs_entry_id,
-                original_target,
-                target_path,
-                target_suffix,
-                target_kind,
-                status,
-                reference_type,
-                last_resolved_at,
-                created_at,
-                updated_at
-            )
-            VALUES (
-                %(knowledge_base_id)s,
-                %(source_fs_entry_id)s,
-                %(target_fs_entry_id)s,
-                %(original_target)s,
-                %(target_path)s,
-                %(target_suffix)s,
-                %(target_kind)s,
-                %(status)s,
-                'MARKDOWN',
-                CASE WHEN %(status)s = 'resolved' THEN NOW() ELSE NULL END,
-                NOW(),
-                NOW()
-            )
-            RETURNING
-                kid,
-                knowledge_base_id,
-                source_fs_entry_id,
-                target_fs_entry_id,
-                original_target,
-                target_path,
-                target_suffix,
-                target_kind,
-                status,
-                reference_type,
-                relation_code,
-                confidence,
-                discovered_by,
-                definition_version,
-                source_task_id,
-                last_resolved_at,
-                created_at,
-                updated_at
-            """,
-            {
-                "knowledge_base_id": knowledge_base_id,
-                "source_fs_entry_id": source_fs_entry_id,
-                "target_fs_entry_id": target_fs_entry_id,
-                "original_target": original_target,
-                "target_path": target_path,
-                "target_suffix": target_suffix,
-                "target_kind": target_kind,
-                "status": status,
-            },
+        """Compatibility adapter for a parsed Markdown MENTIONS assertion."""
+        return await self.upsert_relation_assertion(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            source_fs_entry_id=source_fs_entry_id,
+            target_fs_entry_id=target_fs_entry_id,
+            relation_code="MENTIONS",
+            original_target=original_target,
+            target_path=target_path,
+            target_suffix=target_suffix,
+            target_kind=target_kind,
+            status=status,
+            discovered_by=discovered_by,
+            producer_run_id=producer_run_id,
+            evidence_fingerprint=evidence_fingerprint,
+            source_heading_path=source_heading_path,
+            start_line=start_line,
+            end_line=end_line,
+            start_offset=start_offset,
+            end_offset=end_offset,
+            target_locator_type=target_locator_type,
+            target_locator_value=target_locator_value,
         )
-        return await cursor.fetchone()
-
-    async def list_by_source(
-        self,
-        cursor: Any,
-        *,
-        source_fs_entry_id: int,
-    ) -> list[dict[str, Any]]:
-        """List references emitted by one source file."""
-        await cursor.execute(
-            f"""
-            {self._select_with_target()}
-            WHERE kfr.source_fs_entry_id = %(source_fs_entry_id)s
-              AND kfr.reference_type = 'MARKDOWN'
-            ORDER BY kfr.kid
-            """,
-            {"source_fs_entry_id": source_fs_entry_id},
-        )
-        return await self._fetchall(cursor)
 
     async def upsert_semantic_relation(
         self,
@@ -131,266 +257,88 @@ class KnowledgeFileReferenceRepository:
         discovered_by: str | None = None,
         definition_version: str | None = None,
         source_task_id: int | None = None,
+        producer_run_id: str | None = None,
+        evidence_fingerprint: str | None = None,
     ) -> dict[str, Any] | None:
-        """Create or refresh one stable semantic edge.
-
-        Source, relation and target form the identity. The ``INSERT .. SELECT``
-        also prevents cross-knowledge-base relations when this repository is used
-        without an upstream service check.
-        """
-        self._validate_relation_code(relation_code)
+        """Compatibility adapter for a generated resolved assertion."""
         if source_fs_entry_id == target_fs_entry_id:
             raise ValueError("semantic relation source and target must differ")
-        if confidence is not None and not 0 <= confidence <= 1:
-            raise ValueError("confidence must be between 0 and 1")
-        if not original_target:
-            raise ValueError("original_target must not be empty")
-
-        await cursor.execute(
-            """
-            INSERT INTO knowledge_file_reference (
-                knowledge_base_id,
-                source_fs_entry_id,
-                target_fs_entry_id,
-                original_target,
-                target_path,
-                target_suffix,
-                target_kind,
-                status,
-                reference_type,
-                relation_code,
-                confidence,
-                discovered_by,
-                definition_version,
-                source_task_id,
-                last_resolved_at,
-                created_at,
-                updated_at
-            )
-            SELECT
-                %(knowledge_base_id)s,
-                source.kid,
-                target.kid,
-                %(original_target)s,
-                NULL,
-                '',
-                'FILE',
-                'resolved',
-                'SEMANTIC',
-                %(relation_code)s,
-                %(confidence)s,
-                %(discovered_by)s,
-                %(definition_version)s,
-                %(source_task_id)s,
-                NOW(),
-                NOW(),
-                NOW()
-            FROM knowledge_fs_entry source
-            JOIN knowledge_fs_entry target
-              ON target.kid = %(target_fs_entry_id)s
-             AND target.knowledge_base_id = %(knowledge_base_id)s
-            WHERE source.kid = %(source_fs_entry_id)s
-              AND source.knowledge_base_id = %(knowledge_base_id)s
-            ON DUPLICATE KEY UPDATE
-                knowledge_base_id = EXCLUDED.knowledge_base_id,
-                original_target = EXCLUDED.original_target,
-                confidence = EXCLUDED.confidence,
-                discovered_by = EXCLUDED.discovered_by,
-                definition_version = EXCLUDED.definition_version,
-                source_task_id = EXCLUDED.source_task_id,
-                status = 'resolved',
-                target_path = NULL,
-                target_suffix = '',
-                target_kind = 'FILE',
-                last_resolved_at = NOW(),
-                updated_at = NOW()
-            RETURNING
-                kid,
-                knowledge_base_id,
-                source_fs_entry_id,
-                target_fs_entry_id,
-                original_target,
-                target_path,
-                target_suffix,
-                target_kind,
-                status,
-                reference_type,
-                relation_code,
-                confidence,
-                discovered_by,
-                definition_version,
-                source_task_id,
-                last_resolved_at,
-                created_at,
-                updated_at
-            """,
-            {
-                "knowledge_base_id": knowledge_base_id,
-                "source_fs_entry_id": source_fs_entry_id,
-                "target_fs_entry_id": target_fs_entry_id,
-                "relation_code": relation_code,
-                "original_target": original_target,
-                "confidence": confidence,
-                "discovered_by": discovered_by,
-                "definition_version": definition_version,
-                "source_task_id": source_task_id,
-            },
+        producer = discovered_by or "KNOWLEDGE_ENTITY"
+        return await self.upsert_relation_assertion(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            source_fs_entry_id=source_fs_entry_id,
+            target_fs_entry_id=target_fs_entry_id,
+            relation_code=relation_code,
+            original_target=original_target,
+            target_path=None,
+            status="resolved",
+            confidence=confidence,
+            discovered_by=producer,
+            producer_run_id=producer_run_id
+            or (str(source_task_id) if source_task_id is not None else None),
+            evidence_fingerprint=evidence_fingerprint,
+            target_locator_type="ENTITY_SURFACE",
+            target_locator_value=original_target,
+            definition_version=definition_version,
+            source_task_id=source_task_id,
         )
-        return await cursor.fetchone()
 
-    async def list_semantic_by_source(
+    async def delete_outgoing_for_source_fs_entry_id(
         self,
         cursor: Any,
         *,
-        knowledge_base_id: int,
         source_fs_entry_id: int,
-        relation_code: str | list[str] | tuple[str, ...] | None = None,
-        include_deleted_entries: bool = False,
-        limit: int = 50,
-        offset: int = 0,
+        knowledge_base_id: int | None = None,
+        relation_code: str | Sequence[str] | None = None,
+        discovered_by: str | Sequence[str] | None = None,
+        producer_run_id: str | None = None,
+        source_task_id: int | None = None,
     ) -> list[dict[str, Any]]:
-        """List paged semantic outgoing edges for one source document."""
-        relation_sql, relation_params = self._semantic_relation_filter(relation_code)
-        self._validate_pagination(limit=limit, offset=offset)
-        deleted_filter = (
-            ""
-            if include_deleted_entries
-            else "AND source.is_deleted = FALSE AND target.is_deleted = FALSE"
+        """Delete producer-owned outgoing assertions, never inbound assertions."""
+        conditions = ["source_fs_entry_id = %(source_fs_entry_id)s"]
+        params: dict[str, Any] = {"source_fs_entry_id": source_fs_entry_id}
+        if knowledge_base_id is not None:
+            conditions.append("knowledge_base_id = %(knowledge_base_id)s")
+            params["knowledge_base_id"] = knowledge_base_id
+        relation_sql, relation_params = self._relation_filter(
+            relation_code, table_alias=None
         )
+        if relation_sql:
+            conditions.append(relation_sql.removeprefix("AND "))
+            params.update(relation_params)
+        producer_sql, producer_params = self._producer_filter(
+            discovered_by, table_alias=None
+        )
+        if producer_sql:
+            conditions.append(producer_sql.removeprefix("AND "))
+            params.update(producer_params)
+        if producer_run_id is not None:
+            conditions.append("producer_run_id = %(producer_run_id)s")
+            params["producer_run_id"] = producer_run_id
+        if source_task_id is not None:
+            conditions.append("source_task_id = %(source_task_id)s")
+            params["source_task_id"] = source_task_id
         await cursor.execute(
             f"""
-            {self._select_semantic()}
-            WHERE kfr.knowledge_base_id = %(knowledge_base_id)s
-              AND kfr.reference_type = 'SEMANTIC'
-              AND kfr.source_fs_entry_id = %(source_fs_entry_id)s
-              {relation_sql}
-              {deleted_filter}
-            ORDER BY kfr.kid
-            LIMIT %(limit)s OFFSET %(offset)s
+            DELETE FROM knowledge_file_reference
+            WHERE {" AND ".join(conditions)}
+            RETURNING kid, source_fs_entry_id, target_fs_entry_id,
+                      relation_code, discovered_by, producer_run_id
             """,
-            {
-                "knowledge_base_id": knowledge_base_id,
-                "source_fs_entry_id": source_fs_entry_id,
-                "limit": limit,
-                "offset": offset,
-                **relation_params,
-            },
+            params,
         )
         return await self._fetchall(cursor)
 
-    async def count_semantic_by_source(
-        self,
-        cursor: Any,
-        *,
-        knowledge_base_id: int,
-        source_fs_entry_id: int,
-        relation_code: str | list[str] | tuple[str, ...] | None = None,
-        include_deleted_entries: bool = False,
-    ) -> int:
-        """Count semantic outgoing edges using the same filters as the list query."""
-        relation_sql, relation_params = self._semantic_relation_filter(relation_code)
-        deleted_filter = (
-            ""
-            if include_deleted_entries
-            else "AND source.is_deleted = FALSE AND target.is_deleted = FALSE"
+    async def delete_for_source_fs_entry_id(
+        self, cursor: Any, *, source_fs_entry_id: int
+    ) -> None:
+        """Compatibility adapter deleting Markdown-parser-owned outgoing assertions."""
+        await self.delete_outgoing_for_source_fs_entry_id(
+            cursor,
+            source_fs_entry_id=source_fs_entry_id,
+            discovered_by=self.MARKDOWN_PRODUCER,
         )
-        await cursor.execute(
-            f"""
-            SELECT COUNT(*) AS total
-            FROM knowledge_file_reference kfr
-            JOIN knowledge_fs_entry source ON source.kid = kfr.source_fs_entry_id
-            JOIN knowledge_fs_entry target ON target.kid = kfr.target_fs_entry_id
-            WHERE kfr.knowledge_base_id = %(knowledge_base_id)s
-              AND kfr.reference_type = 'SEMANTIC'
-              AND kfr.source_fs_entry_id = %(source_fs_entry_id)s
-              {relation_sql}
-              {deleted_filter}
-            """,
-            {
-                "knowledge_base_id": knowledge_base_id,
-                "source_fs_entry_id": source_fs_entry_id,
-                **relation_params,
-            },
-        )
-        row = await cursor.fetchone()
-        return int(row["total"]) if row is not None else 0
-
-    async def list_semantic_by_target(
-        self,
-        cursor: Any,
-        *,
-        knowledge_base_id: int,
-        target_fs_entry_id: int,
-        relation_code: str | list[str] | tuple[str, ...] | None = None,
-        include_deleted_entries: bool = False,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> list[dict[str, Any]]:
-        """List paged semantic incoming edges for one target document."""
-        relation_sql, relation_params = self._semantic_relation_filter(relation_code)
-        self._validate_pagination(limit=limit, offset=offset)
-        deleted_filter = (
-            ""
-            if include_deleted_entries
-            else "AND source.is_deleted = FALSE AND target.is_deleted = FALSE"
-        )
-        await cursor.execute(
-            f"""
-            {self._select_semantic()}
-            WHERE kfr.knowledge_base_id = %(knowledge_base_id)s
-              AND kfr.reference_type = 'SEMANTIC'
-              AND kfr.target_fs_entry_id = %(target_fs_entry_id)s
-              {relation_sql}
-              {deleted_filter}
-            ORDER BY kfr.kid
-            LIMIT %(limit)s OFFSET %(offset)s
-            """,
-            {
-                "knowledge_base_id": knowledge_base_id,
-                "target_fs_entry_id": target_fs_entry_id,
-                "limit": limit,
-                "offset": offset,
-                **relation_params,
-            },
-        )
-        return await self._fetchall(cursor)
-
-    async def count_semantic_by_target(
-        self,
-        cursor: Any,
-        *,
-        knowledge_base_id: int,
-        target_fs_entry_id: int,
-        relation_code: str | list[str] | tuple[str, ...] | None = None,
-        include_deleted_entries: bool = False,
-    ) -> int:
-        """Count semantic incoming edges using the same filters as the list query."""
-        relation_sql, relation_params = self._semantic_relation_filter(relation_code)
-        deleted_filter = (
-            ""
-            if include_deleted_entries
-            else "AND source.is_deleted = FALSE AND target.is_deleted = FALSE"
-        )
-        await cursor.execute(
-            f"""
-            SELECT COUNT(*) AS total
-            FROM knowledge_file_reference kfr
-            JOIN knowledge_fs_entry source ON source.kid = kfr.source_fs_entry_id
-            JOIN knowledge_fs_entry target ON target.kid = kfr.target_fs_entry_id
-            WHERE kfr.knowledge_base_id = %(knowledge_base_id)s
-              AND kfr.reference_type = 'SEMANTIC'
-              AND kfr.target_fs_entry_id = %(target_fs_entry_id)s
-              {relation_sql}
-              {deleted_filter}
-            """,
-            {
-                "knowledge_base_id": knowledge_base_id,
-                "target_fs_entry_id": target_fs_entry_id,
-                **relation_params,
-            },
-        )
-        row = await cursor.fetchone()
-        return int(row["total"]) if row is not None else 0
 
     async def delete_semantic_for_source_fs_entry_id(
         self,
@@ -398,28 +346,22 @@ class KnowledgeFileReferenceRepository:
         *,
         knowledge_base_id: int,
         source_fs_entry_id: int,
-        relation_code: str | list[str] | tuple[str, ...] | None = None,
+        relation_code: str | Sequence[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Delete semantic edges emitted by one source, optionally by relation type."""
-        relation_sql, relation_params = self._semantic_relation_filter(
-            relation_code, table_alias=None
+        """Compatibility adapter deleting generated outgoing assertions."""
+        relation_codes = self._normalize_relation_codes(relation_code)
+        producers: list[str] = []
+        if relation_codes is None or "MENTIONS" in relation_codes:
+            producers.append(self.DISCOVERY_PRODUCER)
+        if relation_codes is None or any(code != "MENTIONS" for code in relation_codes):
+            producers.append(self.ENRICH_PRODUCER)
+        return await self.delete_outgoing_for_source_fs_entry_id(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            source_fs_entry_id=source_fs_entry_id,
+            relation_code=relation_codes,
+            discovered_by=producers,
         )
-        await cursor.execute(
-            f"""
-            DELETE FROM knowledge_file_reference
-            WHERE knowledge_base_id = %(knowledge_base_id)s
-              AND reference_type = 'SEMANTIC'
-              AND source_fs_entry_id = %(source_fs_entry_id)s
-              {relation_sql}
-            RETURNING kid, source_fs_entry_id, target_fs_entry_id, relation_code
-            """,
-            {
-                "knowledge_base_id": knowledge_base_id,
-                "source_fs_entry_id": source_fs_entry_id,
-                **relation_params,
-            },
-        )
-        return await self._fetchall(cursor)
 
     async def delete_semantic_for_source_task_id(
         self,
@@ -428,14 +370,14 @@ class KnowledgeFileReferenceRepository:
         knowledge_base_id: int,
         source_task_id: int,
     ) -> list[dict[str, Any]]:
-        """Delete only semantic edges attributed to one processing task."""
+        """Compatibility adapter deleting assertions owned by one task."""
         await cursor.execute(
             """
             DELETE FROM knowledge_file_reference
             WHERE knowledge_base_id = %(knowledge_base_id)s
-              AND reference_type = 'SEMANTIC'
               AND source_task_id = %(source_task_id)s
-            RETURNING kid, source_fs_entry_id, target_fs_entry_id, relation_code
+            RETURNING kid, source_fs_entry_id, target_fs_entry_id,
+                      relation_code, discovered_by, producer_run_id
             """,
             {
                 "knowledge_base_id": knowledge_base_id,
@@ -444,25 +386,309 @@ class KnowledgeFileReferenceRepository:
         )
         return await self._fetchall(cursor)
 
-    async def list_by_reference_ids(
+    async def list_assertions_by_source(
         self,
         cursor: Any,
         *,
-        reference_ids: list[int],
+        source_fs_entry_id: int,
+        relation_code: str | Sequence[str] | None = None,
+        discovered_by: str | Sequence[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """List references by stable reference ids."""
+        """List exact outgoing assertions with optional relation/producer filters."""
+        relation_sql, relation_params = self._relation_filter(relation_code)
+        producer_sql, producer_params = self._producer_filter(discovered_by)
+        await cursor.execute(
+            f"""
+            {self._select_with_target()}
+            WHERE kfr.source_fs_entry_id = %(source_fs_entry_id)s
+              {relation_sql}
+              {producer_sql}
+            ORDER BY kfr.kid
+            """,
+            {
+                "source_fs_entry_id": source_fs_entry_id,
+                **relation_params,
+                **producer_params,
+            },
+        )
+        return await self._fetchall(cursor)
+
+    async def list_by_source(
+        self, cursor: Any, *, source_fs_entry_id: int
+    ) -> list[dict[str, Any]]:
+        """Compatibility view of physical Markdown references."""
+        return await self.list_assertions_by_source(
+            cursor,
+            source_fs_entry_id=source_fs_entry_id,
+            relation_code="MENTIONS",
+            discovered_by=self.MARKDOWN_PRODUCER,
+        )
+
+    async def list_by_reference_ids(
+        self, cursor: Any, *, reference_ids: list[int]
+    ) -> list[dict[str, Any]]:
+        """Resolve stable byqa-ref tokens directly by assertion id."""
         if not reference_ids:
             return []
         await cursor.execute(
             f"""
             {self._select_with_target()}
             WHERE kfr.kid = ANY(%(reference_ids)s)
-              AND kfr.reference_type = 'MARKDOWN'
             ORDER BY kfr.kid
             """,
             {"reference_ids": list(reference_ids)},
         )
         return await self._fetchall(cursor)
+
+    async def list_relations_by_source(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        source_fs_entry_id: int,
+        relation_code: str | Sequence[str] | None = None,
+        include_deleted_entries: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List deduplicated outgoing logical relations."""
+        self._validate_pagination(limit=limit, offset=offset)
+        relation_sql, relation_params = self._relation_filter(relation_code)
+        deleted_filter = (
+            ""
+            if include_deleted_entries
+            else "AND source.is_deleted = FALSE AND target.is_deleted = FALSE"
+        )
+        await cursor.execute(
+            f"""
+            {
+                self._logical_relation_cte(
+                    f'''kfr.knowledge_base_id = %(knowledge_base_id)s
+                    AND kfr.source_fs_entry_id = %(source_fs_entry_id)s
+                    {relation_sql} {deleted_filter}'''
+                )
+            }
+            SELECT * FROM ranked_relations
+            WHERE assertion_rank = 1
+            ORDER BY kid
+            LIMIT %(limit)s OFFSET %(offset)s
+            """,
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "source_fs_entry_id": source_fs_entry_id,
+                "limit": limit,
+                "offset": offset,
+                **relation_params,
+            },
+        )
+        return await self._fetchall(cursor)
+
+    async def count_relations_by_source(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        source_fs_entry_id: int,
+        relation_code: str | Sequence[str] | None = None,
+        include_deleted_entries: bool = False,
+    ) -> int:
+        """Count deduplicated outgoing logical relations."""
+        relation_sql, relation_params = self._relation_filter(relation_code)
+        deleted_filter = (
+            ""
+            if include_deleted_entries
+            else "AND source.is_deleted = FALSE AND target.is_deleted = FALSE"
+        )
+        await cursor.execute(
+            f"""
+            SELECT COUNT(*) AS total
+            FROM (
+                SELECT kfr.source_fs_entry_id, kfr.relation_code,
+                       kfr.target_fs_entry_id
+                FROM knowledge_file_reference kfr
+                JOIN knowledge_fs_entry source ON source.kid = kfr.source_fs_entry_id
+                JOIN knowledge_fs_entry target ON target.kid = kfr.target_fs_entry_id
+                WHERE kfr.knowledge_base_id = %(knowledge_base_id)s
+                  AND kfr.source_fs_entry_id = %(source_fs_entry_id)s
+                  {relation_sql}
+                  {deleted_filter}
+                GROUP BY kfr.source_fs_entry_id, kfr.relation_code,
+                         kfr.target_fs_entry_id
+            ) logical_relations
+            """,
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "source_fs_entry_id": source_fs_entry_id,
+                **relation_params,
+            },
+        )
+        row = await cursor.fetchone()
+        return int(row["total"]) if row is not None else 0
+
+    async def list_relations_by_target(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        target_fs_entry_id: int,
+        relation_code: str | Sequence[str] | None = None,
+        include_deleted_entries: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List deduplicated incoming logical relations."""
+        self._validate_pagination(limit=limit, offset=offset)
+        relation_sql, relation_params = self._relation_filter(relation_code)
+        deleted_filter = (
+            ""
+            if include_deleted_entries
+            else "AND source.is_deleted = FALSE AND target.is_deleted = FALSE"
+        )
+        await cursor.execute(
+            f"""
+            {
+                self._logical_relation_cte(
+                    f'''kfr.knowledge_base_id = %(knowledge_base_id)s
+                    AND kfr.target_fs_entry_id = %(target_fs_entry_id)s
+                    {relation_sql} {deleted_filter}'''
+                )
+            }
+            SELECT * FROM ranked_relations
+            WHERE assertion_rank = 1
+            ORDER BY kid
+            LIMIT %(limit)s OFFSET %(offset)s
+            """,
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "target_fs_entry_id": target_fs_entry_id,
+                "limit": limit,
+                "offset": offset,
+                **relation_params,
+            },
+        )
+        return await self._fetchall(cursor)
+
+    async def count_relations_by_target(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        target_fs_entry_id: int,
+        relation_code: str | Sequence[str] | None = None,
+        include_deleted_entries: bool = False,
+    ) -> int:
+        """Count deduplicated incoming logical relations."""
+        relation_sql, relation_params = self._relation_filter(relation_code)
+        deleted_filter = (
+            ""
+            if include_deleted_entries
+            else "AND source.is_deleted = FALSE AND target.is_deleted = FALSE"
+        )
+        await cursor.execute(
+            f"""
+            SELECT COUNT(*) AS total
+            FROM (
+                SELECT kfr.source_fs_entry_id, kfr.relation_code,
+                       kfr.target_fs_entry_id
+                FROM knowledge_file_reference kfr
+                JOIN knowledge_fs_entry source ON source.kid = kfr.source_fs_entry_id
+                JOIN knowledge_fs_entry target ON target.kid = kfr.target_fs_entry_id
+                WHERE kfr.knowledge_base_id = %(knowledge_base_id)s
+                  AND kfr.target_fs_entry_id = %(target_fs_entry_id)s
+                  {relation_sql}
+                  {deleted_filter}
+                GROUP BY kfr.source_fs_entry_id, kfr.relation_code,
+                         kfr.target_fs_entry_id
+            ) logical_relations
+            """,
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "target_fs_entry_id": target_fs_entry_id,
+                **relation_params,
+            },
+        )
+        row = await cursor.fetchone()
+        return int(row["total"]) if row is not None else 0
+
+    async def list_semantic_by_source(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        source_fs_entry_id: int,
+        relation_code: str | Sequence[str] | None = None,
+        include_deleted_entries: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Compatibility alias for the former semantic-only query API."""
+        return await self.list_relations_by_source(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            source_fs_entry_id=source_fs_entry_id,
+            relation_code=relation_code,
+            include_deleted_entries=include_deleted_entries,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def count_semantic_by_source(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        source_fs_entry_id: int,
+        relation_code: str | Sequence[str] | None = None,
+        include_deleted_entries: bool = False,
+    ) -> int:
+        """Compatibility alias for the former semantic-only query API."""
+        return await self.count_relations_by_source(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            source_fs_entry_id=source_fs_entry_id,
+            relation_code=relation_code,
+            include_deleted_entries=include_deleted_entries,
+        )
+
+    async def list_semantic_by_target(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        target_fs_entry_id: int,
+        relation_code: str | Sequence[str] | None = None,
+        include_deleted_entries: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Compatibility alias for the former semantic-only query API."""
+        return await self.list_relations_by_target(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            target_fs_entry_id=target_fs_entry_id,
+            relation_code=relation_code,
+            include_deleted_entries=include_deleted_entries,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def count_semantic_by_target(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        target_fs_entry_id: int,
+        relation_code: str | Sequence[str] | None = None,
+        include_deleted_entries: bool = False,
+    ) -> int:
+        """Compatibility alias for the former semantic-only query API."""
+        return await self.count_relations_by_target(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            target_fs_entry_id=target_fs_entry_id,
+            relation_code=relation_code,
+            include_deleted_entries=include_deleted_entries,
+        )
 
     async def resolve_pending_for_path(
         self,
@@ -472,9 +698,9 @@ class KnowledgeFileReferenceRepository:
         target_path: str,
         target_fs_entry_id: int,
     ) -> list[dict[str, Any]]:
-        """Resolve unresolved or broken references that point at one exact path."""
+        """Resolve assertions currently waiting on this knowledge-base path."""
         await cursor.execute(
-            """
+            f"""
             UPDATE knowledge_file_reference
             SET target_fs_entry_id = %(target_fs_entry_id)s,
                 target_path = NULL,
@@ -482,33 +708,58 @@ class KnowledgeFileReferenceRepository:
                 last_resolved_at = NOW(),
                 updated_at = NOW()
             WHERE knowledge_base_id = %(knowledge_base_id)s
-              AND reference_type = 'MARKDOWN'
               AND target_fs_entry_id IS NULL
               AND target_path = %(target_path)s
               AND status IN ('unresolved', 'broken')
-            RETURNING
-                kid,
-                knowledge_base_id,
-                source_fs_entry_id,
-                target_fs_entry_id,
-                original_target,
-                target_path,
-                target_suffix,
-                target_kind,
-                status,
-                reference_type,
-                relation_code,
-                confidence,
-                discovered_by,
-                definition_version,
-                source_task_id,
-                last_resolved_at,
-                created_at,
-                updated_at
+            RETURNING {self._assertion_columns()}
             """,
             {
                 "knowledge_base_id": knowledge_base_id,
                 "target_path": target_path,
+                "target_fs_entry_id": target_fs_entry_id,
+            },
+        )
+        return await self._fetchall(cursor)
+
+    async def resolve_assertions_for_locator(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        target_locator_type: str,
+        target_locator_value: str,
+        target_fs_entry_id: int,
+    ) -> list[dict[str, Any]]:
+        """Rebind unresolved assertions through their stable recovery locator."""
+        locator_type = target_locator_type.strip().upper()
+        if locator_type not in self._TARGET_LOCATOR_TYPES:
+            raise ValueError(
+                "target_locator_type must be FS_ENTRY_ID, KB_PATH, or ENTITY_SURFACE"
+            )
+        if not target_locator_value.strip():
+            raise ValueError("target_locator_value must not be empty")
+        await cursor.execute(
+            f"""
+            UPDATE knowledge_file_reference assertion
+            SET target_fs_entry_id = target.kid,
+                target_path = NULL,
+                status = 'resolved',
+                last_resolved_at = NOW(),
+                updated_at = NOW()
+            FROM knowledge_fs_entry target
+            WHERE assertion.knowledge_base_id = %(knowledge_base_id)s
+              AND target.kid = %(target_fs_entry_id)s
+              AND target.knowledge_base_id = %(knowledge_base_id)s
+              AND target.is_deleted = FALSE
+              AND assertion.target_locator_type = %(target_locator_type)s
+              AND assertion.target_locator_value = %(target_locator_value)s
+              AND assertion.status IN ('unresolved', 'broken')
+            RETURNING {self._assertion_columns("assertion")}
+            """,
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "target_locator_type": locator_type,
+                "target_locator_value": target_locator_value,
                 "target_fs_entry_id": target_fs_entry_id,
             },
         )
@@ -522,9 +773,9 @@ class KnowledgeFileReferenceRepository:
         target_path: str,
         target_fs_entry_id: int,
     ) -> list[dict[str, Any]]:
-        """Rebind resolved refs from a soft-deleted row at this path to a live row."""
+        """Rebind assertions from a deleted target row to its live replacement."""
         await cursor.execute(
-            """
+            f"""
             UPDATE knowledge_file_reference kfr
             SET target_fs_entry_id = %(target_fs_entry_id)s,
                 target_path = NULL,
@@ -533,31 +784,12 @@ class KnowledgeFileReferenceRepository:
                 updated_at = NOW()
             FROM knowledge_fs_entry deleted_target
             WHERE kfr.knowledge_base_id = %(knowledge_base_id)s
-              AND kfr.reference_type = 'MARKDOWN'
               AND deleted_target.kid = kfr.target_fs_entry_id
               AND kfr.target_fs_entry_id <> %(target_fs_entry_id)s
               AND kfr.status = 'resolved'
               AND deleted_target.is_deleted = TRUE
               AND deleted_target.virtual_path = %(target_path)s
-            RETURNING
-                kfr.kid,
-                kfr.knowledge_base_id,
-                kfr.source_fs_entry_id,
-                kfr.target_fs_entry_id,
-                kfr.original_target,
-                kfr.target_path,
-                kfr.target_suffix,
-                kfr.target_kind,
-                kfr.status,
-                kfr.reference_type,
-                kfr.relation_code,
-                kfr.confidence,
-                kfr.discovered_by,
-                kfr.definition_version,
-                kfr.source_task_id,
-                kfr.last_resolved_at,
-                kfr.created_at,
-                kfr.updated_at
+            RETURNING {self._assertion_columns("kfr")}
             """,
             {
                 "knowledge_base_id": knowledge_base_id,
@@ -574,10 +806,9 @@ class KnowledgeFileReferenceRepository:
         knowledge_base_id: int,
         targets: list[tuple[int, str]],
     ) -> list[dict[str, Any]]:
-        """Mark references to deleted target rows as broken."""
+        """Break target bindings while retaining each stable recovery locator."""
         if not targets:
             return []
-
         values_sql: list[str] = []
         params: dict[str, Any] = {"knowledge_base_id": knowledge_base_id}
         for index, (target_fs_entry_id, target_path) in enumerate(targets):
@@ -586,39 +817,24 @@ class KnowledgeFileReferenceRepository:
             values_sql.append(f"(%({id_key})s::bigint, %({path_key})s::text)")
             params[id_key] = target_fs_entry_id
             params[path_key] = target_path
-
         await cursor.execute(
             f"""
             UPDATE knowledge_file_reference kfr
             SET target_fs_entry_id = NULL,
                 target_path = deleted_targets.target_path,
+                target_locator_value = CASE
+                    WHEN kfr.target_locator_type = 'KB_PATH'
+                        THEN deleted_targets.target_path
+                    ELSE kfr.target_locator_value
+                END,
                 status = 'broken',
                 updated_at = NOW()
             FROM (VALUES {", ".join(values_sql)})
                 AS deleted_targets(target_fs_entry_id, target_path)
             WHERE kfr.knowledge_base_id = %(knowledge_base_id)s
-              AND kfr.reference_type = 'MARKDOWN'
               AND kfr.target_fs_entry_id = deleted_targets.target_fs_entry_id
               AND kfr.status = 'resolved'
-            RETURNING
-                kfr.kid,
-                kfr.knowledge_base_id,
-                kfr.source_fs_entry_id,
-                kfr.target_fs_entry_id,
-                kfr.original_target,
-                kfr.target_path,
-                kfr.target_suffix,
-                kfr.target_kind,
-                kfr.status,
-                kfr.reference_type,
-                kfr.relation_code,
-                kfr.confidence,
-                kfr.discovered_by,
-                kfr.definition_version,
-                kfr.source_task_id,
-                kfr.last_resolved_at,
-                kfr.created_at,
-                kfr.updated_at
+            RETURNING {self._assertion_columns("kfr")}
             """,
             params,
         )
@@ -632,9 +848,9 @@ class KnowledgeFileReferenceRepository:
         target_path: str,
         target_fs_entry_id: int,
     ) -> list[dict[str, Any]]:
-        """Restore broken references for one path to a live target row."""
+        """Restore every broken assertion last bound to this path."""
         await cursor.execute(
-            """
+            f"""
             UPDATE knowledge_file_reference
             SET target_fs_entry_id = %(target_fs_entry_id)s,
                 target_path = NULL,
@@ -642,35 +858,70 @@ class KnowledgeFileReferenceRepository:
                 last_resolved_at = NOW(),
                 updated_at = NOW()
             WHERE knowledge_base_id = %(knowledge_base_id)s
-              AND reference_type = 'MARKDOWN'
               AND target_fs_entry_id IS NULL
               AND target_path = %(target_path)s
               AND status = 'broken'
-            RETURNING
-                kid,
-                knowledge_base_id,
-                source_fs_entry_id,
-                target_fs_entry_id,
-                original_target,
-                target_path,
-                target_suffix,
-                target_kind,
-                status,
-                reference_type,
-                relation_code,
-                confidence,
-                discovered_by,
-                definition_version,
-                source_task_id,
-                last_resolved_at,
-                created_at,
-                updated_at
+            RETURNING {self._assertion_columns()}
             """,
             {
                 "knowledge_base_id": knowledge_base_id,
                 "target_path": target_path,
                 "target_fs_entry_id": target_fs_entry_id,
             },
+        )
+        return await self._fetchall(cursor)
+
+    async def list_assertions_by_target(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        target_fs_entry_id: int | None = None,
+        target_path: str | None = None,
+        include_deleted_sources: bool = False,
+        relation_code: str | Sequence[str] | None = None,
+        discovered_by: str | Sequence[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """List exact incoming assertions by resolved id or pending path."""
+        if (target_fs_entry_id is None) == (target_path is None):
+            raise ValueError("provide exactly one of target_fs_entry_id or target_path")
+        source_filter = (
+            "" if include_deleted_sources else "AND source.is_deleted = FALSE"
+        )
+        relation_sql, relation_params = self._relation_filter(relation_code)
+        producer_sql, producer_params = self._producer_filter(discovered_by)
+        if target_fs_entry_id is not None:
+            locator_filter = """
+                kfr.target_fs_entry_id = %(target_fs_entry_id)s
+                AND kfr.status = 'resolved'
+            """
+            params: dict[str, Any] = {
+                "knowledge_base_id": knowledge_base_id,
+                "target_fs_entry_id": target_fs_entry_id,
+            }
+        else:
+            locator_filter = """
+                kfr.target_fs_entry_id IS NULL
+                AND kfr.target_path = %(target_path)s
+                AND kfr.status IN ('unresolved', 'broken')
+            """
+            params = {
+                "knowledge_base_id": knowledge_base_id,
+                "target_path": target_path,
+            }
+        params.update(relation_params)
+        params.update(producer_params)
+        await cursor.execute(
+            f"""
+            {self._select_with_source()}
+            WHERE kfr.knowledge_base_id = %(knowledge_base_id)s
+              AND {locator_filter}
+              {source_filter}
+              {relation_sql}
+              {producer_sql}
+            ORDER BY kfr.kid
+            """,
+            params,
         )
         return await self._fetchall(cursor)
 
@@ -683,157 +934,239 @@ class KnowledgeFileReferenceRepository:
         target_path: str | None = None,
         include_deleted_sources: bool = False,
     ) -> list[dict[str, Any]]:
-        """List source references for a live target id or pending target path."""
-        if (target_fs_entry_id is None) == (target_path is None):
-            raise ValueError("provide exactly one of target_fs_entry_id or target_path")
-
-        source_filter = (
-            "" if include_deleted_sources else "AND source.is_deleted = FALSE"
+        """Compatibility view of physical inbound Markdown references."""
+        return await self.list_assertions_by_target(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            target_fs_entry_id=target_fs_entry_id,
+            target_path=target_path,
+            include_deleted_sources=include_deleted_sources,
+            relation_code="MENTIONS",
+            discovered_by=self.MARKDOWN_PRODUCER,
         )
-        if target_fs_entry_id is not None:
-            await cursor.execute(
-                f"""
-                {self._select_with_source()}
-                WHERE kfr.knowledge_base_id = %(knowledge_base_id)s
-                  AND kfr.reference_type = 'MARKDOWN'
-                  AND kfr.target_fs_entry_id = %(target_fs_entry_id)s
-                  AND kfr.status = 'resolved'
-                  {source_filter}
-                ORDER BY kfr.kid
-                """,
-                {
-                    "knowledge_base_id": knowledge_base_id,
-                    "target_fs_entry_id": target_fs_entry_id,
-                },
+
+    def _logical_relation_cte(self, conditions: str) -> str:
+        return f"""
+            WITH ranked_relations AS (
+                SELECT
+                    {self._assertion_columns("kfr")},
+                    source.virtual_path AS source_virtual_path,
+                    source.is_deleted AS source_is_deleted,
+                    target.virtual_path AS target_virtual_path,
+                    target.is_deleted AS target_is_deleted,
+                    COUNT(*) OVER (
+                        PARTITION BY kfr.source_fs_entry_id,
+                                     kfr.relation_code,
+                                     kfr.target_fs_entry_id
+                    ) AS assertion_count,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY kfr.source_fs_entry_id,
+                                     kfr.relation_code,
+                                     kfr.target_fs_entry_id
+                        ORDER BY CASE
+                                     WHEN kfr.start_line IS NOT NULL
+                                       OR kfr.start_offset IS NOT NULL THEN 0
+                                     ELSE 1
+                                 END,
+                                 kfr.confidence DESC NULLS LAST,
+                                 kfr.updated_at DESC,
+                                 kfr.kid DESC
+                    ) AS assertion_rank
+                FROM knowledge_file_reference kfr
+                JOIN knowledge_fs_entry source ON source.kid = kfr.source_fs_entry_id
+                JOIN knowledge_fs_entry target ON target.kid = kfr.target_fs_entry_id
+                WHERE {conditions}
             )
-        else:
-            await cursor.execute(
-                f"""
-                {self._select_with_source()}
-                WHERE kfr.knowledge_base_id = %(knowledge_base_id)s
-                  AND kfr.reference_type = 'MARKDOWN'
-                  AND kfr.target_fs_entry_id IS NULL
-                  AND kfr.target_path = %(target_path)s
-                  AND kfr.status IN ('unresolved', 'broken')
-                  {source_filter}
-                ORDER BY kfr.kid
-                """,
-                {
-                    "knowledge_base_id": knowledge_base_id,
-                    "target_path": target_path,
-                },
-            )
-        return await self._fetchall(cursor)
+        """
 
     def _select_with_target(self) -> str:
-        return """
+        return f"""
             SELECT
-                kfr.kid,
-                kfr.knowledge_base_id,
-                kfr.source_fs_entry_id,
-                kfr.target_fs_entry_id,
-                kfr.original_target,
-                kfr.target_path,
-                kfr.target_suffix,
-                kfr.target_kind,
-                kfr.status,
-                kfr.reference_type,
-                kfr.relation_code,
-                kfr.confidence,
-                kfr.discovered_by,
-                kfr.definition_version,
-                kfr.source_task_id,
-                kfr.last_resolved_at,
-                kfr.created_at,
-                kfr.updated_at,
+                {self._assertion_columns("kfr")},
                 target.virtual_path AS target_virtual_path,
                 target.is_deleted AS target_is_deleted
             FROM knowledge_file_reference kfr
-            LEFT JOIN knowledge_fs_entry target
-              ON target.kid = kfr.target_fs_entry_id
-            """
+            LEFT JOIN knowledge_fs_entry target ON target.kid = kfr.target_fs_entry_id
+        """
 
     def _select_with_source(self) -> str:
-        return """
+        return f"""
             SELECT
-                kfr.kid,
-                kfr.knowledge_base_id,
-                kfr.source_fs_entry_id,
-                kfr.target_fs_entry_id,
-                kfr.original_target,
-                kfr.target_path,
-                kfr.target_suffix,
-                kfr.target_kind,
-                kfr.status,
-                kfr.reference_type,
-                kfr.relation_code,
-                kfr.confidence,
-                kfr.discovered_by,
-                kfr.definition_version,
-                kfr.source_task_id,
-                kfr.last_resolved_at,
-                kfr.created_at,
-                kfr.updated_at,
+                {self._assertion_columns("kfr")},
                 source.virtual_path AS source_virtual_path,
                 source.is_deleted AS source_is_deleted
             FROM knowledge_file_reference kfr
-            JOIN knowledge_fs_entry source
-              ON source.kid = kfr.source_fs_entry_id
-            """
+            JOIN knowledge_fs_entry source ON source.kid = kfr.source_fs_entry_id
+        """
 
-    def _select_semantic(self) -> str:
-        return """
-            SELECT
-                kfr.kid,
-                kfr.knowledge_base_id,
-                kfr.source_fs_entry_id,
-                kfr.target_fs_entry_id,
-                kfr.original_target,
-                kfr.status,
-                kfr.reference_type,
-                kfr.relation_code,
-                kfr.confidence,
-                kfr.discovered_by,
-                kfr.definition_version,
-                kfr.source_task_id,
-                kfr.last_resolved_at,
-                kfr.created_at,
-                kfr.updated_at,
-                source.virtual_path AS source_virtual_path,
-                source.is_deleted AS source_is_deleted,
-                target.virtual_path AS target_virtual_path,
-                target.is_deleted AS target_is_deleted
-            FROM knowledge_file_reference kfr
-            JOIN knowledge_fs_entry source
-              ON source.kid = kfr.source_fs_entry_id
-            JOIN knowledge_fs_entry target
-              ON target.kid = kfr.target_fs_entry_id
-            """
+    def _assertion_columns(self, table_alias: str | None = None) -> str:
+        prefix = f"{table_alias}." if table_alias else ""
+        return ",\n                ".join(
+            f"{prefix}{column}"
+            for column in (
+                "kid",
+                "knowledge_base_id",
+                "source_fs_entry_id",
+                "target_fs_entry_id",
+                "original_target",
+                "target_path",
+                "target_suffix",
+                "target_kind",
+                "status",
+                "relation_code",
+                "confidence",
+                "discovered_by",
+                "producer_run_id",
+                "evidence_fingerprint",
+                "source_heading_path",
+                "start_line",
+                "end_line",
+                "start_offset",
+                "end_offset",
+                "target_locator_type",
+                "target_locator_value",
+                "definition_version",
+                "source_task_id",
+                "last_resolved_at",
+                "created_at",
+                "updated_at",
+            )
+        )
 
-    def _semantic_relation_filter(
+    def _relation_filter(
         self,
-        relation_code: str | list[str] | tuple[str, ...] | None,
+        relation_code: str | Sequence[str] | None,
         *,
         table_alias: str | None = "kfr",
     ) -> tuple[str, dict[str, Any]]:
-        if relation_code is None:
+        relation_codes = self._normalize_relation_codes(relation_code)
+        if relation_codes is None:
             return "", {}
-        relation_codes = (
-            [relation_code] if isinstance(relation_code, str) else list(relation_code)
-        )
-        if not relation_codes:
-            return "", {}
-        for code in relation_codes:
-            self._validate_relation_code(code)
         prefix = f"{table_alias}." if table_alias else ""
         return f"AND {prefix}relation_code = ANY(%(relation_codes)s)", {
             "relation_codes": relation_codes
         }
 
-    def _validate_relation_code(self, relation_code: str) -> None:
-        if relation_code not in self._SEMANTIC_RELATION_CODES:
-            allowed = ", ".join(sorted(self._SEMANTIC_RELATION_CODES))
+    def _producer_filter(
+        self,
+        discovered_by: str | Sequence[str] | None,
+        *,
+        table_alias: str | None = "kfr",
+    ) -> tuple[str, dict[str, Any]]:
+        if discovered_by is None:
+            return "", {}
+        producers = (
+            [discovered_by] if isinstance(discovered_by, str) else list(discovered_by)
+        )
+        producers = [self._normalize_producer(value) for value in producers]
+        if not producers:
+            raise ValueError("discovered_by must not be empty")
+        prefix = f"{table_alias}." if table_alias else ""
+        return f"AND {prefix}discovered_by = ANY(%(discovered_by_values)s)", {
+            "discovered_by_values": producers
+        }
+
+    def _normalize_relation_codes(
+        self, relation_code: str | Sequence[str] | None
+    ) -> list[str] | None:
+        if relation_code is None:
+            return None
+        values = (
+            [relation_code] if isinstance(relation_code, str) else list(relation_code)
+        )
+        if not values:
+            raise ValueError("relation_code must not be empty")
+        return [self._normalize_relation_code(value) for value in values]
+
+    def _normalize_relation_code(self, relation_code: str) -> str:
+        normalized = relation_code.strip().upper()
+        if normalized not in self._RELATION_CODES:
+            allowed = ", ".join(sorted(self._RELATION_CODES))
             raise ValueError(f"relation_code must be one of: {allowed}")
+        return normalized
+
+    def _normalize_producer(self, discovered_by: str) -> str:
+        normalized = discovered_by.strip().upper()
+        if not normalized:
+            raise ValueError("discovered_by must not be empty")
+        return normalized
+
+    def _normalize_optional_text(self, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    def _normalize_target_locator(
+        self,
+        *,
+        target_fs_entry_id: int | None,
+        target_path: str | None,
+        target_locator_type: str | None,
+        target_locator_value: str | None,
+    ) -> tuple[str, str]:
+        locator_type = (
+            target_locator_type.strip().upper()
+            if target_locator_type is not None
+            else ("FS_ENTRY_ID" if target_fs_entry_id is not None else "KB_PATH")
+        )
+        if locator_type not in self._TARGET_LOCATOR_TYPES:
+            raise ValueError(
+                "target_locator_type must be FS_ENTRY_ID, KB_PATH, or ENTITY_SURFACE"
+            )
+        if target_locator_value is not None:
+            locator_value = target_locator_value.strip()
+        elif locator_type == "FS_ENTRY_ID" and target_fs_entry_id is not None:
+            locator_value = str(target_fs_entry_id)
+        elif locator_type == "KB_PATH" and target_path:
+            locator_value = target_path
+        else:
+            locator_value = ""
+        if not locator_value:
+            raise ValueError("target_locator_value must not be empty")
+        return locator_type, locator_value
+
+    def _validate_target_state(
+        self,
+        *,
+        target_fs_entry_id: int | None,
+        target_path: str | None,
+        status: str,
+    ) -> None:
+        if status == "resolved":
+            valid = target_fs_entry_id is not None and target_path is None
+        elif status in {"unresolved", "broken"}:
+            valid = target_fs_entry_id is None and bool(target_path)
+        else:
+            raise ValueError("unsupported assertion status")
+        if not valid:
+            raise ValueError("target state does not match assertion status")
+
+    def _validate_source_range(
+        self,
+        *,
+        start_line: int | None,
+        end_line: int | None,
+        start_offset: int | None,
+        end_offset: int | None,
+    ) -> None:
+        if (start_line is None) != (end_line is None):
+            raise ValueError("start_line and end_line must be provided together")
+        if start_line is not None and (start_line < 1 or end_line < start_line):
+            raise ValueError("invalid source line range")
+        if (start_offset is None) != (end_offset is None):
+            raise ValueError("start_offset and end_offset must be provided together")
+        if start_offset is not None and (start_offset < 0 or end_offset < start_offset):
+            raise ValueError("invalid source offset range")
+
+    def _build_evidence_fingerprint(self, **evidence: Any) -> str:
+        payload = json.dumps(
+            evidence,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def _validate_pagination(self, *, limit: int, offset: int) -> None:
         if limit < 1 or limit > 500:

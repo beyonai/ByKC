@@ -1,9 +1,8 @@
-"""Unit tests for KnowledgeFileReferenceRepository."""
+"""Unit tests for unified relation-assertion persistence."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -11,565 +10,428 @@ from by_qa.knowledge_base.repositories.knowledge_file_reference_repository impor
     KnowledgeFileReferenceRepository,
 )
 
-MIGRATION_PATH = Path("src/by_qa/knowledge_base/sql/026_knowledge_file_reference.sql")
-EXTENSION_MIGRATION_PATH = Path(
+HISTORICAL_SCHEMA_PATH = Path(
+    "src/by_qa/knowledge_base/sql/026_knowledge_file_reference.sql"
+)
+ASSERTION_MIGRATION_PATH = Path(
     "src/by_qa/knowledge_base/sql/030_knowledge_file_reference_semantic_extension.sql"
 )
 
 
 class FakeCursor:
-    def __init__(
-        self,
-        *,
-        fetchone_results: list[dict[str, Any] | None] | None = None,
-        fetchall_results: list[list[dict[str, Any]]] | None = None,
-    ) -> None:
-        self.executed: list[tuple[str, dict[str, Any] | None]] = []
+    def __init__(self, *, fetchone_results=None, fetchall_results=None):
+        self.executed: list[tuple[str, dict | None]] = []
         self._fetchone_results = list(fetchone_results or [])
         self._fetchall_results = list(fetchall_results or [])
 
-    async def execute(self, sql: str, params: dict[str, Any] | None = None) -> None:
+    async def execute(self, sql, params=None):
         self.executed.append((sql, params))
 
-    async def fetchone(self) -> dict[str, Any] | None:
+    async def fetchone(self):
         if self._fetchone_results:
             return self._fetchone_results.pop(0)
         return None
 
-    async def fetchall(self) -> list[dict[str, Any]]:
+    async def fetchall(self):
         if self._fetchall_results:
             return self._fetchall_results.pop(0)
         return []
 
 
-@pytest.mark.asyncio
-async def test_create_reference_inserts_resolved_unresolved_and_broken_rows():
-    repo = KnowledgeFileReferenceRepository()
-    cursor = FakeCursor(
-        fetchone_results=[
-            {"kid": 11, "status": "resolved"},
-            {"kid": 12, "status": "unresolved"},
-            {"kid": 13, "status": "broken"},
-        ]
-    )
-
-    resolved = await repo.create_reference(
-        cursor,
-        knowledge_base_id=1,
-        source_fs_entry_id=2,
-        target_fs_entry_id=3,
-        original_target="../target.md",
-        target_path=None,
-        target_suffix="#section",
-        status="resolved",
-    )
-    unresolved = await repo.create_reference(
-        cursor,
-        knowledge_base_id=1,
-        source_fs_entry_id=2,
-        target_fs_entry_id=None,
-        original_target="./missing.md",
-        target_path="/docs/missing.md",
-        status="unresolved",
-    )
-    broken = await repo.create_reference(
-        cursor,
-        knowledge_base_id=1,
-        source_fs_entry_id=2,
-        target_fs_entry_id=None,
-        original_target="./deleted.md",
-        target_path="/docs/deleted.md",
-        status="broken",
-    )
-
-    assert resolved["kid"] == 11
-    assert unresolved["kid"] == 12
-    assert broken["kid"] == 13
-    assert len(cursor.executed) == 3
-    for sql, params in cursor.executed:
-        assert "INSERT INTO knowledge_file_reference" in sql
-        assert "'MARKDOWN'" in sql
-        assert "target_kind" in sql
-        assert "RETURNING" in sql
-        assert params["target_kind"] == "FILE"
-    assert cursor.executed[0][1]["target_fs_entry_id"] == 3
-    assert cursor.executed[0][1]["target_path"] is None
-    assert cursor.executed[0][1]["target_suffix"] == "#section"
-    assert cursor.executed[1][1]["target_fs_entry_id"] is None
-    assert cursor.executed[1][1]["target_path"] == "/docs/missing.md"
-    assert cursor.executed[1][1]["target_suffix"] == ""
-    assert cursor.executed[2][1]["status"] == "broken"
-
-
-@pytest.mark.asyncio
-async def test_list_by_reference_ids_joins_target_and_exposes_deletion_state():
-    repo = KnowledgeFileReferenceRepository()
-    cursor = FakeCursor(
-        fetchall_results=[
-            [
-                {
-                    "kid": 11,
-                    "target_fs_entry_id": 3,
-                    "target_path": None,
-                    "target_virtual_path": "/docs/target.md",
-                    "target_is_deleted": True,
-                }
-            ]
-        ]
-    )
-
-    rows = await repo.list_by_reference_ids(cursor, reference_ids=[11, 12])
-
-    assert rows[0]["target_is_deleted"] is True
-    assert rows[0]["target_virtual_path"] == "/docs/target.md"
-    sql, params = cursor.executed[0]
-    normalized = " ".join(sql.split())
-    assert (
-        "LEFT JOIN knowledge_fs_entry target ON target.kid = kfr.target_fs_entry_id"
-        in normalized
-    )
-    assert "target.is_deleted AS target_is_deleted" in normalized
-    assert params == {"reference_ids": [11, 12]}
-    assert "kfr.reference_type = 'MARKDOWN'" in normalized
-
-
-@pytest.mark.asyncio
-async def test_resolve_pending_for_path_updates_unresolved_and_broken_rows_by_exact_path():
-    repo = KnowledgeFileReferenceRepository()
-    cursor = FakeCursor(
-        fetchall_results=[
-            [
-                {"kid": 21, "status": "resolved", "target_fs_entry_id": 7},
-                {"kid": 22, "status": "resolved", "target_fs_entry_id": 7},
-            ]
-        ]
-    )
-
-    rows = await repo.resolve_pending_for_path(
-        cursor,
-        knowledge_base_id=1,
-        target_path="/docs/restored.md",
-        target_fs_entry_id=7,
-    )
-
-    assert [row["kid"] for row in rows] == [21, 22]
-    sql, params = cursor.executed[0]
-    normalized = " ".join(sql.split())
-    assert "status = 'resolved'" in normalized
-    assert "target_path = NULL" in normalized
-    assert "last_resolved_at = NOW()" in normalized
-    assert "status IN ('unresolved', 'broken')" in normalized
-    assert "reference_type = 'MARKDOWN'" in normalized
-    assert "target_path = %(target_path)s" in normalized
-    assert params == {
-        "knowledge_base_id": 1,
-        "target_path": "/docs/restored.md",
-        "target_fs_entry_id": 7,
-    }
-
-
-@pytest.mark.asyncio
-async def test_rebind_deleted_target_for_path_updates_resolved_rows_by_deleted_target_path():
-    repo = KnowledgeFileReferenceRepository()
-    cursor = FakeCursor(
-        fetchall_results=[
-            [
-                {"kid": 23, "status": "resolved", "target_fs_entry_id": 9},
-            ]
-        ]
-    )
-
-    rows = await repo.rebind_deleted_target_for_path(
-        cursor,
-        knowledge_base_id=1,
-        target_path="/docs/restored.md",
-        target_fs_entry_id=9,
-    )
-
-    assert rows == [{"kid": 23, "status": "resolved", "target_fs_entry_id": 9}]
-    sql, params = cursor.executed[0]
-    normalized = " ".join(sql.split())
-    assert "FROM knowledge_fs_entry deleted_target" in normalized
-    assert "deleted_target.kid = kfr.target_fs_entry_id" in normalized
-    assert "deleted_target.is_deleted = TRUE" in normalized
-    assert "deleted_target.virtual_path = %(target_path)s" in normalized
-    assert "kfr.status = 'resolved'" in normalized
-    assert "kfr.reference_type = 'MARKDOWN'" in normalized
-    assert "kfr.target_fs_entry_id <> %(target_fs_entry_id)s" in normalized
-    assert "target_path = NULL" in normalized
-    assert params == {
-        "knowledge_base_id": 1,
-        "target_path": "/docs/restored.md",
-        "target_fs_entry_id": 9,
-    }
-
-
-@pytest.mark.asyncio
-async def test_mark_targets_deleted_writes_each_rows_own_target_path():
-    repo = KnowledgeFileReferenceRepository()
-    cursor = FakeCursor(
-        fetchall_results=[
-            [
-                {"kid": 31, "status": "broken", "target_path": "/docs/a.md"},
-                {"kid": 32, "status": "broken", "target_path": "/docs/b.md"},
-            ]
-        ]
-    )
-
-    rows = await repo.mark_targets_deleted(
-        cursor,
-        knowledge_base_id=1,
-        targets=[
-            (7, "/docs/a.md"),
-            (8, "/docs/b.md"),
-        ],
-    )
-
-    assert [row["target_path"] for row in rows] == ["/docs/a.md", "/docs/b.md"]
-    sql, params = cursor.executed[0]
-    normalized = " ".join(sql.split())
-    assert "FROM (VALUES" in normalized
-    assert "target_path = deleted_targets.target_path" in normalized
-    assert "target_fs_entry_id = NULL" in normalized
-    assert "status = 'broken'" in normalized
-    assert "kfr.reference_type = 'MARKDOWN'" in normalized
-    assert params == {
-        "knowledge_base_id": 1,
-        "target_0_id": 7,
-        "target_0_path": "/docs/a.md",
-        "target_1_id": 8,
-        "target_1_path": "/docs/b.md",
-    }
-
-
-@pytest.mark.asyncio
-async def test_list_sources_by_target_supports_resolved_and_broken_lookup():
+async def test_upsert_relation_assertion_persists_exact_evidence_and_stable_locator():
+    row = {"kid": 51, "relation_code": "MENTIONS"}
+    cursor = FakeCursor(fetchone_results=[row])
     repo = KnowledgeFileReferenceRepository()
 
-    resolved_cursor = FakeCursor(fetchall_results=[[{"kid": 41}]])
-    resolved_rows = await repo.list_sources_by_target(
-        resolved_cursor,
-        knowledge_base_id=1,
-        target_fs_entry_id=7,
-    )
-    assert resolved_rows == [{"kid": 41}]
-    resolved_sql, resolved_params = resolved_cursor.executed[0]
-    assert "target_fs_entry_id = %(target_fs_entry_id)s" in resolved_sql
-    assert "status = 'resolved'" in resolved_sql
-    assert "kfr.reference_type = 'MARKDOWN'" in resolved_sql
-    assert resolved_params == {"knowledge_base_id": 1, "target_fs_entry_id": 7}
-
-    broken_cursor = FakeCursor(fetchall_results=[[{"kid": 42}]])
-    broken_rows = await repo.list_sources_by_target(
-        broken_cursor,
-        knowledge_base_id=1,
-        target_path="/docs/deleted.md",
-    )
-    assert broken_rows == [{"kid": 42}]
-    broken_sql, broken_params = broken_cursor.executed[0]
-    assert "target_path = %(target_path)s" in broken_sql
-    assert "status IN ('unresolved', 'broken')" in broken_sql
-    assert "kfr.reference_type = 'MARKDOWN'" in broken_sql
-    assert broken_params == {"knowledge_base_id": 1, "target_path": "/docs/deleted.md"}
-
-
-def test_reference_migration_declares_delete_and_state_constraints():
-    sql = " ".join(MIGRATION_PATH.read_text(encoding="utf-8").split())
-
-    assert (
-        "knowledge_base_id bigint NOT NULL REFERENCES knowledge_base(kid) "
-        "ON DELETE CASCADE"
-    ) in sql
-    assert (
-        "source_fs_entry_id bigint NOT NULL REFERENCES knowledge_fs_entry(kid) "
-        "ON DELETE CASCADE"
-    ) in sql
-    assert (
-        "target_fs_entry_id bigint NULL REFERENCES knowledge_fs_entry(kid) "
-        "ON DELETE RESTRICT"
-    ) in sql
-    assert "CONSTRAINT chk_knowledge_file_reference_state CHECK" in sql
-    assert "status = 'resolved'" in sql
-    assert "target_fs_entry_id IS NOT NULL" in sql
-    assert "target_path IS NULL" in sql
-    assert "status IN ('unresolved', 'broken')" in sql
-    assert "target_fs_entry_id IS NULL" in sql
-    assert "target_path IS NOT NULL" in sql
-
-
-@pytest.mark.asyncio
-async def test_delete_and_list_markdown_by_source_never_touch_semantic_rows():
-    repo = KnowledgeFileReferenceRepository()
-    delete_cursor = FakeCursor()
-    list_cursor = FakeCursor(fetchall_results=[[{"kid": 1}]])
-
-    await repo.delete_for_source_fs_entry_id(delete_cursor, source_fs_entry_id=9)
-    rows = await repo.list_by_source(list_cursor, source_fs_entry_id=9)
-
-    assert rows == [{"kid": 1}]
-    delete_sql, _ = delete_cursor.executed[0]
-    list_sql, _ = list_cursor.executed[0]
-    assert "reference_type = 'MARKDOWN'" in delete_sql
-    assert "kfr.reference_type = 'MARKDOWN'" in list_sql
-
-
-@pytest.mark.asyncio
-async def test_mark_target_restored_only_updates_markdown_rows():
-    repo = KnowledgeFileReferenceRepository()
-    cursor = FakeCursor(fetchall_results=[[]])
-
-    await repo.mark_target_restored(
-        cursor,
-        knowledge_base_id=4,
-        target_path="/docs/restored.md",
-        target_fs_entry_id=8,
-    )
-
-    sql, _ = cursor.executed[0]
-    assert "reference_type = 'MARKDOWN'" in sql
-
-
-@pytest.mark.asyncio
-async def test_upsert_semantic_relation_uses_stable_partial_unique_key():
-    repo = KnowledgeFileReferenceRepository()
-    cursor = FakeCursor(
-        fetchone_results=[
-            {
-                "kid": 51,
-                "reference_type": "SEMANTIC",
-                "relation_code": "MENTIONS",
-            }
-        ]
-    )
-
-    row = await repo.upsert_semantic_relation(
+    result = await repo.upsert_relation_assertion(
         cursor,
         knowledge_base_id=3,
         source_fs_entry_id=11,
         target_fs_entry_id=12,
-        relation_code="MENTIONS",
-        original_target="/KnowledgeEntity/Foo.md",
-        confidence=0.98,
-        discovered_by="AC_EXACT",
+        relation_code="mentions",
+        original_target="../entities/Foo.md",
+        discovered_by="markdown_parser",
+        producer_run_id="rewrite-7",
+        evidence_fingerprint="sha256:offset-19",
+        start_offset=19,
+        end_offset=37,
+        target_locator_type="KB_PATH",
+        target_locator_value="/KnowledgeEntity/Foo.md",
+    )
+
+    assert result == row
+    sql, params = cursor.executed[0]
+    normalized = " ".join(sql.split())
+    assert "INSERT INTO knowledge_file_reference" in normalized
+    assert "ON DUPLICATE KEY UPDATE" in normalized
+    assert "reference_type" not in normalized
+    assert "source.knowledge_base_id = %(knowledge_base_id)s" in normalized
+    assert "target.knowledge_base_id = %(knowledge_base_id)s" in normalized
+    assert params["relation_code"] == "MENTIONS"
+    assert params["discovered_by"] == "MARKDOWN_PARSER"
+    assert params["producer_run_id"] == "rewrite-7"
+    assert params["evidence_fingerprint"] == "sha256:offset-19"
+    assert params["target_locator_type"] == "KB_PATH"
+    assert params["target_locator_value"] == "/KnowledgeEntity/Foo.md"
+
+
+async def test_create_reference_is_a_mentions_assertion_adapter():
+    cursor = FakeCursor(fetchone_results=[{"kid": 21}])
+    repo = KnowledgeFileReferenceRepository()
+
+    await repo.create_reference(
+        cursor,
+        knowledge_base_id=1,
+        source_fs_entry_id=5,
+        target_fs_entry_id=None,
+        original_target="missing.md#intro",
+        target_path="/docs/missing.md",
+        target_suffix="#intro",
+        status="unresolved",
+        evidence_fingerprint="offset:8:29",
+        target_locator_type="KB_PATH",
+        target_locator_value="/docs/missing.md",
+    )
+
+    sql, params = cursor.executed[0]
+    assert "INSERT INTO knowledge_file_reference" in sql
+    assert params["relation_code"] == "MENTIONS"
+    assert params["discovered_by"] == "MARKDOWN_PARSER"
+    assert params["status"] == "unresolved"
+    assert params["target_locator_type"] == "KB_PATH"
+
+
+async def test_upsert_semantic_relation_is_an_entity_surface_adapter():
+    cursor = FakeCursor(fetchone_results=[{"kid": 31}])
+    repo = KnowledgeFileReferenceRepository()
+
+    await repo.upsert_semantic_relation(
+        cursor,
+        knowledge_base_id=2,
+        source_fs_entry_id=7,
+        target_fs_entry_id=8,
+        relation_code="IS_A",
+        original_target="数据库",
+        confidence=0.91,
+        discovered_by="ENTITY_ENRICH",
         definition_version="v1",
         source_task_id=99,
     )
 
-    assert row == {
-        "kid": 51,
-        "reference_type": "SEMANTIC",
-        "relation_code": "MENTIONS",
-    }
-    sql, params = cursor.executed[0]
-    normalized = " ".join(sql.split())
-    assert "'SEMANTIC'" in normalized
-    assert "'resolved'" in normalized
-    assert "target.knowledge_base_id = %(knowledge_base_id)s" in normalized
-    assert "source.knowledge_base_id = %(knowledge_base_id)s" in normalized
-    assert "ON DUPLICATE KEY UPDATE" in normalized
-    assert params == {
-        "knowledge_base_id": 3,
-        "source_fs_entry_id": 11,
-        "target_fs_entry_id": 12,
-        "relation_code": "MENTIONS",
-        "original_target": "/KnowledgeEntity/Foo.md",
-        "confidence": 0.98,
-        "discovered_by": "AC_EXACT",
-        "definition_version": "v1",
-        "source_task_id": 99,
-    }
+    _, params = cursor.executed[0]
+    assert params["target_locator_type"] == "ENTITY_SURFACE"
+    assert params["target_locator_value"] == "数据库"
+    assert params["producer_run_id"] == "99"
+    assert params["source_task_id"] == 99
 
 
 @pytest.mark.parametrize(
-    ("kwargs", "message"),
+    ("overrides", "message"),
     [
+        ({"relation_code": "UNKNOWN"}, "relation_code must be one of"),
+        ({"confidence": 1.1}, "confidence must be between"),
+        ({"start_line": 2}, "must be provided together"),
         (
-            {
-                "source_fs_entry_id": 1,
-                "target_fs_entry_id": 1,
-                "relation_code": "MENTIONS",
-                "confidence": 1.0,
-            },
-            "source and target must differ",
+            {"start_offset": 5, "end_offset": 4},
+            "invalid source offset range",
         ),
         (
-            {
-                "source_fs_entry_id": 1,
-                "target_fs_entry_id": 2,
-                "relation_code": "UNKNOWN",
-                "confidence": 1.0,
-            },
-            "relation_code must be one of",
-        ),
-        (
-            {
-                "source_fs_entry_id": 1,
-                "target_fs_entry_id": 2,
-                "relation_code": "MENTIONS",
-                "confidence": 1.1,
-            },
-            "confidence must be between",
+            {"target_locator_type": "URL"},
+            "target_locator_type must be",
         ),
     ],
 )
-@pytest.mark.asyncio
-async def test_upsert_semantic_relation_validates_identity_and_enums(kwargs, message):
+async def test_upsert_relation_assertion_validates_contract(overrides, message):
     repo = KnowledgeFileReferenceRepository()
     cursor = FakeCursor()
+    values = {
+        "knowledge_base_id": 1,
+        "source_fs_entry_id": 2,
+        "target_fs_entry_id": 3,
+        "original_target": "Foo",
+        "discovered_by": "ENTITY_DISCOVERY",
+    }
+    values.update(overrides)
 
     with pytest.raises(ValueError, match=message):
-        await repo.upsert_semantic_relation(
-            cursor,
-            knowledge_base_id=3,
-            original_target="/KnowledgeEntity/Foo.md",
-            **kwargs,
-        )
+        await repo.upsert_relation_assertion(cursor, **values)
 
     assert cursor.executed == []
 
 
-@pytest.mark.asyncio
-async def test_list_and_count_semantic_by_source_share_filters_and_pagination():
+async def test_upsert_semantic_relation_rejects_self_edge():
     repo = KnowledgeFileReferenceRepository()
-    list_cursor = FakeCursor(
-        fetchall_results=[
-            [
-                {
-                    "kid": 51,
-                    "source_virtual_path": "/docs/source.md",
-                    "target_virtual_path": "/KnowledgeEntity/Foo.md",
-                    "source_is_deleted": False,
-                    "target_is_deleted": False,
-                }
-            ]
-        ]
-    )
-    count_cursor = FakeCursor(fetchone_results=[{"total": 4}])
 
-    rows = await repo.list_semantic_by_source(
-        list_cursor,
+    with pytest.raises(ValueError, match="source and target must differ"):
+        await repo.upsert_semantic_relation(
+            FakeCursor(),
+            knowledge_base_id=1,
+            source_fs_entry_id=2,
+            target_fs_entry_id=2,
+            relation_code="MENTIONS",
+            original_target="Self",
+        )
+
+
+async def test_delete_outgoing_scopes_by_source_relation_and_producer_run():
+    rows = [{"kid": 71}]
+    cursor = FakeCursor(fetchall_results=[rows])
+    repo = KnowledgeFileReferenceRepository()
+
+    result = await repo.delete_outgoing_for_source_fs_entry_id(
+        cursor,
+        knowledge_base_id=3,
+        source_fs_entry_id=11,
+        relation_code=["MENTIONS", "DEPENDS_ON"],
+        discovered_by="ENTITY_DISCOVERY",
+        producer_run_id="task-9",
+    )
+
+    assert result == rows
+    sql, params = cursor.executed[0]
+    assert "source_fs_entry_id = %(source_fs_entry_id)s" in sql
+    assert "relation_code = ANY(%(relation_codes)s)" in sql
+    assert "discovered_by = ANY(%(discovered_by_values)s)" in sql
+    assert "producer_run_id = %(producer_run_id)s" in sql
+    assert "reference_type" not in sql
+    assert params["relation_codes"] == ["MENTIONS", "DEPENDS_ON"]
+    assert params["discovered_by_values"] == ["ENTITY_DISCOVERY"]
+
+
+async def test_legacy_source_delete_only_owns_markdown_parser_assertions():
+    cursor = FakeCursor(fetchall_results=[[]])
+    repo = KnowledgeFileReferenceRepository()
+
+    await repo.delete_for_source_fs_entry_id(cursor, source_fs_entry_id=9)
+
+    sql, params = cursor.executed[0]
+    assert "reference_type" not in sql
+    assert "discovered_by = ANY(%(discovered_by_values)s)" in sql
+    assert params["discovered_by_values"] == ["MARKDOWN_PARSER"]
+
+
+async def test_semantic_delete_adapter_never_deletes_markdown_mentions():
+    cursor = FakeCursor(fetchall_results=[[]])
+    repo = KnowledgeFileReferenceRepository()
+
+    await repo.delete_semantic_for_source_fs_entry_id(
+        cursor,
+        knowledge_base_id=3,
+        source_fs_entry_id=11,
+        relation_code="MENTIONS",
+    )
+
+    sql, params = cursor.executed[0]
+    assert "reference_type" not in sql
+    assert params["relation_codes"] == ["MENTIONS"]
+    assert params["discovered_by_values"] == ["ENTITY_DISCOVERY"]
+
+
+async def test_list_by_reference_ids_resolves_any_assertion_id():
+    cursor = FakeCursor(fetchall_results=[[{"kid": 11}, {"kid": 12}]])
+    repo = KnowledgeFileReferenceRepository()
+
+    rows = await repo.list_by_reference_ids(cursor, reference_ids=[11, 12])
+
+    assert rows == [{"kid": 11}, {"kid": 12}]
+    sql, params = cursor.executed[0]
+    assert "kfr.kid = ANY(%(reference_ids)s)" in sql
+    assert "reference_type" not in sql
+    assert "target_locator_type" in sql
+    assert params == {"reference_ids": [11, 12]}
+
+
+async def test_logical_relation_list_deduplicates_assertions_by_edge():
+    cursor = FakeCursor(fetchall_results=[[{"kid": 51}]])
+    repo = KnowledgeFileReferenceRepository()
+
+    rows = await repo.list_relations_by_source(
+        cursor,
         knowledge_base_id=3,
         source_fs_entry_id=11,
         relation_code=["MENTIONS", "DEPENDS_ON"],
         limit=20,
         offset=40,
     )
-    total = await repo.count_semantic_by_source(
-        count_cursor,
+
+    assert rows == [{"kid": 51}]
+    sql, params = cursor.executed[0]
+    normalized = " ".join(sql.split())
+    assert "ROW_NUMBER() OVER" in normalized
+    assert "COUNT(*) OVER" in normalized
+    assert (
+        "PARTITION BY kfr.source_fs_entry_id, kfr.relation_code, kfr.target_fs_entry_id"
+    ) in normalized
+    assert "WHERE assertion_rank = 1" in normalized
+    assert "WHEN kfr.start_line IS NOT NULL" in normalized
+    assert "reference_type" not in normalized
+    assert params["relation_codes"] == ["MENTIONS", "DEPENDS_ON"]
+    assert params["limit"] == 20
+    assert params["offset"] == 40
+
+
+async def test_logical_relation_count_groups_source_relation_and_target():
+    cursor = FakeCursor(fetchone_results=[{"total": 4}])
+    repo = KnowledgeFileReferenceRepository()
+
+    total = await repo.count_relations_by_target(
+        cursor,
         knowledge_base_id=3,
-        source_fs_entry_id=11,
-        relation_code=["MENTIONS", "DEPENDS_ON"],
+        target_fs_entry_id=12,
+        relation_code="IS_A",
     )
 
     assert total == 4
-    assert rows[0]["target_virtual_path"] == "/KnowledgeEntity/Foo.md"
-    list_sql, list_params = list_cursor.executed[0]
-    count_sql, count_params = count_cursor.executed[0]
-    for sql in (list_sql, count_sql):
-        assert "kfr.reference_type = 'SEMANTIC'" in sql
-        assert "kfr.relation_code = ANY(%(relation_codes)s)" in sql
-        assert "source.is_deleted = FALSE" in sql
-        assert "target.is_deleted = FALSE" in sql
-    assert "source.virtual_path AS source_virtual_path" in list_sql
-    assert "target.virtual_path AS target_virtual_path" in list_sql
-    assert "LIMIT %(limit)s OFFSET %(offset)s" in list_sql
-    assert list_params["relation_codes"] == ["MENTIONS", "DEPENDS_ON"]
-    assert list_params["limit"] == 20
-    assert list_params["offset"] == 40
-    assert count_params["relation_codes"] == ["MENTIONS", "DEPENDS_ON"]
+    sql, params = cursor.executed[0]
+    normalized = " ".join(sql.split())
+    assert (
+        "GROUP BY kfr.source_fs_entry_id, kfr.relation_code, kfr.target_fs_entry_id"
+    ) in normalized
+    assert "reference_type" not in normalized
+    assert params["relation_codes"] == ["IS_A"]
 
 
-@pytest.mark.asyncio
-async def test_list_and_count_semantic_by_target_support_single_relation_code():
+async def test_path_resolution_changes_current_target_but_preserves_locator():
+    cursor = FakeCursor(fetchall_results=[[{"kid": 21}]])
     repo = KnowledgeFileReferenceRepository()
-    list_cursor = FakeCursor(fetchall_results=[[{"kid": 61}]])
-    count_cursor = FakeCursor(fetchone_results=[{"total": 1}])
 
-    rows = await repo.list_semantic_by_target(
-        list_cursor,
-        knowledge_base_id=3,
-        target_fs_entry_id=12,
-        relation_code="IS_A",
-        include_deleted_entries=True,
-    )
-    total = await repo.count_semantic_by_target(
-        count_cursor,
-        knowledge_base_id=3,
-        target_fs_entry_id=12,
-        relation_code="IS_A",
-        include_deleted_entries=True,
+    await repo.resolve_pending_for_path(
+        cursor,
+        knowledge_base_id=1,
+        target_path="/docs/restored.md",
+        target_fs_entry_id=7,
     )
 
-    assert rows == [{"kid": 61}]
-    assert total == 1
-    for cursor in (list_cursor, count_cursor):
-        sql, params = cursor.executed[0]
-        assert "kfr.target_fs_entry_id = %(target_fs_entry_id)s" in sql
-        assert "source.is_deleted = FALSE" not in sql
-        assert params["relation_codes"] == ["IS_A"]
+    sql, _ = cursor.executed[0]
+    set_clause = sql.split("WHERE", maxsplit=1)[0]
+    assert "target_fs_entry_id = %(target_fs_entry_id)s" in set_clause
+    assert "SET target_locator_type" not in set_clause
+    assert ",\n                target_locator_type =" not in set_clause
+    assert ",\n                target_locator_value =" not in set_clause
+    assert "target_path = %(target_path)s" in sql
+    assert "target_locator_type = 'KB_PATH'" not in sql
+    assert "reference_type" not in sql
 
 
-@pytest.mark.asyncio
-async def test_semantic_cleanup_is_scoped_by_source_or_task():
+async def test_entity_surface_locator_can_rebind_to_a_new_target_row():
+    cursor = FakeCursor(fetchall_results=[[{"kid": 22}]])
     repo = KnowledgeFileReferenceRepository()
-    source_cursor = FakeCursor(fetchall_results=[[{"kid": 71}]])
-    task_cursor = FakeCursor(fetchall_results=[[{"kid": 72}]])
 
-    source_rows = await repo.delete_semantic_for_source_fs_entry_id(
-        source_cursor,
-        knowledge_base_id=3,
-        source_fs_entry_id=11,
-        relation_code="MENTIONS",
-    )
-    task_rows = await repo.delete_semantic_for_source_task_id(
-        task_cursor,
-        knowledge_base_id=3,
-        source_task_id=99,
+    rows = await repo.resolve_assertions_for_locator(
+        cursor,
+        knowledge_base_id=1,
+        target_locator_type="entity_surface",
+        target_locator_value="数据库",
+        target_fs_entry_id=17,
     )
 
-    assert source_rows == [{"kid": 71}]
-    assert task_rows == [{"kid": 72}]
-    source_sql, source_params = source_cursor.executed[0]
-    task_sql, task_params = task_cursor.executed[0]
-    assert "reference_type = 'SEMANTIC'" in source_sql
-    assert "relation_code = ANY(%(relation_codes)s)" in source_sql
-    assert source_params["relation_codes"] == ["MENTIONS"]
-    assert "reference_type = 'SEMANTIC'" in task_sql
-    assert "source_task_id = %(source_task_id)s" in task_sql
-    assert task_params == {"knowledge_base_id": 3, "source_task_id": 99}
+    assert rows == [{"kid": 22}]
+    sql, params = cursor.executed[0]
+    set_clause = sql.split("FROM knowledge_fs_entry", maxsplit=1)[0]
+    assert "target_fs_entry_id = target.kid" in set_clause
+    assert "SET target_locator_type" not in set_clause
+    assert ",\n                target_locator_type =" not in set_clause
+    assert ",\n                target_locator_value =" not in set_clause
+    assert "target.knowledge_base_id = %(knowledge_base_id)s" in sql
+    assert "assertion.target_locator_type = %(target_locator_type)s" in sql
+    assert params["target_locator_type"] == "ENTITY_SURFACE"
+    assert params["target_locator_value"] == "数据库"
 
 
-def test_semantic_schema_and_upgrade_define_columns_constraints_and_indexes():
-    historical_sql = " ".join(MIGRATION_PATH.read_text(encoding="utf-8").split())
-    upgrade_sql = " ".join(EXTENSION_MIGRATION_PATH.read_text(encoding="utf-8").split())
+async def test_mark_deleted_refreshes_path_locator_and_preserves_other_locators():
+    cursor = FakeCursor(fetchall_results=[[{"kid": 31}]])
+    repo = KnowledgeFileReferenceRepository()
+
+    await repo.mark_targets_deleted(
+        cursor,
+        knowledge_base_id=1,
+        targets=[(7, "/docs/a.md")],
+    )
+
+    sql, params = cursor.executed[0]
+    set_clause = sql.split("FROM (VALUES", maxsplit=1)[0]
+    assert "SET target_locator_type" not in set_clause
+    assert "WHEN kfr.target_locator_type = 'KB_PATH'" in set_clause
+    assert "THEN deleted_targets.target_path" in set_clause
+    assert "ELSE kfr.target_locator_value" in set_clause
+    assert "target_path = deleted_targets.target_path" in set_clause
+    assert params["target_0_path"] == "/docs/a.md"
+
+
+def test_historical_026_remains_free_of_assertion_extensions():
+    historical_sql = " ".join(
+        HISTORICAL_SCHEMA_PATH.read_text(encoding="utf-8").split()
+    )
 
     for extension_name in (
-        "reference_type",
         "relation_code",
-        "confidence",
         "discovered_by",
-        "definition_version",
+        "producer_run_id",
+        "evidence_fingerprint",
+        "target_locator_type",
         "source_task_id",
     ):
         assert extension_name not in historical_sql
 
-    assert "reference_type varchar(16)" in upgrade_sql
-    assert "relation_code varchar(32)" in upgrade_sql
-    assert "confidence numeric(5,4)" in upgrade_sql
-    assert "discovered_by varchar(32)" in upgrade_sql
-    assert "definition_version varchar(64)" in upgrade_sql
-    assert "source_task_id bigint" in upgrade_sql
-    assert "REFERENCES knowledge_semantic_processing_task(kid)" in upgrade_sql
-    assert "REFERENCES knowledge_build_task(kid)" not in upgrade_sql
-    assert "ON DELETE SET NULL" in upgrade_sql
-    assert "chk_knowledge_file_reference_type" in upgrade_sql
-    assert "chk_knowledge_file_reference_semantic_state" in upgrade_sql
-    assert "source_fs_entry_id <> target_fs_entry_id" in upgrade_sql
-    assert "uq_kfr_semantic_relation" in upgrade_sql
-    assert "idx_kfr_semantic_source" in upgrade_sql
-    assert "idx_kfr_semantic_target" in upgrade_sql
-    assert "idx_kfr_semantic_source_task" in upgrade_sql
-    assert "knowledge_document_relation_evidence" not in upgrade_sql
-    assert "DEFAULT 'MARKDOWN'" in upgrade_sql
-    assert "information_schema.columns" in upgrade_sql
-    assert "pg_constraint" in upgrade_sql
+
+def test_030_defines_unified_assertion_contract_and_heals_draft_schema():
+    sql = " ".join(ASSERTION_MIGRATION_PATH.read_text(encoding="utf-8").split())
+
+    assert "relation_code varchar(32) NOT NULL DEFAULT 'MENTIONS'" in sql
+    assert "discovered_by varchar(32) NOT NULL DEFAULT 'MARKDOWN_PARSER'" in sql
+    for column in (
+        "producer_run_id",
+        "evidence_fingerprint",
+        "source_heading_path",
+        "start_line",
+        "end_line",
+        "start_offset",
+        "end_offset",
+        "target_locator_type",
+        "target_locator_value",
+        "confidence",
+        "definition_version",
+        "source_task_id",
+    ):
+        assert f"column_name = '{column}'" in sql
+    assert "REFERENCES knowledge_semantic_processing_task(kid)" in sql
+    assert "ALTER COLUMN evidence_fingerprint SET NOT NULL" in sql
+    assert "ALTER COLUMN target_locator_type SET NOT NULL" in sql
+    assert "ALTER COLUMN target_locator_value SET NOT NULL" in sql
+    assert "ALTER COLUMN relation_code SET DEFAULT 'MENTIONS'" in sql
+    assert "ALTER COLUMN relation_code SET NOT NULL" in sql
+    assert "ALTER COLUMN discovered_by SET DEFAULT 'MARKDOWN_PARSER'" in sql
+    assert "ALTER COLUMN discovered_by SET NOT NULL" in sql
+    assert "'KB_PATH', 'ENTITY_SURFACE', 'FS_ENTRY_ID'" in sql
+    assert "chk_kfr_relation_code" in sql
+    assert "chk_kfr_confidence" in sql
+    assert "chk_kfr_source_lines" in sql
+    assert "chk_kfr_source_offsets" in sql
+    assert "chk_kfr_target_locator" in sql
+    assert "ALTER COLUMN target_suffix DROP NOT NULL" in sql
+    assert "uq_kfr_exact_assertion" in sql
+    assert "COALESCE(producer_run_id, '__NO_RUN__')" in sql
+    assert "indexdef NOT LIKE '%__NO_RUN__%'" in sql
+    assert "evidence_fingerprint" in sql
+    assert "idx_kfr_relation_source" in sql
+    assert "idx_kfr_relation_target" in sql
+    assert "idx_kfr_producer_outgoing" in sql
+    assert "idx_kfr_source_task" in sql
+    assert "column_name = 'reference_type'" in sql
+    assert "WHEN reference_type = ''SEMANTIC''" in sql
+    assert "target_locator_type = ''ENTITY_SURFACE''" in sql
+    assert "assertion.reference_type = ''MARKDOWN''" in sql
+    for legacy_constraint in (
+        "chk_knowledge_file_reference_type",
+        "chk_knowledge_file_reference_semantic_state",
+        "chk_knowledge_file_reference_confidence",
+    ):
+        assert f"DROP CONSTRAINT {legacy_constraint}" in sql
+    for legacy_index in (
+        "uq_kfr_semantic_relation",
+        "idx_kfr_semantic_source",
+        "idx_kfr_semantic_target",
+        "idx_kfr_semantic_source_task",
+    ):
+        assert f"DROP INDEX IF EXISTS {legacy_index}" in sql
+    assert "DROP COLUMN reference_type" in sql

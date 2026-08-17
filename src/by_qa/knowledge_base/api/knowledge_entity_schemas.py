@@ -343,18 +343,42 @@ class SemanticRelationEndpoint(_ApiModel):
     document_kind: str = Field(serialization_alias="documentKind")
 
 
+class RelationAssertionEvidence(_ApiModel):
+    """Representative lightweight evidence from one physical assertion."""
+
+    producer_run_id: str | None = Field(
+        default=None, serialization_alias="producerRunId"
+    )
+    evidence_fingerprint: str | None = Field(
+        default=None, serialization_alias="evidenceFingerprint"
+    )
+    source_heading_path: str | None = Field(
+        default=None, serialization_alias="sourceHeadingPath"
+    )
+    start_line: int | None = Field(default=None, ge=1, serialization_alias="startLine")
+    end_line: int | None = Field(default=None, ge=1, serialization_alias="endLine")
+    start_offset: int | None = Field(
+        default=None, ge=0, serialization_alias="startOffset"
+    )
+    end_offset: int | None = Field(default=None, ge=0, serialization_alias="endOffset")
+
+
 class SemanticRelationItem(_ApiModel):
     relation_id: str = Field(serialization_alias="relationId")
     relation_code: SemanticRelationCode = Field(serialization_alias="relationCode")
     direction: SemanticRelationDirection
     source: SemanticRelationEndpoint
     target: SemanticRelationEndpoint
+    assertion_count: int = Field(ge=1, serialization_alias="assertionCount")
     confidence: float = Field(ge=0, le=1)
     discovered_by: str = Field(serialization_alias="discoveredBy")
     definition_version: str | None = Field(
         default=None, serialization_alias="definitionVersion"
     )
     source_task_id: str | None = Field(default=None, serialization_alias="sourceTaskId")
+    representative_evidence: RelationAssertionEvidence | None = Field(
+        default=None, serialization_alias="representativeEvidence"
+    )
 
 
 class SemanticRelationPage(_ApiModel):

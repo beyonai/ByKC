@@ -41,6 +41,9 @@ class KnowledgeSemanticProcessingTaskRepository:
         normalized_status = self._normalize_status(status)
         normalized_progress = 0 if progress is None else progress
         self._validate_progress(normalized_progress)
+        # The same bound status parameter is used as both an INSERT value and a
+        # CASE operand. OpenGauss otherwise infers varchar from the target column
+        # and text from the comparison, then rejects the prepared statement.
         await cursor.execute(
             """
             INSERT INTO knowledge_semantic_processing_task (
@@ -67,7 +70,7 @@ class KnowledgeSemanticProcessingTaskRepository:
                 %(fs_entry_id)s,
                 %(task_type)s,
                 %(batch_id)s,
-                %(status)s,
+                %(status)s::varchar(32),
                 %(current_stage)s,
                 %(progress)s,
                 %(input_fingerprint)s,
@@ -77,7 +80,11 @@ class KnowledgeSemanticProcessingTaskRepository:
                 %(method_version)s,
                 %(index_version)s,
                 %(request_params)s::jsonb,
-                CASE WHEN %(status)s = 'running' THEN NOW() ELSE NULL END,
+                CASE
+                    WHEN %(status)s::varchar(32) = 'running'::varchar(32)
+                        THEN NOW()
+                    ELSE NULL
+                END,
                 NOW(),
                 NOW()
             )

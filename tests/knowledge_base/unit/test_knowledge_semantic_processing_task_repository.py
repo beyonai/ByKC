@@ -63,6 +63,8 @@ async def test_create_processing_task_persists_versions_and_json_request():
     assert "INSERT INTO knowledge_semantic_processing_task" in sql
     assert "knowledge_build_task" not in sql
     assert "%(request_params)s::jsonb" in sql
+    assert sql.count("%(status)s::varchar(32)") == 2
+    assert "'running'::varchar(32)" in sql
     assert params["task_type"] == "ENTITY_DISCOVERY"
     assert params["status"] == "pending"
     assert params["batch_id"] == "ed-1"

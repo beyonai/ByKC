@@ -12,8 +12,6 @@ class KnowledgeFileReferenceRepository:
     """Repository for exact assertions and deduplicated logical relations."""
 
     MARKDOWN_PRODUCER = "MARKDOWN_PARSER"
-    DISCOVERY_PRODUCER = "ENTITY_DISCOVERY"
-    ENRICH_PRODUCER = "ENTITY_ENRICH"
     _RELATION_CODES = frozenset({"MENTIONS", "PART_OF", "IS_A", "DEPENDS_ON"})
     _TARGET_LOCATOR_TYPES = frozenset({"FS_ENTRY_ID", "KB_PATH", "ENTITY_SURFACE"})
 
@@ -50,6 +48,8 @@ class KnowledgeFileReferenceRepository:
         normalized_run_id = self._normalize_optional_text(producer_run_id)
         if not original_target:
             raise ValueError("original_target must not be empty")
+        if target_fs_entry_id is not None and source_fs_entry_id == target_fs_entry_id:
+            raise ValueError("relation assertion source and target must differ")
         if target_kind != "FILE":
             raise ValueError("target_kind must be FILE")
         if confidence is not None and not 0 <= confidence <= 1:
@@ -244,46 +244,6 @@ class KnowledgeFileReferenceRepository:
             target_locator_value=target_locator_value,
         )
 
-    async def upsert_semantic_relation(
-        self,
-        cursor: Any,
-        *,
-        knowledge_base_id: int,
-        source_fs_entry_id: int,
-        target_fs_entry_id: int,
-        relation_code: str,
-        original_target: str,
-        confidence: float | None = None,
-        discovered_by: str | None = None,
-        definition_version: str | None = None,
-        source_task_id: int | None = None,
-        producer_run_id: str | None = None,
-        evidence_fingerprint: str | None = None,
-    ) -> dict[str, Any] | None:
-        """Compatibility adapter for a generated resolved assertion."""
-        if source_fs_entry_id == target_fs_entry_id:
-            raise ValueError("semantic relation source and target must differ")
-        producer = discovered_by or "KNOWLEDGE_ENTITY"
-        return await self.upsert_relation_assertion(
-            cursor,
-            knowledge_base_id=knowledge_base_id,
-            source_fs_entry_id=source_fs_entry_id,
-            target_fs_entry_id=target_fs_entry_id,
-            relation_code=relation_code,
-            original_target=original_target,
-            target_path=None,
-            status="resolved",
-            confidence=confidence,
-            discovered_by=producer,
-            producer_run_id=producer_run_id
-            or (str(source_task_id) if source_task_id is not None else None),
-            evidence_fingerprint=evidence_fingerprint,
-            target_locator_type="ENTITY_SURFACE",
-            target_locator_value=original_target,
-            definition_version=definition_version,
-            source_task_id=source_task_id,
-        )
-
     async def delete_outgoing_for_source_fs_entry_id(
         self,
         cursor: Any,
@@ -338,29 +298,6 @@ class KnowledgeFileReferenceRepository:
             cursor,
             source_fs_entry_id=source_fs_entry_id,
             discovered_by=self.MARKDOWN_PRODUCER,
-        )
-
-    async def delete_semantic_for_source_fs_entry_id(
-        self,
-        cursor: Any,
-        *,
-        knowledge_base_id: int,
-        source_fs_entry_id: int,
-        relation_code: str | Sequence[str] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Compatibility adapter deleting generated outgoing assertions."""
-        relation_codes = self._normalize_relation_codes(relation_code)
-        producers: list[str] = []
-        if relation_codes is None or "MENTIONS" in relation_codes:
-            producers.append(self.DISCOVERY_PRODUCER)
-        if relation_codes is None or any(code != "MENTIONS" for code in relation_codes):
-            producers.append(self.ENRICH_PRODUCER)
-        return await self.delete_outgoing_for_source_fs_entry_id(
-            cursor,
-            knowledge_base_id=knowledge_base_id,
-            source_fs_entry_id=source_fs_entry_id,
-            relation_code=relation_codes,
-            discovered_by=producers,
         )
 
     async def list_assertions_by_source(
@@ -586,86 +523,6 @@ class KnowledgeFileReferenceRepository:
         )
         row = await cursor.fetchone()
         return int(row["total"]) if row is not None else 0
-
-    async def list_semantic_by_source(
-        self,
-        cursor: Any,
-        *,
-        knowledge_base_id: int,
-        source_fs_entry_id: int,
-        relation_code: str | Sequence[str] | None = None,
-        include_deleted_entries: bool = False,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> list[dict[str, Any]]:
-        """Compatibility alias for the former semantic-only query API."""
-        return await self.list_relations_by_source(
-            cursor,
-            knowledge_base_id=knowledge_base_id,
-            source_fs_entry_id=source_fs_entry_id,
-            relation_code=relation_code,
-            include_deleted_entries=include_deleted_entries,
-            limit=limit,
-            offset=offset,
-        )
-
-    async def count_semantic_by_source(
-        self,
-        cursor: Any,
-        *,
-        knowledge_base_id: int,
-        source_fs_entry_id: int,
-        relation_code: str | Sequence[str] | None = None,
-        include_deleted_entries: bool = False,
-    ) -> int:
-        """Compatibility alias for the former semantic-only query API."""
-        return await self.count_relations_by_source(
-            cursor,
-            knowledge_base_id=knowledge_base_id,
-            source_fs_entry_id=source_fs_entry_id,
-            relation_code=relation_code,
-            include_deleted_entries=include_deleted_entries,
-        )
-
-    async def list_semantic_by_target(
-        self,
-        cursor: Any,
-        *,
-        knowledge_base_id: int,
-        target_fs_entry_id: int,
-        relation_code: str | Sequence[str] | None = None,
-        include_deleted_entries: bool = False,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> list[dict[str, Any]]:
-        """Compatibility alias for the former semantic-only query API."""
-        return await self.list_relations_by_target(
-            cursor,
-            knowledge_base_id=knowledge_base_id,
-            target_fs_entry_id=target_fs_entry_id,
-            relation_code=relation_code,
-            include_deleted_entries=include_deleted_entries,
-            limit=limit,
-            offset=offset,
-        )
-
-    async def count_semantic_by_target(
-        self,
-        cursor: Any,
-        *,
-        knowledge_base_id: int,
-        target_fs_entry_id: int,
-        relation_code: str | Sequence[str] | None = None,
-        include_deleted_entries: bool = False,
-    ) -> int:
-        """Compatibility alias for the former semantic-only query API."""
-        return await self.count_relations_by_target(
-            cursor,
-            knowledge_base_id=knowledge_base_id,
-            target_fs_entry_id=target_fs_entry_id,
-            relation_code=relation_code,
-            include_deleted_entries=include_deleted_entries,
-        )
 
     async def resolve_pending_for_path(
         self,

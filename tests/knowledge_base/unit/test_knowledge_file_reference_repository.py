@@ -101,11 +101,11 @@ async def test_create_reference_is_a_mentions_assertion_adapter():
     assert params["target_locator_type"] == "KB_PATH"
 
 
-async def test_upsert_semantic_relation_is_an_entity_surface_adapter():
+async def test_upsert_relation_assertion_persists_generated_entity_relation():
     cursor = FakeCursor(fetchone_results=[{"kid": 31}])
     repo = KnowledgeFileReferenceRepository()
 
-    await repo.upsert_semantic_relation(
+    await repo.upsert_relation_assertion(
         cursor,
         knowledge_base_id=2,
         source_fs_entry_id=7,
@@ -114,6 +114,9 @@ async def test_upsert_semantic_relation_is_an_entity_surface_adapter():
         original_target="数据库",
         confidence=0.91,
         discovered_by="ENTITY_ENRICH",
+        producer_run_id="99",
+        target_locator_type="ENTITY_SURFACE",
+        target_locator_value="数据库",
         definition_version="v1",
         source_task_id=99,
     )
@@ -159,17 +162,18 @@ async def test_upsert_relation_assertion_validates_contract(overrides, message):
     assert cursor.executed == []
 
 
-async def test_upsert_semantic_relation_rejects_self_edge():
+async def test_upsert_relation_assertion_rejects_self_edge():
     repo = KnowledgeFileReferenceRepository()
 
     with pytest.raises(ValueError, match="source and target must differ"):
-        await repo.upsert_semantic_relation(
+        await repo.upsert_relation_assertion(
             FakeCursor(),
             knowledge_base_id=1,
             source_fs_entry_id=2,
             target_fs_entry_id=2,
             relation_code="MENTIONS",
             original_target="Self",
+            discovered_by="ENTITY_DISCOVERY",
         )
 
 
@@ -208,23 +212,6 @@ async def test_legacy_source_delete_only_owns_markdown_parser_assertions():
     assert "reference_type" not in sql
     assert "discovered_by = ANY(%(discovered_by_values)s)" in sql
     assert params["discovered_by_values"] == ["MARKDOWN_PARSER"]
-
-
-async def test_semantic_delete_adapter_never_deletes_markdown_mentions():
-    cursor = FakeCursor(fetchall_results=[[]])
-    repo = KnowledgeFileReferenceRepository()
-
-    await repo.delete_semantic_for_source_fs_entry_id(
-        cursor,
-        knowledge_base_id=3,
-        source_fs_entry_id=11,
-        relation_code="MENTIONS",
-    )
-
-    sql, params = cursor.executed[0]
-    assert "reference_type" not in sql
-    assert params["relation_codes"] == ["MENTIONS"]
-    assert params["discovered_by_values"] == ["ENTITY_DISCOVERY"]
 
 
 async def test_list_by_reference_ids_resolves_any_assertion_id():

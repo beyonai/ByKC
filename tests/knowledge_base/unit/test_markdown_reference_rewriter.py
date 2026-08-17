@@ -1,5 +1,7 @@
 from typing import Any
 
+import pytest
+
 from by_qa.knowledge_base.services.markdown_reference_rewriter import (
     MarkdownReferenceRewriter,
 )
@@ -9,10 +11,18 @@ class FakeReferenceRepository:
     def __init__(self) -> None:
         self.rows: list[dict[str, Any]] = []
 
-    async def create_reference(self, cursor: Any, **kwargs: Any) -> dict[str, Any]:
+    async def upsert_relation_assertion(
+        self, cursor: Any, **kwargs: Any
+    ) -> dict[str, Any]:
         row = {"kid": len(self.rows) + 1, **kwargs}
         self.rows.append(row)
         return row
+
+    async def list_by_reference_ids(
+        self, cursor: Any, *, reference_ids: list[int]
+    ) -> list[dict[str, Any]]:
+        del cursor
+        return [row for row in self.rows if row["kid"] in reference_ids]
 
 
 class FakeFsEntryRepository:
@@ -76,6 +86,7 @@ async def _rewrite(
         cursor=object(),
         reference_repository=reference_repository,
         fs_entry_repository=fs_entry_repository,
+        producer_run_id="markdown-run-1",
     )
     return out, reference_repository
 
@@ -87,38 +98,31 @@ async def test_existing_file_target_creates_resolved_reference_token():
     )
 
     assert out == "see ![alt](byqa-ref://1) here"
-    assert reference_repository.rows == [
-        {
-            "kid": 1,
-            "knowledge_base_id": 7,
-            "source_fs_entry_id": 42,
-            "target_fs_entry_id": 123,
-            "original_target": "images/x.png",
-            "target_path": None,
-            "target_suffix": "",
-            "target_kind": "FILE",
-            "status": "resolved",
-        }
-    ]
+    assertion = reference_repository.rows[0]
+    assert assertion["target_fs_entry_id"] == 123
+    assert assertion["original_target"] == "images/x.png"
+    assert assertion["relation_code"] == "MENTIONS"
+    assert assertion["discovered_by"] == "MARKDOWN_PARSER"
+    assert assertion["producer_run_id"] == "markdown-run-1"
+    assert assertion["target_locator_type"] == "KB_PATH"
+    assert assertion["target_locator_value"] == "/docs/p/images/x.png"
+    assert assertion["start_line"] == assertion["end_line"] == 1
+    assert assertion["start_offset"] == 4
+    assert assertion["end_offset"] == 24
+    assert len(assertion["evidence_fingerprint"]) == 64
 
 
 async def test_missing_file_target_creates_unresolved_reference_token():
     out, reference_repository = await _rewrite("![a](missing.png)")
 
     assert out == "![a](byqa-ref://1)"
-    assert reference_repository.rows == [
-        {
-            "kid": 1,
-            "knowledge_base_id": 7,
-            "source_fs_entry_id": 42,
-            "target_fs_entry_id": None,
-            "original_target": "missing.png",
-            "target_path": "/docs/p/missing.png",
-            "target_suffix": "",
-            "target_kind": "FILE",
-            "status": "unresolved",
-        }
-    ]
+    assertion = reference_repository.rows[0]
+    assert assertion["target_fs_entry_id"] is None
+    assert assertion["original_target"] == "missing.png"
+    assert assertion["target_path"] == "/docs/p/missing.png"
+    assert assertion["status"] == "unresolved"
+    assert assertion["target_locator_type"] == "KB_PATH"
+    assert assertion["target_locator_value"] == "/docs/p/missing.png"
 
 
 async def test_ineligible_targets_remain_original_and_create_no_references():
@@ -205,3 +209,60 @@ async def test_skips_when_reference_count_exceeds_cap():
 
     assert out == src
     assert reference_repository.rows == []
+
+
+async def test_records_heading_path_line_and_offsets_for_each_assertion():
+    out, reference_repository = await _rewrite(
+        "# Guide\n\n## Assets\n\nSee [diagram](image.png).\n",
+        files={"/docs/p/image.png": 123},
+    )
+
+    assert "byqa-ref://1" in out
+    assertion = reference_repository.rows[0]
+    assert assertion["source_heading_path"] == "Guide / Assets"
+    assert assertion["start_line"] == assertion["end_line"] == 5
+    assert assertion["start_offset"] == 24
+    assert assertion["end_offset"] == 44
+
+
+async def test_materializes_existing_token_to_current_path_before_deletion():
+    repository = FakeReferenceRepository()
+    repository.rows = [
+        {
+            "kid": 41,
+            "target_virtual_path": "/moved/image.png",
+            "target_path": None,
+            "target_suffix": "#preview",
+            "original_target": "old.png#preview",
+            "target_locator_type": "KB_PATH",
+            "target_locator_value": "/docs/old.png",
+        },
+        {
+            "kid": 42,
+            "target_virtual_path": None,
+            "target_path": None,
+            "target_suffix": "",
+            "original_target": "gone.png",
+            "target_locator_type": "KB_PATH",
+            "target_locator_value": "/docs/gone.png",
+        },
+    ]
+
+    out = await MarkdownReferenceRewriter().materialize_existing_tokens(
+        "![a](byqa-ref://41) [b](byqa-ref://42)",
+        cursor=object(),
+        reference_repository=repository,
+    )
+
+    assert out == "![a](/moved/image.png#preview) [b](/docs/gone.png)"
+
+
+async def test_rejects_unknown_token_instead_of_persisting_dangling_reference():
+    repository = FakeReferenceRepository()
+
+    with pytest.raises(ValueError, match="cannot materialize reference tokens: 999"):
+        await MarkdownReferenceRewriter().materialize_existing_tokens(
+            "![missing](byqa-ref://999)",
+            cursor=object(),
+            reference_repository=repository,
+        )

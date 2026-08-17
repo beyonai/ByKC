@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
+import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, Callable
@@ -33,6 +35,21 @@ class DocumentUpdateResult:
     new_markdown_context: str | None = None
 
 
+@dataclass(frozen=True)
+class GeneratedOutgoingAssertion:
+    """Internal structured relation emitted together with a document update."""
+
+    target_fs_entry_id: int
+    relation_code: str
+    original_target: str
+    discovered_by: str
+    confidence: float | None = None
+    definition_version: str | None = None
+    source_task_id: int | None = None
+    evidence_fingerprint: str | None = None
+    producer_run_id: str | None = None
+
+
 @dataclass
 class DocumentUpdateService:
     """Replace file bytes while atomically invalidating all derived state."""
@@ -54,7 +71,13 @@ class DocumentUpdateService:
     MAX_MARKDOWN_CONTEXT_CHARS = 12_000
     FIXED_SUMMARY = "文件内容已更新。"
 
-    async def update_file(self, request: DocumentUpdateRequest) -> DocumentUpdateResult:
+    async def update_file(
+        self,
+        request: DocumentUpdateRequest,
+        *,
+        generated_outgoing_assertions: Sequence[GeneratedOutgoingAssertion] = (),
+        producer_run_id: str | None = None,
+    ) -> DocumentUpdateResult:
         """Replace a file's original object and reset its indexing state.
 
         The original object's locator is deliberately stable.  If the database
@@ -62,6 +85,7 @@ class DocumentUpdateService:
         are restored to that same locator before surfacing the database failure.
         """
         normalized_path = request.file_path.strip("/")
+        update_run_id = producer_run_id or uuid.uuid4().hex
         connection = await self.connection_factory()
         old_bytes: bytes | None = None
         original_location: StorageLocation | None = None
@@ -117,15 +141,29 @@ class DocumentUpdateService:
 
             if is_markdown:
                 _, final_bytes = split_front_matter(final_bytes)
-                await self.knowledge_file_reference_repository.delete_for_source_fs_entry_id(
-                    cursor, source_fs_entry_id=fs_entry_id
+                materialized = (
+                    await self.markdown_reference_rewriter.materialize_existing_tokens(
+                        final_bytes.decode("utf-8"),
+                        cursor=cursor,
+                        reference_repository=self.knowledge_file_reference_repository,
+                    )
                 )
+                final_bytes = materialized.encode("utf-8")
+
+            await self.knowledge_file_reference_repository.delete_outgoing_for_source_fs_entry_id(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                source_fs_entry_id=fs_entry_id,
+            )
+
+            if is_markdown:
                 final_bytes = await self._rewrite_markdown(
                     final_bytes,
                     cursor=cursor,
                     knowledge_base_id=knowledge_base_id,
                     fs_entry_id=fs_entry_id,
                     file_path=normalized_path,
+                    producer_run_id=update_run_id,
                 )
                 new_markdown = final_bytes.decode("utf-8")
                 summary = self.markdown_update_summary_service.build_rule_summary(
@@ -136,6 +174,14 @@ class DocumentUpdateService:
                 new_markdown = None
                 summary = self.FIXED_SUMMARY
                 summary_source = "FIXED"
+
+            await self._write_generated_assertions(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                source_fs_entry_id=fs_entry_id,
+                assertions=generated_outgoing_assertions,
+                default_producer_run_id=update_run_id,
+            )
 
             checksum = hashlib.sha256(final_bytes).hexdigest()
             await self.knowledge_fs_entry_repository.lock_checksum_scope(
@@ -165,10 +211,6 @@ class DocumentUpdateService:
             )
             wrote_original = True
 
-            if not is_markdown:
-                await self.knowledge_file_reference_repository.delete_for_source_fs_entry_id(
-                    cursor, source_fs_entry_id=fs_entry_id
-                )
             await self.knowledge_item_chunk_repository.delete_for_fs_entry(
                 cursor, fs_entry_id=fs_entry_id
             )
@@ -280,6 +322,37 @@ class DocumentUpdateService:
             **kwargs,
         )
         return rewritten.encode("utf-8")
+
+    async def _write_generated_assertions(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        source_fs_entry_id: int,
+        assertions: Sequence[GeneratedOutgoingAssertion],
+        default_producer_run_id: str,
+    ) -> None:
+        for assertion in assertions:
+            await self.knowledge_file_reference_repository.upsert_relation_assertion(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                source_fs_entry_id=source_fs_entry_id,
+                target_fs_entry_id=assertion.target_fs_entry_id,
+                relation_code=assertion.relation_code,
+                original_target=assertion.original_target,
+                target_path=None,
+                target_suffix="",
+                target_kind="FILE",
+                status="resolved",
+                confidence=assertion.confidence,
+                discovered_by=assertion.discovered_by,
+                producer_run_id=assertion.producer_run_id or default_producer_run_id,
+                evidence_fingerprint=assertion.evidence_fingerprint,
+                target_locator_type="ENTITY_SURFACE",
+                target_locator_value=assertion.original_target,
+                definition_version=assertion.definition_version,
+                source_task_id=assertion.source_task_id,
+            )
 
     async def _apply_front_matter(self, cursor: Any, **kwargs: Any) -> None:
         for name, value in parse_front_matter(kwargs["content"]).items():

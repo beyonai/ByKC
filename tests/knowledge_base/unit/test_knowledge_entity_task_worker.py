@@ -216,9 +216,19 @@ class FakeIngestion:
 class FakeDocumentUpdate:
     def __init__(self) -> None:
         self.requests = []
+        self.generated_assertions = []
+        self.producer_run_ids = []
 
-    async def update_file(self, request) -> None:
+    async def update_file(
+        self,
+        request,
+        *,
+        generated_outgoing_assertions=(),
+        producer_run_id=None,
+    ) -> None:
         self.requests.append(request)
+        self.generated_assertions.append(tuple(generated_outgoing_assertions))
+        self.producer_run_ids.append(producer_run_id)
 
 
 class FakeReferenceRepository:
@@ -228,19 +238,19 @@ class FakeReferenceRepository:
         self.incoming_mentions: list[dict] = []
         self.markdown_sources: list[dict] = []
 
-    async def upsert_semantic_relation(self, cursor, **kwargs) -> dict:
+    async def upsert_relation_assertion(self, cursor, **kwargs) -> dict:
         del cursor
         self.upserts.append(kwargs)
         return kwargs
 
-    async def delete_semantic_for_source_fs_entry_id(
+    async def delete_outgoing_for_source_fs_entry_id(
         self, cursor, **kwargs
     ) -> list[dict]:
         del cursor
         self.deletes.append(kwargs)
         return []
 
-    async def list_semantic_by_target(self, cursor, **kwargs) -> list[dict]:
+    async def list_relations_by_target(self, cursor, **kwargs) -> list[dict]:
         del cursor, kwargs
         return list(self.incoming_mentions)
 
@@ -459,6 +469,7 @@ async def test_discovery_anchors_only_unique_current_kb_and_creates_fixed_entiti
             "knowledge_base_id": 1,
             "source_fs_entry_id": 10,
             "relation_code": "MENTIONS",
+            "discovered_by": "ENTITY_DISCOVERY",
         }
     ]
     assert len(result.index_version) == 16
@@ -588,18 +599,18 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
     }
     assert b"# Beta" in update.file_content
     assert deps.ingestion.indexed_paths == ["/KnowledgeEntity/beta.md"]
-    assert len(deps.references.upserts) == 1
-    assert deps.references.upserts[0]["target_fs_entry_id"] == 20
-    assert deps.references.upserts[0]["relation_code"] == "PART_OF"
-    assert deps.references.upserts[0]["source_task_id"] == 601
-    assert deps.references.deletes == [
-        {
-            "knowledge_base_id": 1,
-            "source_fs_entry_id": 30,
-            "relation_code": ["DEPENDS_ON", "IS_A", "MENTIONS", "PART_OF"],
-        }
-    ]
-    assert deps.references.upserts[0]["definition_version"] == "v2"
+    generated = deps.updater.generated_assertions[0]
+    assert len(generated) == 1
+    assert generated[0].target_fs_entry_id == 20
+    assert generated[0].relation_code == "PART_OF"
+    assert generated[0].source_task_id == 601
+    assert generated[0].definition_version == "v2"
+    assert generated[0].discovered_by == "ENTITY_ENRICH"
+    assert generated[0].producer_run_id == "entity-enrich:601"
+    assert len(generated[0].evidence_fingerprint) == 64
+    assert deps.updater.producer_run_ids == ["entity-enrich:601"]
+    assert deps.references.upserts == []
+    assert deps.references.deletes == []
     assert result.target_file_ids == (20,)
     assert result.index_version is None
     assert result.result_payload["templateCoverage"] == 0.67

@@ -8,7 +8,10 @@ import pytest
 
 from by_qa.knowledge_base.api.schemas import DocumentUpdateRequest
 from by_qa.knowledge_base.infrastructure.storage import StorageLocation, StoredObject
-from by_qa.knowledge_base.services.document_update_service import DocumentUpdateService
+from by_qa.knowledge_base.services.document_update_service import (
+    DocumentUpdateService,
+    GeneratedOutgoingAssertion,
+)
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
 
 pytestmark = pytest.mark.asyncio
@@ -162,8 +165,16 @@ class References:
     def __init__(self, calls):
         self.calls = calls
 
-    async def delete_for_source_fs_entry_id(self, cursor, **kwargs):
-        self.calls.append(("delete_refs", kwargs))
+    async def delete_outgoing_for_source_fs_entry_id(self, cursor, **kwargs):
+        self.calls.append(("delete_outgoing", kwargs))
+
+    async def upsert_relation_assertion(self, cursor, **kwargs):
+        self.calls.append(("upsert_assertion", kwargs))
+        return {"kid": 300, **kwargs}
+
+    async def list_by_reference_ids(self, cursor, *, reference_ids):
+        self.calls.append(("list_tokens", {"reference_ids": reference_ids}))
+        return []
 
     async def resolve_pending_for_path(self, cursor, **kwargs):
         self.calls.append(("resolve_refs", kwargs))
@@ -171,9 +182,19 @@ class References:
 
 
 class Rewriter:
-    async def rewrite(self, text, **kwargs):
+    def __init__(self, calls):
+        self.calls = calls
+
+    async def materialize_existing_tokens(self, text, **kwargs):
         del kwargs
-        return text.replace("./new.png", "byqa-ref://9")
+        self.calls.append(("materialize_tokens", {"text": text}))
+        return text.replace("byqa-ref://41", "./restored.png")
+
+    async def rewrite(self, text, **kwargs):
+        self.calls.append(("rewrite", kwargs))
+        return text.replace("./new.png", "byqa-ref://9").replace(
+            "./restored.png", "byqa-ref://10"
+        )
 
 
 class Timeline:
@@ -217,7 +238,7 @@ def build_service(
         knowledge_fetch_cache_repository=Cache(calls),
         file_metadata_value_repository=Metadata(calls),
         knowledge_file_reference_repository=References(calls),
-        markdown_reference_rewriter=Rewriter(),
+        markdown_reference_rewriter=Rewriter(calls),
         storage_provider=storage,
         update_timeline_repository=Timeline(calls),
         markdown_update_summary_service=Summary(),
@@ -255,7 +276,7 @@ async def test_update_rejects_stale_refer_signature_before_storage_mutation():
     with pytest.raises(KnowledgeBaseValidationError, match="file signature mismatch"):
         await service.update_file(request(referSignature="stale-checksum"))
 
-    assert not any(name in {"read", "write", "delete_refs"} for name, _ in calls)
+    assert not any(name in {"read", "write", "delete_outgoing"} for name, _ in calls)
     assert connection.rolled_back
 
 
@@ -344,9 +365,15 @@ async def test_markdown_update_rewrites_final_bytes_cleans_state_and_records_bou
         "checksum": updated["checksum"],
     }
     assert updated["description_provided"] is True and updated["file_description"] == ""
-    assert "frontmatter" in names and "delete_refs" in names and "resolve_refs" in names
     assert (
-        names.index("delete_refs")
+        "frontmatter" in names
+        and "delete_outgoing" in names
+        and "resolve_refs" in names
+    )
+    assert (
+        names.index("materialize_tokens")
+        < names.index("delete_outgoing")
+        < names.index("rewrite")
         < names.index("write")
         < names.index("delete_chunks")
         < names.index("timeline")
@@ -375,8 +402,54 @@ async def test_non_markdown_update_never_decodes_or_calls_llm_and_uses_fixed_sum
     assert not any(name == "frontmatter" for name, _ in calls)
     assert not any(name == "delete_quietly" for name, _ in calls)
     assert not any(name == "create_task" for name, _ in calls)
-    assert any(name == "delete_refs" for name, _ in calls)
+    assert any(name == "delete_outgoing" for name, _ in calls)
     assert any(name == "resolve_refs" for name, _ in calls)
+
+
+async def test_update_materializes_old_tokens_before_deleting_and_rewriting_outgoing():
+    calls = []
+    service, _, storage = build_service(calls)
+
+    await service.update_file(request(b"# New\n![old](byqa-ref://41)\n"))
+
+    names = [name for name, _ in calls]
+    assert names.index("materialize_tokens") < names.index("delete_outgoing")
+    assert names.index("delete_outgoing") < names.index("rewrite")
+    assert storage.objects[storage.original] == b"# New\n![old](byqa-ref://10)\n"
+
+
+async def test_generated_assertions_are_written_in_same_update_transaction():
+    calls = []
+    service, _, _ = build_service(calls)
+    assertion = GeneratedOutgoingAssertion(
+        target_fs_entry_id=77,
+        relation_code="PART_OF",
+        original_target="Parent",
+        discovered_by="ENTITY_ENRICH",
+        confidence=0.91,
+        definition_version="v2",
+        source_task_id=501,
+        evidence_fingerprint="fingerprint",
+    )
+
+    await service.update_file(
+        request(),
+        generated_outgoing_assertions=(assertion,),
+        producer_run_id="entity-enrich:501",
+    )
+
+    generated = next(data for name, data in calls if name == "upsert_assertion")
+    assert generated["source_fs_entry_id"] == 8
+    assert generated["target_fs_entry_id"] == 77
+    assert generated["relation_code"] == "PART_OF"
+    assert generated["discovered_by"] == "ENTITY_ENRICH"
+    assert generated["producer_run_id"] == "entity-enrich:501"
+    assert generated["target_locator_type"] == "ENTITY_SURFACE"
+    assert generated["target_locator_value"] == "Parent"
+    names = [name for name, _ in calls]
+    assert names.index("delete_outgoing") < names.index("upsert_assertion")
+    assert names.index("upsert_assertion") < names.index("write")
+    assert names.index("upsert_assertion") < names.index("commit")
 
 
 async def test_update_preserves_absent_description_and_applies_explicit_none():

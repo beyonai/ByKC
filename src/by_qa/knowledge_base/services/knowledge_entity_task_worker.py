@@ -27,6 +27,9 @@ from by_qa.knowledge_base.infrastructure.storage import (
     StorageLocation,
     StorageNotFoundError,
 )
+from by_qa.knowledge_base.services.document_update_service import (
+    GeneratedOutgoingAssertion,
+)
 from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
     ALLOWED_RELATION_CODES,
     AhoCorasickIndex,
@@ -254,6 +257,13 @@ class KnowledgeEntityTaskWorker:
             relation_targets=relation_targets,
         )
         allowed_target_ids = {target.file_id for target in relation_targets}
+        allowed_relations = tuple(
+            relation
+            for relation in enriched.relations
+            if relation.relation_code.value in ALLOWED_RELATION_CODES
+            and relation.target_file_id != identity.file_id
+            and relation.target_file_id in allowed_target_ids
+        )
         enrich_version = context.enrich_version or entity.get("enrich_version") or "v1"
         full_markdown = self._render_entity_markdown(
             entity_name=identity.entity_name,
@@ -267,6 +277,26 @@ class KnowledgeEntityTaskWorker:
         checksum = context.input_checksum or entity.get("checksum")
         if not checksum:
             raise ValueError("entity enrichment requires an input checksum")
+        producer_run_id = f"entity-enrich:{context.task_id}"
+        generated_assertions = tuple(
+            GeneratedOutgoingAssertion(
+                target_fs_entry_id=int(relation.target_file_id),
+                relation_code=relation.relation_code.value,
+                original_target=relation.target_entity_name,
+                discovered_by=ENRICH_RELATION_SOURCE,
+                confidence=relation.confidence,
+                definition_version=identity.definition_version,
+                source_task_id=int(context.task_id),
+                evidence_fingerprint=hashlib.sha256(
+                    (
+                        f"{identity.file_id}:{relation.relation_code.value}:"
+                        f"{relation.target_file_id}:{enriched.markdown}"
+                    ).encode("utf-8")
+                ).hexdigest(),
+                producer_run_id=producer_run_id,
+            )
+            for relation in allowed_relations
+        )
         await self._document_update.update_file(
             DocumentUpdateRequest(
                 kb_code=context.kb_code,
@@ -275,7 +305,9 @@ class KnowledgeEntityTaskWorker:
                 process_front_matter=True,
                 skip_if_duplicate=False,
                 refer_signature=str(checksum),
-            )
+            ),
+            generated_outgoing_assertions=generated_assertions,
+            producer_run_id=producer_run_id,
         )
         await self._ingestion.file_to_markdown_index(
             FileToMarkdownIndexRequest(
@@ -285,19 +317,6 @@ class KnowledgeEntityTaskWorker:
             document_chunking_service=self._chunker,
         )
 
-        allowed_relations = tuple(
-            relation
-            for relation in enriched.relations
-            if relation.relation_code.value in ALLOWED_RELATION_CODES
-            and relation.target_file_id != identity.file_id
-            and relation.target_file_id in allowed_target_ids
-        )
-        await self._replace_enrich_relations(
-            context,
-            source_file_id=identity.file_id,
-            relations=allowed_relations,
-            definition_version=identity.definition_version,
-        )
         target_ids = tuple(
             sorted({relation.target_file_id for relation in allowed_relations})
         )
@@ -684,24 +703,38 @@ class KnowledgeEntityTaskWorker:
         connection = await self._connection_factory()
         try:
             cursor = connection.cursor()
-            await self._reference_repository.delete_semantic_for_source_fs_entry_id(
+            await self._reference_repository.delete_outgoing_for_source_fs_entry_id(
                 cursor,
                 knowledge_base_id=int(context.knowledge_base_id),
                 source_fs_entry_id=int(context.source_file_id),
                 relation_code="MENTIONS",
+                discovered_by=DISCOVERY_RELATION_SOURCE,
             )
             for target_id in target_file_ids:
                 if target_id == int(context.source_file_id):
                     continue
-                await self._reference_repository.upsert_semantic_relation(
+                await self._reference_repository.upsert_relation_assertion(
                     cursor,
                     knowledge_base_id=int(context.knowledge_base_id),
                     source_fs_entry_id=int(context.source_file_id),
                     target_fs_entry_id=int(target_id),
                     relation_code="MENTIONS",
                     original_target=names.get(int(target_id), str(target_id)),
+                    target_path=None,
+                    target_suffix="",
+                    target_kind="FILE",
+                    status="resolved",
                     confidence=None,
                     discovered_by=DISCOVERY_RELATION_SOURCE,
+                    producer_run_id=f"entity-discovery:{context.task_id}",
+                    evidence_fingerprint=hashlib.sha256(
+                        (
+                            f"{context.source_file_id}:{target_id}:"
+                            f"{context.definition_version or 'v1'}"
+                        ).encode("utf-8")
+                    ).hexdigest(),
+                    target_locator_type="ENTITY_SURFACE",
+                    target_locator_value=names.get(int(target_id), str(target_id)),
                     definition_version=context.definition_version or "v1",
                     source_task_id=int(context.task_id),
                 )
@@ -748,7 +781,7 @@ class KnowledgeEntityTaskWorker:
         connection = await self._connection_factory()
         try:
             cursor = connection.cursor()
-            mentions = await self._reference_repository.list_semantic_by_target(
+            mentions = await self._reference_repository.list_relations_by_target(
                 cursor,
                 knowledge_base_id=identity.knowledge_base_id,
                 target_fs_entry_id=identity.file_id,
@@ -833,43 +866,6 @@ class KnowledgeEntityTaskWorker:
         finally:
             await search_connection.close()
         return fragments
-
-    async def _replace_enrich_relations(
-        self,
-        context: KnowledgeEntityTaskContext | Any,
-        *,
-        source_file_id: int,
-        relations: Sequence[Any],
-        definition_version: str,
-    ) -> None:
-        connection = await self._connection_factory()
-        try:
-            cursor = connection.cursor()
-            await self._reference_repository.delete_semantic_for_source_fs_entry_id(
-                cursor,
-                knowledge_base_id=int(context.knowledge_base_id),
-                source_fs_entry_id=source_file_id,
-                relation_code=sorted(ALLOWED_RELATION_CODES),
-            )
-            for relation in relations:
-                await self._reference_repository.upsert_semantic_relation(
-                    cursor,
-                    knowledge_base_id=int(context.knowledge_base_id),
-                    source_fs_entry_id=source_file_id,
-                    target_fs_entry_id=int(relation.target_file_id),
-                    relation_code=relation.relation_code.value,
-                    original_target=relation.target_entity_name,
-                    confidence=relation.confidence,
-                    discovered_by=ENRICH_RELATION_SOURCE,
-                    definition_version=definition_version,
-                    source_task_id=int(context.task_id),
-                )
-            await connection.commit()
-        except Exception:
-            await connection.rollback()
-            raise
-        finally:
-            await connection.close()
 
     @staticmethod
     def _candidate_aliases(candidate: EntityCandidate) -> tuple[str, ...]:

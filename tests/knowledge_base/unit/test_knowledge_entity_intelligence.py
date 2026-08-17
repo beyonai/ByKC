@@ -10,6 +10,9 @@ import httpx
 import pytest
 
 from by_qa.core.model_config import LLMModelProfile, ModelConfig
+from by_qa.knowledge_base.services import (
+    knowledge_entity_intelligence as intelligence_module,
+)
 from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
     AhoCorasickIndex,
     EvidenceFragment,
@@ -183,7 +186,16 @@ def test_discovery_context_keeps_head_tail_and_heading_map_within_16k() -> None:
 
 
 @pytest.mark.asyncio
-async def test_discovery_retries_strict_json_and_filters_non_entities() -> None:
+async def test_discovery_retries_strict_json_and_filters_non_entities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log_messages: list[str] = []
+
+    def capture_log(message: str, *args: Any, **_kwargs: Any) -> None:
+        log_messages.append(message % args)
+
+    monkeypatch.setattr(intelligence_module.logger, "info", capture_log)
+    monkeypatch.setattr(intelligence_module.logger, "warning", capture_log)
     raw_candidates = [
         {
             "entityName": " OSOT ",
@@ -229,7 +241,17 @@ async def test_discovery_retries_strict_json_and_filters_non_entities() -> None:
     llm = _FakeLLM("```json\n[]\n```", json.dumps(raw_candidates, ensure_ascii=False))
     discovery = KnowledgeEntityDiscovery(llm)
 
-    result = await discovery.discover("# OSOT\n文档内容")
+    result = await discovery.discover(
+        "# OSOT\n文档内容",
+        log_context={
+            "batch_id": "batch-1",
+            "task_id": 51,
+            "kb_code": "7",
+            "source_file_id": 42,
+            "file_path": "/docs/source.md",
+            "task_type": "ENTITY_DISCOVERY",
+        },
+    )
 
     assert result.attempts == 2
     assert [candidate.entity_name for candidate in result.candidates] == [
@@ -244,6 +266,13 @@ async def test_discovery_retries_strict_json_and_filters_non_entities() -> None:
     assert llm.calls[0][1] is True
     assert "Previous output was invalid" in llm.calls[1][0][-1]["content"]
     assert "KnowledgeEntity v1" in llm.calls[0][0][0]["content"]
+    rendered_logs = "\n".join(log_messages)
+    assert "llm output invalid" in rendered_logs
+    assert "llm retry recovered" in rendered_logs
+    assert "batch_id=batch-1" in rendered_logs
+    assert "task_id=51" in rendered_logs
+    assert "文档内容" not in rendered_logs
+    assert "Object-oriented theory" not in rendered_logs
 
 
 def test_candidate_normalization_requires_a_stable_subject_and_caps_at_twelve() -> None:

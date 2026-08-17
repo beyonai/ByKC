@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -17,6 +18,7 @@ from typing import Any
 
 import yaml
 
+from by_qa.core import logger
 from by_qa.knowledge_base.api.schemas import (
     DocumentUpdateRequest,
     FileToMarkdownIndexRequest,
@@ -126,15 +128,47 @@ class KnowledgeEntityTaskWorker:
         """Run exactly one task; failures are intentionally surfaced to the caller."""
 
         task_type = str(getattr(context.task_type, "value", context.task_type)).upper()
-        if task_type == DISCOVERY_TASK_TYPE:
-            return await self._run_discovery(context)
-        if task_type in ENRICH_TASK_TYPES:
-            return await self._run_enrich(context)
-        raise ValueError(f"unsupported KnowledgeEntity task type: {task_type}")
+        task_started_at = time.perf_counter()
+        log_args = self._context_log_args(context, task_type=task_type)
+        logger.info(
+            "knowledge_entity_task_worker started: batch_id=%s task_id=%s "
+            "kb=%s source_file_id=%s file_path=%s task_type=%s",
+            *log_args,
+        )
+        try:
+            if task_type == DISCOVERY_TASK_TYPE:
+                result = await self._run_discovery(context)
+            elif task_type in ENRICH_TASK_TYPES:
+                result = await self._run_enrich(context)
+            else:
+                raise ValueError(f"unsupported KnowledgeEntity task type: {task_type}")
+        except Exception:
+            logger.exception(
+                "knowledge_entity_task_worker failed: batch_id=%s task_id=%s "
+                "kb=%s source_file_id=%s file_path=%s task_type=%s elapsed_ms=%.2f",
+                *log_args,
+                (time.perf_counter() - task_started_at) * 1000,
+            )
+            raise
+        logger.info(
+            "knowledge_entity_task_worker completed: batch_id=%s task_id=%s "
+            "kb=%s source_file_id=%s file_path=%s task_type=%s "
+            "target_count=%s index_version_present=%s elapsed_ms=%.2f",
+            *log_args,
+            len(result.target_file_ids),
+            result.index_version is not None,
+            (time.perf_counter() - task_started_at) * 1000,
+        )
+        return result
 
     async def _run_discovery(
         self, context: KnowledgeEntityTaskContext | Any
     ) -> KnowledgeEntityTaskExecutionResult:
+        logger.info(
+            "knowledge_entity_discovery started: batch_id=%s task_id=%s kb=%s "
+            "source_file_id=%s file_path=%s task_type=%s",
+            *self._context_log_args(context),
+        )
         source, all_surfaces = await self._load_source_and_surfaces(context)
         markdown = await self._read_markdown(source)
         index = self._build_surface_index(all_surfaces)
@@ -148,6 +182,15 @@ class KnowledgeEntityTaskWorker:
             known_matches,
             source_file_id=int(context.source_file_id),
         )
+        logger.info(
+            "knowledge_entity_discovery matching completed: batch_id=%s task_id=%s "
+            "kb=%s source_file_id=%s file_path=%s task_type=%s "
+            "vocabulary_entity_count=%s match_count=%s anchored_count=%s",
+            *self._context_log_args(context),
+            len(all_surfaces),
+            len(known_matches),
+            len(anchored_ids),
+        )
         request_params = context.request_params or {}
         max_entities = int(
             request_params.get("maxEntities", request_params.get("max_entities", 12))
@@ -156,6 +199,17 @@ class KnowledgeEntityTaskWorker:
             markdown,
             known_matches=known_matches,
             max_entities=max_entities,
+            log_context=self._intelligence_log_context(context),
+        )
+        logger.info(
+            "knowledge_entity_discovery model completed: batch_id=%s task_id=%s "
+            "kb=%s source_file_id=%s file_path=%s task_type=%s "
+            "candidate_count=%s warning_count=%s attempts=%s context_truncated=%s",
+            *self._context_log_args(context),
+            len(discovery.candidates),
+            len(discovery.warnings),
+            discovery.attempts,
+            discovery.context.truncated,
         )
 
         current_surfaces = [
@@ -217,6 +271,17 @@ class KnowledgeEntityTaskWorker:
             target_file_ids=sorted(target_ids),
             surfaces=current_surfaces,
         )
+        logger.info(
+            "knowledge_entity_discovery persistence completed: batch_id=%s "
+            "task_id=%s kb=%s source_file_id=%s file_path=%s task_type=%s "
+            "created_count=%s anchored_count=%s dropped_count=%s "
+            "relation_replacement_count=%s",
+            *self._context_log_args(context),
+            sum(action["action"] == "CREATED" for action in actions),
+            sum(action["action"] == "ANCHORED" for action in actions),
+            sum(action["action"] == "DROPPED" for action in actions),
+            len(target_ids),
+        )
         return KnowledgeEntityTaskExecutionResult(
             result_payload={
                 "taskType": DISCOVERY_TASK_TYPE,
@@ -234,6 +299,11 @@ class KnowledgeEntityTaskWorker:
     async def _run_enrich(
         self, context: KnowledgeEntityTaskContext | Any
     ) -> KnowledgeEntityTaskExecutionResult:
+        logger.info(
+            "knowledge_entity_enrich started: batch_id=%s task_id=%s kb=%s "
+            "source_file_id=%s file_path=%s task_type=%s",
+            *self._context_log_args(context),
+        )
         entity, current_surfaces = await self._load_entity_and_current_surfaces(context)
         identity = self._validate_entity_identity(
             entity, context, current_surfaces=current_surfaces
@@ -250,11 +320,20 @@ class KnowledgeEntityTaskWorker:
             for item in current_surfaces
             if int(item["kid"]) != identity.file_id and item.get("entity_name")
         )
+        logger.info(
+            "knowledge_entity_enrich evidence ready: batch_id=%s task_id=%s "
+            "kb=%s source_file_id=%s file_path=%s task_type=%s "
+            "evidence_input_count=%s relation_target_count=%s",
+            *self._context_log_args(context),
+            len(evidence),
+            len(relation_targets),
+        )
         enriched = await self._enricher.enrich(
             identity,
             evidence,
             existing_markdown=existing_markdown,
             relation_targets=relation_targets,
+            log_context=self._intelligence_log_context(context),
         )
         allowed_target_ids = {target.file_id for target in relation_targets}
         allowed_relations = tuple(
@@ -263,6 +342,18 @@ class KnowledgeEntityTaskWorker:
             if relation.relation_code.value in ALLOWED_RELATION_CODES
             and relation.target_file_id != identity.file_id
             and relation.target_file_id in allowed_target_ids
+        )
+        logger.info(
+            "knowledge_entity_enrich model completed: batch_id=%s task_id=%s "
+            "kb=%s source_file_id=%s file_path=%s task_type=%s "
+            "relation_output_count=%s relation_allowed_count=%s "
+            "warning_count=%s attempts=%s template_coverage=%s",
+            *self._context_log_args(context),
+            len(enriched.relations),
+            len(allowed_relations),
+            len(enriched.warnings),
+            enriched.attempts,
+            enriched.template_coverage,
         )
         enrich_version = context.enrich_version or entity.get("enrich_version") or "v1"
         full_markdown = self._render_entity_markdown(
@@ -315,6 +406,13 @@ class KnowledgeEntityTaskWorker:
                 file_path=context.file_path,
             ),
             document_chunking_service=self._chunker,
+        )
+        logger.info(
+            "knowledge_entity_enrich persistence completed: batch_id=%s task_id=%s "
+            "kb=%s source_file_id=%s file_path=%s task_type=%s "
+            "relation_replacement_count=%s",
+            *self._context_log_args(context),
+            len(generated_assertions),
         )
 
         target_ids = tuple(
@@ -938,3 +1036,40 @@ class KnowledgeEntityTaskWorker:
             if hasattr(value, name):
                 return getattr(value, name)
         return None
+
+    @staticmethod
+    def _context_log_args(
+        context: KnowledgeEntityTaskContext | Any, *, task_type: str | None = None
+    ) -> tuple[Any, ...]:
+        normalized_task_type = (
+            task_type
+            or str(getattr(context.task_type, "value", context.task_type)).upper()
+        )
+        return (
+            getattr(context, "batch_id", None) or "-",
+            context.task_id,
+            context.kb_code,
+            context.source_file_id,
+            context.file_path,
+            normalized_task_type,
+        )
+
+    @classmethod
+    def _intelligence_log_context(
+        cls, context: KnowledgeEntityTaskContext | Any
+    ) -> dict[str, Any]:
+        values = cls._context_log_args(context)
+        return dict(
+            zip(
+                (
+                    "batch_id",
+                    "task_id",
+                    "kb_code",
+                    "source_file_id",
+                    "file_path",
+                    "task_type",
+                ),
+                values,
+                strict=True,
+            )
+        )

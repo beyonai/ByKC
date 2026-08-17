@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from by_qa.knowledge_base.services import knowledge_entity_task_worker as worker_module
 from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
     DiscoveryDocumentContext,
     EnrichmentResult,
@@ -263,11 +264,15 @@ class FakeDiscovery:
     def __init__(self, candidates: tuple[EntityCandidate, ...]) -> None:
         self.candidates = candidates
         self.known_matches = ()
+        self.log_context = None
 
-    async def discover(self, markdown, *, known_matches, max_entities):
+    async def discover(
+        self, markdown, *, known_matches, max_entities, log_context=None
+    ):
         assert markdown
         assert max_entities == 12
         self.known_matches = known_matches
+        self.log_context = log_context
         return EntityDiscoveryResult(
             candidates=self.candidates,
             warnings=(),
@@ -291,13 +296,21 @@ class FakeEnricher:
         self.relations = tuple(relations)
         self.evidence = []
         self.targets = ()
+        self.log_context = None
 
     async def enrich(
-        self, identity, evidence, *, existing_markdown, relation_targets
+        self,
+        identity,
+        evidence,
+        *,
+        existing_markdown,
+        relation_targets,
+        log_context=None,
     ) -> EnrichmentResult:
         del existing_markdown
         self.evidence = list(evidence)
         self.targets = relation_targets
+        self.log_context = log_context
         bundle = organize_evidence(self.evidence, target_file_id=identity.file_id)
         if not bundle.fragments:
             raise KnowledgeEntityOutputError("enrichment requires authorized evidence")
@@ -358,7 +371,15 @@ def make_worker(
 
 
 @pytest.mark.asyncio
-async def test_discovery_anchors_only_unique_current_kb_and_creates_fixed_entities():
+async def test_discovery_anchors_only_unique_current_kb_and_creates_fixed_entities(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    log_messages: list[str] = []
+
+    def capture_log(message: str, *args, **_kwargs) -> None:
+        log_messages.append(message % args)
+
+    monkeypatch.setattr(worker_module.logger, "info", capture_log)
     source = file_row(10, "/docs/source.md", content_key="source")
     owner = file_row(
         20,
@@ -430,6 +451,7 @@ async def test_discovery_anchors_only_unique_current_kb_and_creates_fixed_entiti
             source_file_id=10,
             file_path="/docs/source.md",
             definition_version="v2",
+            batch_id="batch-501",
         )
     )
 
@@ -482,6 +504,20 @@ async def test_discovery_anchors_only_unique_current_kb_and_creates_fixed_entiti
     assert "[来源文档](</docs/source.md>)".encode() in (
         deps.ingestion.uploads[0].file_content
     )
+    assert deps.discovery.log_context == {
+        "batch_id": "batch-501",
+        "task_id": 501,
+        "kb_code": "1",
+        "source_file_id": 10,
+        "file_path": "/docs/source.md",
+        "task_type": "ENTITY_DISCOVERY",
+    }
+    rendered_logs = "\n".join(log_messages)
+    assert "knowledge_entity_task_worker started" in rendered_logs
+    assert "knowledge_entity_discovery model completed" in rendered_logs
+    assert "relation_replacement_count=3" in rendered_logs
+    assert "batch_id=batch-501" in rendered_logs
+    assert "Alpha and Cross are mentioned" not in rendered_logs
 
 
 @pytest.mark.asyncio
@@ -578,6 +614,7 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
             enrich_version="e3",
             input_checksum="before-enrich",
             request_params={"evidenceKnCodeList": ["1"], "topK": 5},
+            batch_id="batch-601",
         )
     )
 
@@ -609,6 +646,14 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
     assert generated[0].producer_run_id == "entity-enrich:601"
     assert len(generated[0].evidence_fingerprint) == 64
     assert deps.updater.producer_run_ids == ["entity-enrich:601"]
+    assert deps.enricher.log_context == {
+        "batch_id": "batch-601",
+        "task_id": 601,
+        "kb_code": "1",
+        "source_file_id": 30,
+        "file_path": "/KnowledgeEntity/beta.md",
+        "task_type": "DOCUMENT_ENRICH",
+    }
     assert deps.references.upserts == []
     assert deps.references.deletes == []
     assert result.target_file_ids == (20,)
@@ -618,7 +663,15 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
 
 
 @pytest.mark.asyncio
-async def test_enrich_without_any_evidence_fails_before_document_update():
+async def test_enrich_without_any_evidence_fails_before_document_update(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    failed_logs: list[str] = []
+
+    def capture_failure(message: str, *args, **_kwargs) -> None:
+        failed_logs.append(message % args)
+
+    monkeypatch.setattr(worker_module.logger, "exception", capture_failure)
     entity = file_row(
         30,
         "/KnowledgeEntity/beta.md",
@@ -648,8 +701,11 @@ async def test_enrich_without_any_evidence_fails_before_document_update():
                 source_file_id=30,
                 file_path="/KnowledgeEntity/beta.md",
                 input_checksum="checksum-1",
+                batch_id="batch-701",
             )
         )
 
     assert deps.updater.requests == []
     assert deps.references.upserts == []
+    assert "batch_id=batch-701" in "\n".join(failed_logs)
+    assert "task_id=701" in "\n".join(failed_logs)

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 import unicodedata
 from collections import Counter, deque
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
@@ -21,6 +22,7 @@ from typing import Any, Protocol
 
 import httpx
 
+from by_qa.core import logger
 from by_qa.core.model_config import (
     LLMModelProfile,
     ModelConfigProvider,
@@ -624,8 +626,19 @@ class KnowledgeEntityDiscovery:
         *,
         known_matches: Sequence[SurfaceMatch] = (),
         max_entities: int = MAX_DISCOVERED_ENTITIES,
+        log_context: Mapping[str, Any] | None = None,
     ) -> EntityDiscoveryResult:
+        discovery_started_at = time.perf_counter()
         context = build_discovery_context(markdown)
+        logger.info(
+            "knowledge_entity_intelligence discovery started: document_chars=%s "
+            "known_match_count=%s max_entities=%s context_truncated=%s%s",
+            len(markdown),
+            len(known_matches),
+            max_entities,
+            context.truncated,
+            _safe_log_context(log_context),
+        )
         known_block = _format_known_matches(known_matches)
         base_messages: list[dict[str, str]] = [
             {"role": "system", "content": DISCOVERY_SYSTEM_PROMPT},
@@ -644,18 +657,30 @@ class KnowledgeEntityDiscovery:
             max_attempts=self._max_attempts,
             retry_backoff_seconds=self._retry_backoff_seconds,
             sleep=self._sleep,
+            operation="discovery",
+            log_context=log_context,
         )
         candidates, warnings = normalize_entity_candidates(
             raw_items,
             known_matches=known_matches,
             max_entities=min(max(max_entities, 1), MAX_DISCOVERED_ENTITIES),
         )
-        return EntityDiscoveryResult(
+        result = EntityDiscoveryResult(
             candidates=candidates,
             warnings=warnings,
             attempts=attempts,
             context=context,
         )
+        logger.info(
+            "knowledge_entity_intelligence discovery completed: "
+            "candidate_count=%s warning_count=%s attempts=%s elapsed_ms=%.2f%s",
+            len(result.candidates),
+            len(result.warnings),
+            result.attempts,
+            (time.perf_counter() - discovery_started_at) * 1000,
+            _safe_log_context(log_context),
+        )
+        return result
 
 
 def normalize_entity_candidates(
@@ -1029,14 +1054,35 @@ class KnowledgeEntityEnricher:
         existing_markdown: str = "",
         soft_template: str = DEFAULT_SOFT_TEMPLATE,
         relation_targets: Sequence[RelationTarget] = (),
+        log_context: Mapping[str, Any] | None = None,
     ) -> EnrichmentResult:
+        enrich_started_at = time.perf_counter()
         bundle = (
             evidence
             if isinstance(evidence, EvidenceBundle)
             else organize_evidence(evidence, target_file_id=identity.file_id)
         )
         if not bundle.fragments:
+            logger.warning(
+                "knowledge_entity_intelligence enrich rejected: reason=no_evidence "
+                "entity_file_id=%s knowledge_base_id=%s%s",
+                identity.file_id,
+                identity.knowledge_base_id,
+                _safe_log_context(log_context),
+            )
             raise KnowledgeEntityOutputError("enrichment requires authorized evidence")
+        logger.info(
+            "knowledge_entity_intelligence enrich started: entity_file_id=%s "
+            "knowledge_base_id=%s evidence_count=%s evidence_chars=%s "
+            "relation_target_count=%s existing_markdown_chars=%s%s",
+            identity.file_id,
+            identity.knowledge_base_id,
+            len(bundle.fragments),
+            bundle.total_chars,
+            len(relation_targets),
+            len(existing_markdown),
+            _safe_log_context(log_context),
+        )
         messages = _build_enrichment_messages(
             identity=identity,
             evidence=bundle,
@@ -1051,6 +1097,8 @@ class KnowledgeEntityEnricher:
             max_attempts=self._max_attempts,
             retry_backoff_seconds=self._retry_backoff_seconds,
             sleep=self._sleep,
+            operation="enrich",
+            log_context=log_context,
         )
         markdown, markdown_warnings = normalize_enriched_markdown(
             payload.get("markdown"), identity.entity_name
@@ -1077,7 +1125,7 @@ class KnowledgeEntityEnricher:
         )
         if placeholder_count:
             warnings.append(f"soft template placeholders remain: {placeholder_count}")
-        return EnrichmentResult(
+        result = EnrichmentResult(
             markdown=markdown,
             relations=relations,
             warnings=tuple(dict.fromkeys(warnings)),
@@ -1088,6 +1136,20 @@ class KnowledgeEntityEnricher:
             evidence=bundle,
             attempts=attempts,
         )
+        logger.info(
+            "knowledge_entity_intelligence enrich completed: entity_file_id=%s "
+            "relation_count=%s discarded_relation_count=%s warning_count=%s "
+            "attempts=%s template_coverage=%s elapsed_ms=%.2f%s",
+            identity.file_id,
+            len(result.relations),
+            result.discarded_relation_count,
+            len(result.warnings),
+            result.attempts,
+            result.template_coverage,
+            (time.perf_counter() - enrich_started_at) * 1000,
+            _safe_log_context(log_context),
+        )
+        return result
 
 
 def normalize_enriched_markdown(
@@ -1208,6 +1270,8 @@ async def _complete_strict_json(
     max_attempts: int,
     retry_backoff_seconds: float,
     sleep: Callable[[float], Awaitable[None]],
+    operation: str,
+    log_context: Mapping[str, Any] | None = None,
 ) -> tuple[Any, int]:
     last_error = ""
     for attempt in range(1, max_attempts + 1):
@@ -1230,16 +1294,67 @@ async def _complete_strict_json(
             parsed = json.loads(raw)
         except (json.JSONDecodeError, TypeError) as exc:
             last_error = f"JSON parse error: {exc}"
+            logger.warning(
+                "knowledge_entity_intelligence llm output invalid: operation=%s "
+                "attempt=%s max_attempts=%s error_type=json_decode retry=%s%s",
+                operation,
+                attempt,
+                max_attempts,
+                attempt < max_attempts,
+                _safe_log_context(log_context),
+            )
             continue
         if not isinstance(parsed, expected_type):
             last_error = (
                 f"expected {expected_type.__name__}, got {type(parsed).__name__}"
             )
+            logger.warning(
+                "knowledge_entity_intelligence llm output invalid: operation=%s "
+                "attempt=%s max_attempts=%s error_type=unexpected_json_type "
+                "retry=%s%s",
+                operation,
+                attempt,
+                max_attempts,
+                attempt < max_attempts,
+                _safe_log_context(log_context),
+            )
             continue
+        if attempt > 1:
+            logger.info(
+                "knowledge_entity_intelligence llm retry recovered: operation=%s "
+                "attempt=%s%s",
+                operation,
+                attempt,
+                _safe_log_context(log_context),
+            )
         return parsed, attempt
+    logger.error(
+        "knowledge_entity_intelligence llm retries exhausted: operation=%s "
+        "attempts=%s%s",
+        operation,
+        max_attempts,
+        _safe_log_context(log_context),
+    )
     raise KnowledgeEntityOutputError(
         f"LLM output remained invalid after {max_attempts} attempts: {last_error}"
     )
+
+
+def _safe_log_context(context: Mapping[str, Any] | None) -> str:
+    """Render only the approved task correlation fields, never arbitrary payloads."""
+
+    if not context:
+        return ""
+    fields = (
+        "batch_id",
+        "task_id",
+        "kb_code",
+        "source_file_id",
+        "file_path",
+        "task_type",
+    )
+    values = " ".join(f"{name}={context.get(name, '-')}" for name in fields)
+    return f" {values}"
 
 
 def _format_known_matches(matches: Sequence[SurfaceMatch]) -> str:

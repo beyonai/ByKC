@@ -190,6 +190,8 @@ knowledgeEntity -> [entityEnrich]
 
 Discovery 和 Enrich 都支持单文件或全库触发。全库触发仍逐文件应用上述资格规则：Discovery 枚举本库全部合格 original 文档，并排除固定 `/KnowledgeEntity` 目录；Enrich 只枚举本库 `/KnowledgeEntity` 下的合格 knowledgeEntity 文档。未传文件路径不代表跳过资格校验。
 
+输入文件还必须是当前版本支持的文本格式。Discovery 中，文件存在后缀时，以 `.md`、`.markdown`、`.txt`、`.html`、`.htm` 和 `.csv` 白名单为准；仅对无后缀文件使用规范化的 `text/*` MIME 回退判定。PDF 和 Office 文件即使已生成 Markdown sidecar 也不参与 Discovery，资格结果为 `UNSUPPORTED_FILE_FORMAT`。Enrich 先要求目标位于 `/KnowledgeEntity`，否则返回 `KNOWLEDGE_ENTITY_PATH_REQUIRED`；再硬性限制后缀为 `.md/.markdown`，否则返回 `UNSUPPORTED_CONTENT_TYPE`。上述检查位于 capability 判定之后、`CONTENT_NOT_READY` 之前。
+
 “可以执行”和“现在需要执行”分开判断：
 
 ```text

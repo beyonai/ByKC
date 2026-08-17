@@ -69,6 +69,7 @@ def original(file_id=10, path="/docs/source.md", **updates):
         "markdown_bucket_name": "markdown",
         "markdown_object_key": f"{file_id}.md",
         "line_count": 3,
+        "mime_type": "text/markdown",
         "document_kind": "original",
         "processing_capabilities": [],
         "processing_capabilities_configured": False,
@@ -276,7 +277,11 @@ async def test_eligibility_uses_content_fingerprint_and_reports_fresh_task():
 
 
 async def test_explicit_empty_capabilities_disable_default_and_content_must_be_ready():
-    disabled = original(processing_capabilities_configured=True)
+    disabled = original(
+        path="/docs/disabled.pdf",
+        mime_type="application/pdf",
+        processing_capabilities_configured=True,
+    )
     service, _ = make_service([disabled])
     result = await service.evaluate_processing_eligibility(
         ProcessingEligibilityRequest(
@@ -293,6 +298,226 @@ async def test_explicit_empty_capabilities_disable_default_and_content_must_be_r
         )
     )
     assert result.reason_code == "CONTENT_NOT_READY"
+
+
+@pytest.mark.parametrize(
+    ("path", "mime_type"),
+    [
+        ("/docs/source.md", "application/pdf"),
+        ("/docs/source.MD", None),
+        ("/docs/source.txt", "text/plain; charset=utf-8"),
+        ("/docs/source.html", "text/html"),
+        ("/docs/source.csv", "text/csv"),
+        ("/docs/legacy.markdown", None),
+        ("/docs/legacy.htm", "application/octet-stream"),
+    ],
+)
+async def test_discovery_accepts_supported_text_suffixes(path, mime_type):
+    file_row = original(path=path, mime_type=mime_type)
+    service, _ = make_service([file_row])
+
+    result = await service.evaluate_processing_eligibility(
+        ProcessingEligibilityRequest(
+            knCode="7", filePath=path, capability="entityDiscovery"
+        )
+    )
+
+    assert result.eligibility == ProcessingEligibility.ELIGIBLE_AND_STALE
+    assert result.reason_code == "NEVER_PROCESSED"
+
+
+async def test_suffixless_text_mime_is_supported_but_suffix_is_authoritative():
+    suffixless = original(path="/docs/README", mime_type="text/plain")
+    disguised_pdf = original(
+        11,
+        "/docs/disguised.pdf",
+        mime_type="text/plain",
+    )
+    service, _ = make_service([suffixless, disguised_pdf])
+
+    allowed = await service.evaluate_processing_eligibility(
+        ProcessingEligibilityRequest(
+            knCode="7",
+            filePath=suffixless["file_path"],
+            capability="entityDiscovery",
+        )
+    )
+    rejected = await service.evaluate_processing_eligibility(
+        ProcessingEligibilityRequest(
+            knCode="7",
+            filePath=disguised_pdf["file_path"],
+            capability="entityDiscovery",
+        )
+    )
+
+    assert allowed.eligibility == ProcessingEligibility.ELIGIBLE_AND_STALE
+    assert rejected.reason_code == "UNSUPPORTED_FILE_FORMAT"
+
+
+async def test_pdf_with_ready_markdown_sidecar_is_not_discovery_input():
+    pdf = original(path="/docs/source.pdf", mime_type="application/pdf")
+    service, _ = make_service([pdf])
+
+    result = await service.evaluate_processing_eligibility(
+        ProcessingEligibilityRequest(
+            knCode="7", filePath=pdf["file_path"], capability="entityDiscovery"
+        )
+    )
+
+    assert pdf["markdown_object_key"]
+    assert pdf["line_count"] > 0
+    assert result.eligibility == ProcessingEligibility.INELIGIBLE
+    assert result.reason_code == "UNSUPPORTED_FILE_FORMAT"
+
+
+async def test_content_type_rejection_precedes_content_readiness_and_enrich_evidence():
+    entity_pdf = original(
+        20,
+        "/KnowledgeEntity/entity.pdf",
+        mime_type="application/pdf",
+        markdown_bucket_name=None,
+        markdown_object_key=None,
+        line_count=0,
+        document_kind="knowledgeEntity",
+        entity_name="Entity",
+        aliases=[],
+        definition_version="ke/1.0",
+    )
+    service, _ = make_service([entity_pdf])
+
+    result = await service.evaluate_processing_eligibility(
+        ProcessingEligibilityRequest(
+            knCode="7",
+            filePath=entity_pdf["file_path"],
+            capability="entityEnrich",
+        )
+    )
+
+    assert result.eligibility == ProcessingEligibility.INELIGIBLE
+    assert result.reason_code == "UNSUPPORTED_CONTENT_TYPE"
+
+
+async def test_enrich_requires_markdown_in_reserved_entity_directory():
+    entity_txt = original(
+        20,
+        "/KnowledgeEntity/entity.txt",
+        mime_type="text/plain",
+        document_kind="knowledgeEntity",
+        entity_name="Entity",
+        aliases=[],
+        definition_version="ke/1.0",
+    )
+    misplaced_entity = original(
+        21,
+        "/docs/entity.txt",
+        mime_type="text/plain",
+        document_kind="knowledgeEntity",
+        entity_name="Misplaced",
+        aliases=[],
+        definition_version="ke/1.0",
+    )
+    service, _ = make_service([entity_txt, misplaced_entity])
+
+    unsupported = await service.evaluate_processing_eligibility(
+        ProcessingEligibilityRequest(
+            knCode="7",
+            filePath=entity_txt["file_path"],
+            capability="entityEnrich",
+        )
+    )
+    misplaced = await service.evaluate_processing_eligibility(
+        ProcessingEligibilityRequest(
+            knCode="7",
+            filePath=misplaced_entity["file_path"],
+            capability="entityEnrich",
+        )
+    )
+
+    assert unsupported.reason_code == "UNSUPPORTED_CONTENT_TYPE"
+    assert misplaced.reason_code == "KNOWLEDGE_ENTITY_PATH_REQUIRED"
+
+
+async def test_whole_kb_discovery_schedules_only_text_documents():
+    scheduler = Scheduler()
+    files = [
+        original(10, "/docs/a.md", mime_type="text/markdown"),
+        original(11, "/docs/b.txt", mime_type="text/plain"),
+        original(12, "/docs/c.html", mime_type="text/html"),
+        original(13, "/docs/d.csv", mime_type="text/csv"),
+        original(14, "/docs/e.pdf", mime_type="application/pdf"),
+        original(
+            15,
+            "/docs/f.docx",
+            mime_type=(
+                "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.document"
+            ),
+        ),
+    ]
+    service, _ = make_service(files, scheduler=scheduler)
+
+    accepted = await service.discover_knowledge_entities(
+        EntityDiscoveryRequest(knCode="7")
+    )
+
+    assert accepted.eligible_count == 4
+    assert accepted.accepted_count == 4
+    assert accepted.skipped_count == 2
+    assert len(scheduler.factories) == 4
+
+
+async def test_whole_kb_enrich_schedules_only_markdown_entities():
+    source = original(10, "/docs/source.md")
+    markdown_entity = original(
+        20,
+        "/KnowledgeEntity/a.md",
+        document_kind="knowledgeEntity",
+        entity_name="A",
+        aliases=[],
+        definition_version="ke/1.0",
+    )
+    text_entity = original(
+        21,
+        "/KnowledgeEntity/b.txt",
+        mime_type="text/plain",
+        document_kind="knowledgeEntity",
+        entity_name="B",
+        aliases=[],
+        definition_version="ke/1.0",
+    )
+    markdown_entity_long_suffix = original(
+        22,
+        "/KnowledgeEntity/c.MARKDOWN",
+        mime_type=None,
+        document_kind="knowledgeEntity",
+        entity_name="C",
+        aliases=[],
+        definition_version="ke/1.0",
+    )
+    scheduler = Scheduler()
+    relations = Relations(
+        incoming=[
+            {
+                "kid": 501,
+                "source_fs_entry_id": 10,
+                "target_fs_entry_id": 20,
+                "relation_code": "MENTIONS",
+                "updated_at": datetime.now(timezone.utc),
+            }
+        ]
+    )
+    service, _ = make_service(
+        [source, markdown_entity, text_entity, markdown_entity_long_suffix],
+        relations=relations,
+        scheduler=scheduler,
+    )
+
+    accepted = await service.enrich_knowledge_entities(EntityEnrichRequest(knCode="7"))
+
+    assert accepted.eligible_count == 2
+    assert accepted.accepted_count == 2
+    assert accepted.skipped_count == 1
+    assert len(scheduler.factories) == 2
 
 
 async def test_missing_metadata_defaults_ordinary_document_to_discovery_input():

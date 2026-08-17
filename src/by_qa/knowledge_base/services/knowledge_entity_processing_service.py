@@ -11,6 +11,7 @@ from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import PurePosixPath
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -45,6 +46,11 @@ DISCOVERY_METHOD_VERSION = "discovery/1.0"
 ENRICH_METHOD_VERSION = "enrich/1.0"
 PROCESSING_POLICY_VERSION = "entity-policy/1.0"
 ENRICH_TEMPLATE_VERSION = "entity-template/1.0"
+
+_TEXT_DOCUMENT_SUFFIXES = frozenset(
+    {".csv", ".htm", ".html", ".markdown", ".md", ".txt"}
+)
+_MARKDOWN_DOCUMENT_SUFFIXES = frozenset({".markdown", ".md"})
 
 
 @dataclass(frozen=True)
@@ -869,6 +875,21 @@ class KnowledgeEntityProcessingOrchestrator:
             reason = "DOCUMENT_KIND_MISMATCH"
         elif not self._capability_enabled(file_row, document_kind, capability):
             reason = "CAPABILITY_DISABLED"
+        elif (
+            capability == ProcessingCapability.ENTITY_DISCOVERY
+            and not self._is_supported_discovery_document(file_row)
+        ):
+            reason = "UNSUPPORTED_FILE_FORMAT"
+        elif (
+            capability == ProcessingCapability.ENTITY_ENRICH
+            and not self._inside_entity_directory(str(file_row.get("file_path") or ""))
+        ):
+            reason = "KNOWLEDGE_ENTITY_PATH_REQUIRED"
+        elif (
+            capability == ProcessingCapability.ENTITY_ENRICH
+            and not self._is_markdown_document(file_row)
+        ):
+            reason = "UNSUPPORTED_CONTENT_TYPE"
         elif not self._content_ready(file_row):
             reason = "CONTENT_NOT_READY"
         elif (
@@ -1153,6 +1174,26 @@ class KnowledgeEntityProcessingOrchestrator:
             and row.get("markdown_object_key")
             and int(row.get("line_count") or 0) > 0
         )
+
+    def _is_supported_discovery_document(self, row: Mapping[str, Any]) -> bool:
+        """Allow original text documents, never converted binary sidecars.
+
+        A present suffix is authoritative and must belong to the build
+        pipeline's current text allowlist.  MIME is only a fallback for a
+        suffixless file, so an Office/PDF document cannot become eligible
+        merely because a Markdown sidecar exists.
+        """
+        suffix = PurePosixPath(str(row.get("file_path") or "")).suffix.lower()
+        if suffix:
+            return suffix in _TEXT_DOCUMENT_SUFFIXES
+        mime_type = (
+            str(row.get("mime_type") or "").split(";", maxsplit=1)[0].strip().lower()
+        )
+        return mime_type.startswith("text/")
+
+    def _is_markdown_document(self, row: Mapping[str, Any]) -> bool:
+        suffix = PurePosixPath(str(row.get("file_path") or "")).suffix.lower()
+        return suffix in _MARKDOWN_DOCUMENT_SUFFIXES
 
     def _identity_complete(self, row: Mapping[str, Any]) -> bool:
         return bool(

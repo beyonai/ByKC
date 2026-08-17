@@ -185,6 +185,9 @@ EVIDENCE_CHANGED
 INPUT_UNCHANGED
 CAPABILITY_DISABLED
 DOCUMENT_KIND_MISMATCH
+UNSUPPORTED_FILE_FORMAT
+KNOWLEDGE_ENTITY_PATH_REQUIRED
+UNSUPPORTED_CONTENT_TYPE
 CONTENT_NOT_READY
 IDENTITY_METADATA_INCOMPLETE
 NO_EVIDENCE
@@ -745,6 +748,9 @@ templateVersion
 | `DOCUMENT_NOT_FOUND` | 文档不存在 | 否 |
 | `DOCUMENT_KIND_MISMATCH` | 文档类型不支持该能力 | 否 |
 | `CAPABILITY_DISABLED` | `processingCapabilities` 禁用该能力 | 否 |
+| `UNSUPPORTED_FILE_FORMAT` | Discovery 输入后缀不在文本白名单，或无后缀且 MIME 不是 `text/*`；PDF/Office 即使已生成 Markdown 也不参与处理 | 否 |
+| `KNOWLEDGE_ENTITY_PATH_REQUIRED` | Enrich 目标不在本库 `/KnowledgeEntity` 目录下 | 否 |
+| `UNSUPPORTED_CONTENT_TYPE` | Enrich 目标不是 `.md/.markdown` 文档 | 否 |
 | `CONTENT_NOT_READY` | Markdown 尚未构建或正文为空 | 是 |
 | `IDENTITY_METADATA_INCOMPLETE` | 实体身份 metadata 不完整 | 否 |
 | `NO_EVIDENCE` | Enrich 无可用证据；通常进入 `SKIPPED` | 条件变化后可重试 |

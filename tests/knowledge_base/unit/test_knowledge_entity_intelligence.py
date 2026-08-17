@@ -501,6 +501,70 @@ async def test_openai_compatible_client_uses_core_provider_and_injected_http_cli
 
 
 @pytest.mark.asyncio
+async def test_openai_compatible_client_uses_five_minute_default_timeout_and_logs_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    debug_messages: list[str] = []
+
+    class _Provider:
+        async def get_config(self, model_type: str | LLMModelProfile) -> ModelConfig:
+            del model_type
+            return ModelConfig(
+                model_name="knowledge-model",
+                temperature=0.1,
+                base_url="https://llm.example/v1",
+                api_key="secret-api-key",
+            )
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {"choices": [{"message": {"content": "done"}}]}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+        async def post(self, *_args: Any, **_kwargs: Any) -> _Response:
+            captured["debug_logged_before_post"] = bool(debug_messages)
+            return _Response()
+
+    def client_factory(*, timeout: float) -> _Client:
+        captured["timeout"] = timeout
+        return _Client()
+
+    def capture_debug(message: str, *args: Any, **_kwargs: Any) -> None:
+        debug_messages.append(message % args)
+
+    monkeypatch.setattr(intelligence_module.logger, "debug", capture_debug)
+    client = OpenAICompatibleKnowledgeEntityLLM(
+        provider=_Provider(), client_factory=client_factory
+    )
+    messages = [
+        {"role": "system", "content": "你是知识实体助手"},
+        {"role": "user", "content": "请分析最终文档"},
+    ]
+
+    result = await client.complete(messages, json_mode=True)
+
+    assert result == "done"
+    assert captured == {"timeout": 300.0, "debug_logged_before_post": True}
+    assert len(debug_messages) == 1
+    assert "model=knowledge-model" in debug_messages[0]
+    assert "json_mode=True" in debug_messages[0]
+    assert "message_count=2" in debug_messages[0]
+    assert json.dumps(messages, ensure_ascii=False) in debug_messages[0]
+    assert "secret-api-key" not in debug_messages[0]
+    assert "Authorization" not in debug_messages[0]
+
+
+@pytest.mark.asyncio
 async def test_openai_compatible_client_wraps_http_failures() -> None:
     class _Provider:
         async def get_config(

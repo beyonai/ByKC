@@ -52,7 +52,7 @@ def setup_logger(
     log_dir: Optional[str] = None,
     max_bytes: int = 50 * 1024 * 1024,  # 50MB
     backup_count: int = 8,
-    log_level: int = logging.INFO,
+    log_level: int | str | None = None,
 ) -> logging.Logger:
     """Set up a logger with file rotation and contextual formatting.
 
@@ -61,20 +61,24 @@ def setup_logger(
         log_dir: Directory for log files (defaults to settings.logs_path)
         max_bytes: Maximum size of each log file before rotation (default: 50MB)
         backup_count: Number of backup files to keep (default: 8)
-        log_level: Logging level (default: INFO)
+        log_level: Logging level (defaults to ``LOG_LEVEL`` from settings)
 
     Returns:
         Configured logger instance
     """
+    resolved_log_level = _resolve_log_level(log_level)
+
     # Get or create logger
     logger = logging.getLogger(name)
-    logger.setLevel(log_level)
+    logger.setLevel(resolved_log_level)
 
     # Disable propagation to avoid duplicate logs from root logger
     logger.propagate = False
 
     # Avoid duplicate handlers
     if logger.handlers:
+        for handler in logger.handlers:
+            handler.setLevel(resolved_log_level)
         return logger
 
     # Determine log directory
@@ -97,7 +101,7 @@ def setup_logger(
         backupCount=backup_count,
         encoding="utf-8",
     )
-    file_handler.setLevel(log_level)
+    file_handler.setLevel(resolved_log_level)
 
     # Create formatter with custom format
     # Format: 2026-03-06 05:28:22.319 [INFO] [session_id:1111,message_id:10804720] [filename:line] content
@@ -112,11 +116,24 @@ def setup_logger(
 
     # Also add console handler for development
     console_handler = logging.StreamHandler()
-    console_handler.setLevel(log_level)
+    console_handler.setLevel(resolved_log_level)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
     return logger
+
+
+def _resolve_log_level(log_level: int | str | None) -> int:
+    """Resolve explicit integer levels or the validated configured level name."""
+    if log_level is None:
+        log_level = get_settings().log_level
+    if isinstance(log_level, int):
+        return log_level
+    normalized = log_level.strip().upper()
+    resolved = getattr(logging, normalized, None)
+    if not isinstance(resolved, int):
+        raise ValueError(f"invalid log level: {log_level}")
+    return resolved
 
 
 # Global logger instance

@@ -485,7 +485,7 @@ class OpenAICompatibleKnowledgeEntityLLM:
         *,
         provider: ModelConfigProvider | None = None,
         profile: str | LLMModelProfile = LLMModelProfile.STANDARD,
-        timeout: float = 60.0,
+        timeout: float = 300.0,
         client_factory: Callable[..., Any] | None = None,
     ) -> None:
         self._provider = provider or load_model_config_provider()
@@ -516,6 +516,14 @@ class OpenAICompatibleKnowledgeEntityLLM:
             payload["response_format"] = {"type": "json_object"}
         try:
             async with self._client_factory(timeout=self._timeout) as client:
+                logger.debug(
+                    "knowledge entity llm request prompt: model=%s, "
+                    "json_mode=%s, message_count=%d, messages=%s",
+                    config.model_name,
+                    json_mode,
+                    len(payload["messages"]),
+                    json.dumps(payload["messages"], ensure_ascii=False),
+                )
                 response = await client.post(
                     f"{base_url}/chat/completions", headers=headers, json=payload
                 )

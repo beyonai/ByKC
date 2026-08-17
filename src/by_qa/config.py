@@ -88,6 +88,7 @@ class Settings(BaseSettings):
     redis_database: int = Field(default=0, alias="REDIS_DATABASE")
 
     agent_data_path: Path = Field(default=Path("agent_data"), alias="AGENT_DATA_PATH")
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
 
     db_host: str = Field(default="", alias="DB_HOST")
     db_port: int = Field(default=5432, alias="DB_PORT")
@@ -167,6 +168,20 @@ class Settings(BaseSettings):
         gt=0,
         alias="KB_UPDATE_TIMELINE_LLM_TIMEOUT_SECONDS",
     )
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def _normalize_log_level(cls, value: Any) -> str:
+        """Normalize and validate the application logging threshold."""
+        if not isinstance(value, str):
+            raise ValueError("LOG_LEVEL must be a string")
+        normalized = value.strip().upper()
+        allowed = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        if normalized not in allowed:
+            raise ValueError(
+                "LOG_LEVEL must be one of DEBUG, INFO, WARNING, ERROR, CRITICAL"
+            )
+        return normalized
 
     @field_validator("host_machine", mode="before")
     @classmethod

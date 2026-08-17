@@ -109,6 +109,14 @@ def test_settings_expose_embedding_batch_max_texts_default():
     assert settings.embedding_batch_max_texts == 10
 
 
+def test_settings_normalize_and_validate_log_level():
+    assert Settings(_env_file=None).log_level == "INFO"
+    assert Settings(_env_file=None, LOG_LEVEL=" debug ").log_level == "DEBUG"
+
+    with pytest.raises(ValidationError, match="LOG_LEVEL must be one of"):
+        Settings(_env_file=None, LOG_LEVEL="TRACE")
+
+
 def test_settings_expose_configurable_dsl_limits():
     defaults = Settings(_env_file=None)
     configured = Settings(

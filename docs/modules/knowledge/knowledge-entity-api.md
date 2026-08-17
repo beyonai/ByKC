@@ -769,7 +769,7 @@ KnowledgeEntity v1 **不新增实体主表、语义关系表或关系证据表**
 | 分类 | 表或配置 | 结论 |
 | --- | --- | --- |
 | 文档主数据 | `knowledge_fs_entry` | 直接复用，不改表 |
-| 实体/原始文档属性 | `knowledge_metadata_property_def`、`knowledge_file_metadata_value` | 复用；新增属性定义数据，不改表结构 |
+| 实体/原始文档属性 | `knowledge_file_metadata_value`（增量 SQL `031`） | 复用自包含 EAV；回填历史 live FILE 的 `documentKind`，不改表结构 |
 | Markdown 引用 / `MENTIONS` 断言 | `knowledge_file_reference` | 继续复用；历史行由增量脚本回填为 `MENTIONS` |
 | 文档 chunk 和向量检索 | `knowledge_chunk`、embedding 表 | 直接复用 |
 | Enrich 文档更新时间线 | `knowledge_file_update_timeline` | v1 直接复用，不改表 |
@@ -792,7 +792,9 @@ KnowledgeEntity v1 **不新增实体主表、语义关系表或关系证据表**
 
 #### Metadata 表
 
-通过 metadata 属性定义新增以下配置，不需要 DDL：
+SQL `025` 已将 `knowledge_file_metadata_value` 迁移为自包含 EAV，属性名和类型直接保存在
+`property_name` / `value_type`，并删除旧 `knowledge_metadata_property_def`。因此以下属性
+不需要新增属性定义或专用列：
 
 | 属性 | valueType | 适用文档 |
 | --- | --- | --- |
@@ -809,6 +811,12 @@ KnowledgeEntity v1 **不新增实体主表、语义关系表或关系证据表**
 | `enrichVersion` | `string` | KnowledgeEntity，可选 |
 
 `subjectFileId` 建议使用 `string`，避免接口层大整数精度和 `numeric` 序列化差异。
+
+import/upload/update 会在文档写入事务内补齐 `documentKind`：
+`/KnowledgeEntity` 保留目录下默认为 `knowledgeEntity`，其他路径默认为
+`original`；显式已有值不覆盖。增量 SQL `031` 仅回填缺失该属性的 live FILE，
+反复执行不会新增重复行。`processingCapabilities` 不物化默认值：缺失表示按
+`documentKind` 使用默认能力，显式空列表才表示禁用。
 
 #### `knowledge_file_reference`
 

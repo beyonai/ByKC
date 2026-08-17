@@ -128,6 +128,12 @@ Enrich 不得改变实体身份、权限和证据边界，但文档章节、标�
 | `original` | 原始、采集、导入或人工撰写的证据文档 |
 | `knowledgeEntity` | 表达一个稳定 KnowledgeEntity 的累积性文档 |
 
+写入链路会在 import/upload/update 的同一事务中物化 `documentKind`：
+保留目录 `/KnowledgeEntity` 下默认为 `knowledgeEntity`，其他文件默认为
+`original`。显式 metadata 始终优先，系统默认不会覆盖已有值。增量 SQL
+`031` 按同一规则回填历史 live FILE；读取层保留相同的兼容默认，
+以支持滚动升级和未及时回填的存量数据。
+
 ### 5.2 原始文档 metadata
 
 | 属性 | 必需 | 说明 |
@@ -180,6 +186,7 @@ knowledgeEntity -> [entityEnrich]
 ```
 
 `processingCapabilities` 只用于覆盖默认策略。例如原始文档设置为空列表，表示该文档不参与实体发现。v1 不对 Enrich 后的 KnowledgeEntity 再执行实体发现，避免形成处理循环。
+系统不为默认能力物化 `processingCapabilities`，以便保留“缺失表示使用默认、显式空列表表示禁用”的区别。
 
 Discovery 和 Enrich 都支持单文件或全库触发。全库触发仍逐文件应用上述资格规则：Discovery 枚举本库全部合格 original 文档，并排除固定 `/KnowledgeEntity` 目录；Enrich 只枚举本库 `/KnowledgeEntity` 下的合格 knowledgeEntity 文档。未传文件路径不代表跳过资格校验。
 

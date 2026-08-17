@@ -318,7 +318,7 @@ Discovery 成功任务结果示例见任务状态接口。
 - 新实体只写入源文档所在知识库的固定 `/KnowledgeEntity` 目录，目录不存在时自动创建；接口不允许调用方指定其他知识库或目录；
 - 全系统词表只用于高性能候选召回，最终锚定、别名合并、关系建立和新实体创建都限定在当前知识库，不建立跨库实体关系；
 - `maxEntities` 是每个源文件的结果上限，不是整个批次共享上限；不得通过截断隐藏已发生的写入；
-- `force=true` 会创建新任务，但身份和关系写入仍保持幂等；
+- `force=true` 会跳过已成功任务的 freshness 复用并创建新任务；如同文件同类型仍有 `PENDING/RUNNING` 任务，则复用该活动任务，身份和关系写入仍保持幂等；
 - 新实体及 `MENTIONS` 写入成功后才触发对应阶段 Callback。
 
 ## 6. 文档富化接口
@@ -714,7 +714,7 @@ templateVersion
 
 - 相同指纹已有运行中任务：返回该任务；
 - 相同指纹已有成功任务且 `force=false`：返回成功任务；
-- `force=true`：创建新任务，但文档和关系写入仍幂等；
+- `force=true`：跳过已成功任务的 freshness 复用；若已有同文件同类型的活动任务则仍复用该任务，否则创建新任务；
 - AC 每次 `indexVersion` 变化不自动改变全库 Discovery 指纹；
 - Enrich 输出 checksum 不作为下一次 Enrich 的自动触发输入。
 
@@ -742,7 +742,7 @@ templateVersion
 
 ### 11.1 结论
 
-KnowledgeEntity v1 **不需要新增实体主表，也不新增任务表、语义关系表或关系证据表**。现有 `006_knowledge_build_task` 和 `026_knowledge_file_reference` 可以复用，但必须增加类型区分和实体能力所需字段；这不是零 DDL 复用。
+KnowledgeEntity v1 **不新增实体主表、语义关系表或关系证据表**。原始文档与 KnowledgeEntity 继续复用文档主表，Markdown 引用与语义关系复用 `knowledge_file_reference`。任务存储按领域边界拆分：保留 `knowledge_build_task` 只服务文件构建，新增 `knowledge_semantic_processing_task` 统一承载 Discovery/Enrich。
 
 建议：
 
@@ -753,8 +753,9 @@ KnowledgeEntity v1 **不需要新增实体主表，也不新增任务表、语�
 | Markdown 物理引用 | `knowledge_file_reference` | 继续复用；现有数据默认为 `MARKDOWN` |
 | 文档 chunk 和向量检索 | `knowledge_chunk`、embedding 表 | 直接复用 |
 | Enrich 文档更新时间线 | `knowledge_file_update_timeline` | v1 直接复用，不改表 |
-| Discovery/Enrich 异步任务 | `knowledge_build_task`（SQL `006`） | 复用并扩展，不新增 `knowledge_processing_task` |
-| 文档语义关系 | `knowledge_file_reference`（SQL `026`） | 复用并扩展，用 `reference_type` 与 Markdown 引用隔离 |
+| 文件构建任务 | `knowledge_build_task`（SQL `006`） | 保留现有表与仓储语义，不修改旧 SQL |
+| Discovery/Enrich 异步任务 | `knowledge_semantic_processing_task`（增量 SQL `029`） | 新增一张语义处理任务表，两种任务共用生命周期 |
+| 文档语义关系 | `knowledge_file_reference`（增量 SQL `030`） | 增量扩展，用 `reference_type` 与 Markdown 引用隔离；原 `026` 不变 |
 | 关系证据 | - | v1 不实现 `knowledge_document_relation_evidence` |
 | 全系统实体词面投影 | `knowledge_entity_surface` | 生产规模强烈建议新增；PoC 可暂时从 metadata 重建 |
 | 合并后的旧 ID 重定向 | `knowledge_document_redirect` | v1 不需要，实体合并/拆分阶段再增加 |
@@ -806,22 +807,26 @@ Enrich 对实体 Markdown 的更新可以继续记录为 `UPDATE`，因此 v1 �
 
 当后续需要明确记录 `MERGE`、`SPLIT`、`RENAME` 时，再扩展时间线事件类型或引入专门的身份治理审计记录。
 
-### 11.3 复用并扩展：`knowledge_build_task`（SQL `006`）
+### 11.3 新增：`knowledge_semantic_processing_task`（增量 SQL `029`）
 
-现有表已经有 `knowledge_base_id`、`fs_entry_id`、状态、当前步骤、错误和起止时间，正好可以表达“每个知识库文件一条异步处理任务”。保留表名以避免大范围迁移，将它定位为兼容历史命名的文件处理任务表。
+`knowledge_build_task` 的边界保持不变，只记录文件到 Markdown、chunk 和向量索引的构建任务。不在 `006`、`013` 中增加 `task_type` 或改写原有索引。
 
-保留字段的统一语义：
+Discovery 和 Enrich 共用批次、状态、幂等、Callback 与分页查询模型，因此不按任务类型拆成两张表。新表仅承载 `ENTITY_DISCOVERY`、`DOCUMENT_ENRICH` 两类语义处理任务，不作为全系统通用任务表。
 
-- `fs_entry_id` 始终表示本任务实际处理的文件：Discovery 是原始文档，Enrich 是实体文档；
-- `current_step` 同时承载实体任务的 `currentStage`；
-- 数据库存储沿用现有小写状态风格，HTTP 层映射为本接口的大写状态枚举；
-- `kid` 继续作为对外 `taskId`。
+统一语义：
 
-建议在 `006` 的后续迁移中增加：
+- `fs_entry_id` 是本任务实际处理的文件：Discovery 为原始文档，Enrich 为 KnowledgeEntity 文档；
+- `current_stage` 对应接口的 `currentStage`；
+- 数据库使用小写状态，HTTP 层映射为大写枚举；
+- `kid` 作为对外 `taskId`。
+
+字段建议：
 
 | 字段 | 建议 | 说明 |
 | --- | --- | --- |
-| `task_type` | `varchar(32) NOT NULL DEFAULT 'FILE_BUILD'` | `FILE_BUILD`、`ENTITY_DISCOVERY`、`DOCUMENT_ENRICH`；默认值保证历史行兼容 |
+| `knowledge_base_id` | `bigint NOT NULL` | 知识库 ID |
+| `fs_entry_id` | `bigint NOT NULL` | 被处理文件 ID；路径查询时 join 文档表 |
+| `task_type` | `varchar(32) NOT NULL` | `ENTITY_DISCOVERY` 或 `DOCUMENT_ENRICH` |
 | `batch_id` | `varchar(64) NULL` | 一次单文件或全库触发的批次 ID |
 | `progress` | `smallint NULL` | 0 至 100 |
 | `input_fingerprint` | `varchar(128) NULL` | 幂等和 freshness 判断 |
@@ -832,37 +837,27 @@ Enrich 对实体 Markdown 的更新可以继续记录为 `UPDATE`，因此 v1 �
 | `index_version` | `varchar(64) NULL` | 实际使用的 AC snapshot 版本 |
 | `request_params` | `jsonb NULL` | 去除 callback 后的请求快照 |
 | `result_payload` | `jsonb NULL` | 每文件任务结果，不作为独立证据表 |
-| `error_code` | `varchar(64) NULL` | 结构化错误码；现有 `error_message` 继续复用 |
+| `error_code` | `varchar(64) NULL` | 结构化错误码 |
+| `error_message` | `text NULL` | 错误详情 |
 
 一次全库请求先完成资格筛选，再为每个实际处理文件创建一行，所有行共享 `batch_id`；不增加父任务或批次表。未满足资格的文件只进入接受响应的 `skippedCount`，不强制落一条 `SKIPPED` 记录；执行中才发现证据失效等情况时，文件任务可以落为 `skipped`。
 
-SQL `013` 的现有唯一索引必须从：
-
-```text
-(fs_entry_id) WHERE status = 'running'
-```
-
-调整为：
-
-```text
-(fs_entry_id, task_type) WHERE status = 'running'
-```
-
-否则一个文件的 `FILE_BUILD` 会错误阻止其他类型任务。另建议增加：
+新表建议增加：
 
 - `(knowledge_base_id, task_type, created_at DESC, kid DESC)`：全库状态查询；
 - `(knowledge_base_id, fs_entry_id, task_type, created_at DESC, kid DESC)`：可选路径查询；
 - `(batch_id, created_at, kid)`：批次查询；
-- `(task_type, fs_entry_id, input_fingerprint, status)`：幂等复用。
+- `(task_type, fs_entry_id, input_fingerprint, status)`：幂等复用；
+- `(fs_entry_id, task_type) WHERE status IN ('pending', 'running')` 部分唯一索引：防止同一文件的同类活动任务重复接受。
 
-兼容改造要求：
+仓储边界：
 
-- 现有 `get_latest_by_fs_entry_id`、`delete_for_fs_entry_id`、文件构建状态和重复构建判断显式过滤 `task_type='FILE_BUILD'`；文档更新清理构建产物时不能顺带删除 Discovery/Enrich 历史；
-- 现有 `create_task` 默认写入 `FILE_BUILD`；
-- 新增按 `knowledge_base_id`、可选 `fs_entry_id`、可选 `batch_id` 的实体任务分页查询；
-- Callback callable 不写数据库，进程内执行器仍通过 `taskId` 暂时持有引用。
+- `KnowledgeBuildTaskRepository` 保留原有构建方法，不感知 `task_type`；
+- 新增 `KnowledgeSemanticProcessingTaskRepository`，负责语义处理任务的创建、更新、分页和计数；
+- 按 `knowledge_base_id`、可选 `fs_entry_id`、可选 `batch_id` 分页查询；
+- Callback callable 不写数据库，进程内执行器通过 `taskId` 暂时持有引用。
 
-### 11.4 复用并扩展：`knowledge_file_reference`（SQL `026`）
+### 11.4 增量扩展：`knowledge_file_reference`（SQL `030`，原 `026` 不变）
 
 建议增加：
 
@@ -873,7 +868,7 @@ SQL `013` 的现有唯一索引必须从：
 | `confidence` | `numeric(5,4) NULL` | 精确 `MENTIONS` 可为 1.0 |
 | `discovered_by` | `varchar(32) NULL` | `AC_EXACT`、`LLM_DISCOVERY`、`ENRICH_LLM` 等 |
 | `definition_version` | `varchar(64) NULL` | 生成关系时使用的定义版本 |
-| `source_task_id` | `bigint NULL REFERENCES knowledge_build_task(kid) ON DELETE SET NULL` | 最近生成或确认该关系的任务 |
+| `source_task_id` | `bigint NULL REFERENCES knowledge_semantic_processing_task(kid) ON DELETE SET NULL` | 最近生成或确认该关系的语义处理任务 |
 
 semantic 行沿用现有约束的写法：
 
@@ -913,7 +908,7 @@ target_kind = FILE
 当前版本不新增 `knowledge_document_relation_evidence`，也不向 `knowledge_file_reference` 填充大段 evidence JSON。先保留三层最低追溯能力：
 
 - 关系行的 `source_task_id` 指向生成任务；
-- `knowledge_build_task.result_payload` 保留有界的任务结果和丢弃原因，主要用于调试，不作为长期证据主数据；
+- `knowledge_semantic_processing_task.result_payload` 保留有界的任务结果和丢弃原因，主要用于调试，不作为长期证据主数据；
 - KnowledgeEntity Markdown 正文使用现有文件引用指向原始证据文档。
 
 代价是 v1 暂不支持按关系返回多个证据片段、证据 checksum 失效检测和关系级审计。出现明确的审计、失效重算或多证据查询需求后，再把任务结果中的证据提升为独立投影表，不影响现有关系 ID。
@@ -962,7 +957,6 @@ PoC 可以从 metadata 中读取 `entityName` 和 `aliases` 后构建 AC snapsho
 
 - `knowledge_document_processing_state`：可先通过任务表索引查询最近成功指纹；规模化调度出现瓶颈后再增加水位投影；
 - `knowledge_processing_task_event`：Callback v1 不持久化逐事件日志，当前阶段和结果保存在任务表即可；
-- `knowledge_processing_task`：复用扩展后的 `knowledge_build_task`；
 - `knowledge_document_relation`：复用扩展后的 `knowledge_file_reference`；
 - `knowledge_document_relation_evidence`：v1 明确不建设独立关系证据层；
 - `knowledge_document_redirect`：实体合并和拆分正式上线时再增加；
@@ -975,9 +969,10 @@ PoC 可以从 metadata 中读取 `entityName` 和 `aliases` 后构建 AC snapsho
 ```text
 复用：knowledge_fs_entry
 复用：metadata property/value
-修改复用：knowledge_build_task（006）
-修改复用：knowledge_build_task 索引（013）
-修改复用：knowledge_file_reference（026）
+原样保留：knowledge_build_task（006）
+原样保留：knowledge_build_task 索引（013）
+新增：knowledge_semantic_processing_task（029）
+增量扩展：knowledge_file_reference（030，原 026 不变）
 不实现：knowledge_document_relation_evidence
 AC snapshot：直接从 metadata 构建
 ```
@@ -993,4 +988,4 @@ v1 最小组合
 
 因此，回答“是否需要增改数据表”：
 
-> 必须改现有表，但 v1 不必为任务、关系和关系证据新增三张表：扩展 `006_knowledge_build_task` 和 `013` 索引以承载按文件的 Discovery/Enrich 任务，扩展 `026_knowledge_file_reference` 以区分 Markdown 引用和语义关系；不实现 `knowledge_document_relation_evidence`。生产级全系统词表仍建议新增可重建的 `knowledge_entity_surface` 投影。`knowledge_fs_entry`、metadata 表和更新时间线不需要改结构。
+> v1 新增一张 `knowledge_semantic_processing_task` 承载按文件的 Discovery/Enrich 任务，保持 `006_knowledge_build_task`、`013` 不变；通过增量脚本 `030` 扩展 `knowledge_file_reference` 以区分 Markdown 引用和语义关系，原 `026` 不变；不实现 `knowledge_document_relation_evidence`。生产级全系统词表仍建议新增可重建的 `knowledge_entity_surface` 投影。`knowledge_fs_entry`、metadata 表和更新时间线不需要改结构。

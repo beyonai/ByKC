@@ -892,8 +892,8 @@ Enrich 使用独立 `enrichVersion`，索引使用独立 `indexVersion`。
 
 - 原始文档和 KnowledgeEntity 共用文档主模型；
 - 建立最小有效实体文档格式；
-- 扩展 `knowledge_build_task`，以 `taskType` 隔离文件构建、discovery 和 enrich，并支持同批文件共享 `batchId`；
-- 扩展 `knowledge_file_reference`，以 `referenceType` 隔离 Markdown 引用和语义关系；
+- 保留 `knowledge_build_task` 专用于文件构建，新增 `knowledge_semantic_processing_task` 统一承载 discovery/enrich，并支持同批文件共享 `batchId`；
+- 保留原 `026` 不变，通过增量脚本扩展 `knowledge_file_reference`，以 `referenceType` 隔离 Markdown 引用和语义关系；
 - 支持内部 Python/SDK Callback。
 
 ### 阶段 2：AC 与实体发现

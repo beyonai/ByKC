@@ -6,6 +6,8 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
+from by_qa.core import logger
+
 SEMANTIC_TASK_TYPES = frozenset({"ENTITY_DISCOVERY", "DOCUMENT_ENRICH"})
 SEMANTIC_TASK_STATUSES = frozenset(
     {"pending", "running", "succeeded", "failed", "cancelled", "skipped"}
@@ -98,7 +100,27 @@ class KnowledgeSemanticProcessingTaskRepository:
                 "request_params": self._json_value(request_params),
             },
         )
-        return await cursor.fetchone()
+        row = await cursor.fetchone()
+        if row is None:
+            logger.warning(
+                "semantic processing task create returned no row: kb_id=%s source_id=%s task_type=%s batch_id=%s",
+                knowledge_base_id,
+                fs_entry_id,
+                normalized_task_type,
+                batch_id,
+            )
+        else:
+            logger.debug(
+                "semantic processing task created: task_id=%s kb_id=%s source_id=%s task_type=%s batch_id=%s status=%s stage=%s",
+                row.get("kid"),
+                knowledge_base_id,
+                fs_entry_id,
+                normalized_task_type,
+                batch_id,
+                row.get("status", normalized_status),
+                row.get("current_stage", current_stage),
+            )
+        return row
 
     async def update_processing_task(
         self,
@@ -159,7 +181,28 @@ class KnowledgeSemanticProcessingTaskRepository:
                 "finished": finished,
             },
         )
-        return await cursor.fetchone()
+        row = await cursor.fetchone()
+        if row is None:
+            logger.warning(
+                "semantic processing task update matched no row: task_id=%s task_type=%s requested_status=%s stage=%s",
+                task_id,
+                normalized_task_type,
+                normalized_status,
+                current_stage,
+            )
+            return None
+        logger.debug(
+            "semantic processing task updated: task_id=%s task_type=%s status=%s stage=%s progress=%s error_code=%s started=%s finished=%s",
+            task_id,
+            normalized_task_type,
+            row.get("status", normalized_status),
+            row.get("current_stage", current_stage),
+            row.get("progress", progress),
+            row.get("error_code", error_code),
+            started,
+            finished,
+        )
+        return row
 
     async def list_processing_tasks(
         self,
@@ -235,7 +278,19 @@ class KnowledgeSemanticProcessingTaskRepository:
                 "offset": offset,
             },
         )
-        return await cursor.fetchall()
+        rows = await cursor.fetchall()
+        logger.debug(
+            "semantic processing tasks listed: kb_id=%s source_id=%s task_type=%s batch_id=%s latest_only=%s count=%s offset=%s limit=%s",
+            knowledge_base_id,
+            fs_entry_id,
+            task_type,
+            batch_id,
+            latest_only,
+            len(rows),
+            offset,
+            limit,
+        )
+        return rows
 
     async def count_processing_tasks(
         self,
@@ -276,7 +331,17 @@ class KnowledgeSemanticProcessingTaskRepository:
             {**params, "latest_only": latest_only},
         )
         row = await cursor.fetchone()
-        return int(row["total"]) if row else 0
+        total = int(row["total"]) if row else 0
+        logger.debug(
+            "semantic processing tasks counted: kb_id=%s source_id=%s task_type=%s batch_id=%s latest_only=%s total=%s",
+            knowledge_base_id,
+            fs_entry_id,
+            task_type,
+            batch_id,
+            latest_only,
+            total,
+        )
+        return total
 
     def _processing_filters(
         self,

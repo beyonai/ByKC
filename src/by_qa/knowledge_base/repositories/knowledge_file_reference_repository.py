@@ -7,6 +7,8 @@ import json
 from collections.abc import Sequence
 from typing import Any
 
+from by_qa.core import logger
+
 
 class KnowledgeFileReferenceRepository:
     """Repository for exact assertions and deduplicated logical relations."""
@@ -195,7 +197,32 @@ class KnowledgeFileReferenceRepository:
                 "source_task_id": source_task_id,
             },
         )
-        return await cursor.fetchone()
+        row = await cursor.fetchone()
+        if row is None:
+            logger.warning(
+                "relation assertion upsert returned no row: kb_id=%s source_id=%s target_id=%s relation=%s producer=%s producer_run_id=%s task_id=%s",
+                knowledge_base_id,
+                source_fs_entry_id,
+                target_fs_entry_id,
+                normalized_relation,
+                normalized_producer,
+                normalized_run_id,
+                source_task_id,
+            )
+        else:
+            logger.debug(
+                "relation assertion persisted: assertion_id=%s kb_id=%s source_id=%s target_id=%s relation=%s producer=%s producer_run_id=%s task_id=%s status=%s",
+                row.get("kid"),
+                knowledge_base_id,
+                source_fs_entry_id,
+                target_fs_entry_id,
+                normalized_relation,
+                normalized_producer,
+                normalized_run_id,
+                source_task_id,
+                status,
+            )
+        return row
 
     async def create_reference(
         self,
@@ -288,7 +315,19 @@ class KnowledgeFileReferenceRepository:
             """,
             params,
         )
-        return await self._fetchall(cursor)
+        rows = await self._fetchall(cursor)
+        log = logger.info if rows else logger.debug
+        log(
+            "outgoing relation assertions deleted: kb_id=%s source_id=%s relations=%s producers=%s producer_run_id=%s task_id=%s count=%s",
+            knowledge_base_id,
+            source_fs_entry_id,
+            relation_code,
+            discovered_by,
+            producer_run_id,
+            source_task_id,
+            len(rows),
+        )
+        return rows
 
     async def delete_for_source_fs_entry_id(
         self, cursor: Any, *, source_fs_entry_id: int
@@ -325,7 +364,15 @@ class KnowledgeFileReferenceRepository:
                 **producer_params,
             },
         )
-        return await self._fetchall(cursor)
+        rows = await self._fetchall(cursor)
+        logger.debug(
+            "relation assertions listed by source: source_id=%s relations=%s producers=%s count=%s",
+            source_fs_entry_id,
+            relation_code,
+            discovered_by,
+            len(rows),
+        )
+        return rows
 
     async def list_by_source(
         self, cursor: Any, *, source_fs_entry_id: int
@@ -352,7 +399,13 @@ class KnowledgeFileReferenceRepository:
             """,
             {"reference_ids": list(reference_ids)},
         )
-        return await self._fetchall(cursor)
+        rows = await self._fetchall(cursor)
+        logger.debug(
+            "relation assertions loaded by token ids: requested_count=%s found_count=%s",
+            len(reference_ids),
+            len(rows),
+        )
+        return rows
 
     async def list_relations_by_source(
         self,
@@ -395,7 +448,18 @@ class KnowledgeFileReferenceRepository:
                 **relation_params,
             },
         )
-        return await self._fetchall(cursor)
+        rows = await self._fetchall(cursor)
+        logger.debug(
+            "logical relations listed by source: kb_id=%s source_id=%s relations=%s include_deleted=%s count=%s offset=%s limit=%s",
+            knowledge_base_id,
+            source_fs_entry_id,
+            relation_code,
+            include_deleted_entries,
+            len(rows),
+            offset,
+            limit,
+        )
+        return rows
 
     async def count_relations_by_source(
         self,
@@ -437,7 +501,16 @@ class KnowledgeFileReferenceRepository:
             },
         )
         row = await cursor.fetchone()
-        return int(row["total"]) if row is not None else 0
+        total = int(row["total"]) if row is not None else 0
+        logger.debug(
+            "logical relations counted by source: kb_id=%s source_id=%s relations=%s include_deleted=%s total=%s",
+            knowledge_base_id,
+            source_fs_entry_id,
+            relation_code,
+            include_deleted_entries,
+            total,
+        )
+        return total
 
     async def list_relations_by_target(
         self,
@@ -480,7 +553,18 @@ class KnowledgeFileReferenceRepository:
                 **relation_params,
             },
         )
-        return await self._fetchall(cursor)
+        rows = await self._fetchall(cursor)
+        logger.debug(
+            "logical relations listed by target: kb_id=%s target_id=%s relations=%s include_deleted=%s count=%s offset=%s limit=%s",
+            knowledge_base_id,
+            target_fs_entry_id,
+            relation_code,
+            include_deleted_entries,
+            len(rows),
+            offset,
+            limit,
+        )
+        return rows
 
     async def count_relations_by_target(
         self,
@@ -522,7 +606,16 @@ class KnowledgeFileReferenceRepository:
             },
         )
         row = await cursor.fetchone()
-        return int(row["total"]) if row is not None else 0
+        total = int(row["total"]) if row is not None else 0
+        logger.debug(
+            "logical relations counted by target: kb_id=%s target_id=%s relations=%s include_deleted=%s total=%s",
+            knowledge_base_id,
+            target_fs_entry_id,
+            relation_code,
+            include_deleted_entries,
+            total,
+        )
+        return total
 
     async def resolve_pending_for_path(
         self,
@@ -553,7 +646,15 @@ class KnowledgeFileReferenceRepository:
                 "target_fs_entry_id": target_fs_entry_id,
             },
         )
-        return await self._fetchall(cursor)
+        rows = await self._fetchall(cursor)
+        log = logger.info if rows else logger.debug
+        log(
+            "pending relation assertions resolved: kb_id=%s target_id=%s count=%s",
+            knowledge_base_id,
+            target_fs_entry_id,
+            len(rows),
+        )
+        return rows
 
     async def resolve_assertions_for_locator(
         self,
@@ -597,7 +698,16 @@ class KnowledgeFileReferenceRepository:
                 "target_fs_entry_id": target_fs_entry_id,
             },
         )
-        return await self._fetchall(cursor)
+        rows = await self._fetchall(cursor)
+        log = logger.info if rows else logger.debug
+        log(
+            "relation assertions rebound by locator: kb_id=%s target_id=%s locator_type=%s count=%s",
+            knowledge_base_id,
+            target_fs_entry_id,
+            locator_type,
+            len(rows),
+        )
+        return rows
 
     async def rebind_deleted_target_for_path(
         self,
@@ -631,7 +741,15 @@ class KnowledgeFileReferenceRepository:
                 "target_fs_entry_id": target_fs_entry_id,
             },
         )
-        return await self._fetchall(cursor)
+        rows = await self._fetchall(cursor)
+        log = logger.info if rows else logger.debug
+        log(
+            "relation assertions rebound from deleted target: kb_id=%s target_id=%s count=%s",
+            knowledge_base_id,
+            target_fs_entry_id,
+            len(rows),
+        )
+        return rows
 
     async def mark_targets_deleted(
         self,
@@ -672,7 +790,15 @@ class KnowledgeFileReferenceRepository:
             """,
             params,
         )
-        return await self._fetchall(cursor)
+        rows = await self._fetchall(cursor)
+        log = logger.info if rows else logger.debug
+        log(
+            "relation assertion targets marked broken: kb_id=%s target_count=%s assertion_count=%s",
+            knowledge_base_id,
+            len(targets),
+            len(rows),
+        )
+        return rows
 
     async def mark_target_restored(
         self,
@@ -703,7 +829,15 @@ class KnowledgeFileReferenceRepository:
                 "target_fs_entry_id": target_fs_entry_id,
             },
         )
-        return await self._fetchall(cursor)
+        rows = await self._fetchall(cursor)
+        log = logger.info if rows else logger.debug
+        log(
+            "broken relation assertions restored: kb_id=%s target_id=%s count=%s",
+            knowledge_base_id,
+            target_fs_entry_id,
+            len(rows),
+        )
+        return rows
 
     async def list_assertions_by_target(
         self,

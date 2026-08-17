@@ -4,13 +4,13 @@
 from __future__ import annotations
 
 import hashlib
-import logging
 import re
 import uuid
 from bisect import bisect_right
 from typing import Any
 from urllib.parse import unquote
 
+from by_qa.core import logger
 from by_qa.knowledge_common.kb_path_utils import normalize_kb_path
 from by_qa.knowledge_common.markdown_reference import (
     URL_SCHEME_RE,
@@ -19,7 +19,6 @@ from by_qa.knowledge_common.markdown_reference import (
     split_target,
 )
 
-logger = logging.getLogger(__name__)
 _HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$")
 
 
@@ -48,16 +47,26 @@ class MarkdownReferenceRewriter:
             or fs_entry_repository is None
         ):
             raise TypeError("transactional rewrite requires repository and cursor args")
-        return await self._rewrite_transactional(
-            text,
-            source_dir=source_dir,
-            knowledge_base_id=knowledge_base_id,
-            source_fs_entry_id=source_fs_entry_id,
-            cursor=cursor,
-            reference_repository=reference_repository,
-            fs_entry_repository=fs_entry_repository,
-            producer_run_id=producer_run_id or uuid.uuid4().hex,
-        )
+        normalized_run_id = producer_run_id or uuid.uuid4().hex
+        try:
+            return await self._rewrite_transactional(
+                text,
+                source_dir=source_dir,
+                knowledge_base_id=knowledge_base_id,
+                source_fs_entry_id=source_fs_entry_id,
+                cursor=cursor,
+                reference_repository=reference_repository,
+                fs_entry_repository=fs_entry_repository,
+                producer_run_id=normalized_run_id,
+            )
+        except Exception:
+            logger.exception(
+                "markdown reference rewrite failed: kb_id=%s source_id=%s producer_run_id=%s",
+                knowledge_base_id,
+                source_fs_entry_id,
+                normalized_run_id,
+            )
+            raise
 
     async def materialize_existing_tokens(
         self,
@@ -86,6 +95,11 @@ class MarkdownReferenceRewriter:
             if not locator_by_id.get(reference_id)
         }
         if unresolved_ids:
+            logger.warning(
+                "markdown reference token materialization failed: token_count=%s missing_count=%s",
+                len(token_spans),
+                len(unresolved_ids),
+            )
             missing = ", ".join(str(item) for item in sorted(unresolved_ids))
             raise ValueError(f"cannot materialize reference tokens: {missing}")
         replacements = [
@@ -93,7 +107,13 @@ class MarkdownReferenceRewriter:
             for start, end, reference_id in token_spans
             if locator_by_id.get(reference_id)
         ]
-        return self._apply_replacements(text, replacements)
+        materialized = self._apply_replacements(text, replacements)
+        logger.debug(
+            "markdown reference tokens materialized: token_count=%s assertion_count=%s",
+            len(token_spans),
+            len(rows),
+        )
+        return materialized
 
     async def _rewrite_transactional(
         self,
@@ -109,24 +129,39 @@ class MarkdownReferenceRewriter:
     ) -> str:
         spans = detect_reference_spans(text)
         if not spans:
+            logger.debug(
+                "markdown references rewritten: kb_id=%s source_id=%s producer_run_id=%s parsed_count=0 persisted_count=0 resolved_count=0 pending_count=0 skipped_count=0",
+                knowledge_base_id,
+                source_fs_entry_id,
+                producer_run_id,
+            )
             return text
         if len(spans) > self.MAX_REFERENCES:
             logger.warning(
-                "markdown reference count exceeds cap, skipping rewrite: count=%s",
+                "markdown reference count exceeds cap, skipping rewrite: kb_id=%s source_id=%s producer_run_id=%s parsed_count=%s cap=%s",
+                knowledge_base_id,
+                source_fs_entry_id,
+                producer_run_id,
                 len(spans),
+                self.MAX_REFERENCES,
             )
             return text
 
         source_contexts = self._source_contexts(text)
         replacements: list[tuple[int, int, str]] = []
+        resolved_count = 0
+        pending_count = 0
+        skipped_count = 0
         for start, end, alt, target, is_image in spans:
             t = target.strip()
             if self._is_ineligible_target(t):
+                skipped_count += 1
                 continue
             path_part, suffix = split_target(t)
             decoded = unquote(path_part)
             resolved = normalize_kb_path(source_dir, decoded)
             if resolved is None or resolved == "/":
+                skipped_count += 1
                 continue
 
             target_file = await fs_entry_repository.get_file_reference_target_by_path(
@@ -141,6 +176,7 @@ class MarkdownReferenceRewriter:
                     full_path=resolved,
                 )
                 if target_directory is not None:
+                    skipped_count += 1
                     continue
 
             start_line, heading_path = self._context_at_offset(
@@ -180,6 +216,10 @@ class MarkdownReferenceRewriter:
             reference_id = self._row_value(reference, "kid")
             if reference_id is None:
                 raise ValueError("reference insert did not return kid")
+            if target_file is None:
+                pending_count += 1
+            else:
+                resolved_count += 1
 
             target_start, target_end = self._target_bounds(
                 text=text,
@@ -192,10 +232,19 @@ class MarkdownReferenceRewriter:
                 (target_start, target_end, f"byqa-ref://{reference_id}")
             )
 
-        if not replacements:
-            return text
-
-        return self._apply_replacements(text, replacements)
+        rewritten = self._apply_replacements(text, replacements)
+        logger.info(
+            "markdown references rewritten: kb_id=%s source_id=%s producer_run_id=%s parsed_count=%s persisted_count=%s resolved_count=%s pending_count=%s skipped_count=%s",
+            knowledge_base_id,
+            source_fs_entry_id,
+            producer_run_id,
+            len(spans),
+            len(replacements),
+            resolved_count,
+            pending_count,
+            skipped_count,
+        )
+        return rewritten
 
     @staticmethod
     def _apply_replacements(text: str, replacements: list[tuple[int, int, str]]) -> str:

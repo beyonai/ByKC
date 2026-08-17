@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
+import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -86,11 +87,25 @@ class DocumentUpdateService:
         """
         normalized_path = request.file_path.strip("/")
         update_run_id = producer_run_id or uuid.uuid4().hex
+        update_started_at = time.perf_counter()
         connection = await self.connection_factory()
+        knowledge_base_id: int | None = None
+        fs_entry_id: int | None = None
+        is_markdown: bool | None = None
+        deleted_assertion_count = 0
         old_bytes: bytes | None = None
         original_location: StorageLocation | None = None
         wrote_original = False
         committed = False
+        logger.info(
+            "document update started: kb_code=%s file_path=%s update_run_id=%s generated_assertion_count=%s skip_if_duplicate=%s process_front_matter=%s",
+            request.kb_code,
+            normalized_path,
+            update_run_id,
+            len(generated_outgoing_assertions),
+            request.skip_if_duplicate,
+            request.process_front_matter,
+        )
         try:
             cursor = connection.cursor()
             kb_row = await self.knowledge_base_repository.get_by_code(
@@ -150,11 +165,12 @@ class DocumentUpdateService:
                 )
                 final_bytes = materialized.encode("utf-8")
 
-            await self.knowledge_file_reference_repository.delete_outgoing_for_source_fs_entry_id(
+            deleted_assertions = await self.knowledge_file_reference_repository.delete_outgoing_for_source_fs_entry_id(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
                 source_fs_entry_id=fs_entry_id,
             )
+            deleted_assertion_count = len(deleted_assertions or ())
 
             if is_markdown:
                 final_bytes = await self._rewrite_markdown(
@@ -269,13 +285,38 @@ class DocumentUpdateService:
             old_sidecar = self._markdown_location(file_row)
             if old_sidecar is not None:
                 await self.storage_provider.delete_quietly(old_sidecar)
+            timeline_id = self._row_id(timeline)
+            logger.info(
+                "document update completed: kb_id=%s source_id=%s file_path=%s update_run_id=%s timeline_id=%s markdown=%s file_size=%s deleted_assertion_count=%s generated_assertion_count=%s elapsed_ms=%.2f",
+                knowledge_base_id,
+                fs_entry_id,
+                normalized_path,
+                update_run_id,
+                timeline_id,
+                is_markdown,
+                len(final_bytes),
+                deleted_assertion_count,
+                len(generated_outgoing_assertions),
+                (time.perf_counter() - update_started_at) * 1000,
+            )
             return DocumentUpdateResult(
-                timeline_id=self._row_id(timeline),
+                timeline_id=timeline_id,
                 is_markdown=is_markdown,
                 old_markdown_context=self._bounded_context(old_markdown),
                 new_markdown_context=self._bounded_context(new_markdown),
             )
         except Exception:
+            logger.exception(
+                "document update failed: kb_code=%s kb_id=%s source_id=%s file_path=%s update_run_id=%s wrote_original=%s committed=%s elapsed_ms=%.2f",
+                request.kb_code,
+                knowledge_base_id,
+                fs_entry_id,
+                normalized_path,
+                update_run_id,
+                wrote_original,
+                committed,
+                (time.perf_counter() - update_started_at) * 1000,
+            )
             if not committed:
                 try:
                     await connection.rollback()
@@ -297,6 +338,14 @@ class DocumentUpdateService:
                         original_location,
                         old_bytes,
                         content_type=self._guess_mime_type(normalized_path),
+                    )
+                    logger.warning(
+                        "document update storage compensation completed: kb_code=%s kb_id=%s source_id=%s file_path=%s update_run_id=%s",
+                        request.kb_code,
+                        knowledge_base_id,
+                        fs_entry_id,
+                        normalized_path,
+                        update_run_id,
                     )
                 except Exception:
                     logger.critical(

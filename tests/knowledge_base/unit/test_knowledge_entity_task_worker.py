@@ -24,6 +24,10 @@ from by_qa.knowledge_base.services.markdown_front_matter import (
     parse_front_matter,
     split_front_matter,
 )
+from by_qa.knowledge_common.markdown_reference import (
+    detect_reference_spans,
+    detect_reference_token_spans,
+)
 
 
 class FakeCursor:
@@ -370,6 +374,30 @@ def make_worker(
     )
 
 
+@pytest.mark.parametrize(
+    ("entity_name", "expected_path"),
+    [
+        ("知识实体", "/KnowledgeEntity/知识实体.md"),
+        ("OpenAI Platform", "/KnowledgeEntity/OpenAI-Platform.md"),
+        ("Alpha/Beta", "/KnowledgeEntity/Alpha-Beta.md"),
+    ],
+)
+def test_entity_path_uses_readable_name_without_identity_signature(
+    entity_name: str, expected_path: str
+) -> None:
+    assert KnowledgeEntityTaskWorker._entity_path(entity_name) == expected_path
+
+
+def test_discovery_source_path_cannot_be_parsed_as_a_reference() -> None:
+    rendered = KnowledgeEntityTaskWorker._non_link_source_path(
+        "/docs/[source](target)-byqa-ref://42.md"
+    )
+
+    assert rendered == ("/docs/&#91;source&#93;&#40;target&#41;-byqa-ref&#58;//42.md")
+    assert detect_reference_spans(rendered) == []
+    assert detect_reference_token_spans(rendered) == []
+
+
 @pytest.mark.asyncio
 async def test_discovery_anchors_only_unique_current_kb_and_creates_fixed_entities(
     monkeypatch: pytest.MonkeyPatch,
@@ -469,9 +497,10 @@ async def test_discovery_anchors_only_unique_current_kb_and_creates_fixed_entiti
         for action in result.result_payload["actions"]
     )
     paths = [request.file_path for request in deps.ingestion.uploads]
-    assert all(path.startswith("/KnowledgeEntity/") for path in paths)
-    assert all(path.count("/") == 2 for path in paths)
-    assert all("Unsafe/" not in path for path in paths)
+    assert paths == [
+        "/KnowledgeEntity/Beta-Unsafe.md",
+        "/KnowledgeEntity/Alpha-Worker.md",
+    ]
 
     metadata = [
         parse_front_matter(request.file_content) for request in deps.ingestion.uploads
@@ -485,6 +514,8 @@ async def test_discovery_anchors_only_unique_current_kb_and_creates_fixed_entiti
     assert 20 in mention_targets
     assert 99 not in mention_targets
     assert all(item["relation_code"] == "MENTIONS" for item in deps.references.upserts)
+    assert {item["source_fs_entry_id"] for item in deps.references.upserts} == {10}
+    assert all(item["target_fs_entry_id"] != 10 for item in deps.references.upserts)
     assert all(item["source_task_id"] == 501 for item in deps.references.upserts)
     assert deps.references.deletes == [
         {
@@ -501,9 +532,10 @@ async def test_discovery_anchors_only_unique_current_kb_and_creates_fixed_entiti
         "CREATED",
         "DROPPED",
     }
-    assert "[来源文档](</docs/source.md>)".encode() in (
-        deps.ingestion.uploads[0].file_content
-    )
+    for request in deps.ingestion.uploads:
+        _, body = split_front_matter(request.file_content)
+        assert "来源文档：/docs/source.md".encode() in body
+        assert detect_reference_spans(body.decode("utf-8")) == []
     assert deps.discovery.log_context == {
         "batch_id": "batch-501",
         "task_id": 501,
@@ -518,6 +550,111 @@ async def test_discovery_anchors_only_unique_current_kb_and_creates_fixed_entiti
     assert "relation_replacement_count=3" in rendered_logs
     assert "batch_id=batch-501" in rendered_logs
     assert "Alpha and Cross are mentioned" not in rendered_logs
+
+
+@pytest.mark.asyncio
+async def test_discovery_anchors_readable_path_when_entity_name_metadata_is_missing():
+    source = file_row(10, "/docs/source.md", content_key="source")
+    occupied = file_row(
+        11,
+        "/KnowledgeEntity/Alpha-Beta.md",
+        content_key="occupied",
+        markdown_key="occupied-md",
+        document_kind="knowledgeEntity",
+        entity_name=None,
+        definition_version="v1",
+    )
+    deps = make_worker(
+        rows=[source, occupied],
+        objects={
+            ("original", "source"): b"Alpha Beta is mentioned.",
+            ("original", "occupied"): b"# Alpha/Beta",
+            ("markdown", "occupied-md"): b"# Alpha/Beta",
+        },
+        discovery=FakeDiscovery(
+            (
+                EntityCandidate(
+                    entity_name="Alpha/Beta",
+                    local_name="Alpha/Beta",
+                    identity_scope=IdentityScope.GLOBAL,
+                    evidence="Alpha Beta is a stable component.",
+                ),
+            )
+        ),
+    )
+
+    result = await deps.worker.run_task(
+        KnowledgeEntityTaskContext(
+            task_id=502,
+            task_type="ENTITY_DISCOVERY",
+            kb_code="1",
+            knowledge_base_id=1,
+            source_file_id=10,
+            file_path="/docs/source.md",
+        )
+    )
+
+    assert deps.ingestion.uploads == []
+    assert result.target_file_ids == (11,)
+    assert result.result_payload["actions"] == [
+        {
+            "action": "ANCHORED",
+            "entityName": "Alpha/Beta",
+            "entityFileId": 11,
+            "filePath": "/KnowledgeEntity/Alpha-Beta.md",
+        }
+    ]
+    assert len(deps.references.upserts) == 1
+    assert deps.references.upserts[0]["source_fs_entry_id"] == 10
+    assert deps.references.upserts[0]["target_fs_entry_id"] == 11
+
+
+@pytest.mark.asyncio
+async def test_discovery_rejects_conflicting_metadata_at_readable_path():
+    source = file_row(10, "/docs/source.md", content_key="source")
+    conflicting = file_row(
+        11,
+        "/KnowledgeEntity/Alpha-Beta.md",
+        content_key="conflicting",
+        document_kind="knowledgeEntity",
+        entity_name="Different Entity",
+        definition_version="v1",
+    )
+    deps = make_worker(
+        rows=[source, conflicting],
+        objects={
+            ("original", "source"): b"Alpha Beta is mentioned.",
+            ("original", "conflicting"): b"# Different Entity",
+        },
+        discovery=FakeDiscovery(
+            (
+                EntityCandidate(
+                    entity_name="Alpha/Beta",
+                    local_name="Alpha/Beta",
+                    identity_scope=IdentityScope.GLOBAL,
+                    evidence="Alpha Beta is a stable component.",
+                ),
+            )
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="readable path has conflicting entityName metadata",
+    ):
+        await deps.worker.run_task(
+            KnowledgeEntityTaskContext(
+                task_id=503,
+                task_type="ENTITY_DISCOVERY",
+                kb_code="1",
+                knowledge_base_id=1,
+                source_file_id=10,
+                file_path="/docs/source.md",
+            )
+        )
+
+    assert deps.ingestion.uploads == []
+    assert deps.references.upserts == []
 
 
 @pytest.mark.asyncio

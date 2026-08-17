@@ -319,6 +319,10 @@ Discovery 成功任务结果示例见任务状态接口。
 - 文档必须已经生成可读 Markdown 正文；
 - `filePath` 未传时，枚举当前知识库中所有符合上述条件的文件，并排除 `/KnowledgeEntity` 目录；
 - 新实体只写入源文档所在知识库的固定 `/KnowledgeEntity` 目录，目录不存在时自动创建；接口不允许调用方指定其他知识库或目录；
+- 新实体路径固定为 `/KnowledgeEntity/{规范可读名称}.md`，不附加 MD5、哈希签名或数字序号；
+- 同库规范路径已存在时直接锚定该文件，不创建副本：文件必须是 KnowledgeEntity，`entityName` 与候选相同或缺失，subject 身份一致；明显的元数据或文档类型冲突使任务失败；
+- Discovery 不自动覆盖已有实体的身份元数据或合并候选别名；缺失 `entityName` 时只在当前任务内以候选名完成锚定；
+- 新实体正文中的来源路径以普通文本展示，不生成指向原始文档的 Markdown 链接；只持久化原始文档到实体的单向 `MENTIONS`，反向视图由查询层派生；
 - 全系统词表只用于高性能候选召回，最终锚定、别名合并、关系建立和新实体创建都限定在当前知识库，不建立跨库实体关系；
 - `maxEntities` 是每个源文件的结果上限，不是整个批次共享上限；不得通过截断隐藏已发生的写入；
 - `force=true` 会跳过已成功任务的 freshness 复用并创建新任务；如同文件同类型仍有 `PENDING/RUNNING` 任务，则复用该活动任务，身份和关系写入仍保持幂等；
@@ -940,6 +944,7 @@ Discovery 和 Enrich 共用批次、状态、幂等、Callback 与分页查询�
 - 更新一份文档时只替换它拥有的全部出边，不删除其他文档的入边；
 - Enrich 在一个事务中执行“物化旧令牌→删除 source 全部出边→重写 Markdown `MENTIONS`→写入 Enrich 关系”；
 - Discovery 不修改文档正文，只替换同 source 上 `discovered_by='ENTITY_DISCOVERY'` 的 `MENTIONS`，不误删 Markdown 断言。
+- Discovery 创建实体文档时将来源路径写为非链接文本，不由 Markdown Parser 产生实体到原始文档的反向 `MENTIONS`。
 
 不在数据库中保存反向边；`PART_OF` 的“包含”、`IS_A` 的“具有实例/下位类型”和 `MENTIONS` 的“被提及于”由查询层派生。
 
@@ -951,7 +956,7 @@ Discovery 和 Enrich 共用批次、状态、幂等、Callback 与分页查询�
 - Markdown Parser 断言保存标题路径、行号和字符偏移；
 - `source_task_id` 指向 Discovery/Enrich 生成任务；
 - `knowledge_semantic_processing_task.result_payload` 保留有界的任务结果和丢弃原因，主要用于调试，不作为长期证据主数据；
-- KnowledgeEntity Markdown 正文使用现有文件引用指向原始证据文档。
+- KnowledgeEntity Markdown 正文只展示非链接的原始来源路径；长期来源关系以原始文档到实体的 `MENTIONS` 为准。
 
 代价是 v1 不保存证据片段正文，也不承诺证据 checksum 失效检测和长期关系审计。出现明确的审计、失效重算或多证据正文查询需求后，再增加独立证据投影表，不影响现有关系语义。
 

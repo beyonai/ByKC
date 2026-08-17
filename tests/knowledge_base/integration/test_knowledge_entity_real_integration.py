@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import io
+import re
 import time
 from collections.abc import Iterable
 from contextlib import contextmanager
@@ -787,6 +788,7 @@ stores stable entity names and aliases for knowledge-governance workflows.
             assert entity_paths, single_tasks
             assert all(path.startswith("/KnowledgeEntity/") for path in entity_paths)
             entity_path = entity_paths[0]
+            assert not re.search(r"-[0-9a-f]{12}\.md$", Path(entity_path).name)
             entity_metadata = _metadata(
                 client,
                 kb_code=kb_code,
@@ -837,9 +839,24 @@ stores stable entity names and aliases for knowledge-governance workflows.
             )
             assert mention_page["total"] >= 1
             assert any(
-                item["target"]["filePath"].startswith("/KnowledgeEntity/")
+                item["target"]["filePath"] == entity_path
                 and item["relationCode"] == "MENTIONS"
                 for item in mention_page["data"]
+            )
+            entity_outgoing_mentions = _semantic_relations(
+                client,
+                kb_code=kb_code,
+                file_path=entity_path,
+                direction="OUTGOING",
+                relation_codes=["MENTIONS"],
+            )
+            assert entity_outgoing_mentions["total"] == 0
+            assert not any(
+                item["relation_code"] == "MENTIONS"
+                for item in _relation_assertion_rows(
+                    kb_code=kb_code,
+                    source_path=entity_path,
+                )
             )
 
             # An unbuilt second original document and the fresh first document

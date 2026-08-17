@@ -395,7 +395,7 @@ LLM 主要发现 AC 未覆盖但对理解文档显著的稳定主体。每个候
 对已有实体：
 
 - 只在当前知识库中锚定已有实体，并建立原始文档到实体的 `MENTIONS`；
-- 新证明的别名经身份裁决后追加到 `aliases`；
+- v1 Discovery 不自动改写已有实体的 `entityName` 或 `aliases`；候选别名只参与本次身份匹配，显式元数据治理另行执行；
 - 不直接覆盖实体正文；
 - 可根据策略触发 Enrich。
 
@@ -403,19 +403,29 @@ LLM 主要发现 AC 未覆盖但对理解文档显著的稳定主体。每个候
 
 1. 在当前知识库 `/KnowledgeEntity` 下创建 `documentKind=knowledgeEntity` 文档；
 2. 写入 `entityName`、`aliases`、`definitionVersion` 和可选 `subjectFileId`；
-3. 正文至少包含实体定义与边界、初始证据引用；
+3. 正文至少包含实体定义与边界、初始证据和非链接形式的来源路径；
 4. 建立原始文档到新实体的 `MENTIONS`；
 5. 数据提交后触发词表 delta 更新。
 
 该文档是有证据的最小有效知识，不是“草稿实体”。
+
+实体文件使用规范名派生的单一可读路径：
+
+```text
+/KnowledgeEntity/{normalized-readable-name}.md
+```
+
+文件名不附加 MD5、哈希签名或数字序号。同一知识库中该路径已经存在时，不创建第二份文件，而是按同一个 KnowledgeEntity 实例处理：现有文件必须是 `documentKind=knowledgeEntity`，其 `entityName` 与候选规范化后相同，或暂时缺失；subject-local 实体的 `subjectFileId` 必须一致。缺失的 `entityName` 只在当前任务内用候选名完成锚定，Discovery 不静默回写元数据或合并别名。现有文件为普通文档、`entityName` 明显不同或 subject 身份不一致时属于数据冲突，任务失败并要求显式治理。
+
+实体文档中的“发现来源”只展示普通文本路径，不生成指向原始文档的 Markdown 链接。来源追溯以原始文档到实体的 `MENTIONS` 入边为准，Discovery 不插入实体到原始文档的反向关系。
 
 ### 9.7 幂等与并发
 
 - 单文件和全库请求都按“一个实际处理文件一条任务记录”执行，同批文件共享 `batchId`；
 - 任务状态按知识库查询，文件路径可选；需要查看某次触发时再用 `batchId` 收窄；
 - 同一原始文档、同一 checksum、同一 `definitionVersion` 的重复任务可复用结果；
-- 创建新实体前对派生身份键使用事务级互斥或等价机制；
-- 并发创建冲突时重新读取已创建实体并转为锚定；
+- 创建新实体前对规范可读路径使用事务级互斥或等价机制；
+- 并发创建同名路径时重新读取已创建实体，通过上述身份校验后转为锚定，不派生哈希或数字后缀；
 - 关系断言按“生产者运行 + 证据指纹”精确幂等；查询层再按 source、relation、target 合并为逻辑边；
 - Callback 不参与核心事务。
 
@@ -425,6 +435,7 @@ LLM 主要发现 AC 未覆盖但对理解文档显著的稳定主体。每个候
 
 - 关系必须能直接读成“source relation target”；
 - 只持久化一个方向，反向展示由查询层派生；
+- Discovery 只写入 `原始文档 --MENTIONS--> KnowledgeEntity`，实体正文中的来源路径不是链接，不产生 `KnowledgeEntity --> 原始文档` 反向断言；
 - Markdown 引用就是带正文位置证据的 `MENTIONS` 断言，与 Discovery/Enrich 关系共用一套写入、去重、查询、移动、删除和恢复逻辑；
 - 除 `MENTIONS` 的精确命中外，语义关系必须有明确证据；
 - 无法映射到精确关系时只保留自然语言和文档引用，不创建“相关”；

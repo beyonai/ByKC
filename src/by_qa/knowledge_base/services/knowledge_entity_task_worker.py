@@ -54,6 +54,18 @@ ENRICH_TASK_TYPES = frozenset({"DOCUMENT_ENRICH", "ENTITY_ENRICH"})
 ENRICH_RELATION_SOURCE = "ENTITY_ENRICH"
 DISCOVERY_RELATION_SOURCE = "ENTITY_DISCOVERY"
 _SAFE_SLUG_RE = re.compile(r"[^\w-]+", re.UNICODE)
+_NON_LINK_PATH_TRANSLATION = str.maketrans(
+    {
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "[": "&#91;",
+        "]": "&#93;",
+        "(": "&#40;",
+        ")": "&#41;",
+        ":": "&#58;",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,14 +259,14 @@ class KnowledgeEntityTaskWorker:
                 await self._ensure_indexed(context, existing)
                 action = "ANCHORED"
             else:
-                entity_id, created = await self._create_or_reuse_entity(
+                entity_id, created, was_created = await self._create_or_reuse_entity(
                     context,
                     candidate=candidate,
                     subject_file_id=owner_id,
                 )
                 existing = created
                 current_surfaces.append(created)
-                action = "CREATED"
+                action = "CREATED" if was_created else "ANCHORED"
             if entity_id != int(context.source_file_id):
                 target_ids.add(entity_id)
             actions.append(
@@ -664,7 +676,7 @@ class KnowledgeEntityTaskWorker:
         *,
         candidate: EntityCandidate,
         subject_file_id: int | None,
-    ) -> tuple[int, dict[str, Any]]:
+    ) -> tuple[int, dict[str, Any], bool]:
         existing = await self._refresh_exact_candidate(
             context,
             candidate=candidate,
@@ -672,16 +684,10 @@ class KnowledgeEntityTaskWorker:
         )
         if existing is not None:
             await self._ensure_indexed(context, existing)
-            return int(existing["kid"]), existing
+            return int(existing["kid"]), existing, False
 
         definition_version = context.definition_version or "v1"
         aliases = self._candidate_aliases(candidate)
-        identity_key = (
-            f"subject:{subject_file_id}:{normalize_surface(candidate.local_name)}"
-            if subject_file_id is not None
-            else f"global:{normalize_surface(candidate.entity_name)}"
-        )
-        path = self._entity_path(candidate.entity_name, identity_key=identity_key)
         content = self._render_entity_markdown(
             entity_name=candidate.entity_name,
             body=(
@@ -689,7 +695,7 @@ class KnowledgeEntityTaskWorker:
                 "## 实体定义与边界\n\n"
                 f"{candidate.evidence}\n\n"
                 "## 发现来源\n\n"
-                f"[来源文档](<{context.file_path}>)\n"
+                f"来源文档：{self._non_link_source_path(context.file_path)}\n"
             ),
             aliases=aliases,
             definition_version=definition_version,
@@ -697,6 +703,16 @@ class KnowledgeEntityTaskWorker:
             entity_type=candidate.entity_type,
             enrich_version=None,
         )
+        path = self._entity_path(candidate.entity_name)
+        occupied = await self._get_entity_by_path(context, path)
+        if occupied is not None:
+            anchored = self._validate_readable_path_identity(
+                occupied,
+                candidate=candidate,
+                subject_file_id=subject_file_id,
+            )
+            await self._ensure_indexed(context, anchored)
+            return int(anchored["kid"]), anchored, False
         try:
             uploaded = await self._ingestion.upload_file(
                 KnowledgeItemUploadRequest(
@@ -713,10 +729,19 @@ class KnowledgeEntityTaskWorker:
                 candidate=candidate,
                 subject_file_id=subject_file_id,
             )
-            if concurrent is None:
-                raise
-            await self._ensure_indexed(context, concurrent)
-            return int(concurrent["kid"]), concurrent
+            if concurrent is not None:
+                await self._ensure_indexed(context, concurrent)
+                return int(concurrent["kid"]), concurrent, False
+            occupied = await self._get_entity_by_path(context, path)
+            if occupied is not None:
+                anchored = self._validate_readable_path_identity(
+                    occupied,
+                    candidate=candidate,
+                    subject_file_id=subject_file_id,
+                )
+                await self._ensure_indexed(context, anchored)
+                return int(anchored["kid"]), anchored, False
+            raise
 
         await self._ingestion.file_to_markdown_index(
             FileToMarkdownIndexRequest(kb_code=context.kb_code, file_path=path),
@@ -732,7 +757,45 @@ class KnowledgeEntityTaskWorker:
                 "aliases": list(aliases),
                 "subject_file_id": subject_file_id,
             }
-        return int(created["kid"]), created
+        return int(created["kid"]), created, True
+
+    @staticmethod
+    def _validate_readable_path_identity(
+        row: Mapping[str, Any],
+        *,
+        candidate: EntityCandidate,
+        subject_file_id: int | None,
+    ) -> dict[str, Any]:
+        path = str(row.get("file_path") or "")
+        if row.get("document_kind") != "knowledgeEntity":
+            raise ValueError(
+                "KnowledgeEntity readable path is occupied by a non-entity "
+                f"document: {path}"
+            )
+        existing_name = str(row.get("entity_name") or "").strip()
+        if existing_name and normalize_surface(existing_name) != normalize_surface(
+            candidate.entity_name
+        ):
+            raise ValueError(
+                "KnowledgeEntity readable path has conflicting entityName metadata: "
+                f"{path}"
+            )
+        existing_subject = row.get("subject_file_id")
+        normalized_existing_subject = (
+            int(existing_subject) if existing_subject is not None else None
+        )
+        if normalized_existing_subject != subject_file_id:
+            raise ValueError(
+                "KnowledgeEntity readable path has conflicting subject identity: "
+                f"{path}"
+            )
+        anchored = dict(row)
+        # Missing identity metadata is not silently rewritten during discovery.
+        # The candidate values only complete the in-memory surface used by this
+        # task; explicit metadata repair remains a separate document operation.
+        anchored["entity_name"] = existing_name or candidate.entity_name
+        anchored["aliases"] = list(row.get("aliases") or ())
+        return anchored
 
     async def _refresh_exact_candidate(
         self,
@@ -986,12 +1049,17 @@ class KnowledgeEntityTaskWorker:
         return tuple(aliases)
 
     @staticmethod
-    def _entity_path(entity_name: str, *, identity_key: str) -> str:
+    def _entity_path(entity_name: str) -> str:
         normalized = unicodedata.normalize("NFKC", entity_name).strip()
         slug = _SAFE_SLUG_RE.sub("-", normalized.replace("/", "-")).strip("-_")
         slug = slug[:48].strip("-_") or "entity"
-        digest = hashlib.sha256(identity_key.encode("utf-8")).hexdigest()[:12]
-        return f"{ENTITY_DIRECTORY}/{slug}-{digest}.md"
+        return f"{ENTITY_DIRECTORY}/{slug}.md"
+
+    @staticmethod
+    def _non_link_source_path(file_path: str) -> str:
+        """Render provenance text without creating links or stable-ref tokens."""
+
+        return str(file_path).translate(_NON_LINK_PATH_TRANSLATION)
 
     @staticmethod
     def _render_entity_markdown(

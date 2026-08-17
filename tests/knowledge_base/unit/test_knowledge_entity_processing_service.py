@@ -1,0 +1,497 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import pytest
+
+from by_qa.knowledge_base.api.knowledge_entity_schemas import (
+    EntityDiscoveryRequest,
+    EntityEnrichRequest,
+    ProcessingCapability,
+    ProcessingEligibility,
+    ProcessingEligibilityRequest,
+    ProcessingTaskStatusRequest,
+    SemanticRelationsRequest,
+)
+from by_qa.knowledge_base.services.knowledge_entity_processing_service import (
+    KnowledgeEntityProcessingOrchestrator,
+    TaskWorkerResult,
+)
+
+pytestmark = pytest.mark.asyncio
+
+
+class Connection:
+    def __init__(self):
+        self.commits = 0
+        self.rollbacks = 0
+        self.locked_ids = []
+        connection = self
+
+        class Cursor:
+            async def execute(self, sql, params):
+                del self
+                if "FOR UPDATE" in sql:
+                    connection.locked_ids.append(params["file_id"])
+
+        self.cursor_object = Cursor()
+
+    def cursor(self):
+        return self.cursor_object
+
+    async def commit(self):
+        self.commits += 1
+
+    async def rollback(self):
+        self.rollbacks += 1
+
+    async def close(self):
+        pass
+
+
+class KBRepo:
+    async def get_by_code(self, cursor, kb_code):
+        del cursor
+        return {"kid": 7} if kb_code == "7" else None
+
+
+def original(file_id=10, path="/docs/source.md", **updates):
+    row = {
+        "kid": file_id,
+        "knowledge_base_id": 7,
+        "file_path": path,
+        "checksum": "sha-source",
+        "markdown_bucket_name": "markdown",
+        "markdown_object_key": f"{file_id}.md",
+        "line_count": 3,
+        "document_kind": "original",
+        "processing_capabilities": [],
+        "processing_capabilities_configured": False,
+        "entity_name": None,
+        "aliases": [],
+        "definition_version": None,
+        "subject_file_id": None,
+    }
+    row.update(updates)
+    return row
+
+
+class EntityRepo:
+    def __init__(self, files):
+        self.files = files
+
+    async def get_file_with_metadata(self, cursor, *, knowledge_base_id, file_path):
+        del cursor, knowledge_base_id
+        return next((row for row in self.files if row["file_path"] == file_path), None)
+
+    async def list_files_with_metadata(
+        self, cursor, *, knowledge_base_id, path_prefix=None
+    ):
+        del cursor, knowledge_base_id
+        if path_prefix is None:
+            return list(self.files)
+        return [
+            row for row in self.files if row["file_path"].startswith(path_prefix + "/")
+        ]
+
+    async def get_files_by_ids(self, cursor, *, knowledge_base_id, fs_entry_ids):
+        del cursor, knowledge_base_id
+        return [row for row in self.files if row["kid"] in fs_entry_ids]
+
+
+class Tasks:
+    def __init__(self, rows=None):
+        self.rows = list(rows or [])
+        self.updates = []
+
+    async def list_processing_tasks(self, cursor, **filters):
+        del cursor
+        rows = [
+            row
+            for row in self.rows
+            if row["knowledge_base_id"] == filters["knowledge_base_id"]
+            and (
+                filters.get("fs_entry_id") is None
+                or row["fs_entry_id"] == filters["fs_entry_id"]
+            )
+            and (
+                filters.get("task_type") is None
+                or row["task_type"] == filters["task_type"]
+            )
+            and (
+                filters.get("batch_id") is None
+                or row.get("batch_id") == filters["batch_id"]
+            )
+            and (not filters.get("statuses") or row["status"] in filters["statuses"])
+        ]
+        rows.sort(key=lambda row: row["kid"], reverse=True)
+        if filters.get("latest_only"):
+            selected = {}
+            for row in rows:
+                selected.setdefault((row["fs_entry_id"], row["task_type"]), row)
+            rows = list(selected.values())
+        offset = filters.get("offset", 0)
+        return rows[offset : offset + filters.get("limit", 50)]
+
+    async def count_processing_tasks(self, cursor, **filters):
+        filters = {**filters, "limit": 500, "offset": 0}
+        return len(await self.list_processing_tasks(cursor, **filters))
+
+    async def create_processing_task(self, cursor, **values):
+        del cursor
+        row = {
+            "kid": 100 + len(self.rows),
+            **values,
+            "file_path": "/docs/source.md",
+            "created_at": datetime.now(timezone.utc),
+            "started_at": None,
+            "finished_at": None,
+            "index_version": None,
+            "result_payload": None,
+            "error_code": None,
+            "error_message": None,
+        }
+        self.rows.append(row)
+        return row
+
+    async def update_processing_task(self, cursor, *, task_id, task_type, **updates):
+        del cursor, task_type
+        self.updates.append((task_id, updates))
+        row = next(row for row in self.rows if row["kid"] == task_id)
+        row.update({key: value for key, value in updates.items() if value is not None})
+        return row
+
+
+class Relations:
+    def __init__(self, outgoing=None, incoming=None, markdown_sources=None):
+        self.outgoing = outgoing or []
+        self.incoming = incoming or []
+        self.markdown_sources = markdown_sources or []
+
+    async def list_semantic_by_source(self, cursor, *, limit, offset, **kwargs):
+        del cursor, kwargs
+        return self.outgoing[offset : offset + limit]
+
+    async def list_semantic_by_target(self, cursor, *, limit, offset, **kwargs):
+        del cursor, kwargs
+        return self.incoming[offset : offset + limit]
+
+    async def count_semantic_by_source(self, cursor, **kwargs):
+        del cursor, kwargs
+        return len(self.outgoing)
+
+    async def count_semantic_by_target(self, cursor, **kwargs):
+        del cursor, kwargs
+        return len(self.incoming)
+
+    async def list_sources_by_target(self, cursor, **kwargs):
+        del cursor, kwargs
+        return self.markdown_sources
+
+
+class Worker:
+    def __init__(self, result=None, error=None):
+        self.result = result
+        self.error = error
+        self.contexts = []
+
+    async def run_task(self, context):
+        self.contexts.append(context)
+        if self.error:
+            raise self.error
+        return self.result
+
+
+class Scheduler:
+    def __init__(self):
+        self.factories = []
+
+    def schedule(self, task_factory):
+        self.factories.append(task_factory)
+
+    async def run_all(self):
+        for factory in self.factories:
+            await factory()
+
+
+def make_service(files, *, tasks=None, relations=None, worker=None, scheduler=None):
+    connection = Connection()
+
+    async def connection_factory():
+        return connection
+
+    return (
+        KnowledgeEntityProcessingOrchestrator(
+            connection_factory=connection_factory,
+            knowledge_base_repository=KBRepo(),
+            knowledge_entity_repository=EntityRepo(files),
+            knowledge_build_task_repository=tasks or Tasks(),
+            knowledge_file_reference_repository=relations or Relations(),
+            worker=worker or Worker(),
+            task_scheduler=scheduler or Scheduler(),
+        ),
+        connection,
+    )
+
+
+async def test_eligibility_uses_content_fingerprint_and_reports_fresh_task():
+    file_row = original()
+    service, _ = make_service([file_row])
+    stale = await service.evaluate_processing_eligibility(
+        ProcessingEligibilityRequest(
+            knCode="7", filePath=file_row["file_path"], capability="entityDiscovery"
+        )
+    )
+    assert stale.eligibility == ProcessingEligibility.ELIGIBLE_AND_STALE
+    assert stale.reason_code == "NEVER_PROCESSED"
+
+    fingerprint = service._fingerprint(
+        file_row, ProcessingCapability.ENTITY_DISCOVERY, "ke/1.0", None, [], []
+    )
+    service.knowledge_build_task_repository.rows.append(
+        {
+            "kid": 80,
+            "knowledge_base_id": 7,
+            "fs_entry_id": 10,
+            "file_path": file_row["file_path"],
+            "task_type": "ENTITY_DISCOVERY",
+            "status": "succeeded",
+            "input_fingerprint": fingerprint,
+            "definition_version": "ke/1.0",
+            "finished_at": datetime.now(timezone.utc),
+        }
+    )
+    fresh = await service.evaluate_processing_eligibility(
+        ProcessingEligibilityRequest(
+            knCode="7", filePath=file_row["file_path"], capability="entityDiscovery"
+        )
+    )
+    assert fresh.eligibility == ProcessingEligibility.ELIGIBLE_BUT_FRESH
+    assert fresh.last_successful_task_id == "80"
+
+
+async def test_explicit_empty_capabilities_disable_default_and_content_must_be_ready():
+    disabled = original(processing_capabilities_configured=True)
+    service, _ = make_service([disabled])
+    result = await service.evaluate_processing_eligibility(
+        ProcessingEligibilityRequest(
+            knCode="7", filePath=disabled["file_path"], capability="entityDiscovery"
+        )
+    )
+    assert result.reason_code == "CAPABILITY_DISABLED"
+
+    not_ready = original(markdown_object_key=None)
+    service, _ = make_service([not_ready])
+    result = await service.evaluate_processing_eligibility(
+        ProcessingEligibilityRequest(
+            knCode="7", filePath=not_ready["file_path"], capability="entityDiscovery"
+        )
+    )
+    assert result.reason_code == "CONTENT_NOT_READY"
+
+
+async def test_enrich_accepts_resolved_markdown_reference_as_evidence():
+    entity = original(
+        20,
+        "/KnowledgeEntity/A.md",
+        document_kind="knowledgeEntity",
+        entity_name="A",
+        aliases=[],
+        definition_version="ke/1.0",
+    )
+    source = original(10)
+    relations = Relations(markdown_sources=[{"source_fs_entry_id": 10}])
+    service, _ = make_service([source, entity], relations=relations)
+    accepted = await service.enrich_knowledge_entities(
+        EntityEnrichRequest(knCode="7", filePath="/KnowledgeEntity/A.md")
+    )
+    assert accepted.eligible_count == 1
+    assert accepted.accepted_count == 1
+
+
+async def test_accept_creates_per_file_task_and_worker_lifecycle_callbacks():
+    scheduler = Scheduler()
+    worker = Worker(TaskWorkerResult({"createdCount": 1}, (22,), "ac/4"))
+    tasks = Tasks()
+    service, connection = make_service(
+        [original()], tasks=tasks, worker=worker, scheduler=scheduler
+    )
+    events = []
+
+    def callback(event):
+        events.append(event)
+        if event.event_type == "task.started":
+            raise RuntimeError("callback failure must be ignored")
+
+    accepted = await service.discover_knowledge_entities(
+        EntityDiscoveryRequest(knCode="7", filePath="/docs/source.md"),
+        callback=callback,
+    )
+    assert accepted.accepted_count == 1
+    assert accepted.tasks[0].status.value == "PENDING"
+    assert events[0].event_type == "task.accepted"
+
+    await scheduler.run_all()
+    assert worker.contexts[0].input_checksum == "sha-source"
+    assert [event.event_type for event in events] == [
+        "task.accepted",
+        "task.started",
+        "task.succeeded",
+    ]
+    assert tasks.rows[0]["status"] == "succeeded"
+    assert tasks.rows[0]["index_version"] == "ac/4"
+    assert connection.locked_ids == [10]
+    assert connection.rollbacks == 0
+
+
+async def test_same_fingerprint_succeeded_task_is_reused_without_scheduling():
+    file_row = original()
+    service, _ = make_service([file_row])
+    fingerprint = service._fingerprint(
+        file_row, ProcessingCapability.ENTITY_DISCOVERY, "ke/1.0", None, [], []
+    )
+    service.knowledge_build_task_repository.rows.append(
+        {
+            "kid": 81,
+            "knowledge_base_id": 7,
+            "fs_entry_id": 10,
+            "file_path": file_row["file_path"],
+            "task_type": "ENTITY_DISCOVERY",
+            "status": "succeeded",
+            "input_fingerprint": fingerprint,
+            "definition_version": "ke/1.0",
+            "finished_at": datetime.now(timezone.utc),
+        }
+    )
+    accepted = await service.discover_knowledge_entities(
+        EntityDiscoveryRequest(knCode="7", filePath="/docs/source.md")
+    )
+    assert accepted.accepted_count == 0
+    assert accepted.reused_count == 1
+    assert accepted.tasks[0].task_id == "81"
+
+
+async def test_pending_same_fingerprint_is_reused_under_file_lock():
+    file_row = original()
+    service, connection = make_service([file_row])
+    fingerprint = service._fingerprint(
+        file_row, ProcessingCapability.ENTITY_DISCOVERY, "ke/1.0", None, [], []
+    )
+    service.knowledge_build_task_repository.rows.append(
+        {
+            "kid": 82,
+            "knowledge_base_id": 7,
+            "fs_entry_id": 10,
+            "file_path": file_row["file_path"],
+            "task_type": "ENTITY_DISCOVERY",
+            "status": "pending",
+            "input_fingerprint": fingerprint,
+            "definition_version": "ke/1.0",
+            "finished_at": None,
+        }
+    )
+    accepted = await service.discover_knowledge_entities(
+        EntityDiscoveryRequest(knCode="7", filePath="/docs/source.md")
+    )
+    assert accepted.reused_count == 1
+    assert connection.locked_ids == [10]
+
+
+async def test_status_filters_by_optional_file_and_hides_details():
+    now = datetime.now(timezone.utc)
+    tasks = Tasks(
+        [
+            {
+                "kid": 90,
+                "knowledge_base_id": 7,
+                "fs_entry_id": 10,
+                "file_path": "/docs/source.md",
+                "task_type": "ENTITY_DISCOVERY",
+                "batch_id": "ed-1",
+                "status": "failed",
+                "current_step": "failed",
+                "progress": 100,
+                "definition_version": "ke/1.0",
+                "enrich_version": None,
+                "index_version": None,
+                "created_at": now,
+                "started_at": now,
+                "finished_at": now,
+                "result_payload": {"private": True},
+                "error_code": "X",
+                "error_message": "boom",
+            }
+        ]
+    )
+    service, _ = make_service([original()], tasks=tasks)
+    page = await service.get_processing_task_status(
+        ProcessingTaskStatusRequest(knCode="7", filePath="/docs/source.md")
+    )
+    assert page.total == 1
+    assert page.data[0].result is None
+    assert page.data[0].error is None
+
+
+async def test_both_relation_direction_merges_by_relation_id_before_paging():
+    files = [
+        original(10, "/docs/source.md"),
+        original(11, "/KnowledgeEntity/A.md", document_kind="knowledgeEntity"),
+        original(12, "/KnowledgeEntity/B.md", document_kind="knowledgeEntity"),
+    ]
+
+    def edge(kid, source, target):
+        return {
+            "kid": kid,
+            "source_fs_entry_id": source,
+            "target_fs_entry_id": target,
+            "relation_code": "MENTIONS",
+            "confidence": 1,
+            "discovered_by": "AC_EXACT",
+            "definition_version": "ke/1.0",
+            "source_task_id": 2,
+        }
+
+    relations = Relations(outgoing=[edge(3, 10, 12)], incoming=[edge(1, 11, 10)])
+    service, _ = make_service(files, relations=relations)
+    page = await service.get_semantic_relations(
+        SemanticRelationsRequest(
+            knCode="7", filePath="/docs/source.md", pageNum=1, pageSize=1
+        )
+    )
+    assert page.total == 2
+    assert [item.relation_id for item in page.data] == ["1"]
+    assert page.data[0].direction.value == "INCOMING"
+
+
+async def test_relation_preserves_zero_confidence_and_worker_result_is_duck_typed():
+    files = [original(10), original(11, "/KnowledgeEntity/A.md")]
+    edge = {
+        "kid": 1,
+        "source_fs_entry_id": 10,
+        "target_fs_entry_id": 11,
+        "relation_code": "MENTIONS",
+        "confidence": 0,
+        "discovered_by": "LLM",
+        "definition_version": None,
+        "source_task_id": None,
+    }
+    service, _ = make_service(files, relations=Relations(outgoing=[edge]))
+    page = await service.get_semantic_relations(
+        SemanticRelationsRequest(
+            knCode="7",
+            filePath="/docs/source.md",
+            direction="OUTGOING",
+        )
+    )
+    assert page.data[0].confidence == 0
+
+    class ForeignResult:
+        result_payload = {"ok": True}
+        target_file_ids = (11,)
+        index_version = "ac/5"
+
+    assert service._worker_result(ForeignResult()) == (
+        {"ok": True},
+        (11,),
+        "ac/5",
+    )

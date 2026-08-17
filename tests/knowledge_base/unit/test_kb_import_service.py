@@ -977,6 +977,15 @@ class FakeFileMetadataValueRepository:
         self.upserts.append(kwargs)
         return {"kid": len(self.upserts)}
 
+    async def get_file_metadata(self, cursor, *, fs_entry_id, property_names=None):
+        del cursor
+        return [
+            item
+            for item in self.upserts
+            if item["fs_entry_id"] == fs_entry_id
+            and (property_names is None or item["property_name"] in property_names)
+        ]
+
 
 async def test_create_knowledge_base_commits_and_returns_business_fields():
     """Knowledge base creation should generate kb_code from the persisted row id."""
@@ -1954,9 +1963,77 @@ async def test_upload_file_imports_front_matter_without_registered_properties():
         {"property_name": "priority", "value_type": "number", "value": 3},
         {"property_name": "published", "value_type": "boolean", "value": True},
         {"property_name": "tags", "value_type": "stringList", "value": ["hr"]},
+        {
+            "property_name": "documentKind",
+            "value_type": "string",
+            "value": "original",
+        },
     ]
     assert connection.committed is True
     assert storage.written[0][1] == b"# Hello"
+
+
+async def test_upload_file_persists_path_default_and_preserves_explicit_document_kind():
+    cases = [
+        ("/plain.md", b"# Plain", True, "original"),
+        ("/manual.pdf", b"pdf-bytes", True, "original"),
+        (
+            "/KnowledgeEntity/manual.md",
+            b"# Manually created entity",
+            True,
+            "knowledgeEntity",
+        ),
+        (
+            "/entity.md",
+            b"---\ndocumentKind: knowledgeEntity\n---\n# Entity",
+            True,
+            "knowledgeEntity",
+        ),
+        (
+            "/ignored-front-matter.md",
+            b"---\ndocumentKind: knowledgeEntity\n---\n# Ordinary",
+            False,
+            "original",
+        ),
+    ]
+
+    for file_path, content, process_front_matter, expected_kind in cases:
+        connection = FakeConnection()
+        metadata_repository = FakeFileMetadataValueRepository()
+        service = KnowledgeItemIngestionService(
+            connection_factory=lambda current=connection: _async_return(current),
+            knowledge_base_repository=FakeKnowledgeBaseRepository(
+                default_lookup_result={"id": 7, "kb_code": "hr-policy"}
+            ),
+            knowledge_fs_entry_repository=FakeKnowledgeFsEntryRepository(),
+            knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+            retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+            storage_provider=FakeStorageProvider(),
+            embedding_dimension=2,
+            file_metadata_value_repository=metadata_repository,
+        )
+
+        await service.upload_file(
+            KnowledgeItemUploadRequest(
+                knCode="hr-policy",
+                filePath=file_path,
+                fileContent=content,
+                processFrontMatter=process_front_matter,
+            )
+        )
+
+        document_kinds = [
+            item
+            for item in metadata_repository.upserts
+            if item["property_name"] == "documentKind"
+        ]
+        assert len(document_kinds) == 1
+        assert document_kinds[0]["value_type"] == "string"
+        assert document_kinds[0]["value"] == expected_kind
+        assert not any(
+            item["property_name"] == "processingCapabilities"
+            for item in metadata_repository.upserts
+        )
 
 
 async def test_list_dir_root_returns_top_level_entries():

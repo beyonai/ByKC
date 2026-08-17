@@ -154,11 +154,42 @@ class Cache:
 
 
 class Metadata:
-    def __init__(self, calls):
+    def __init__(self, calls, rows=None):
         self.calls = calls
+        self.rows = list(rows or [])
 
     async def upsert_value(self, cursor, **kwargs):
-        self.calls.append(("frontmatter", kwargs))
+        del cursor
+        self.calls.append(("metadata_upsert", kwargs))
+        existing = next(
+            (
+                row
+                for row in self.rows
+                if row["fs_entry_id"] == kwargs["fs_entry_id"]
+                and row["property_name"] == kwargs["property_name"]
+                and row["value_type"] == kwargs["value_type"]
+            ),
+            None,
+        )
+        if existing is None:
+            self.rows.append(dict(kwargs))
+        else:
+            existing.update(kwargs)
+
+    async def get_file_metadata(self, cursor, *, fs_entry_id, property_names=None):
+        del cursor
+        self.calls.append(
+            (
+                "metadata_get",
+                {"fs_entry_id": fs_entry_id, "property_names": property_names},
+            )
+        )
+        return [
+            row
+            for row in self.rows
+            if row["fs_entry_id"] == fs_entry_id
+            and (property_names is None or row["property_name"] in property_names)
+        ]
 
 
 class References:
@@ -221,6 +252,7 @@ def build_service(
     markdown=True,
     task_status=None,
     duplicate_path=None,
+    metadata_rows=None,
 ):
     connection, storage = (
         Connection(calls, fail_commit, fail_rollback),
@@ -236,7 +268,7 @@ def build_service(
         retrieval_projection_repository=Projection(calls),
         knowledge_build_task_repository=BuildTasks(calls, task_status),
         knowledge_fetch_cache_repository=Cache(calls),
-        file_metadata_value_repository=Metadata(calls),
+        file_metadata_value_repository=Metadata(calls, metadata_rows),
         knowledge_file_reference_repository=References(calls),
         markdown_reference_rewriter=Rewriter(calls),
         storage_provider=storage,
@@ -366,7 +398,7 @@ async def test_markdown_update_rewrites_final_bytes_cleans_state_and_records_bou
     }
     assert updated["description_provided"] is True and updated["file_description"] == ""
     assert (
-        "frontmatter" in names
+        "metadata_upsert" in names
         and "delete_outgoing" in names
         and "resolve_refs" in names
     )
@@ -399,11 +431,80 @@ async def test_non_markdown_update_never_decodes_or_calls_llm_and_uses_fixed_sum
     )
     assert event["summary"] == "文件内容已更新。" and event["summary_source"] == "FIXED"
     assert storage.objects[storage.original] == b"\xfe\x01new"
-    assert not any(name == "frontmatter" for name, _ in calls)
+    metadata_upserts = [data for name, data in calls if name == "metadata_upsert"]
+    assert [
+        (item["property_name"], item["value_type"], item["value"])
+        for item in metadata_upserts
+    ] == [("documentKind", "string", "original")]
     assert not any(name == "delete_quietly" for name, _ in calls)
     assert not any(name == "create_task" for name, _ in calls)
     assert any(name == "delete_outgoing" for name, _ in calls)
     assert any(name == "resolve_refs" for name, _ in calls)
+
+
+async def test_update_backfills_missing_document_kind_and_preserves_explicit_values():
+    calls = []
+    service, _, _ = build_service(calls)
+    await service.update_file(request(b"# Updated\n"))
+    document_kind_upserts = [
+        data
+        for name, data in calls
+        if name == "metadata_upsert" and data["property_name"] == "documentKind"
+    ]
+    assert len(document_kind_upserts) == 1
+    assert document_kind_upserts[0]["value"] == "original"
+
+    calls = []
+    service, _, _ = build_service(
+        calls,
+        metadata_rows=[
+            {
+                "fs_entry_id": 8,
+                "knowledge_base_id": 7,
+                "property_name": "documentKind",
+                "value_type": "string",
+                "value": "knowledgeEntity",
+            }
+        ],
+    )
+    await service.update_file(request(b"# Updated\n"))
+    assert not any(
+        name == "metadata_upsert" and data["property_name"] == "documentKind"
+        for name, data in calls
+    )
+
+    calls = []
+    service, _, _ = build_service(calls)
+    await service.update_file(
+        request(b"---\ndocumentKind: knowledgeEntity\n---\n# Updated\n")
+    )
+    explicit_upserts = [
+        data
+        for name, data in calls
+        if name == "metadata_upsert" and data["property_name"] == "documentKind"
+    ]
+    assert len(explicit_upserts) == 1
+    assert explicit_upserts[0]["value"] == "knowledgeEntity"
+
+
+async def test_update_defaults_reserved_directory_file_to_knowledge_entity():
+    calls = []
+    service, _, _ = build_service(calls)
+
+    await service.update_file(
+        request(b"# Entity\n", filePath="/KnowledgeEntity/entity.md")
+    )
+
+    document_kind = next(
+        data
+        for name, data in calls
+        if name == "metadata_upsert" and data["property_name"] == "documentKind"
+    )
+    assert document_kind["value"] == "knowledgeEntity"
+    assert not any(
+        name == "metadata_upsert" and data["property_name"] == "processingCapabilities"
+        for name, data in calls
+    )
 
 
 async def test_update_materializes_old_tokens_before_deleting_and_rewriting_outgoing():

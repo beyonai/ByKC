@@ -20,6 +20,9 @@ from by_qa.knowledge_base.metadata_types import (
     normalize_metadata_value,
 )
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
+from by_qa.knowledge_base.services.knowledge_document_metadata import (
+    ensure_document_kind_metadata,
+)
 from by_qa.knowledge_base.services.markdown_front_matter import (
     parse_front_matter,
     split_front_matter,
@@ -249,6 +252,13 @@ class DocumentUpdateService:
                     knowledge_base_id=knowledge_base_id,
                     content=request.file_content,
                 )
+            await ensure_document_kind_metadata(
+                cursor,
+                file_metadata_value_repository=self.file_metadata_value_repository,
+                fs_entry_id=fs_entry_id,
+                knowledge_base_id=knowledge_base_id,
+                file_path=normalized_path,
+            )
             await self.knowledge_file_reference_repository.resolve_pending_for_path(
                 cursor,
                 knowledge_base_id=knowledge_base_id,

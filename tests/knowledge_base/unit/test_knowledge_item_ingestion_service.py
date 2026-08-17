@@ -404,6 +404,7 @@ async def test_non_markdown_upload_does_not_call_rewriter_but_resolves_pending()
             knCode="kb-1",
             filePath="/docs/manual.pdf",
             fileContent=b"%PDF bytes",
+            mimeType="text/plain",
         )
     )
 
@@ -419,6 +420,28 @@ async def test_non_markdown_upload_does_not_call_rewriter_but_resolves_pending()
     assert result["knowledge_base_id"] == 7
     assert result["virtual_path"] == "/docs/manual.pdf"
     assert result["mime_type"] == "application/pdf"
+    assert connection.committed is True
+
+
+async def test_suffixless_upload_persists_normalized_multipart_mime_type():
+    calls = []
+    service, connection = _build_service(calls)
+
+    result = await service.upload_file(
+        KnowledgeItemUploadRequest(
+            knCode="kb-1",
+            filePath="/docs/README",
+            fileContent=b"plain text",
+            mimeType="Text/Plain; charset=utf-8",
+        )
+    )
+
+    names = _call_names(calls)
+    storage_call = calls[names.index("storage_write")][1]
+    update_call = calls[names.index("update_file_entry_storage")][1]
+    assert storage_call["content_type"] == "text/plain"
+    assert update_call["mime_type"] == "text/plain"
+    assert result["mime_type"] == "text/plain"
     assert connection.committed is True
 
 

@@ -50,6 +50,14 @@ def _guess_mime_type(path: str) -> str:
     return mimetypes.guess_type(path)[0] or "application/octet-stream"
 
 
+def _resolve_upload_mime_type(path: str, supplied_mime_type: str | None) -> str:
+    """Use multipart MIME only when the target path has no authoritative suffix."""
+    if PurePosixPath(path).suffix:
+        return _guess_mime_type(path)
+    normalized = (supplied_mime_type or "").split(";", maxsplit=1)[0].strip().lower()
+    return normalized or _guess_mime_type(path)
+
+
 def _build_optional_location(
     row: dict, *, namespace_key: str, key_key: str
 ) -> StorageLocation | None:
@@ -158,7 +166,10 @@ class KnowledgeItemIngestionService:
         if not normalized_object_path:
             raise KnowledgeBaseValidationError("file_path must not be root")
 
-        mime_type = _guess_mime_type(normalized_object_path)
+        mime_type = _resolve_upload_mime_type(
+            normalized_object_path,
+            request.mime_type,
+        )
         connection = await self.connection_factory()
         stored: Any | None = None
         original_location: Any | None = None

@@ -362,7 +362,7 @@ KnowledgeEntity 集成测试必须穿过和生产一致的真实边界，不得�
 
 LLM 输出不断言特定遣词，但必须断言结构性和持久化不变式：任务终态、定义版本、当前文档身份、同库边界、关系类型/方向、证据定位、原子提交和幂等计数。测试语料应小而无歧义，模型参数固定为集成环境的稳定配置，不以未公开 prompt 全文作为断言对象。
 
-当前已落地 `tests/knowledge_base/integration/test_knowledge_entity_real_integration.py`：通过真实 `.env` 启动 FastAPI `TestClient` lifespan，全链路使用 OpenGauss、MinIO、Redis、embedding 和 LLM，没有 fake/mock/monkeypatch/dependency override。2026-08-17 实跑结果为 `1 passed in 103.13s`。该用例是一条真实端到端 smoke journey，不等于本节所有矩阵均已覆盖；下表仅按实际断言更新状态。
+当前已落地 `tests/knowledge_base/integration/test_knowledge_entity_real_integration.py`：通过真实 `.env` 启动 FastAPI `TestClient` lifespan，全链路使用 OpenGauss、MinIO、Redis、embedding 和 LLM，没有 fake/mock/monkeypatch/dependency override。2026-08-17 已实跑 6 条真实用例全部通过。下表仅按实际断言更新状态。
 
 ### 基准数据与验收口径
 
@@ -384,23 +384,23 @@ LLM 输出不断言特定遣词，但必须断言结构性和持久化不变式�
 | --- | --- | --- | --- | --- | --- |
 | KE-ENV1 | 集成环境维护者 | 确认测试没有退化为替身 | `start real app -> dependency preflight -> create KB -> import -> build` | OpenGauss、MinIO、Redis、embedding 和 LLM 均有真实网络交互；缺任一依赖整组失败 | 已写 |
 | KE-ENV2 | 数据库维护者 | 真实执行任务创建 SQL | `entityDiscovery(single) -> poll status -> DB task row` | 在 `prepare_threshold=0` 下成功写入 `status/started_at/request_params`，不出现 `text versus character varying` 或 `AmbiguousParameter` | 已写 |
-| KE-ENV3 | 数据库维护者 | 覆盖词面查询的可选知识库范围 | `seed global + subject-local entities -> entityDiscovery -> repository query for one KB` | `knowledge_base_id=NULL`（全系统词面）和非空（单库词面）都由 OpenGauss 真实解析；不出现 `could not determine data type of parameter $2` | 已写部分（已覆盖 `NULL`，待补单库分支） |
-| KE-ENV4 | 运行时维护者 | 验证真实异步执行而非只是路由受理 | `HTTP entityDiscovery/entityEnrich -> PENDING/RUNNING -> terminal status` | 应用 lifespan 内的 worker 实际消费任务；任务阶段、进度、开始/结束时间和持久化结果完整 | 已写部分（已覆盖 Discovery/Enrich 终态和结果，待补中间阶段/进度断言） |
+| KE-ENV3 | 数据库维护者 | 覆盖词面查询的可选知识库范围 | `seed global + subject-local entities -> entityDiscovery -> repository query for one KB` | `knowledge_base_id=NULL`（全系统词面）和非空（单库词面）都由 OpenGauss 真实解析；不出现 `could not determine data type of parameter $2` | 已写 |
+| KE-ENV4 | 运行时维护者 | 验证真实异步执行而非只是路由受理 | `HTTP entityDiscovery/entityEnrich -> PENDING/RUNNING -> terminal status` | 应用 lifespan 内的 worker 实际消费任务；任务阶段、进度、开始/结束时间和持久化结果完整 | 已写部分（已覆盖 `PENDING/RUNNING/SUCCEEDED`、进度和时间；当前 worker 未实现 `stage.completed*` 事件） |
 
 ### metadata 默认、增量回填与处理资格
 
 | 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
 | --- | --- | --- | --- | --- | --- |
 | KE-M1 | 内容管理员 | import 后获得原始文档默认分类 | `knowledgeItems/import(/source/a.md) -> metadata/get -> processingEligibility` | 同一事务内写入 `documentKind=original`；构建就绪后 Discovery 可资格判定 | 已写 |
-| KE-M2 | 内容管理员 | 保留目录文档获得实体默认分类 | `knowledgeItems/import(/KnowledgeEntity/a.md) -> metadata/get -> processingEligibility` | 写入 `documentKind=knowledgeEntity`；默认只启用 `entityEnrich` | 已写部分（已覆盖 Discovery 创建链路，待补直接 import） |
-| KE-M3 | 内容管理员 | update/upload 保持分类不丢失 | `import -> metadata/update(explicit documentKind) -> knowledgeItems/update -> metadata/get` | update 后 metadata 仍存在；已有显式 `documentKind` 不被路径默认覆盖 | 已写部分（已覆盖默认值保留，待补显式值） |
-| KE-M4 | 数据升级管理员 | 增量脚本回填历史文档 | `prepare legacy live/deleted rows -> run SQL 031 twice -> metadata query` | 首次仅回填缺失属性的 live FILE；保留目录为 `knowledgeEntity`、其他为 `original`；显式值和已删除行不变；第二次新增 0 行 | 待补 |
-| KE-M5 | 内容管理员 | 验证能力默认和显式禁用 | `metadata/get/update/unset processingCapabilities -> processingEligibility` | 属性缺失时按 `documentKind` 使用默认；显式空列表返回 `CAPABILITY_DISABLED`；unset 后恢复默认 | 待补 |
-| KE-M6 | 内容管理员 | 校验 Discovery 文本白名单 | `import+build md/markdown/txt/html/htm/csv/pdf/docx -> processingEligibility(entityDiscovery)` | 六类文本后缀可继续判定；PDF/Office 即使已有 Markdown sidecar 仍为 `UNSUPPORTED_FILE_FORMAT` | 待补 |
-| KE-M7 | 内容管理员 | 校验无后缀 MIME 回退 | `import no-suffix text/plain + application/octet-stream -> processingEligibility` | 仅规范化后 `text/*` 可通过；有后缀文件始终以后缀白名单为准 | 待补 |
-| KE-M8 | 内容管理员 | 校验 Enrich 格式和固定目录 | `processingEligibility(entityEnrich)` 覆盖保留目录外路径实体、保留目录 txt/pdf、md/markdown | 目录外返回 `KNOWLEDGE_ENTITY_PATH_REQUIRED`；非 Markdown 返回 `UNSUPPORTED_CONTENT_TYPE`；仅保留目录 md/markdown 继续身份/证据判定 | 已写部分（已覆盖合格 md，待补反例） |
-| KE-M9 | 内容管理员 | 校验资格原因顺序和内容就绪 | `processingEligibility` 覆盖未构建、空正文、身份不全、无证据 | 依契约返回 `CONTENT_NOT_READY/IDENTITY_METADATA_INCOMPLETE/NO_EVIDENCE`；格式不支持时不被 sidecar 状态掩盖 | 已写部分（已覆盖全库跳过未构建文档） |
-| KE-M10 | 内容管理员 | 判定 freshness 和版本变化 | `successful task -> eligibility same input -> update content/evidence/version -> eligibility` | 相同指纹为 `ELIGIBLE_BUT_FRESH/INPUT_UNCHANGED`；checksum、证据或方法版本改变后为 `ELIGIBLE_AND_STALE` 且 reason 准确 | 已写部分（已覆盖成功任务复用，待补变更分支） |
+| KE-M2 | 内容管理员 | 保留目录文档获得实体默认分类 | `knowledgeItems/import(/KnowledgeEntity/a.md) -> metadata/get -> processingEligibility` | 写入 `documentKind=knowledgeEntity`；默认只启用 `entityEnrich` | 已写 |
+| KE-M3 | 内容管理员 | update/upload 保持分类不丢失 | `import -> metadata/update(explicit documentKind) -> knowledgeItems/update -> metadata/get` | update 后 metadata 仍存在；已有显式 `documentKind` 不被路径默认覆盖 | 已写 |
+| KE-M4 | 数据升级管理员 | 增量脚本回填历史文档 | `prepare legacy live/deleted rows -> run SQL 031 twice -> metadata query` | 首次仅回填缺失属性的 live FILE；保留目录为 `knowledgeEntity`、其他为 `original`；显式值和已删除行不变；第二次新增 0 行 | 已写 |
+| KE-M5 | 内容管理员 | 验证能力默认和显式禁用 | `metadata/get/update/unset processingCapabilities -> processingEligibility` | 属性缺失时按 `documentKind` 使用默认；显式空列表返回 `CAPABILITY_DISABLED`；unset 后恢复默认 | 已写 |
+| KE-M6 | 内容管理员 | 校验 Discovery 文本白名单 | `import+build md/markdown/txt/html/htm/csv/pdf/docx -> processingEligibility(entityDiscovery)` | 六类文本后缀可继续判定；PDF/Office 即使已有 Markdown sidecar 仍为 `UNSUPPORTED_FILE_FORMAT` | 已写 |
+| KE-M7 | 内容管理员 | 校验无后缀 MIME 回退 | `import no-suffix text/plain + application/octet-stream -> processingEligibility` | 仅规范化后 `text/*` 可通过；有后缀文件始终以后缀白名单为准 | 已写 |
+| KE-M8 | 内容管理员 | 校验 Enrich 格式和固定目录 | `processingEligibility(entityEnrich)` 覆盖保留目录外路径实体、保留目录 txt/pdf、md/markdown | 目录外返回 `KNOWLEDGE_ENTITY_PATH_REQUIRED`；非 Markdown 返回 `UNSUPPORTED_CONTENT_TYPE`；仅保留目录 md/markdown 继续身份/证据判定 | 已写 |
+| KE-M9 | 内容管理员 | 校验资格原因顺序和内容就绪 | `processingEligibility` 覆盖未构建、空正文、身份不全、无证据 | 依契约返回 `CONTENT_NOT_READY/IDENTITY_METADATA_INCOMPLETE/NO_EVIDENCE`；格式不支持时不被 sidecar 状态掩盖 | 已写部分（已覆盖未构建、身份不全、无证据和格式优先级，待补空正文） |
+| KE-M10 | 内容管理员 | 判定 freshness 和版本变化 | `successful task -> eligibility same input -> update content/evidence/version -> eligibility` | 相同指纹为 `ELIGIBLE_BUT_FRESH/INPUT_UNCHANGED`；checksum、证据或方法版本改变后为 `ELIGIBLE_AND_STALE` 且 reason 准确 | 已写 |
 
 ### Entity Discovery：单文件、全库、身份隔离和幂等
 
@@ -408,52 +408,52 @@ LLM 输出不断言特定遣词，但必须断言结构性和持久化不变式�
 | --- | --- | --- | --- | --- | --- |
 | KE-D1 | 知识整理者 | 单文件实体发现 | `import+build original -> entityDiscovery(filePath) -> processingTaskStatus` | 接受响应 `scope=SINGLE_FILE`，生成一条真实任务并到达终态；结果计数与实体文档/关系落库一致 | 已写 |
 | KE-D2 | 知识整理者 | 全库文件触发 | `seed eligible/fresh/disabled/unsupported/not-ready/entity docs -> entityDiscovery(no filePath)` | `scope=WHOLE_KB`；`eligibleCount/acceptedCount/reusedCount/skippedCount` 和逐文件资格一致；不为 skipped 文件强制建任务，不创建父任务 | 已写部分（已覆盖 fresh 复用、not-ready 跳过和实体排除） |
-| KE-D3 | 知识整理者 | 锚定已有名称和别名 | `create entity metadata -> import source mentioning canonical+alias -> entityDiscovery` | 真实词面扫描命中已有实体，不重复创建；任务结果为 `ANCHORED/DISAMBIGUATED`，关系指向稳定 `fileId` | 待补 |
-| KE-D4 | 知识整理者 | 创建最小有效实体文档 | `entityDiscovery(source with new stable subject) -> readFile/metadata/get/listDir` | 新文档只保存在同库 `/KnowledgeEntity`，且具有 `documentKind/entityName/aliases/definitionVersion`、非空 Markdown 和来源证据引用 | 已写部分（已覆盖目录、metadata 和 MENTIONS，待补直接读文档） |
-| KE-D5 | 知识治理者 | 验证全系统词表不引入重型跨库身份 | `KB-A/KB-B seed same surface -> discovery in KB-A` | 可扫描全系统词面，但只锚定 KB-A 实体；无跨库 `target_fs_entry_id`、关系、别名合并或创建阻断 | 待补 |
-| KE-D6 | 调度使用者 | 验证重复请求和 `force` | `discovery -> repeat same input -> force=true -> poll` | 相同指纹复用运行中/成功任务；`force=true` 对已成功任务建新任务，但仍复用同文件活动任务 | 已写部分（已覆盖成功任务复用，待补 `force` 和运行中复用） |
-| KE-D7 | 调度使用者 | 并发防止同文件双活动任务 | `concurrent HTTP entityDiscovery for same file` | 最多一条 `PENDING/RUNNING`；其余请求返回 reused；数据库部分唯一约束生效 | 待补 |
-| KE-D8 | 接口使用者 | 移除自定义目标库/目录参数 | `entityDiscovery` 附带 `targetKnCode/targetDirectoryPath` | extra 字段被标准请求校验拒绝；不可将实体写到其他库或目录 | 待补 |
+| KE-D3 | 知识整理者 | 锚定已有名称和别名 | `create entity metadata -> import source mentioning canonical+alias -> entityDiscovery` | 真实词面扫描命中已有实体，不重复创建；任务结果为 `ANCHORED/DISAMBIGUATED`，关系指向稳定 `fileId` | 已写 |
+| KE-D4 | 知识整理者 | 创建最小有效实体文档 | `entityDiscovery(source with new stable subject) -> readFile/metadata/get/listDir` | 新文档只保存在同库 `/KnowledgeEntity`，且具有 `documentKind/entityName/aliases/definitionVersion`、非空 Markdown 和来源证据引用 | 已写 |
+| KE-D5 | 知识治理者 | 验证全系统词表不引入重型跨库身份 | `KB-A/KB-B seed same surface -> discovery in KB-A` | 可扫描全系统词面，但只锚定 KB-A 实体；无跨库 `target_fs_entry_id`、关系、别名合并或创建阻断 | 已写 |
+| KE-D6 | 调度使用者 | 验证重复请求和 `force` | `discovery -> repeat same input -> force=true -> poll` | 相同指纹复用运行中/成功任务；`force=true` 对已成功任务建新任务，但仍复用同文件活动任务 | 已写 |
+| KE-D7 | 调度使用者 | 并发防止同文件双活动任务 | `concurrent HTTP entityDiscovery for same file` | 最多一条 `PENDING/RUNNING`；其余请求返回 reused；数据库部分唯一约束生效 | 已写 |
+| KE-D8 | 接口使用者 | 移除自定义目标库/目录参数 | `entityDiscovery` 附带 `targetKnCode/targetDirectoryPath` | extra 字段被标准请求校验拒绝；不可将实体写到其他库或目录 | 已写 |
 
 ### Entity Enrich：真实检索/LLM、软模板与原子更新
 
 | 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| KE-E1 | 知识编辑 | 单实体真实 Enrich | `seed entity+vectorized evidence -> entityEnrich(filePath) -> poll -> readFile/metadata/timeline` | 真实检索和 LLM 被调用；文档非空、身份不漂移，`enrichVersion`、checksum 和 `UPDATE` 时间线原子切换 | 已写部分（已覆盖真实检索/LLM、更新结果、metadata 和关系，待补 checksum/时间线断言） |
-| KE-E2 | 知识编辑 | 全库 Enrich | `seed eligible/ineligible entity docs -> entityEnrich(no filePath)` | 仅枚举当前库 `/KnowledgeEntity` 下合格 md/markdown；计数、共享 `batchId` 和任务行数一致 | 待补 |
-| KE-E3 | 知识编辑 | 模板只作软约束 | `entityEnrich -> readFile -> task details` | 缺章节、章节顺序变化或少量占位符最多记 warning，不使任务失败；空正文/身份漂移仍必须阻断 | 待补 |
-| KE-E4 | 知识编辑 | 无证据不产生半更新 | `entityEnrich(entity without authorized evidence) -> status/readFile/DB` | 受理前无证据计入 skipped 或执行中证据失效落 `SKIPPED/NO_EVIDENCE`；对象、checksum、关系和时间线均不半更新 | 待补 |
-| KE-E5 | 知识编辑 | 证据范围只能收窄 | `entityEnrich(evidenceKnCodeList subset/foreign/unknown)` | 实际召回不超过调用方权限与请求列表交集；不泄漏未授权证据或数量 | 待补 |
-| KE-E6 | 知识编辑 | 证据变化后重新富化 | `enrich success -> update evidence -> eligibility -> enrich` | evidence fileId/checksum 改变使指纹 stale；新任务写入新正文/关系并保留更新时间线 | 待补 |
-| KE-E7 | 知识编辑 | 并发变更时拒绝陈旧写 | `start enrich -> concurrently update target -> wait task` | checksum 不一致时任务为 `FAILED/STALE_WRITE` 且可重试；保留并发 update 的正文、metadata 和关系 | 待补 |
-| KE-E8 | 接口使用者 | Enrich 不接受客户端模板或目标参数 | `entityEnrich` 附带 `template/targetKnCode/targetDirectoryPath` | extra 字段被拒绝；只使用 `enrichVersion` 指向的服务端软模板 | 待补 |
+| KE-E1 | 知识编辑 | 单实体真实 Enrich | `seed entity+vectorized evidence -> entityEnrich(filePath) -> poll -> readFile/metadata/timeline` | 真实检索和 LLM 被调用；文档非空、身份不漂移，`enrichVersion`、checksum 和 `UPDATE` 时间线原子切换 | 已写 |
+| KE-E2 | 知识编辑 | 全库 Enrich | `seed eligible/ineligible entity docs -> entityEnrich(no filePath)` | 仅枚举当前库 `/KnowledgeEntity` 下合格 md/markdown；计数、共享 `batchId` 和任务行数一致 | 已写 |
+| KE-E3 | 知识编辑 | 模板只作软约束 | `entityEnrich -> readFile -> task details` | 缺章节、章节顺序变化或少量占位符最多记 warning，不使任务失败；空正文/身份漂移仍必须阻断 | 已写部分（已断言真实任务的 template coverage/warning 结构和成功提交，待补可控缺章节/占位符输出） |
+| KE-E4 | 知识编辑 | 无证据不产生半更新 | `entityEnrich(entity without authorized evidence) -> status/readFile/DB` | 受理前无证据计入 skipped 或执行中证据失效落 `SKIPPED/NO_EVIDENCE`；对象、checksum、关系和时间线均不半更新 | 已写 |
+| KE-E5 | 知识编辑 | 证据范围只能收窄 | `entityEnrich(evidenceKnCodeList subset/foreign/unknown)` | 实际召回不超过调用方权限与请求列表交集；不泄漏未授权证据或数量 | 已写部分（已覆盖当前库子集、外库 marker 不泄漏以及空值/重复校验，待补调用方权限与 foreign/unknown 交集） |
+| KE-E6 | 知识编辑 | 证据变化后重新富化 | `enrich success -> update evidence -> eligibility -> enrich` | evidence fileId/checksum 改变使指纹 stale；新任务写入新正文/关系并保留更新时间线 | 已写 |
+| KE-E7 | 知识编辑 | 并发变更时拒绝陈旧写 | `start enrich -> concurrently update target -> wait task` | checksum 不一致时任务为 `FAILED/STALE_WRITE` 且可重试；保留并发 update 的正文、metadata 和关系 | 已写部分（已覆盖真实并发、旧签名拒绝和用户更新保留；当前错误码为 `PROCESSING_FAILED`，待实现 `STALE_WRITE`） |
+| KE-E8 | 接口使用者 | Enrich 不接受客户端模板或目标参数 | `entityEnrich` 附带 `template/targetKnCode/targetDirectoryPath` | extra 字段被拒绝；只使用 `enrichVersion` 指向的服务端软模板 | 已写 |
 
 ### 任务查询与内部 Python/SDK Callback
 
 | 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| KE-T1 | 调度使用者 | 按知识库和可选路径查任务 | `processingTaskStatus(knCode)` 对比 `processingTaskStatus(knCode,filePath)` | 全库返回本库任务；路径查询只返回该文件且不依赖调用方保存 `taskId` | 已写部分（已覆盖按路径，待补纯 KB 全量对比） |
-| KE-T2 | 调度使用者 | 组合过滤和稳定分页 | `taskType/batchId/statusList/latestOnly/includeDetails/page` | 组合条件在 OpenGauss 真实 SQL 上生效；总数、顺序、页间无重复且 `includeDetails=false` 不返回 result/error | 已写部分（已覆盖 `batchId/taskType/latestOnly/includeDetails=true`） |
-| KE-T3 | 调度使用者 | 查询无任务与不存在路径 | `processingTaskStatus` 覆盖空库、存在无任务文件、不存在路径 | 前两者 `total=0,data=[]`；不存在路径返回 `DOCUMENT_NOT_FOUND` | 待补 |
-| KE-T4 | SDK 调用方 | 在同进程接收真实 Callback | `discover/enrich SDK(callback=collector) -> wait terminal` | 不替换 worker 或依赖；接收 `task.started -> stage.completed* -> task.succeeded/failed`，`sequence/progress/taskId/batchId` 有序且成功事件在数据提交后触发 | 待补 |
-| KE-T5 | SDK 调用方 | Callback 异常不改变主任务 | `SDK callback raises -> poll HTTP status -> DB/readFile` | Callback 异常被记录；任务仍依真实处理结果到达终态，已提交文档/关系不回滚 | 待补 |
-| KE-T6 | HTTP 调用方 | HTTP 不接受 Callback | `entityDiscovery/entityEnrich` JSON 附带 `callback` | 由 `extra=forbid` 请求模型拒绝；数据库 `request_params` 永不保存 callable/callback 字段 | 待补 |
+| KE-T1 | 调度使用者 | 按知识库和可选路径查任务 | `processingTaskStatus(knCode)` 对比 `processingTaskStatus(knCode,filePath)` | 全库返回本库任务；路径查询只返回该文件且不依赖调用方保存 `taskId` | 已写 |
+| KE-T2 | 调度使用者 | 组合过滤和稳定分页 | `taskType/batchId/statusList/latestOnly/includeDetails/page` | 组合条件在 OpenGauss 真实 SQL 上生效；总数、顺序、页间无重复且 `includeDetails=false` 不返回 result/error | 已写 |
+| KE-T3 | 调度使用者 | 查询无任务与不存在路径 | `processingTaskStatus` 覆盖空库、存在无任务文件、不存在路径 | 前两者 `total=0,data=[]`；不存在路径返回 `DOCUMENT_NOT_FOUND` | 已写 |
+| KE-T4 | SDK 调用方 | 在同进程接收真实 Callback | `discover/enrich SDK(callback=collector) -> wait terminal` | 不替换 worker 或依赖；接收 `task.started -> stage.completed* -> task.succeeded/failed`，`sequence/progress/taskId/batchId` 有序且成功事件在数据提交后触发 | 已写部分（已覆盖真实 SDK `accepted/started/succeeded`、序号/进度/持久化；当前 worker 未实现 `stage.completed*`） |
+| KE-T5 | SDK 调用方 | Callback 异常不改变主任务 | `SDK callback raises -> poll HTTP status -> DB/readFile` | Callback 异常被记录；任务仍依真实处理结果到达终态，已提交文档/关系不回滚 | 已写 |
+| KE-T6 | HTTP 调用方 | HTTP 不接受 Callback | `entityDiscovery/entityEnrich` JSON 附带 `callback` | 由 `extra=forbid` 请求模型拒绝；数据库 `request_params` 永不保存 callable/callback 字段 | 已写 |
 
 ### 统一 MENTIONS、关系去重与稳定生命周期
 
 | 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| KE-R1 | 关系查询方 | Markdown 引用与 Discovery mention 共用语义 | `import/build source link entity -> discovery same mention -> references + semanticRelations` | `references` 仍展示 Markdown 物理出现；`semanticRelations` 只返回一条 source-target `MENTIONS` 逻辑边，`assertionCount=2`，代表证据优先标题/行/偏移 | 已写部分（已覆盖 Discovery `MENTIONS` 查询，待补双生产者去重） |
-| KE-R2 | 关系查询方 | 区分断言幂等与逻辑去重 | `repeat same producer run/evidence -> force new producer run -> semanticRelations/DB` | 同一运行同证据不新增物理行；不同合法断言可累加 `assertionCount`；逻辑 `relationId` 不变 | 待补 |
-| KE-R3 | 关系维护者 | Discovery 只替换自己生产的 mention | `markdown assertion + discovery run1 -> update source text -> discovery force run2` | 旧 `ENTITY_DISCOVERY` 出边被范围替换，`MARKDOWN_PARSER` 断言保留，不误删 Markdown 引用 | 待补 |
-| KE-R4 | 关系维护者 | Enrich 重建当前文档全部出边 | `enrich run1 -> change evidence -> enrich run2 -> DB/semanticRelations` | 原子执行“物化旧令牌→删除该 source 全部出边→重写 Markdown MENTIONS→写入 Enrich 关系”；无 run1 残留断言 | 已写部分（已覆盖 Enrich 后关系可查，待补两次重建对比） |
-| KE-R5 | 关系维护者 | 出边重建不影响其他 source | `source A/source B -> same target -> enrich/update A` | 只替换 A 拥有的出边；B 的出边和 target 从 B 得到的入边保持不变 | 待补 |
-| KE-R6 | 内容管理员 | 普通 Markdown 更新不误删语义关系 | `discovery/enrich relations -> knowledgeItems/update markdown -> semanticRelations` | 更新的 source 按统一规则重建出边；非该 source 的语义关系和入边不被误删，无两套 repository 行为差异 | 待补 |
-| KE-R7 | 目录管理员 | 文件/目录移动后关系稳定 | `create relations -> move entity or source subtree -> semanticRelations/references` | source/target 继续依赖稳定 `fs_entry_id`，返回新 `filePath`；逻辑 `relationId`、方向和断言数不变 | 待补 |
-| KE-R8 | 内容管理员 | 删除目标后关系可恢复 | `relation -> delete target entity -> query/DB -> reimport same entity name/path -> query` | 删除时断言不被物理删除，`target_fs_entry_id` 置空、locator 保留 `ENTITY_SURFACE`；同名/同路径恢复后重绑，不违反 source-target 约束 | 待补 |
-| KE-R9 | 内容管理员 | 删除 source 后读视图收敛 | `relation -> delete source -> semanticRelations(target)/references` | 已删除 source 不再出现于 target 的逻辑入边或 Markdown 兼容视图；不泄漏软删除路径 | 待补 |
+| KE-R1 | 关系查询方 | Markdown 引用与 Discovery mention 共用语义 | `import/build source link entity -> discovery same mention -> references + semanticRelations` | `references` 仍展示 Markdown 物理出现；`semanticRelations` 只返回一条 source-target `MENTIONS` 逻辑边，`assertionCount=2`，代表证据优先标题/行/偏移 | 已写 |
+| KE-R2 | 关系查询方 | 区分断言幂等与逻辑去重 | `repeat same producer run/evidence -> force new producer run -> semanticRelations/DB` | 同一运行同证据不新增物理行；不同合法断言可累加 `assertionCount`；逻辑 `relationId` 不变 | 已写部分（已覆盖强制新 run 的 producer 替换、物理计数和稳定 `relationId`，待补同 producer run 重入） |
+| KE-R3 | 关系维护者 | Discovery 只替换自己生产的 mention | `markdown assertion + discovery run1 -> update source text -> discovery force run2` | 旧 `ENTITY_DISCOVERY` 出边被范围替换，`MARKDOWN_PARSER` 断言保留，不误删 Markdown 引用 | 已写 |
+| KE-R4 | 关系维护者 | Enrich 重建当前文档全部出边 | `enrich run1 -> change evidence -> enrich run2 -> DB/semanticRelations` | 原子执行“物化旧令牌→删除该 source 全部出边→重写 Markdown MENTIONS→写入 Enrich 关系”；无 run1 残留断言 | 已写部分（已覆盖两次真实 Enrich、producer run 替换和无 run1 残留；待补模型稳定输出非空关系的对比） |
+| KE-R5 | 关系维护者 | 出边重建不影响其他 source | `source A/source B -> same target -> enrich/update A` | 只替换 A 拥有的出边；B 的出边和 target 从 B 得到的入边保持不变 | 已写 |
+| KE-R6 | 内容管理员 | 普通 Markdown 更新不误删语义关系 | `discovery/enrich relations -> knowledgeItems/update markdown -> semanticRelations` | 更新的 source 按统一规则重建出边；非该 source 的语义关系和入边不被误删，无两套 repository 行为差异 | 已写 |
+| KE-R7 | 目录管理员 | 文件/目录移动后关系稳定 | `create relations -> move entity or source subtree -> semanticRelations/references` | source/target 继续依赖稳定 `fs_entry_id`，返回新 `filePath`；逻辑 `relationId`、方向和断言数不变 | 已写 |
+| KE-R8 | 内容管理员 | 删除目标后关系可恢复 | `relation -> delete target entity -> query/DB -> reimport same entity name/path -> query` | 删除时断言不被物理删除，`target_fs_entry_id` 置空、locator 保留 `ENTITY_SURFACE`；同名/同路径恢复后重绑，不违反 source-target 约束 | 已写 |
+| KE-R9 | 内容管理员 | 删除 source 后读视图收敛 | `relation -> delete source -> semanticRelations(target)/references` | 已删除 source 不再出现于 target 的逻辑入边或 Markdown 兼容视图；不泄漏软删除路径 | 已写 |
 | KE-R10 | 关系查询方 | 验证关系白名单、方向和自环禁止 | `enrich -> semanticRelations(direction/relationCodeList)` | 仅出现 `MENTIONS/PART_OF/IS_A/DEPENDS_ON`；非法关系和 source=target 被丢弃但合法正文可提交；OUTGOING/INCOMING/BOTH 计数正确 | 已写部分（已覆盖 `MENTIONS/OUTGOING` 和 Enrich `BOTH`，待补其他方向与反例） |
-| KE-R11 | 关系查询方 | 验证轻量证据边界 | `semanticRelations -> DB schema/task payload` | 关系行只保存 producer、fingerprint、位置和 `source_task_id`；不存大段 evidence JSON，不依赖 `knowledge_document_relation_evidence` | 待补 |
+| KE-R11 | 关系查询方 | 验证轻量证据边界 | `semanticRelations -> DB schema/task payload` | 关系行只保存 producer、fingerprint、位置和 `source_task_id`；不存大段 evidence JSON，不依赖 `knowledge_document_relation_evidence` | 已写 |
 
 ### 完成口径与清理
 

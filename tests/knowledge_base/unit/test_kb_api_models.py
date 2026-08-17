@@ -116,12 +116,14 @@ def test_upload_request_accepts_documented_form_fields():
         filePath="/dir1/item-1.pdf",
         fileDescription="操作手册",
         fileContent=b"hello",
+        mimeType="application/pdf",
     )
 
     assert request.kb_code == "hr-policy"
     assert request.file_path == "/dir1/item-1.pdf"
     assert request.file_description == "操作手册"
     assert request.file_content == b"hello"
+    assert request.mime_type == "application/pdf"
 
 
 def test_glob_request_accepts_documented_fields():

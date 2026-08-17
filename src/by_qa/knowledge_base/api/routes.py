@@ -631,6 +631,9 @@ def register_routes(
                     "filePath": file_path,
                     "fileDescription": file_description,
                     "fileContent": payload,
+                    "mimeType": (
+                        file_content.content_type if file_content is not None else None
+                    ),
                     "processFrontMatter": process_front_matter,
                     "skipIfDuplicate": skip_if_duplicate,
                 }

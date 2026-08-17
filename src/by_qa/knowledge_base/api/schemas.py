@@ -317,6 +317,10 @@ class KnowledgeItemUploadRequest(BaseModel):
         min_length=1,
         validation_alias=AliasChoices("fileContent", "file_content"),
     )
+    mime_type: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("mimeType", "mime_type", "contentType"),
+    )
     process_front_matter: bool = Field(
         default=True,
         validation_alias=AliasChoices("processFrontMatter", "process_front_matter"),

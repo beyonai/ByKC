@@ -119,7 +119,7 @@ class KnowledgeEntityProcessingOrchestrator:
     connection_factory: Callable[[], Awaitable[Any]]
     knowledge_base_repository: Any
     knowledge_entity_repository: Any
-    knowledge_build_task_repository: Any
+    knowledge_semantic_processing_task_repository: Any
     knowledge_file_reference_repository: Any
     worker: KnowledgeEntityTaskWorker
     task_scheduler: KnowledgeEntityTaskScheduler = field(
@@ -197,10 +197,10 @@ class KnowledgeEntityProcessingOrchestrator:
                 else None,
                 "latest_only": request.latest_only,
             }
-            total = await self.knowledge_build_task_repository.count_processing_tasks(
+            total = await self.knowledge_semantic_processing_task_repository.count_processing_tasks(
                 cursor, **filters
             )
-            rows = await self.knowledge_build_task_repository.list_processing_tasks(
+            rows = await self.knowledge_semantic_processing_task_repository.list_processing_tasks(
                 cursor,
                 **filters,
                 limit=request.page_size,
@@ -369,9 +369,14 @@ class KnowledgeEntityProcessingOrchestrator:
                     continue
                 eligible_count += 1
                 await self._lock_file(cursor, self._row_id(file_row))
-                reusable = None
-                if not request.force:
-                    reusable = await self._find_reusable_task(
+                reusable = await self._find_active_task(
+                    cursor,
+                    knowledge_base_id,
+                    self._row_id(file_row),
+                    task_type,
+                )
+                if reusable is None and not request.force:
+                    reusable = await self._find_fresh_task(
                         cursor,
                         knowledge_base_id,
                         self._row_id(file_row),
@@ -383,23 +388,21 @@ class KnowledgeEntityProcessingOrchestrator:
                     summaries.append(self._task_summary(reusable, reused=True))
                     continue
                 params = request.model_dump(mode="json", by_alias=True)
-                created = (
-                    await self.knowledge_build_task_repository.create_processing_task(
-                        cursor,
-                        knowledge_base_id=knowledge_base_id,
-                        fs_entry_id=self._row_id(file_row),
-                        task_type=task_type.value,
-                        status="pending",
-                        batch_id=batch_id,
-                        current_step="accepted",
-                        progress=0,
-                        input_fingerprint=evaluation.input_fingerprint,
-                        input_checksum=file_row.get("checksum"),
-                        definition_version=evaluation.definition_version,
-                        enrich_version=evaluation.enrich_version,
-                        method_version=evaluation.method_version,
-                        request_params=params,
-                    )
+                created = await self.knowledge_semantic_processing_task_repository.create_processing_task(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    fs_entry_id=self._row_id(file_row),
+                    task_type=task_type.value,
+                    status="pending",
+                    batch_id=batch_id,
+                    current_stage="accepted",
+                    progress=0,
+                    input_fingerprint=evaluation.input_fingerprint,
+                    input_checksum=file_row.get("checksum"),
+                    definition_version=evaluation.definition_version,
+                    enrich_version=evaluation.enrich_version,
+                    method_version=evaluation.method_version,
+                    request_params=params,
                 )
                 if created is None:
                     raise RuntimeError("failed to create processing task")
@@ -475,7 +478,7 @@ class KnowledgeEntityProcessingOrchestrator:
         await self._update_task(
             context,
             status="running",
-            current_step="started",
+            current_stage="started",
             progress=1,
             started=True,
         )
@@ -486,7 +489,7 @@ class KnowledgeEntityProcessingOrchestrator:
             await self._update_task(
                 context,
                 status="succeeded",
-                current_step="completed",
+                current_stage="completed",
                 progress=100,
                 result_payload=result,
                 index_version=index_version,
@@ -513,7 +516,7 @@ class KnowledgeEntityProcessingOrchestrator:
                 await self._update_task(
                     context,
                     status="failed",
-                    current_step="failed",
+                    current_stage="failed",
                     progress=100,
                     error_code=str(error["errorCode"]),
                     error_message=str(error["message"]),
@@ -539,7 +542,7 @@ class KnowledgeEntityProcessingOrchestrator:
         await self._update_task(
             context,
             status="failed",
-            current_step="scheduling_failed",
+            current_stage="scheduling_failed",
             progress=100,
             error_code="SCHEDULING_FAILED",
             error_message=str(exc),
@@ -553,7 +556,7 @@ class KnowledgeEntityProcessingOrchestrator:
         connection = await self.connection_factory()
         try:
             cursor = connection.cursor()
-            await self.knowledge_build_task_repository.update_processing_task(
+            await self.knowledge_semantic_processing_task_repository.update_processing_task(
                 cursor,
                 task_id=context.task_id,
                 task_type=context.task_type.value,
@@ -699,7 +702,7 @@ class KnowledgeEntityProcessingOrchestrator:
         file_id: int,
         task_type: ProcessingTaskType,
     ) -> dict[str, Any] | None:
-        rows = await self.knowledge_build_task_repository.list_processing_tasks(
+        rows = await self.knowledge_semantic_processing_task_repository.list_processing_tasks(
             cursor,
             knowledge_base_id=knowledge_base_id,
             fs_entry_id=file_id,
@@ -711,7 +714,26 @@ class KnowledgeEntityProcessingOrchestrator:
         )
         return rows[0] if rows else None
 
-    async def _find_reusable_task(
+    async def _find_active_task(
+        self,
+        cursor: Any,
+        knowledge_base_id: int,
+        file_id: int,
+        task_type: ProcessingTaskType,
+    ) -> dict[str, Any] | None:
+        rows = await self.knowledge_semantic_processing_task_repository.list_processing_tasks(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            fs_entry_id=file_id,
+            task_type=task_type.value,
+            statuses=["pending", "running"],
+            latest_only=False,
+            limit=1,
+            offset=0,
+        )
+        return rows[0] if rows else None
+
+    async def _find_fresh_task(
         self,
         cursor: Any,
         knowledge_base_id: int,
@@ -719,12 +741,12 @@ class KnowledgeEntityProcessingOrchestrator:
         task_type: ProcessingTaskType,
         fingerprint: str,
     ) -> dict[str, Any] | None:
-        rows = await self.knowledge_build_task_repository.list_processing_tasks(
+        rows = await self.knowledge_semantic_processing_task_repository.list_processing_tasks(
             cursor,
             knowledge_base_id=knowledge_base_id,
             fs_entry_id=file_id,
             task_type=task_type.value,
-            statuses=["pending", "running", "succeeded"],
+            statuses=["succeeded"],
             latest_only=False,
             limit=500,
             offset=0,
@@ -876,7 +898,7 @@ class KnowledgeEntityProcessingOrchestrator:
             batch_id=row.get("batch_id"),
             task_type=ProcessingTaskType(str(row["task_type"]).upper()),
             status=ProcessingTaskStatus(str(row["status"]).upper()),
-            current_stage=row.get("current_step"),
+            current_stage=row.get("current_stage"),
             progress=row.get("progress"),
             file_id=str(row["fs_entry_id"]),
             file_path=str(row["file_path"]),

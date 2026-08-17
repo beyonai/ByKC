@@ -1,5 +1,5 @@
--- Idempotent upgrade for databases that created the Markdown-only 026 schema.
--- Fresh databases already receive these columns and constraints from 026.
+-- Idempotent, additive upgrade of the Markdown-only 026 schema.
+-- Both fresh and existing databases receive semantic fields only from this file.
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -56,7 +56,7 @@ BEGIN
     ) THEN
         ALTER TABLE knowledge_file_reference
             ADD COLUMN source_task_id bigint NULL
-            REFERENCES knowledge_build_task(kid) ON DELETE SET NULL;
+            REFERENCES knowledge_semantic_processing_task(kid) ON DELETE SET NULL;
     END IF;
 END $$;
 

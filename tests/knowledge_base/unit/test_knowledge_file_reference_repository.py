@@ -540,26 +540,36 @@ async def test_semantic_cleanup_is_scoped_by_source_or_task():
 
 
 def test_semantic_schema_and_upgrade_define_columns_constraints_and_indexes():
-    fresh_sql = " ".join(MIGRATION_PATH.read_text(encoding="utf-8").split())
+    historical_sql = " ".join(MIGRATION_PATH.read_text(encoding="utf-8").split())
     upgrade_sql = " ".join(EXTENSION_MIGRATION_PATH.read_text(encoding="utf-8").split())
 
-    for sql in (fresh_sql, upgrade_sql):
-        assert "reference_type varchar(16)" in sql
-        assert "relation_code varchar(32)" in sql
-        assert "confidence numeric(5,4)" in sql
-        assert "discovered_by varchar(32)" in sql
-        assert "definition_version varchar(64)" in sql
-        assert "source_task_id bigint" in sql
-        assert "ON DELETE SET NULL" in sql
-        assert "chk_knowledge_file_reference_type" in sql
-        assert "chk_knowledge_file_reference_semantic_state" in sql
-        assert "source_fs_entry_id <> target_fs_entry_id" in sql
-        assert "uq_kfr_semantic_relation" in sql
-        assert "idx_kfr_semantic_source" in sql
-        assert "idx_kfr_semantic_target" in sql
-        assert "idx_kfr_semantic_source_task" in sql
-        assert "knowledge_document_relation_evidence" not in sql
+    for extension_name in (
+        "reference_type",
+        "relation_code",
+        "confidence",
+        "discovered_by",
+        "definition_version",
+        "source_task_id",
+    ):
+        assert extension_name not in historical_sql
 
-    assert "DEFAULT 'MARKDOWN'" in fresh_sql
+    assert "reference_type varchar(16)" in upgrade_sql
+    assert "relation_code varchar(32)" in upgrade_sql
+    assert "confidence numeric(5,4)" in upgrade_sql
+    assert "discovered_by varchar(32)" in upgrade_sql
+    assert "definition_version varchar(64)" in upgrade_sql
+    assert "source_task_id bigint" in upgrade_sql
+    assert "REFERENCES knowledge_semantic_processing_task(kid)" in upgrade_sql
+    assert "REFERENCES knowledge_build_task(kid)" not in upgrade_sql
+    assert "ON DELETE SET NULL" in upgrade_sql
+    assert "chk_knowledge_file_reference_type" in upgrade_sql
+    assert "chk_knowledge_file_reference_semantic_state" in upgrade_sql
+    assert "source_fs_entry_id <> target_fs_entry_id" in upgrade_sql
+    assert "uq_kfr_semantic_relation" in upgrade_sql
+    assert "idx_kfr_semantic_source" in upgrade_sql
+    assert "idx_kfr_semantic_target" in upgrade_sql
+    assert "idx_kfr_semantic_source_task" in upgrade_sql
+    assert "knowledge_document_relation_evidence" not in upgrade_sql
+    assert "DEFAULT 'MARKDOWN'" in upgrade_sql
     assert "information_schema.columns" in upgrade_sql
     assert "pg_constraint" in upgrade_sql

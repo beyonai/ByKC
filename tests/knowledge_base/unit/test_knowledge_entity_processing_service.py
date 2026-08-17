@@ -225,7 +225,7 @@ def make_service(files, *, tasks=None, relations=None, worker=None, scheduler=No
             connection_factory=connection_factory,
             knowledge_base_repository=KBRepo(),
             knowledge_entity_repository=EntityRepo(files),
-            knowledge_build_task_repository=tasks or Tasks(),
+            knowledge_semantic_processing_task_repository=tasks or Tasks(),
             knowledge_file_reference_repository=relations or Relations(),
             worker=worker or Worker(),
             task_scheduler=scheduler or Scheduler(),
@@ -248,7 +248,7 @@ async def test_eligibility_uses_content_fingerprint_and_reports_fresh_task():
     fingerprint = service._fingerprint(
         file_row, ProcessingCapability.ENTITY_DISCOVERY, "ke/1.0", None, [], []
     )
-    service.knowledge_build_task_repository.rows.append(
+    service.knowledge_semantic_processing_task_repository.rows.append(
         {
             "kid": 80,
             "knowledge_base_id": 7,
@@ -350,7 +350,7 @@ async def test_same_fingerprint_succeeded_task_is_reused_without_scheduling():
     fingerprint = service._fingerprint(
         file_row, ProcessingCapability.ENTITY_DISCOVERY, "ke/1.0", None, [], []
     )
-    service.knowledge_build_task_repository.rows.append(
+    service.knowledge_semantic_processing_task_repository.rows.append(
         {
             "kid": 81,
             "knowledge_base_id": 7,
@@ -377,7 +377,7 @@ async def test_pending_same_fingerprint_is_reused_under_file_lock():
     fingerprint = service._fingerprint(
         file_row, ProcessingCapability.ENTITY_DISCOVERY, "ke/1.0", None, [], []
     )
-    service.knowledge_build_task_repository.rows.append(
+    service.knowledge_semantic_processing_task_repository.rows.append(
         {
             "kid": 82,
             "knowledge_base_id": 7,
@@ -397,6 +397,33 @@ async def test_pending_same_fingerprint_is_reused_under_file_lock():
     assert connection.locked_ids == [10]
 
 
+async def test_force_reuses_active_task_even_when_fingerprint_changed():
+    file_row = original()
+    service, connection = make_service([file_row])
+    service.knowledge_semantic_processing_task_repository.rows.append(
+        {
+            "kid": 83,
+            "knowledge_base_id": 7,
+            "fs_entry_id": 10,
+            "file_path": file_row["file_path"],
+            "task_type": "ENTITY_DISCOVERY",
+            "status": "running",
+            "input_fingerprint": "older-input",
+            "definition_version": "ke/1.0",
+            "finished_at": None,
+        }
+    )
+
+    accepted = await service.discover_knowledge_entities(
+        EntityDiscoveryRequest(knCode="7", filePath="/docs/source.md", force=True)
+    )
+
+    assert accepted.accepted_count == 0
+    assert accepted.reused_count == 1
+    assert accepted.tasks[0].task_id == "83"
+    assert connection.locked_ids == [10]
+
+
 async def test_status_filters_by_optional_file_and_hides_details():
     now = datetime.now(timezone.utc)
     tasks = Tasks(
@@ -409,7 +436,7 @@ async def test_status_filters_by_optional_file_and_hides_details():
                 "task_type": "ENTITY_DISCOVERY",
                 "batch_id": "ed-1",
                 "status": "failed",
-                "current_step": "failed",
+                "current_stage": "failed",
                 "progress": 100,
                 "definition_version": "ke/1.0",
                 "enrich_version": None,

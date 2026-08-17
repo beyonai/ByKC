@@ -685,10 +685,8 @@ async def test_delete_build_tasks_for_fs_entry_is_targeted():
 
     await repo.delete_for_fs_entry_id(cursor, fs_entry_id=81)
 
-    sql, params = cursor.executed[-1]
-    assert "DELETE FROM knowledge_build_task" in sql
-    assert "task_type = %(task_type)s" in sql
-    assert params == {"fs_entry_id": 81, "task_type": "FILE_BUILD"}
+    assert "DELETE FROM knowledge_build_task" in cursor.executed[-1][0]
+    assert cursor.executed[-1][1] == {"fs_entry_id": 81}
 
 
 async def test_delete_references_for_source_does_not_target_inbound_references():

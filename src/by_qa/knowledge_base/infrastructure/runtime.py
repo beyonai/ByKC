@@ -46,6 +46,9 @@ from by_qa.knowledge_base.repositories.knowledge_item_chunk_repository import (
 from by_qa.knowledge_base.repositories.knowledge_item_search_repository import (
     KnowledgeItemSearchRepository,
 )
+from by_qa.knowledge_base.repositories.knowledge_semantic_processing_task_repository import (
+    KnowledgeSemanticProcessingTaskRepository,
+)
 from by_qa.knowledge_base.repositories.metadata_search_repository import (
     MetadataSearchRepository,
 )
@@ -376,7 +379,7 @@ async def build_knowledge_entity_processing_service(
     connection_factory = build_connection_factory(settings)
     knowledge_base_repository = KnowledgeBaseRepository()
     knowledge_entity_repository = KnowledgeEntityRepository()
-    knowledge_build_task_repository = KnowledgeBuildTaskRepository()
+    semantic_processing_task_repository = KnowledgeSemanticProcessingTaskRepository()
     knowledge_file_reference_repository = KnowledgeFileReferenceRepository()
     storage_provider = await build_storage_provider(
         settings, embedding_config=embedding_config
@@ -408,7 +411,7 @@ async def build_knowledge_entity_processing_service(
         connection_factory=connection_factory,
         knowledge_base_repository=knowledge_base_repository,
         knowledge_entity_repository=knowledge_entity_repository,
-        knowledge_build_task_repository=knowledge_build_task_repository,
+        knowledge_semantic_processing_task_repository=semantic_processing_task_repository,
         knowledge_file_reference_repository=knowledge_file_reference_repository,
         worker=worker,
     )

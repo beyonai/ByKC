@@ -288,10 +288,20 @@ class FakeSearch:
     def __init__(self, hits=()) -> None:
         self.hits = list(hits)
         self.requests = []
+        self.resolve_requests: list[tuple[int, list[str]]] = []
 
     async def search(self, request):
         self.requests.append(request)
         return list(self.hits)
+
+    async def resolve_markdown_texts(self, *, knowledge_base_id: int, texts: list[str]):
+        self.resolve_requests.append((knowledge_base_id, list(texts)))
+        return [
+            text.replace("byqa-ref://61", "/docs/research.md").replace(
+                "byqa-ref://62", "/docs/source.md"
+            )
+            for text in texts
+        ]
 
 
 class FakeEnricher:
@@ -300,6 +310,7 @@ class FakeEnricher:
         self.evidence = []
         self.targets = ()
         self.log_context = None
+        self.existing_markdown = ""
 
     async def enrich(
         self,
@@ -310,7 +321,7 @@ class FakeEnricher:
         relation_targets,
         log_context=None,
     ) -> EnrichmentResult:
-        del existing_markdown
+        self.existing_markdown = existing_markdown
         self.evidence = list(evidence)
         self.targets = relation_targets
         self.log_context = log_context
@@ -800,12 +811,16 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
         ],
         objects={
             ("original", "entity"): b"# Beta",
-            ("markdown", "entity-md"): b"# Beta\n\nOld content.",
+            ("markdown", "entity-md"): (
+                b"# Beta\n\nOld content. [source](byqa-ref://62)"
+            ),
             ("original", "alpha"): b"# Alpha",
             ("markdown", "alpha-md"): b"# Alpha",
             ("original", "remote"): b"# Remote",
             ("markdown", "remote-md"): b"# Remote",
-            ("original", "direct"): b"Direct Beta evidence.",
+            ("original", "direct"): (
+                b"Direct Beta evidence. [research](byqa-ref://61)"
+            ),
             ("original", "reference"): b"Explicit [[Beta]] evidence.",
             ("original", "recalled"): b"Recall source.",
             ("original", "recent-third"): b"Recent Beta evidence.",
@@ -893,6 +908,13 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
         ]
     }
     assert "Old content." in deps.search.requests[0].query
+    assert "byqa-ref://" not in deps.search.requests[0].query
+    assert "/docs/source.md" in deps.enricher.existing_markdown
+    direct_evidence = next(
+        item for item in deps.enricher.evidence if item.document_file_id == 10
+    )
+    assert "[research](/docs/research.md)" in direct_evidence.content
+    assert "byqa-ref://" not in direct_evidence.content
 
     update = deps.updater.requests[0]
     assert update.refer_signature == "before-enrich"

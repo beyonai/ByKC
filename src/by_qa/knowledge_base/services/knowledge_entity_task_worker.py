@@ -184,6 +184,12 @@ class KnowledgeEntityTaskWorker:
         )
         source, all_surfaces = await self._load_source_and_surfaces(context)
         markdown = await self._read_markdown(source)
+        markdown = (
+            await self._search.resolve_markdown_texts(
+                knowledge_base_id=int(context.knowledge_base_id),
+                texts=[markdown],
+            )
+        )[0]
         index = self._build_surface_index(all_surfaces)
         known_matches = self._scan_known_matches(
             index,
@@ -387,6 +393,12 @@ class KnowledgeEntityTaskWorker:
             entity, context, current_surfaces=current_surfaces
         )
         existing_markdown = await self._read_markdown(entity)
+        existing_markdown = (
+            await self._search.resolve_markdown_texts(
+                knowledge_base_id=identity.knowledge_base_id,
+                texts=[existing_markdown],
+            )
+        )[0]
         evidence = await self._collect_evidence(
             context,
             identity=identity,
@@ -1030,12 +1042,25 @@ class KnowledgeEntityTaskWorker:
 
         fragments: list[EvidenceFragment] = []
         rows_by_id = {int(row["kid"]): row for row in source_rows}
+        relation_documents: list[tuple[Mapping[str, Any], Mapping[str, Any], str]] = []
         for relation in selected_relations:
             file_id = int(relation["source_fs_entry_id"])
             row = rows_by_id.get(file_id)
             if row is None:
                 continue
             content = await self._read_markdown(row)
+            relation_documents.append((relation, row, content))
+
+        resolved_relation_contents = await self._search.resolve_markdown_texts(
+            knowledge_base_id=identity.knowledge_base_id,
+            texts=[content for _, _, content in relation_documents],
+        )
+        for (relation, row, _), content in zip(
+            relation_documents,
+            resolved_relation_contents,
+            strict=True,
+        ):
+            file_id = int(relation["source_fs_entry_id"])
             selected_content = self._select_entity_sections(
                 content,
                 names=(identity.entity_name, *identity.aliases),

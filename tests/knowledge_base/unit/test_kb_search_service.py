@@ -124,3 +124,22 @@ async def test_search_resolves_chunk_texts_in_batch_per_knowledge_base():
     assert resolver.calls == [
         (1, ["see byqa-ref://10", "again byqa-ref://10"]),
     ]
+
+
+@pytest.mark.asyncio
+async def test_resolve_markdown_texts_reuses_search_reference_resolver():
+    resolver = _FakeResolver()
+    service = KnowledgeItemSearchService(
+        connection_factory=_fake_connection_factory,
+        search_repository=_FakeSearchRepository(),
+        embedding_query_service=_FakeEmbeddingQueryService(),
+        markdown_reference_resolver=resolver,
+    )
+
+    resolved = await service.resolve_markdown_texts(
+        knowledge_base_id=1,
+        texts=["see byqa-ref://10"],
+    )
+
+    assert resolved == ["see /docs/target.md"]
+    assert resolver.calls == [(1, ["see byqa-ref://10"])]

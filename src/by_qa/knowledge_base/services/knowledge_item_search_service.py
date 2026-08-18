@@ -180,13 +180,27 @@ class KnowledgeItemSearchService:
 
         for knowledge_base_id, indexes in index_by_kb.items():
             group_texts = [texts[index] for index in indexes]
-            group_resolved = await self.markdown_reference_resolver.resolve_texts(
+            group_resolved = await self.resolve_markdown_texts(
                 knowledge_base_id=knowledge_base_id,
                 texts=group_texts,
             )
             for index, text in zip(indexes, group_resolved, strict=True):
                 resolved[index] = text
         return resolved
+
+    async def resolve_markdown_texts(
+        self,
+        *,
+        knowledge_base_id: int,
+        texts: list[str],
+    ) -> list[str]:
+        """Resolve stable Markdown tokens through the search output pipeline."""
+        if not texts or self.markdown_reference_resolver is None:
+            return list(texts)
+        return await self.markdown_reference_resolver.resolve_texts(
+            knowledge_base_id=knowledge_base_id,
+            texts=texts,
+        )
 
     async def search_file_with_dsl(
         self, request: SearchFileRequest

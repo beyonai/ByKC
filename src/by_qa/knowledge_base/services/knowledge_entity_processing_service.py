@@ -42,7 +42,7 @@ from by_qa.knowledge_base.api.knowledge_entity_schemas import (
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
 
 DEFAULT_DEFINITION_VERSION = "ke/1.0"
-DISCOVERY_METHOD_VERSION = "discovery/1.2"
+DISCOVERY_METHOD_VERSION = "discovery/1.3"
 ENRICH_METHOD_VERSION = "enrich/1.0"
 PROCESSING_POLICY_VERSION = "entity-policy/1.2"
 MAX_RECENT_RELATION_EVIDENCE = 3

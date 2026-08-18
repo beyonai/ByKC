@@ -433,11 +433,11 @@ def build_discovery_context(
         raise ValueError("max_chars must be at least 256")
     normalized = (markdown or "").strip()
     heading_lines: list[str] = []
-    for line_number, line in enumerate(normalized.splitlines(), start=1):
+    for line in normalized.splitlines():
         heading = _HEADING_RE.match(line)
         if heading:
             heading_lines.append(
-                f"L{line_number} {'#' * len(heading.group(1))} {heading.group(2).strip()}"
+                f"{'#' * len(heading.group(1))} {heading.group(2).strip()}"
             )
     if len(normalized) <= max_chars:
         return DiscoveryDocumentContext(
@@ -448,7 +448,7 @@ def build_discovery_context(
 
     map_budget = min(3_000, max_chars // 5)
     heading_text = "\n".join(heading_lines)[:map_budget].rstrip()
-    separator = f"\n\n[DOCUMENT HEADING MAP]\n{heading_text}\n\n[DOCUMENT END]\n"
+    separator = f"\n\n[文档标题地图]\n{heading_text}\n\n[文档结尾]\n"
     remaining = max(max_chars - len(separator) - 1, 2)
     head_budget = max(remaining * 2 // 3, 1)
     tail_budget = max(remaining - head_budget, 1)
@@ -492,6 +492,27 @@ class OpenAICompatibleKnowledgeEntityLLM:
         self._temperature = temperature
         self._timeout = timeout
         self._client_factory = client_factory or httpx.AsyncClient
+
+    async def cache_identity(self) -> str:
+        """Return a non-secret identity for content-addressed result isolation."""
+
+        config = await self._provider.get_config(self._profile)
+        temperature = (
+            self._temperature if self._temperature is not None else config.temperature
+        )
+        return json.dumps(
+            {
+                "client": type(self).__qualname__,
+                "profile": str(self._profile),
+                "baseUrl": config.base_url.rstrip("/"),
+                "model": config.model_name,
+                "temperature": temperature,
+                "extraBody": config.extra_body,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
 
     async def complete(
         self,
@@ -565,13 +586,13 @@ async def _complete_strict_json(
             await sleep(retry_backoff_seconds * (attempt - 1))
         retry_messages = list(messages)
         if last_error:
-            type_name = "array" if expected_type is list else "object"
+            type_name = "数组" if expected_type is list else "对象"
             retry_messages.append(
                 {
                     "role": "user",
                     "content": (
-                        f"Previous output was invalid ({last_error}). Return only one "
-                        f"strict JSON {type_name}; no Markdown fences or explanation."
+                        f"上次输出无效（{last_error}）。请重新只输出一个严格 JSON "
+                        f"{type_name}，不要 Markdown 代码围栏或解释。"
                     ),
                 }
             )

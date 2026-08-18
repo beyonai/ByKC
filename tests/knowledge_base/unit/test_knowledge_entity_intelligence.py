@@ -190,8 +190,8 @@ def test_discovery_context_keeps_original_head_tail_frame_within_16k() -> None:
     assert len(context.excerpt) <= 16_000
     assert "HEAD-TOKEN" in context.excerpt
     assert "TAIL-TOKEN" in context.excerpt
-    assert "[DOCUMENT END]" in context.excerpt
-    assert "[DOCUMENT HEADING MAP]" in context.excerpt
+    assert "[文档结尾]" in context.excerpt
+    assert "[文档标题地图]" in context.excerpt
     assert any("中部标题" in heading for heading in context.heading_map)
     assert "中部标题" in context.excerpt
 
@@ -275,7 +275,7 @@ async def test_discovery_retries_strict_json_and_filters_non_entities(
     assert any("unstable_identity" in warning for warning in result.warnings)
     assert len(llm.calls) == 2
     assert llm.calls[0][1] is False
-    assert "Previous output was invalid" in llm.calls[1][0][-1]["content"]
+    assert "上次输出无效" in llm.calls[1][0][-1]["content"]
     assert "KnowledgeEntity v1" in llm.calls[0][0][0]["content"]
     rendered_logs = "\n".join(log_messages)
     assert "llm output invalid" in rendered_logs
@@ -329,10 +329,56 @@ async def test_discovery_prompt_is_independent_of_existing_entity_vocabulary() -
     system_prompt = llm.calls[0][0][0]["content"]
     user_prompt = llm.calls[0][0][1]["content"]
     normalized_prompt = " ".join(system_prompt.split())
-    assert "resolved after extraction" in normalized_prompt
-    assert "external state" in normalized_prompt
+    assert "只在抽取后做身份解析" in normalized_prompt
+    assert "外部词表状态" in normalized_prompt
     assert "fileId=10" not in user_prompt
     assert "Known AC matches" not in user_prompt
+
+
+@pytest.mark.asyncio
+async def test_discovery_cache_is_isolated_by_model_identity() -> None:
+    first = json.dumps(
+        [
+            {
+                "entityName": "模型甲实体",
+                "localName": "模型甲实体",
+                "identityScope": "global",
+                "isEvent": False,
+                "evidence": "模型甲实体是稳定对象。",
+            }
+        ],
+        ensure_ascii=False,
+    )
+    second = json.dumps(
+        [
+            {
+                "entityName": "模型乙实体",
+                "localName": "模型乙实体",
+                "identityScope": "global",
+                "isEvent": False,
+                "evidence": "模型乙实体是稳定对象。",
+            }
+        ],
+        ensure_ascii=False,
+    )
+
+    class _ModelAwareFakeLLM(_FakeLLM):
+        identity = "model-a"
+
+        async def cache_identity(self) -> str:
+            return self.identity
+
+    llm = _ModelAwareFakeLLM(first, second)
+    discovery = KnowledgeEntityDiscovery(llm)
+    markdown = "模型甲实体是稳定对象。\n模型乙实体是稳定对象。"
+
+    result_a = await discovery.discover(markdown)
+    llm.identity = "model-b"
+    result_b = await discovery.discover(markdown)
+
+    assert [item.entity_name for item in result_a.candidates] == ["模型甲实体"]
+    assert [item.entity_name for item in result_b.candidates] == ["模型乙实体"]
+    assert len(llm.calls) == 2
 
 
 def test_candidate_normalization_requires_a_stable_subject_and_caps_at_twelve() -> None:

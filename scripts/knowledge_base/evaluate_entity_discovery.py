@@ -13,10 +13,12 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
-    AhoCorasickIndex,
+from by_qa.knowledge_base.services.knowledge_entity_discovery import (
     EntityCandidate,
     KnowledgeEntityDiscovery,
+)
+from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
+    AhoCorasickIndex,
     OpenAICompatibleKnowledgeEntityLLM,
     SurfaceEntry,
     SurfaceMatch,

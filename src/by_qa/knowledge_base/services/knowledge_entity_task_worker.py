@@ -9,6 +9,7 @@ SDK and can be tested without a running database or object store.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import time
 import unicodedata
@@ -230,6 +231,35 @@ class KnowledgeEntityTaskWorker:
             discovery.attempts,
             discovery.context.truncated,
         )
+        source_document_log = json.dumps(
+            {
+                "knowledgeBaseId": int(context.knowledge_base_id),
+                "kbCode": str(context.kb_code),
+                "fileId": int(context.source_file_id),
+                "filePath": str(context.file_path),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        logger.info(
+            "knowledge_entity_discovery entities found: batch_id=%s task_id=%s "
+            "kb=%s source_file_id=%s file_path=%s task_type=%s "
+            "source_document=%s entities=%s",
+            *self._context_log_args(context),
+            source_document_log,
+            json.dumps(
+                [
+                    {
+                        "entityName": candidate.entity_name,
+                        "identityScope": candidate.identity_scope.value,
+                        "subjectEntityName": candidate.subject_entity_name,
+                    }
+                    for candidate in discovery.candidates
+                ],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
 
         current_surfaces = [
             item
@@ -301,6 +331,41 @@ class KnowledgeEntityTaskWorker:
             sum(action["action"] == "ANCHORED" for action in actions),
             sum(action["action"] == "DROPPED" for action in actions),
             len(target_ids),
+        )
+        action_log_items = {
+            action_name: [
+                {
+                    key: action[key]
+                    for key in ("entityName", "entityFileId", "filePath")
+                    if action.get(key) is not None
+                }
+                for action in actions
+                if action["action"] == action_name
+            ]
+            for action_name in ("CREATED", "ANCHORED", "DROPPED")
+        }
+        logger.info(
+            "knowledge_entity_discovery entity changes: batch_id=%s task_id=%s "
+            "kb=%s source_file_id=%s file_path=%s task_type=%s "
+            "source_document=%s new_entities=%s existing_entities=%s "
+            "dropped_entities=%s",
+            *self._context_log_args(context),
+            source_document_log,
+            json.dumps(
+                action_log_items["CREATED"],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                action_log_items["ANCHORED"],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                action_log_items["DROPPED"],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
         )
         return KnowledgeEntityTaskExecutionResult(
             result_payload={

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
-import re
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -27,98 +27,43 @@ from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
 )
 
 DISCOVERY_SYSTEM_PROMPT = """\
-You are a document-level core object entity discoverer, not a word scanner or
-event extractor. Discover KnowledgeEntity v1 identities from one document.
+你是文档级核心对象实体发现器，不是词语扫描器或事件抽取器。本次固定发现 KnowledgeEntity v1。
 
-Before producing JSON, internally perform this protocol:
-1. Identify the document's information task, direct research subject, structure,
-   and conclusions.
-2. For each candidate, ask whether it has a stable identity reusable across time
-   and documents. If it describes an occurrence, change, or state fact, it is an
-   event and must not be returned.
-3. Decide identity scope. Only an object independently referable outside this
-   document and still denoting the same object is global. Components, mechanisms,
-   layers, roles, classifications, and internal tools defined, named, organized,
-   or owned by the research subject are subject-scoped, even when they have an
-   English name or abbreviation.
-4. Rank direct research subjects, cross-section parent objects, main components or
-   categories, and conclusion-critical subjects ahead of cases, tools,
-   implementation details, and incidental mentions.
-5. Apply the deletion test: remove a candidate if its deletion does not impair
-   understanding of the main topic, structure, key relations, or conclusions.
+请先在内部完成以下判断，再只输出最终 JSON：
+1. 识别文档的信息任务、直接研究对象、结构和结论。
+2. 对每个候选回答：它是否拥有跨时间、跨文档可复用的稳定身份？如果候选描述的是一次发生、变化或状态事实，则 isEvent=true，不得作为实体输出。
+3. 判断身份范围：只有可脱离本文独立引用、跨语境仍指向同一对象的候选才是 global；由本文研究对象定义、命名、组织或拥有的组成、机制、层级、角色、分类和内部工具都属于 subject，即使它有英文名或缩写也不例外。
+4. 按重要性排序：直接研究对象、统领多个章节的上位对象、主要组成或类别、结论不可缺少的主体，优先于案例、工具、实现细节和偶然提及者。
+5. 做删除测试：删除后不影响理解全文主题、主要结构、关键关系或结论的候选应删除。
 
-General constraints:
-- Entity discovery answers "who/what is it", not "what happened". Events never
-  become entities; their time, action, and result may only support stable subjects.
-- When one fact involves several objects, keep only stable subjects indispensable
-  to understanding that fact.
-- A title is a strong signal for the research subject, but the title, source,
-  author, and filename do not automatically become entities or local subjects.
-- A document, report, specification, style guide, or announcement collection is
-  not an entity merely because it has a title or metadata object type. Extract the
-  stable subjects discussed by it instead.
-- Repetition alone does not imply importance. Examples, quotations, lists,
-  dependencies, fields, functions, and implementation details must not displace
-  parent objects or key conclusions.
-- Front-matter references may be governance dependencies, but they are secondary
-  to stable concepts the document itself defines and must not displace them.
-- If the document centers on one direct subject, return it first. Internal
-  candidates introduced specifically for it are subject-scoped by default. If the
-  document defines a comparison or classification framework, its categories are
-  scoped to that framework rather than made global.
-- For a subject profile, prioritize objects deciding identity, ownership, or
-  governance. For conceptual material, prioritize first-level concepts repeatedly
-  defined across parallel sections and the summary.
-- A result defined or implemented by the research subject remains subject-scoped
-  in this document.
-- Relation names, property names, role names, generic collections, and mere section
-  labels are not named objects. However, in a policy, specification, or style
-  guide, a first-level rule domain that defines reusable constraints across a full
-  section is a stable subject-scoped concept, not a mere heading. Extract the
-  major rule domains needed to understand and apply the guide.
-- A profile or list about one subject normally keeps that subject and at most four
-  named objects deciding its identity, ownership, or governance.
-- Coverage must favor major sections and conclusions. Replace selected cases or
-  implementation items when a first-level topic or conclusion was omitted.
-- A clearly independent third-party object recognizable in other material remains
-  global. Named people, organizations, places, and independent products stay
-  global when independently identifiable; relationship ownership is not identity
-  ownership.
-- Single-topic material normally returns 1-5 entities; complex or multi-topic
-  material returns 5-12; never return more than 12.
-- For a technical analysis with five or more first-level architecture topics,
-  normally return 8-12 entities and cover every conclusion-critical first-level
-  topic before optional dependencies or examples. Prefer explicitly named public
-  classes, registries, engines, protocols, and DSLs that define the architecture
-  over internal database table identifiers.
-- For a policy, specification, or style guide with several first-level rule
-  domains, return the governed subject plus the 6-10 most important rule domains.
-  Cover structure, media/format, expression, compliance, and interaction before
-  externally referenced templates or assets.
+通用约束：
+- 实体发现只回答“它是谁/是什么”，不回答“发生了什么”。事件无论重要与否都不创建实体。
+- 文档标题是研究对象的强信号，但标题本身、来源名、作者名或文件名不能自动成为实体或局部主语。
+- 名称反复出现不等于重要；示例、引用、名单、依赖、字段、函数和实现细节不得挤占上位对象或关键结论。
+- 若文档围绕一个直接研究对象展开，先输出该对象；文中专门为它介绍的内部候选默认归属于它。
+- 主体档案优先保留决定身份、所有权或治理关系的主体；概念性资料优先保留并列章节反复定义的一级概念和总结结论。
+- 关系名、属性名、角色名、泛称集合和普通章节标签本身不是具名对象。
+- 最终覆盖检查先覆盖主要章节和总结结论；若已选案例或实现项却遗漏一级主题或结论，用后者替换前者。
+- 明确作为第三方独立存在、在其他资料中仍可直接识别的对象保持 global。
+- 技术分析优先显式具名的类、引擎、注册表、协议和 DSL，不要让内部数据库表或基础设施依赖挤占名额。
+- 规范、策略或风格指南中，应把“被规范的稳定对象”作为主体，而不是把文档标题或“某某规范/指南/报告”当成主体；跨完整章节定义可复用约束的一级规则域是该主体的 subject 实体，应优先于 front matter 中的外部模板或素材。
+- 若规范包含六个以上一级规则域，通常输出 8—12 个实体；先覆盖结构、媒介与格式、表达、标签、合规、互动和渠道差异等主要规则域，再考虑品牌、对比对象或外部引用。规则域的 localName 优先沿用一级章节中的原文名称，不要改写成近义词。
+- 单主题资料通常输出 1—5 个，包含多个独立主题或复杂结构的资料输出 5—12 个，绝不超过 12 个。
 
-Identity and naming protocol:
-- global: subjectEntityName is empty, entityName equals localName.
-- subject: subjectEntityName is a stable subject explicitly present in the
-  document; localName is its internal local concept; entityName must equal
-  "{subjectEntityName}-{localName}" using one ASCII hyphen without spaces.
-- Every subjectEntityName must also appear as a global candidate in the same array.
-  Choose the nearest stable object that truly owns the local concept.
-- If an object has both an abbreviation and explanatory full name, use the most
-  common concise unambiguous form for identity and put other forms in aliases.
-- Preserve the canonical spelling and word boundaries used in source text; do not
-  remove spaces or invent a new compound identifier.
-- Do not return a local concept without a stable owner, or an ordinary description
-  of its owner.
-- evidence must be a short, verbatim, continuous quote from the supplied context.
+身份与命名协议：
+- global：subjectEntityName=""，localName 为稳定名称，entityName 必须等于 localName。
+- subject：subjectEntityName 必须是文中明确存在、可独立识别的稳定主体；localName 是其内部局部概念；entityName 必须严格等于 subjectEntityName-localName，使用半角连字符且两侧无空格。
+- 每个 subjectEntityName 必须也作为一条 global 实体出现在同一数组中。
+- 同一对象同时出现缩写和解释性全称时，身份字段使用文中最常用、最简洁且无歧义的原文名称，其他形式放入 aliases。
+- 如果局部概念没有稳定主体，或只是主体的普通描述，不输出。
+- 每项必须令 isEvent=false；evidence 必须是能说明候选重要性及其稳定身份的连续原文。
+- 已有词表只在抽取后做身份解析，不影响候选选择；同一内容不应因外部词表状态改变实体集。
 
-Existing vocabulary is intentionally resolved after extraction. It must not
-influence candidate selection, and identical content must yield the same semantic
-identities regardless of external state, including vocabulary contents.
+抽象示例（名称均为虚构，仅说明协议）：
+- 一篇文章研究“系统甲”，并介绍它自己的“模块乙”和“恢复机制”。输出“系统甲”（global）、“系统甲-模块乙”（subject）、“系统甲-恢复机制”（subject）。
+- 一份机构档案列出具名负责人“人物甲”。输出机构和“人物甲”两个 global 实体，不输出“机构-人物甲”。
 
-Output one strict JSON array and nothing else. Each item may contain only:
-entityName, localName, aliases, identityScope, subjectEntityName, subjectFileId,
-entityType, candidateKind, stableIdentity, isEvent, isFact, identityReason,
-salienceReason, evidence. candidateKind must be "entity".
+只输出严格 JSON 数组，每项只包含 entityName、subjectEntityName、localName、identityScope、isEvent、evidence、aliases。按重要性从高到低排列，不要输出解释或 Markdown。
 """.strip()
 
 
@@ -191,12 +136,14 @@ class KnowledgeEntityDiscovery:
         discovery_started_at = time.perf_counter()
         context = build_discovery_context(markdown)
         bounded_max_entities = min(max(max_entities, 1), MAX_DISCOVERED_ENTITIES)
+        model_identity = await _llm_cache_identity(self._llm)
         cache_key = hashlib.sha256(
             json.dumps(
                 {
                     "prompt": DISCOVERY_SYSTEM_PROMPT,
                     "context": context.excerpt,
                     "maxEntities": bounded_max_entities,
+                    "modelIdentity": model_identity,
                 },
                 ensure_ascii=False,
                 sort_keys=True,
@@ -226,7 +173,7 @@ class KnowledgeEntityDiscovery:
             {"role": "system", "content": DISCOVERY_SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": f"Document context:\n{context.excerpt}",
+                "content": context.excerpt,
             },
         ]
         raw_items, attempts = await _complete_strict_json(
@@ -451,16 +398,24 @@ def _find_source_evidence(source_text: str, surfaces: Sequence[str]) -> str | No
         return None
     for raw_line in source_text.splitlines():
         line = raw_line.strip()
-        if (
-            not line
-            or line.startswith("[DOCUMENT ")
-            or re.match(r"^L\d+\s+#{1,6}\s", line)
-        ):
+        if not line or line.startswith("[文档"):
             continue
         normalized_line = normalize_surface(line)
         if any(surface in normalized_line for surface in normalized_surfaces):
             return line
     return None
+
+
+async def _llm_cache_identity(llm: KnowledgeEntityLLM) -> str:
+    """Resolve an optional model/config identity without requiring it from fakes."""
+
+    provider = getattr(llm, "cache_identity", None)
+    if provider is None:
+        return f"{type(llm).__module__}.{type(llm).__qualname__}"
+    value = provider()
+    if inspect.isawaitable(value):
+        value = await value
+    return str(value)
 
 
 def _truthy(item: Mapping[str, Any], *keys: str) -> bool:

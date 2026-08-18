@@ -544,6 +544,28 @@ async def test_discovery_anchors_only_unique_current_kb_and_creates_fixed_entiti
     rendered_logs = "\n".join(log_messages)
     assert "knowledge_entity_task_worker started" in rendered_logs
     assert "knowledge_entity_discovery model completed" in rendered_logs
+    found_log = next(message for message in log_messages if "entities found" in message)
+    assert (
+        'source_document={"knowledgeBaseId":1,"kbCode":"1","fileId":10,'
+        '"filePath":"/docs/source.md"}' in found_log
+    )
+    assert '"entityName":"A"' in found_log
+    assert '"entityName":"Alpha-Worker"' in found_log
+    assert '"identityScope":"subject"' in found_log
+    assert "Worker belongs to Alpha" not in found_log
+    changes_log = next(
+        message for message in log_messages if "entity changes" in message
+    )
+    assert (
+        'source_document={"knowledgeBaseId":1,"kbCode":"1","fileId":10,'
+        '"filePath":"/docs/source.md"}' in changes_log
+    )
+    assert "new_entities=" in changes_log
+    assert '"entityName":"Beta/Unsafe"' in changes_log
+    assert "existing_entities=" in changes_log
+    assert '"entityName":"Alpha"' in changes_log
+    assert "dropped_entities=" in changes_log
+    assert '"entityName":"Missing-Child"' in changes_log
     assert "relation_replacement_count=3" in rendered_logs
     assert "batch_id=batch-501" in rendered_logs
     assert "Alpha and Cross are mentioned" not in rendered_logs

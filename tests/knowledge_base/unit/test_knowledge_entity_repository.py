@@ -84,11 +84,6 @@ async def test_get_file_with_metadata_folds_eav_values_and_storage_fields():
                     value_string_list=["OSOT", "OCG", 7],
                 ),
                 file_row(
-                    property_name="definitionVersion",
-                    value_type="string",
-                    value_string="ke/1.0",
-                ),
-                file_row(
                     property_name="subjectFileId",
                     value_type="string",
                     value_string="200",
@@ -127,7 +122,6 @@ async def test_get_file_with_metadata_folds_eav_values_and_storage_fields():
         "processing_capabilities_configured": True,
         "entity_name": "OSOT-OCG",
         "aliases": ["OSOT", "OCG"],
-        "definition_version": "ke/1.0",
         "subject_file_id": "200",
         "entity_type": "system",
     }
@@ -136,6 +130,7 @@ async def test_get_file_with_metadata_folds_eav_values_and_storage_fields():
     assert "mv.property_name = ANY(%(property_names)s)" in sql
     assert params["file_path"] == "/docs/a.md"
     assert "entityName" in params["property_names"]
+    assert "definitionVersion" not in params["property_names"]
 
 
 async def test_list_files_with_metadata_uses_segment_safe_prefix_and_stable_order():

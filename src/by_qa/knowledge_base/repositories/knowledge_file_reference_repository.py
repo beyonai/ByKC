@@ -41,7 +41,6 @@ class KnowledgeFileReferenceRepository:
         end_offset: int | None = None,
         target_locator_type: str | None = None,
         target_locator_value: str | None = None,
-        definition_version: str | None = None,
         source_task_id: int | None = None,
     ) -> dict[str, Any] | None:
         """Insert or refresh one exact producer-owned relation assertion."""
@@ -108,7 +107,6 @@ class KnowledgeFileReferenceRepository:
                 end_offset,
                 target_locator_type,
                 target_locator_value,
-                definition_version,
                 source_task_id,
                 last_resolved_at,
                 created_at,
@@ -135,7 +133,6 @@ class KnowledgeFileReferenceRepository:
                 %(end_offset)s,
                 %(target_locator_type)s,
                 %(target_locator_value)s,
-                %(definition_version)s,
                 %(source_task_id)s,
                 CASE WHEN %(status)s = 'resolved' THEN NOW() ELSE NULL END,
                 NOW(),
@@ -163,7 +160,6 @@ class KnowledgeFileReferenceRepository:
                 end_line = EXCLUDED.end_line,
                 start_offset = EXCLUDED.start_offset,
                 end_offset = EXCLUDED.end_offset,
-                definition_version = EXCLUDED.definition_version,
                 source_task_id = EXCLUDED.source_task_id,
                 last_resolved_at = CASE
                     WHEN EXCLUDED.status = 'resolved' THEN NOW()
@@ -193,7 +189,6 @@ class KnowledgeFileReferenceRepository:
                 "end_offset": end_offset,
                 "target_locator_type": locator_type,
                 "target_locator_value": locator_value,
-                "definition_version": definition_version,
                 "source_task_id": source_task_id,
             },
         )
@@ -1028,7 +1023,6 @@ class KnowledgeFileReferenceRepository:
                 "end_offset",
                 "target_locator_type",
                 "target_locator_value",
-                "definition_version",
                 "source_task_id",
                 "last_resolved_at",
                 "created_at",

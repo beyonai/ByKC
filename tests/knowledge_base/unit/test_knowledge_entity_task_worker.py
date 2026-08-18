@@ -84,7 +84,6 @@ def file_row(
     entity_name: str | None = None,
     aliases: list[str] | None = None,
     subject_file_id: int | None = None,
-    definition_version: str | None = None,
     entity_type: str | None = None,
     checksum: str = "checksum-1",
 ) -> dict:
@@ -104,7 +103,6 @@ def file_row(
         "entity_name": entity_name,
         "aliases": aliases or [],
         "subject_file_id": subject_file_id,
-        "definition_version": definition_version,
         "entity_type": entity_type,
     }
 
@@ -193,7 +191,6 @@ class FakeIngestion:
             entity_name=metadata["entityName"],
             aliases=metadata.get("aliases", []),
             subject_file_id=metadata.get("subjectFileId"),
-            definition_version=metadata["definitionVersion"],
             entity_type=metadata.get("entityType"),
         )
         return {
@@ -414,7 +411,6 @@ async def test_discovery_anchors_only_unique_current_kb_and_creates_fixed_entiti
         document_kind="knowledgeEntity",
         entity_name="Alpha",
         aliases=["A"],
-        definition_version="v1",
     )
     cross_kb = file_row(
         99,
@@ -424,7 +420,6 @@ async def test_discovery_anchors_only_unique_current_kb_and_creates_fixed_entiti
         markdown_key="cross-md",
         document_kind="knowledgeEntity",
         entity_name="Cross",
-        definition_version="v1",
     )
     candidates = (
         EntityCandidate(
@@ -475,7 +470,6 @@ async def test_discovery_anchors_only_unique_current_kb_and_creates_fixed_entiti
             knowledge_base_id=1,
             source_file_id=10,
             file_path="/docs/source.md",
-            definition_version="v2",
             batch_id="batch-501",
         )
     )
@@ -503,7 +497,7 @@ async def test_discovery_anchors_only_unique_current_kb_and_creates_fixed_entiti
         parse_front_matter(request.file_content) for request in deps.ingestion.uploads
     ]
     assert metadata[0]["documentKind"] == "knowledgeEntity"
-    assert metadata[0]["definitionVersion"] == "v2"
+    assert "definitionVersion" not in metadata[0]
     assert metadata[1]["subjectFileId"] == 20
     assert "Worker" in metadata[1]["aliases"]
     mention_targets = {item["target_fs_entry_id"] for item in deps.references.upserts}
@@ -581,7 +575,6 @@ async def test_discovery_anchors_readable_path_when_entity_name_metadata_is_miss
         markdown_key="occupied-md",
         document_kind="knowledgeEntity",
         entity_name=None,
-        definition_version="v1",
     )
     deps = make_worker(
         rows=[source, occupied],
@@ -640,7 +633,6 @@ async def test_discovery_does_not_anchor_incidental_ac_match_omitted_by_salience
         markdown_key="alpha-md",
         document_kind="knowledgeEntity",
         entity_name="Alpha",
-        definition_version="v1",
     )
     deps = make_worker(
         rows=[source, incidental],
@@ -678,7 +670,6 @@ async def test_discovery_rejects_conflicting_metadata_at_readable_path():
         content_key="conflicting",
         document_kind="knowledgeEntity",
         entity_name="Different Entity",
-        definition_version="v1",
     )
     deps = make_worker(
         rows=[source, conflicting],
@@ -727,7 +718,6 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
         document_kind="knowledgeEntity",
         entity_name="Beta",
         aliases=["B"],
-        definition_version="v2",
         checksum="before-enrich",
     )
     target = file_row(
@@ -737,7 +727,6 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
         markdown_key="alpha-md",
         document_kind="knowledgeEntity",
         entity_name="Alpha",
-        definition_version="v1",
     )
     other_kb_target = file_row(
         99,
@@ -747,7 +736,6 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
         markdown_key="remote-md",
         document_kind="knowledgeEntity",
         entity_name="Remote",
-        definition_version="v1",
     )
     direct = file_row(10, "/docs/direct.md", content_key="direct")
     explicit = file_row(11, "/docs/reference.md", content_key="reference")
@@ -824,7 +812,6 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
             knowledge_base_id=1,
             source_file_id=30,
             file_path="/KnowledgeEntity/beta.md",
-            definition_version="v2",
             input_checksum="before-enrich",
             request_params={"topK": 5},
             batch_id="batch-601",
@@ -850,7 +837,6 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
         "processingCapabilities": ["entityEnrich"],
         "entityName": "Beta",
         "aliases": ["B"],
-        "definitionVersion": "v2",
     }
     assert b"# Beta" in update.file_content
     assert deps.ingestion.indexed_paths == ["/KnowledgeEntity/beta.md"]
@@ -859,7 +845,6 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
     assert generated[0].target_fs_entry_id == 20
     assert generated[0].relation_code == "PART_OF"
     assert generated[0].source_task_id == 601
-    assert generated[0].definition_version == "v2"
     assert generated[0].discovered_by == "ENTITY_ENRICH"
     assert generated[0].producer_run_id == "entity-enrich:601"
     assert len(generated[0].evidence_fingerprint) == 64
@@ -897,7 +882,6 @@ async def test_enrich_without_any_evidence_fails_before_document_update(
         markdown_key="entity-md",
         document_kind="knowledgeEntity",
         entity_name="Beta",
-        definition_version="v1",
     )
     deps = make_worker(
         rows=[entity],

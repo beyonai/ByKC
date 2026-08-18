@@ -92,7 +92,6 @@ class KnowledgeEntityTaskContext:
     knowledge_base_id: int
     source_file_id: int
     file_path: str
-    definition_version: str | None = None
     input_fingerprint: str | None = None
     input_checksum: str | None = None
     request_params: dict[str, Any] = field(default_factory=dict)
@@ -444,7 +443,6 @@ class KnowledgeEntityTaskWorker:
             entity_name=identity.entity_name,
             body=enriched.markdown,
             aliases=identity.aliases,
-            definition_version=identity.definition_version,
             subject_file_id=identity.subject_file_id,
             entity_type=entity.get("entity_type"),
         )
@@ -459,7 +457,6 @@ class KnowledgeEntityTaskWorker:
                 original_target=relation.target_entity_name,
                 discovered_by=ENRICH_RELATION_SOURCE,
                 confidence=relation.confidence,
-                definition_version=identity.definition_version,
                 source_task_id=int(context.task_id),
                 evidence_fingerprint=hashlib.sha256(
                     (
@@ -757,7 +754,6 @@ class KnowledgeEntityTaskWorker:
             await self._ensure_indexed(context, existing)
             return int(existing["kid"]), existing, False
 
-        definition_version = context.definition_version or "v1"
         aliases = self._candidate_aliases(candidate)
         content = self._render_entity_markdown(
             entity_name=candidate.entity_name,
@@ -769,7 +765,6 @@ class KnowledgeEntityTaskWorker:
                 f"来源文档：{self._non_link_source_path(context.file_path)}\n"
             ),
             aliases=aliases,
-            definition_version=definition_version,
             subject_file_id=subject_file_id,
             entity_type=candidate.entity_type,
         )
@@ -959,14 +954,10 @@ class KnowledgeEntityTaskWorker:
                     discovered_by=DISCOVERY_RELATION_SOURCE,
                     producer_run_id=f"entity-discovery:{context.task_id}",
                     evidence_fingerprint=hashlib.sha256(
-                        (
-                            f"{context.source_file_id}:{target_id}:"
-                            f"{context.definition_version or 'v1'}"
-                        ).encode("utf-8")
+                        f"{context.source_file_id}:{target_id}".encode("utf-8")
                     ).hexdigest(),
                     target_locator_type="ENTITY_SURFACE",
                     target_locator_value=names.get(int(target_id), str(target_id)),
-                    definition_version=context.definition_version or "v1",
                     source_task_id=int(context.task_id),
                 )
             await connection.commit()
@@ -986,8 +977,7 @@ class KnowledgeEntityTaskWorker:
         if entity.get("document_kind") != "knowledgeEntity":
             raise ValueError("entity enrichment requires documentKind=knowledgeEntity")
         name = str(entity.get("entity_name") or "").strip()
-        definition_version = str(entity.get("definition_version") or "").strip()
-        if not name or not definition_version:
+        if not name:
             raise ValueError("entity identity metadata is incomplete")
         subject_id = entity.get("subject_file_id")
         if subject_id is not None and not any(
@@ -1000,7 +990,6 @@ class KnowledgeEntityTaskWorker:
             entity_name=name,
             aliases=tuple(str(item) for item in entity.get("aliases") or ()),
             subject_file_id=int(subject_id) if subject_id is not None else None,
-            definition_version=definition_version,
         )
 
     async def _collect_evidence(
@@ -1179,7 +1168,6 @@ class KnowledgeEntityTaskWorker:
         entity_name: str,
         body: str,
         aliases: Sequence[str],
-        definition_version: str,
         subject_file_id: int | None,
         entity_type: str | None,
     ) -> str:
@@ -1188,7 +1176,6 @@ class KnowledgeEntityTaskWorker:
             "processingCapabilities": ["entityEnrich"],
             "entityName": entity_name,
             "aliases": list(aliases),
-            "definitionVersion": definition_version,
         }
         if subject_file_id is not None:
             metadata["subjectFileId"] = subject_file_id

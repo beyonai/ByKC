@@ -257,7 +257,6 @@ def _set_entity_metadata(
     entity_name: str,
     aliases: list[str] | None = None,
     document_kind: str = "knowledgeEntity",
-    definition_version: str = "v1",
 ) -> None:
     _update_metadata(
         client,
@@ -282,12 +281,6 @@ def _set_entity_metadata(
                 "valueType": "stringList",
                 "value": aliases or [],
             },
-            {
-                "propertyName": "definitionVersion",
-                "operation": "set",
-                "valueType": "string",
-                "value": definition_version,
-            },
         ],
     )
 
@@ -298,15 +291,12 @@ def _eligibility(
     kb_code: str,
     file_path: str,
     capability: str,
-    definition_version: str | None = None,
 ) -> dict:
     body: dict[str, Any] = {
         "knCode": kb_code,
         "filePath": file_path,
         "capability": capability,
     }
-    if definition_version is not None:
-        body["definitionVersion"] = definition_version
     return _assert_success(
         client.post(
             "/api/v1/knowledgeItems/processingEligibility",
@@ -528,7 +518,6 @@ def _entity_markdown(
     entity_name: str,
     aliases: Iterable[str] = (),
     body: str | None = None,
-    definition_version: str = "v1",
 ) -> str:
     alias_values = ", ".join(f'"{value}"' for value in aliases)
     return f"""---
@@ -536,7 +525,6 @@ documentKind: knowledgeEntity
 processingCapabilities: [entityEnrich]
 entityName: {entity_name}
 aliases: [{alias_values}]
-definitionVersion: {definition_version}
 ---
 
 # {entity_name}
@@ -796,13 +784,11 @@ stores stable entity names and aliases for knowledge-governance workflows.
                     "processingCapabilities",
                     "entityName",
                     "aliases",
-                    "definitionVersion",
                 ],
             )
             assert entity_metadata["documentKind"]["value"] == "knowledgeEntity"
             assert "entityEnrich" in entity_metadata["processingCapabilities"]["value"]
             assert entity_metadata["entityName"]["value"]
-            assert entity_metadata["definitionVersion"]["value"]
             entity_markdown_before_enrich = _read_markdown(
                 client, kb_code=kb_code, file_path=entity_path
             )
@@ -929,16 +915,6 @@ stores stable entity names and aliases for knowledge-governance workflows.
                     item["taskId"] for item in forced_discovery["tasks"]
                 ),
             )
-            discovery_version_stale = _eligibility(
-                client,
-                kb_code=kb_code,
-                file_path=source_path,
-                capability="entityDiscovery",
-                definition_version="ke/next-integration",
-            )
-            assert discovery_version_stale["eligibility"] == "ELIGIBLE_AND_STALE"
-            assert discovery_version_stale["reasonCode"] == "METHOD_VERSION_CHANGED"
-
             enrich_eligibility = _assert_success(
                 client.post(
                     "/api/v1/knowledgeItems/processingEligibility",
@@ -955,7 +931,7 @@ stores stable entity names and aliases for knowledge-governance workflows.
                 client,
                 kb_code=kb_code,
                 file_path=entity_path,
-                field_names=["fileSignature", "entityName", "definitionVersion"],
+                field_names=["fileSignature", "entityName"],
             )
             assert _latest_timeline(kb_code=kb_code, file_path=entity_path) is None
 
@@ -995,7 +971,7 @@ stores stable entity names and aliases for knowledge-governance workflows.
                 client,
                 kb_code=kb_code,
                 file_path=entity_path,
-                field_names=["fileSignature", "entityName", "definitionVersion"],
+                field_names=["fileSignature", "entityName"],
             )
             assert (
                 after_enrich_metadata["fileSignature"]["value"]
@@ -1004,10 +980,6 @@ stores stable entity names and aliases for knowledge-governance workflows.
             assert (
                 after_enrich_metadata["entityName"]
                 == before_enrich_metadata["entityName"]
-            )
-            assert (
-                after_enrich_metadata["definitionVersion"]
-                == before_enrich_metadata["definitionVersion"]
             )
             enriched_markdown = _read_markdown(
                 client, kb_code=kb_code, file_path=entity_path
@@ -1349,7 +1321,7 @@ def test_knowledge_entity_real_eligibility_and_request_matrix() -> None:
                 client,
                 kb_code=kb_code,
                 file_path=no_evidence_path,
-                field_names=["fileSignature", "entityName", "definitionVersion"],
+                field_names=["fileSignature", "entityName"],
             )
             no_evidence_markdown = _read_markdown(
                 client, kb_code=kb_code, file_path=no_evidence_path
@@ -1377,7 +1349,6 @@ def test_knowledge_entity_real_eligibility_and_request_matrix() -> None:
                     field_names=[
                         "fileSignature",
                         "entityName",
-                        "definitionVersion",
                     ],
                 )
                 == no_evidence_before
@@ -2315,7 +2286,6 @@ integration subject described by this current-KB source.
                 entity_name=entity_name,
                 aliases=[entity_alias],
                 body=f"# {entity_name}\n\nCONCURRENT-USER-UPDATE-{token}\n",
-                definition_version="v1",
             )
             _update_markdown(
                 client,
@@ -2327,7 +2297,7 @@ integration subject described by this current-KB source.
                 client,
                 kb_code=kb_code,
                 file_path=entity_path,
-                field_names=["fileSignature", "entityName", "definitionVersion"],
+                field_names=["fileSignature", "entityName"],
             )
             concurrent_bytes = _download_file(
                 client, kb_code=kb_code, file_path=entity_path
@@ -2355,7 +2325,6 @@ integration subject described by this current-KB source.
                     field_names=[
                         "fileSignature",
                         "entityName",
-                        "definitionVersion",
                     ],
                 )
                 == concurrent_metadata

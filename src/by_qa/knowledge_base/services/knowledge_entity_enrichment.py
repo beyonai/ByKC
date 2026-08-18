@@ -40,7 +40,6 @@ class KnowledgeEntityIdentity:
     entity_name: str
     aliases: tuple[str, ...] = ()
     subject_file_id: int | None = None
-    definition_version: str = "v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -499,7 +498,6 @@ Authoritative identity:
 - entityName: {identity.entity_name}
 - aliases: {json.dumps(identity.aliases, ensure_ascii=False)}
 - subjectFileId: {identity.subject_file_id}
-- definitionVersion: {identity.definition_version}
 
 Existing Markdown (authoritative editing baseline; update it in place conceptually,
 but identity may not change):

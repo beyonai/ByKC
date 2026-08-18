@@ -371,7 +371,7 @@ LLM 输出不断言特定遣词，但必须断言结构性和持久化不变式�
 | 数据组 | 内容 | 用途与验收点 |
 | --- | --- | --- |
 | `KB-A` 原始文档 | `/source/company.md`，另准备 `.markdown/.txt/.html/.htm/.csv`、无后缀 `text/plain`、PDF 和 Office 文件 | 验证默认 `documentKind=original`、文本格式白名单、内容就绪以及全库过滤计数 |
-| `KB-A` 实体文档 | `/KnowledgeEntity/华辰科技.md`、`/KnowledgeEntity/华辰集团.markdown`，metadata 含 `entityName`、`aliases`、`definitionVersion` | 验证实体默认分类、词面召回、Enrich、语义关系和固定目录 |
+| `KB-A` 实体文档 | `/KnowledgeEntity/华辰科技.md`、`/KnowledgeEntity/华辰集团.markdown`，metadata 含 `entityName`、`aliases` | 验证实体默认分类、词面召回、Enrich、语义关系和固定目录 |
 | `KB-A` 证据文档 | 至少两份真实构建和向量化的 Markdown，正文明确陈述实体名称、别名以及 `PART_OF/IS_A/DEPENDS_ON` 中的无歧义关系 | 验证真实检索、LLM Enrich、关系白名单和 evidence checksum 变化 |
 | `KB-B` 同名实体 | 同样的 `entityName`/别名，但具有不同 `fileId` 和库内证据 | 验证全系统词面扫描与库内身份隔离；不得建立跨库关系或合并实体 |
 | Markdown 关系样本 | 原始文档在固定标题和行号上链接到实体文档 | 验证 `MARKDOWN_PARSER` 和 Discovery 共用 `MENTIONS`、逻辑去重、`assertionCount`、标题/行/偏移证据 |
@@ -409,7 +409,7 @@ LLM 输出不断言特定遣词，但必须断言结构性和持久化不变式�
 | KE-D1 | 知识整理者 | 单文件实体发现 | `import+build original -> entityDiscovery(filePath) -> processingTaskStatus` | 接受响应 `scope=SINGLE_FILE`，生成一条真实任务并到达终态；结果计数与实体文档/关系落库一致 | 已写 |
 | KE-D2 | 知识整理者 | 全库文件触发 | `seed eligible/fresh/disabled/unsupported/not-ready/entity docs -> entityDiscovery(no filePath)` | `scope=WHOLE_KB`；`eligibleCount/acceptedCount/reusedCount/skippedCount` 和逐文件资格一致；不为 skipped 文件强制建任务，不创建父任务 | 已写部分（已覆盖 fresh 复用、not-ready 跳过和实体排除） |
 | KE-D3 | 知识整理者 | 锚定已有名称和别名 | `create entity metadata -> import source mentioning canonical+alias -> entityDiscovery` | 真实词面扫描命中已有实体，不重复创建；任务结果为 `ANCHORED/DISAMBIGUATED`，关系指向稳定 `fileId` | 已写 |
-| KE-D4 | 知识整理者 | 创建最小有效实体文档 | `entityDiscovery(source with new stable subject) -> readFile/metadata/get/listDir` | 新文档只保存在同库 `/KnowledgeEntity`，且具有 `documentKind/entityName/aliases/definitionVersion`、非空 Markdown 和来源证据引用 | 已写 |
+| KE-D4 | 知识整理者 | 创建最小有效实体文档 | `entityDiscovery(source with new stable subject) -> readFile/metadata/get/listDir` | 新文档只保存在同库 `/KnowledgeEntity`，且具有 `documentKind/entityName/aliases`、非空 Markdown 和来源证据引用 | 已写 |
 | KE-D5 | 知识治理者 | 验证全系统词表不引入重型跨库身份 | `KB-A/KB-B seed same surface -> discovery in KB-A` | 可扫描全系统词面，但只锚定 KB-A 实体；无跨库 `target_fs_entry_id`、关系、别名合并或创建阻断 | 已写 |
 | KE-D6 | 调度使用者 | 验证重复请求和 `force` | `discovery -> repeat same input -> force=true -> poll` | 相同指纹复用运行中/成功任务；`force=true` 对已成功任务建新任务，但仍复用同文件活动任务 | 已写 |
 | KE-D7 | 调度使用者 | 并发防止同文件双活动任务 | `concurrent HTTP entityDiscovery for same file` | 最多一条 `PENDING/RUNNING`；其余请求返回 reused；数据库部分唯一约束生效 | 已写 |

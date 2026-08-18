@@ -528,7 +528,6 @@ async def test_generated_assertions_are_written_in_same_update_transaction():
         original_target="Parent",
         discovered_by="ENTITY_ENRICH",
         confidence=0.91,
-        definition_version="v2",
         source_task_id=501,
         evidence_fingerprint="fingerprint",
     )

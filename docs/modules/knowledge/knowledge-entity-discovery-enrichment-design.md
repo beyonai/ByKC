@@ -153,7 +153,6 @@ Enrich 不得改变实体身份、权限和证据边界，但文档章节、标�
 | `documentKind` | 是 | 固定为 `knowledgeEntity` |
 | `entityName` | 是 | 规范名称；subject 实体使用限定名 |
 | `aliases` | 是 | 可以为空列表；只保存已确认别名 |
-| `definitionVersion` | 是 | 创建或最近重新判定时使用的实体定义版本 |
 | `subjectFileId` | 否 | 不存在表示 global；存在表示 subject-local |
 | `entityType` | 否 | 轻量类型描述，v1 不要求完整本体枚举 |
 | `processingCapabilities` | 否 | 覆盖默认处理能力；实体文档默认仅启用 `entityEnrich` |
@@ -209,7 +208,7 @@ canEnrich = knowledgeEntity
 
 ```text
 needsDiscovery = canDiscover
-                 + 文档 checksum、definitionVersion 或 discoveryMethodVersion 已变化
+                 + 文档 checksum、discoveryMethodVersion 或 processingPolicyVersion 已变化
 
 needsEnrich = canEnrich
               + 尚未成功 Enrich，或存在 createdAt 晚于实体 updatedAt 的入边断言
@@ -331,7 +330,6 @@ normalizedSurface
 
 - 知识库标识；
 - 可选原始文档路径；传入时处理单文件，不传时处理该知识库全部合格原始文档；
-- `definitionVersion`；
 - 可选发现数量限制、模型配置和内部 Callback。
 
 不将独立 ontology object 列表作为 KnowledgeEntity 发现的必要输入。`entityType` 在 v1 中只做辅助分类，不决定实体是否成立。
@@ -403,7 +401,7 @@ LLM 必须返回一份由文档内容决定的完整显著实体集。AC 结果�
 对新实体：
 
 1. 在当前知识库 `/KnowledgeEntity` 下创建 `documentKind=knowledgeEntity` 文档；
-2. 写入 `entityName`、`aliases`、`definitionVersion` 和可选 `subjectFileId`；
+2. 写入 `entityName`、`aliases` 和可选 `subjectFileId`；
 3. 正文至少包含实体定义与边界、初始证据和非链接形式的来源路径；
 4. 建立原始文档到新实体的 `MENTIONS`；
 5. 数据提交后触发词表 delta 更新。
@@ -424,7 +422,7 @@ LLM 必须返回一份由文档内容决定的完整显著实体集。AC 结果�
 
 - 单文件和全库请求都按“一个实际处理文件一条任务记录”执行，同批文件共享 `batchId`；
 - 任务状态按知识库查询，文件路径可选；需要查看某次触发时再用 `batchId` 收窄；
-- 同一原始文档、同一 checksum、同一 `definitionVersion` 的重复任务可复用结果；
+- 同一原始文档、同一 checksum 和同一抽取方法/策略版本的重复任务可复用结果；
 - 创建新实体前对规范可读路径使用事务级互斥或等价机制；
 - 并发创建同名路径时重新读取已创建实体，通过上述身份校验后转为锚定，不派生哈希或数字后缀；
 - 关系断言按“生产者运行 + 证据指纹”精确幂等；查询层再按 source、relation、target 合并为逻辑边；
@@ -528,7 +526,7 @@ targetLocatorType / targetLocatorValue
 discoveredBy / producerRunId
 evidenceFingerprint
 sourceHeadingPath / startLine / endLine / startOffset / endOffset
-confidence / definitionVersion / sourceTaskId
+confidence / sourceTaskId
 ```
 
 每个物理行表示一次关系断言或证据出现，同一 source/relation/target 可以有多行；对外查询再聚合成一条逻辑边。Markdown Parser 记录标题路径、行号和字符偏移，Discovery/Enrich 记录生产任务和证据指纹。v1 仍不建设独立 `knowledge_document_relation_evidence`，也不在关系行中保存大段 evidence JSON。
@@ -545,7 +543,7 @@ Enrich 以实体稳定身份为中心，从多份授权证据中组织可阅读�
 
 - 知识库标识；
 - 可选目标 KnowledgeEntity 路径；传入时处理该实体，不传时处理本库 `/KnowledgeEntity` 下全部合格实体文档；
-- 当前 `entityName`、`aliases`、`subjectFileId` 和 `definitionVersion`；
+- 当前 `entityName`、`aliases` 和 `subjectFileId`；
 - 目标文档 checksum；
 - 可选内部 Callback。
 
@@ -800,31 +798,13 @@ ByDC 在 2026-08-08 曾进入 `develop` 的实现是：
 - 写入失败：保留上一版有效文档；
 - Callback 失败：不改变主任务结果。
 
-## 16. 版本化与升级
+## 16. 方法升级与实体治理
 
-### 16.1 定义包
+### 16.1 方法版本
 
-KnowledgeEntity 定义不是一段可以无痕修改的 prompt，而是一个版本化定义包：
+Discovery 的 prompt、归一化、global/subject 规则、数量上限和显著性规则随代码发布，由服务端内部 `discoveryMethodVersion` 标记。该版本参与输入指纹，调用方不能指定。持久化策略由 `processingPolicyVersion` 标记，索引继续使用独立 `indexVersion`。
 
-```text
-definitionVersion = ke/1.0
-```
-
-每个版本绑定：
-
-- 正式定义、正例和反例；
-- discovery prompt；
-- 名称归一化和 global/subject 规则；
-- 数量上限和显著性规则；
-- 默认模型与参数版本；
-- 评测集和指标。
-
-版本语义：
-
-- `1.x`：增加可选属性、别名规则或归一化优化，不改变实体边界；
-- `2.0`：改变“什么是 KnowledgeEntity”的语义边界，例如未来允许某类具名事件成为实体。
-
-Enrich 策略随代码发布，不再维护硬编码的独立 `enrichVersion`；索引仍使用独立 `indexVersion`。
+KnowledgeEntity 文档和关系不保存 `definitionVersion`。实体身份由 `fileId`、`entityName` 和可选 `subjectFileId` 决定；任务记录保留实际方法版本和索引版本用于审计。
 
 ### 16.2 升级流程
 
@@ -833,7 +813,7 @@ Enrich 策略随代码发布，不再维护硬编码的独立 `enrichVersion`；
 3. 分析新增、消失、合并、拆分和 namespace 变化；
 4. 生成幂等迁移计划，不直接覆盖现有文档；
 5. 同一身份升级时保留 `fileId`；
-6. 更新定义版本后重建 AC 和向量索引；
+6. 发布新方法版本后重建 AC 和向量索引；
 7. 对受影响实体按需重新 Enrich；
 8. 通过内部 Callback 通知批处理阶段和结果。
 
@@ -911,13 +891,13 @@ Enrich 策略随代码发布，不再维护硬编码的独立 `enrichVersion`；
 - discovery/enrich 任务数、成功率、失败分类和分阶段延迟；
 - 重试次数；
 - Callback 调用数、异常数和执行时间；
-- 每个任务使用的 `definitionVersion`、`indexVersion` 和模型版本。
+- 每个任务使用的 `methodVersion`、`indexVersion` 和模型版本。
 
 ## 18. 分阶段落地
 
 ### 阶段 0：定义和评测基线
 
-- 固化 KnowledgeEntity `ke/1.0` 定义包；
+- 固化 KnowledgeEntity 定义、正反例和评测基线；
 - 建立正例、反例、global/subject、同名和同义评测集；
 - 固化 v1 关系白名单和 metadata 命名。
 

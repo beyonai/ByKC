@@ -41,10 +41,9 @@ from by_qa.knowledge_base.api.knowledge_entity_schemas import (
 )
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
 
-DEFAULT_DEFINITION_VERSION = "ke/1.0"
 DISCOVERY_METHOD_VERSION = "discovery/1.3"
 ENRICH_METHOD_VERSION = "enrich/1.0"
-PROCESSING_POLICY_VERSION = "entity-policy/1.2"
+PROCESSING_POLICY_VERSION = "entity-policy/1.3"
 MAX_RECENT_RELATION_EVIDENCE = 3
 
 _TEXT_DOCUMENT_SUFFIXES = frozenset(
@@ -170,7 +169,6 @@ class TaskExecutionContext:
     file_path: str
     input_fingerprint: str
     input_checksum: str | None
-    definition_version: str | None
     request_params: Mapping[str, Any]
 
 
@@ -257,7 +255,6 @@ class KnowledgeEntityProcessingOrchestrator:
                 knowledge_base_id,
                 file_row,
                 request.capability,
-                definition_version=request.definition_version,
             )
             logger.info(
                 "knowledge_entity_processing_service eligibility evaluated: knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, capability=%s, eligibility=%s, reason_code=%s",
@@ -547,7 +544,6 @@ class KnowledgeEntityProcessingOrchestrator:
                     knowledge_base_id,
                     file_row,
                     capability,
-                    definition_version=getattr(request, "definition_version", None),
                 )
                 eligibility_counts[evaluation.result.eligibility.value] += 1
                 reason_counts[evaluation.result.reason_code or "NONE"] += 1
@@ -607,7 +603,6 @@ class KnowledgeEntityProcessingOrchestrator:
                     progress=0,
                     input_fingerprint=evaluation.input_fingerprint,
                     input_checksum=file_row.get("checksum"),
-                    definition_version=evaluation.definition_version,
                     method_version=evaluation.method_version,
                     request_params=params,
                 )
@@ -623,7 +618,6 @@ class KnowledgeEntityProcessingOrchestrator:
                     file_path=str(file_row["file_path"]),
                     input_fingerprint=evaluation.input_fingerprint,
                     input_checksum=file_row.get("checksum"),
-                    definition_version=evaluation.definition_version,
                     request_params=params,
                 )
                 contexts.append(context)
@@ -704,14 +698,6 @@ class KnowledgeEntityProcessingOrchestrator:
             batch_id=batch_id,
             scope=scope,
             task_type=task_type,
-            definition_version=(
-                getattr(request, "definition_version", None)
-                or (
-                    DEFAULT_DEFINITION_VERSION
-                    if task_type == ProcessingTaskType.ENTITY_DISCOVERY
-                    else None
-                )
-            ),
             eligible_count=eligible_count,
             accepted_count=len(contexts),
             reused_count=reused_count,
@@ -907,8 +893,6 @@ class KnowledgeEntityProcessingOrchestrator:
         knowledge_base_id: int,
         file_row: Mapping[str, Any],
         capability: ProcessingCapability,
-        *,
-        definition_version: str | None,
     ) -> _Evaluation:
         file_id = self._row_id(file_row)
         document_kind = self._effective_document_kind(file_row)
@@ -921,11 +905,6 @@ class KnowledgeEntityProcessingOrchestrator:
             ProcessingTaskType.ENTITY_DISCOVERY
             if capability == ProcessingCapability.ENTITY_DISCOVERY
             else ProcessingTaskType.DOCUMENT_ENRICH
-        )
-        resolved_definition = (
-            definition_version or DEFAULT_DEFINITION_VERSION
-            if capability == ProcessingCapability.ENTITY_DISCOVERY
-            else None
         )
         method_version = (
             DISCOVERY_METHOD_VERSION
@@ -984,7 +963,6 @@ class KnowledgeEntityProcessingOrchestrator:
             self._fingerprint(
                 file_row,
                 capability,
-                resolved_definition,
                 evidence_rows,
             )
             if reason is None
@@ -1006,7 +984,7 @@ class KnowledgeEntityProcessingOrchestrator:
                 eligibility = ProcessingEligibility.ELIGIBLE_AND_STALE
                 reason = (
                     "METHOD_VERSION_CHANGED"
-                    if latest.get("definition_version") != resolved_definition
+                    if latest.get("method_version") != method_version
                     else "INPUT_CHANGED"
                 )
         else:
@@ -1038,7 +1016,6 @@ class KnowledgeEntityProcessingOrchestrator:
         return _Evaluation(
             result=result,
             input_fingerprint=fingerprint,
-            definition_version=resolved_definition,
             method_version=method_version,
         )
 
@@ -1164,13 +1141,11 @@ class KnowledgeEntityProcessingOrchestrator:
         self,
         file_row: Mapping[str, Any],
         capability: ProcessingCapability,
-        definition_version: str | None,
         evidence_rows: list[dict[str, Any]],
     ) -> str:
         if capability == ProcessingCapability.ENTITY_DISCOVERY:
             value = {
                 "sourceFileChecksum": file_row.get("checksum"),
-                "definitionVersion": definition_version,
                 "discoveryMethodVersion": DISCOVERY_METHOD_VERSION,
                 "processingPolicyVersion": PROCESSING_POLICY_VERSION,
             }
@@ -1252,7 +1227,6 @@ class KnowledgeEntityProcessingOrchestrator:
     def _identity_complete(self, row: Mapping[str, Any]) -> bool:
         basics_complete = bool(
             str(row.get("entity_name") or "").strip()
-            and str(row.get("definition_version") or "").strip()
             and isinstance(row.get("aliases"), list)
         )
         if not basics_complete:
@@ -1281,7 +1255,6 @@ class KnowledgeEntityProcessingOrchestrator:
             progress=row.get("progress"),
             file_id=str(row["fs_entry_id"]),
             file_path=str(row["file_path"]),
-            definition_version=row.get("definition_version"),
             index_version=row.get("index_version"),
             created_at=row["created_at"],
             started_at=row.get("started_at"),
@@ -1349,7 +1322,6 @@ class KnowledgeEntityProcessingOrchestrator:
                 1.0 if row.get("confidence") is None else row["confidence"]
             ),
             discovered_by=str(row.get("discovered_by") or "UNKNOWN"),
-            definition_version=row.get("definition_version"),
             source_task_id=str(row["source_task_id"])
             if row.get("source_task_id") is not None
             else None,
@@ -1473,5 +1445,4 @@ class KnowledgeEntityProcessingOrchestrator:
 class _Evaluation:
     result: ProcessingEligibilityResult
     input_fingerprint: str
-    definition_version: str | None
     method_version: str

@@ -13,7 +13,6 @@ CREATE TABLE IF NOT EXISTS knowledge_semantic_processing_task (
     progress smallint NOT NULL DEFAULT 0,
     input_fingerprint varchar(128),
     input_checksum varchar(128),
-    definition_version varchar(64),
     method_version varchar(64),
     index_version varchar(64),
     request_params jsonb,

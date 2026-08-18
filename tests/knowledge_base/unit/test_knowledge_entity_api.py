@@ -176,7 +176,7 @@ def test_discovery_route_uses_provider_and_never_accepts_http_callback():
 
     response = client.post(
         "/api/v1/knowledgeItems/entityDiscovery",
-        json={"knCode": "1", "definitionVersion": "ke/1.0"},
+        json={"knCode": "1"},
     )
 
     assert response.status_code == 200
@@ -186,6 +186,12 @@ def test_discovery_route_uses_provider_and_never_accepts_http_callback():
     assert operation == "discovery"
     assert request.file_path is None
     assert callback is None
+
+    removed_field_response = client.post(
+        "/api/v1/knowledgeItems/entityDiscovery",
+        json={"knCode": "1", "definitionVersion": "ke/1.0"},
+    )
+    assert removed_field_response.json()["resultCode"] == "-1"
 
     invalid_response = client.post(
         "/api/v1/knowledgeItems/entityDiscovery",

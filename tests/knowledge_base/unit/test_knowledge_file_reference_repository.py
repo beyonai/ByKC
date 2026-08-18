@@ -136,7 +136,6 @@ async def test_upsert_relation_assertion_persists_generated_entity_relation():
         producer_run_id="99",
         target_locator_type="ENTITY_SURFACE",
         target_locator_value="数据库",
-        definition_version="v1",
         source_task_id=99,
     )
 
@@ -396,10 +395,10 @@ def test_030_defines_unified_assertion_contract_and_heals_draft_schema():
         "target_locator_type",
         "target_locator_value",
         "confidence",
-        "definition_version",
         "source_task_id",
     ):
         assert f"column_name = '{column}'" in sql
+    assert "definition_version" not in sql
     assert "REFERENCES knowledge_semantic_processing_task(kid)" in sql
     assert "ALTER COLUMN evidence_fingerprint SET NOT NULL" in sql
     assert "ALTER COLUMN target_locator_type SET NOT NULL" in sql

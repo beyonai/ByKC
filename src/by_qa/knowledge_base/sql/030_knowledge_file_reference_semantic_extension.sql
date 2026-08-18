@@ -123,16 +123,6 @@ BEGIN
         SELECT 1 FROM information_schema.columns
         WHERE table_schema = current_schema()
           AND table_name = 'knowledge_file_reference'
-          AND column_name = 'definition_version'
-    ) THEN
-        ALTER TABLE knowledge_file_reference
-            ADD COLUMN definition_version varchar(64) NULL;
-    END IF;
-
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = current_schema()
-          AND table_name = 'knowledge_file_reference'
           AND column_name = 'source_task_id'
     ) THEN
         ALTER TABLE knowledge_file_reference

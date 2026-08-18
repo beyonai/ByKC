@@ -48,7 +48,6 @@ class GeneratedOutgoingAssertion:
     original_target: str
     discovered_by: str
     confidence: float | None = None
-    definition_version: str | None = None
     source_task_id: int | None = None
     evidence_fingerprint: str | None = None
     producer_run_id: str | None = None
@@ -409,7 +408,6 @@ class DocumentUpdateService:
                 evidence_fingerprint=assertion.evidence_fingerprint,
                 target_locator_type="ENTITY_SURFACE",
                 target_locator_value=assertion.original_target,
-                definition_version=assertion.definition_version,
                 source_task_id=assertion.source_task_id,
             )
 

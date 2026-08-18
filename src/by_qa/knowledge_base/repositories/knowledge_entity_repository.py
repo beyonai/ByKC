@@ -20,7 +20,6 @@ class KnowledgeEntityRepository:
         "processingCapabilities",
         "entityName",
         "aliases",
-        "definitionVersion",
         "subjectFileId",
         "entityType",
     )
@@ -30,7 +29,6 @@ class KnowledgeEntityRepository:
         "processingCapabilities": "processing_capabilities",
         "entityName": "entity_name",
         "aliases": "aliases",
-        "definitionVersion": "definition_version",
         "subjectFileId": "subject_file_id",
         "entityType": "entity_type",
     }
@@ -240,7 +238,6 @@ class KnowledgeEntityRepository:
                     "processing_capabilities_configured": False,
                     "entity_name": None,
                     "aliases": [],
-                    "definition_version": None,
                     "subject_file_id": None,
                     "entity_type": None,
                 }

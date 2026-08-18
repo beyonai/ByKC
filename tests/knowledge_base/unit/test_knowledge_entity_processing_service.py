@@ -78,7 +78,6 @@ def original(file_id=10, path="/docs/source.md", **updates):
         "processing_capabilities_configured": False,
         "entity_name": None,
         "aliases": [],
-        "definition_version": None,
         "subject_file_id": None,
     }
     row.update(updates)
@@ -263,7 +262,7 @@ async def test_eligibility_uses_content_fingerprint_and_reports_fresh_task():
     assert stale.reason_code == "NEVER_PROCESSED"
 
     fingerprint = service._fingerprint(
-        file_row, ProcessingCapability.ENTITY_DISCOVERY, "ke/1.0", []
+        file_row, ProcessingCapability.ENTITY_DISCOVERY, []
     )
     service.knowledge_semantic_processing_task_repository.rows.append(
         {
@@ -274,7 +273,7 @@ async def test_eligibility_uses_content_fingerprint_and_reports_fresh_task():
             "task_type": "ENTITY_DISCOVERY",
             "status": "succeeded",
             "input_fingerprint": fingerprint,
-            "definition_version": "ke/1.0",
+            "method_version": processing_module.DISCOVERY_METHOD_VERSION,
             "finished_at": datetime.now(timezone.utc),
         }
     )
@@ -287,6 +286,37 @@ async def test_eligibility_uses_content_fingerprint_and_reports_fresh_task():
     assert fresh.last_successful_task_id == "80"
 
 
+async def test_discovery_reports_method_version_change_from_task_method() -> None:
+    file_row = original()
+    tasks = Tasks(
+        [
+            {
+                "kid": 81,
+                "knowledge_base_id": 7,
+                "fs_entry_id": 10,
+                "file_path": file_row["file_path"],
+                "task_type": "ENTITY_DISCOVERY",
+                "status": "succeeded",
+                "input_fingerprint": "old-method-fingerprint",
+                "method_version": "discovery/1.2",
+                "finished_at": datetime.now(timezone.utc),
+            }
+        ]
+    )
+    service, _ = make_service([file_row], tasks=tasks)
+
+    result = await service.evaluate_processing_eligibility(
+        ProcessingEligibilityRequest(
+            knCode="7",
+            filePath=file_row["file_path"],
+            capability="entityDiscovery",
+        )
+    )
+
+    assert result.eligibility == ProcessingEligibility.ELIGIBLE_AND_STALE
+    assert result.reason_code == "METHOD_VERSION_CHANGED"
+
+
 async def test_enrich_fingerprint_canonicalizes_latest_relation_timestamp():
     service, _ = make_service([original()])
     entity = original(
@@ -295,7 +325,6 @@ async def test_enrich_fingerprint_canonicalizes_latest_relation_timestamp():
         document_kind="knowledgeEntity",
         entity_name="Child",
         aliases=["Child alias"],
-        definition_version="v1",
     )
     utc_timestamp = datetime(2026, 8, 17, 9, 30, 0, 123456, tzinfo=timezone.utc)
     local_timestamp = utc_timestamp.astimezone(timezone(timedelta(hours=8)))
@@ -304,7 +333,6 @@ async def test_enrich_fingerprint_canonicalizes_latest_relation_timestamp():
         service._fingerprint(
             entity,
             ProcessingCapability.ENTITY_ENRICH,
-            None,
             [{"kid": 31, "created_at": timestamp}],
         )
         for timestamp in (utc_timestamp, local_timestamp)
@@ -320,18 +348,15 @@ async def test_enrich_fingerprint_changes_with_latest_relation_watermark():
         "/KnowledgeEntity/child.md",
         document_kind="knowledgeEntity",
         entity_name="Child",
-        definition_version="v1",
     )
     first = service._fingerprint(
         entity,
         ProcessingCapability.ENTITY_ENRICH,
-        None,
         [{"kid": 31, "created_at": datetime(2026, 8, 17, tzinfo=timezone.utc)}],
     )
     second = service._fingerprint(
         entity,
         ProcessingCapability.ENTITY_ENRICH,
-        None,
         [{"kid": 32, "created_at": datetime(2026, 8, 18, tzinfo=timezone.utc)}],
     )
     assert first != second
@@ -344,7 +369,6 @@ async def test_invalid_subject_file_id_is_ineligible_instead_of_json_failure():
         document_kind="knowledgeEntity",
         entity_name="Child",
         aliases=[],
-        definition_version="v1",
         subject_file_id="21.5",
     )
     service, _ = make_service([entity])
@@ -477,7 +501,6 @@ async def test_content_type_rejection_precedes_content_readiness_and_enrich_evid
         document_kind="knowledgeEntity",
         entity_name="Entity",
         aliases=[],
-        definition_version="ke/1.0",
     )
     service, _ = make_service([entity_pdf])
 
@@ -501,7 +524,6 @@ async def test_enrich_requires_markdown_in_reserved_entity_directory():
         document_kind="knowledgeEntity",
         entity_name="Entity",
         aliases=[],
-        definition_version="ke/1.0",
     )
     misplaced_entity = original(
         21,
@@ -510,7 +532,6 @@ async def test_enrich_requires_markdown_in_reserved_entity_directory():
         document_kind="knowledgeEntity",
         entity_name="Misplaced",
         aliases=[],
-        definition_version="ke/1.0",
     )
     service, _ = make_service([entity_txt, misplaced_entity])
 
@@ -570,7 +591,6 @@ async def test_whole_kb_enrich_schedules_only_markdown_entities():
         document_kind="knowledgeEntity",
         entity_name="A",
         aliases=[],
-        definition_version="ke/1.0",
     )
     text_entity = original(
         21,
@@ -579,7 +599,6 @@ async def test_whole_kb_enrich_schedules_only_markdown_entities():
         document_kind="knowledgeEntity",
         entity_name="B",
         aliases=[],
-        definition_version="ke/1.0",
     )
     markdown_entity_long_suffix = original(
         22,
@@ -588,7 +607,6 @@ async def test_whole_kb_enrich_schedules_only_markdown_entities():
         document_kind="knowledgeEntity",
         entity_name="C",
         aliases=[],
-        definition_version="ke/1.0",
     )
     scheduler = Scheduler()
     relations = Relations(
@@ -677,7 +695,6 @@ async def test_identity_metadata_outside_entity_directory_defaults_to_original()
         document_kind=None,
         entity_name="legacy-name",
         aliases=["legacy-alias"],
-        definition_version="ke/1.0",
         subject_file_id="42",
     )
     service, _ = make_service([ordinary])
@@ -722,7 +739,6 @@ async def test_enrich_accepts_resolved_markdown_reference_as_evidence():
         document_kind="knowledgeEntity",
         entity_name="A",
         aliases=[],
-        definition_version="ke/1.0",
     )
     source = original(10)
     relations = Relations(
@@ -767,7 +783,6 @@ async def test_enrich_staleness_uses_any_recent_relation_creation_time(
         document_kind="knowledgeEntity",
         entity_name="A",
         aliases=[],
-        definition_version="ke/1.0",
         updated_at=datetime(2026, 8, 18, tzinfo=timezone.utc),
     )
     source = original(10)
@@ -791,7 +806,6 @@ async def test_enrich_staleness_uses_any_recent_relation_creation_time(
                 "task_type": "DOCUMENT_ENRICH",
                 "status": "succeeded",
                 "input_fingerprint": "previous",
-                "definition_version": None,
                 "finished_at": datetime(2026, 8, 18, tzinfo=timezone.utc),
             }
         ]
@@ -916,7 +930,7 @@ async def test_same_fingerprint_succeeded_task_is_reused_without_scheduling():
     file_row = original()
     service, _ = make_service([file_row])
     fingerprint = service._fingerprint(
-        file_row, ProcessingCapability.ENTITY_DISCOVERY, "ke/1.0", []
+        file_row, ProcessingCapability.ENTITY_DISCOVERY, []
     )
     service.knowledge_semantic_processing_task_repository.rows.append(
         {
@@ -927,7 +941,7 @@ async def test_same_fingerprint_succeeded_task_is_reused_without_scheduling():
             "task_type": "ENTITY_DISCOVERY",
             "status": "succeeded",
             "input_fingerprint": fingerprint,
-            "definition_version": "ke/1.0",
+            "method_version": processing_module.DISCOVERY_METHOD_VERSION,
             "finished_at": datetime.now(timezone.utc),
         }
     )
@@ -943,7 +957,7 @@ async def test_pending_same_fingerprint_is_reused_under_file_lock():
     file_row = original()
     service, connection = make_service([file_row])
     fingerprint = service._fingerprint(
-        file_row, ProcessingCapability.ENTITY_DISCOVERY, "ke/1.0", []
+        file_row, ProcessingCapability.ENTITY_DISCOVERY, []
     )
     service.knowledge_semantic_processing_task_repository.rows.append(
         {
@@ -954,7 +968,7 @@ async def test_pending_same_fingerprint_is_reused_under_file_lock():
             "task_type": "ENTITY_DISCOVERY",
             "status": "pending",
             "input_fingerprint": fingerprint,
-            "definition_version": "ke/1.0",
+            "method_version": processing_module.DISCOVERY_METHOD_VERSION,
             "finished_at": None,
         }
     )
@@ -977,7 +991,6 @@ async def test_force_reuses_active_task_even_when_fingerprint_changed():
             "task_type": "ENTITY_DISCOVERY",
             "status": "running",
             "input_fingerprint": "older-input",
-            "definition_version": "ke/1.0",
             "finished_at": None,
         }
     )
@@ -1006,7 +1019,6 @@ async def test_status_filters_by_optional_file_and_hides_details():
                 "status": "failed",
                 "current_stage": "failed",
                 "progress": 100,
-                "definition_version": "ke/1.0",
                 "index_version": None,
                 "created_at": now,
                 "started_at": now,
@@ -1041,7 +1053,6 @@ async def test_both_relation_direction_merges_by_relation_id_before_paging():
             "relation_code": "MENTIONS",
             "confidence": 1,
             "discovered_by": "AC_EXACT",
-            "definition_version": "ke/1.0",
             "source_task_id": 2,
         }
 
@@ -1078,7 +1089,6 @@ async def test_relation_preserves_zero_confidence_and_worker_result_is_duck_type
         "end_line": 8,
         "start_offset": 100,
         "end_offset": 120,
-        "definition_version": None,
         "source_task_id": None,
     }
     service, _ = make_service(files, relations=Relations(outgoing=[edge]))

@@ -84,10 +84,6 @@ class ProcessingEligibilityRequest(_ApiModel):
         validation_alias=AliasChoices("filePath", "file_path"),
     )
     capability: ProcessingCapability
-    definition_version: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("definitionVersion", "definition_version"),
-    )
     _normalize_file_path = field_validator("file_path")(_validate_file_path)
 
 
@@ -101,10 +97,6 @@ class EntityDiscoveryRequest(_ApiModel):
     file_path: str | None = Field(
         default=None,
         validation_alias=AliasChoices("filePath", "file_path"),
-    )
-    definition_version: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("definitionVersion", "definition_version"),
     )
     max_entities: int = Field(
         default=12,
@@ -265,9 +257,6 @@ class ProcessingBatchAccepted(_ApiModel):
     batch_id: str = Field(serialization_alias="batchId")
     scope: ProcessingScope
     task_type: ProcessingTaskType = Field(serialization_alias="taskType")
-    definition_version: str | None = Field(
-        default=None, serialization_alias="definitionVersion"
-    )
     eligible_count: int = Field(ge=0, serialization_alias="eligibleCount")
     accepted_count: int = Field(ge=0, serialization_alias="acceptedCount")
     reused_count: int = Field(ge=0, serialization_alias="reusedCount")
@@ -284,9 +273,6 @@ class ProcessingTaskItem(_ApiModel):
     progress: int | None = Field(default=None, ge=0, le=100)
     file_id: str = Field(serialization_alias="fileId")
     file_path: str = Field(serialization_alias="filePath")
-    definition_version: str | None = Field(
-        default=None, serialization_alias="definitionVersion"
-    )
     index_version: str | None = Field(default=None, serialization_alias="indexVersion")
     created_at: datetime = Field(serialization_alias="createdAt")
     started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
@@ -341,9 +327,6 @@ class SemanticRelationItem(_ApiModel):
     assertion_count: int = Field(ge=1, serialization_alias="assertionCount")
     confidence: float = Field(ge=0, le=1)
     discovered_by: str = Field(serialization_alias="discoveredBy")
-    definition_version: str | None = Field(
-        default=None, serialization_alias="definitionVersion"
-    )
     source_task_id: str | None = Field(default=None, serialization_alias="sourceTaskId")
     representative_evidence: RelationAssertionEvidence | None = Field(
         default=None, serialization_alias="representativeEvidence"

@@ -141,7 +141,6 @@ v1 不新增 KnowledgeEntity 创建、修改、删除和读取接口：
 | `knCode` | string | 是 | 知识库编码 |
 | `filePath` | string | 是 | 文档路径 |
 | `capability` | string | 是 | `entityDiscovery` 或 `entityEnrich` |
-| `definitionVersion` | string | 否 | Discovery 定义版本，默认当前稳定版本 |
 
 请求示例：
 
@@ -149,8 +148,7 @@ v1 不新增 KnowledgeEntity 创建、修改、删除和读取接口：
 {
   "knCode": "1",
   "filePath": "/原始文档/AI时代的组织革命.md",
-  "capability": "entityDiscovery",
-  "definitionVersion": "ke/1.0"
+  "capability": "entityDiscovery"
 }
 ```
 
@@ -214,7 +212,6 @@ PERMISSION_DENIED
 | --- | --- | --- | --- | --- |
 | `knCode` | string | 是 | - | 原始文档所属知识库 |
 | `filePath` | string | 否 | - | 原始文档路径；不传表示处理该知识库下全部符合条件的原始文档 |
-| `definitionVersion` | string | 否 | 当前稳定版本 | KnowledgeEntity 定义版本 |
 | `maxEntities` | integer | 否 | `12` | 最大实体数，v1 不得超过 12 |
 | `force` | boolean | 否 | `false` | 是否跳过 freshness 判断；不跳过资格和权限校验 |
 
@@ -226,7 +223,6 @@ HTTP 请求中不包含 `callback` 字段。
 {
   "knCode": "1",
   "filePath": "/原始文档/AI时代的组织革命.md",
-  "definitionVersion": "ke/1.0",
   "maxEntities": 12,
   "force": false
 }
@@ -237,7 +233,6 @@ HTTP 请求中不包含 `callback` 字段。
 ```json
 {
   "knCode": "1",
-  "definitionVersion": "ke/1.0",
   "maxEntities": 12,
   "force": false
 }
@@ -253,7 +248,6 @@ HTTP 请求中不包含 `callback` 字段。
     "batchId": "ed-20260817-0001",
     "scope": "SINGLE_FILE",
     "taskType": "ENTITY_DISCOVERY",
-    "definitionVersion": "ke/1.0",
     "eligibleCount": 1,
     "acceptedCount": 1,
     "reusedCount": 0,
@@ -283,7 +277,6 @@ HTTP 请求中不包含 `callback` 字段。
     "batchId": "ed-20260817-0002",
     "scope": "SINGLE_FILE",
     "taskType": "ENTITY_DISCOVERY",
-    "definitionVersion": "ke/1.0",
     "eligibleCount": 1,
     "acceptedCount": 0,
     "reusedCount": 1,
@@ -398,7 +391,7 @@ HTTP 请求中不包含 `callback` 或模板正文。Enrich 只在当前知识�
 
 - 只接受 `documentKind=knowledgeEntity` 且启用 `entityEnrich` 的文档；
 - 传入 `filePath` 时，目标必须属于当前知识库的 `/KnowledgeEntity` 目录；不传时只枚举该固定目录；
-- `entityName`、`definitionVersion` 等身份 metadata 必须完整；
+- `entityName`、`aliases` 等身份 metadata 必须完整；
 - 至少存在一份调用方有权访问的证据，否则任务进入 `SKIPPED`；
 - evidence 范围只能收窄调用方权限，不能扩大权限；
 - 模板章节缺失、顺序变化或占位符残留只产生 warning；
@@ -476,7 +469,6 @@ HTTP 请求中不包含 `callback` 或模板正文。Enrich 只在当前知识�
         "progress": 100,
         "fileId": "1024",
         "filePath": "/原始文档/AI时代的组织革命.md",
-        "definitionVersion": "ke/1.0",
         "indexVersion": "ac/18",
         "createdAt": "2026-08-17T10:00:00+08:00",
         "startedAt": "2026-08-17T10:00:01+08:00",
@@ -576,7 +568,6 @@ HTTP 请求中不包含 `callback` 或模板正文。Enrich 只在当前知识�
         "assertionCount": 2,
         "confidence": 1.0,
         "discoveredBy": "MARKDOWN_PARSER",
-        "definitionVersion": null,
         "sourceTaskId": null,
         "representativeEvidence": {
           "producerRunId": "markdown-update:9001",
@@ -607,7 +598,6 @@ HTTP 请求中不包含 `callback` 或模板正文。Enrich 只在当前知识�
         "assertionCount": 1,
         "confidence": 0.96,
         "discoveredBy": "ENTITY_ENRICH",
-        "definitionVersion": "ke/1.0",
         "sourceTaskId": "9101",
         "representativeEvidence": {
           "producerRunId": "entity-enrich:9101",
@@ -718,7 +708,6 @@ Discovery 输入指纹至少包含：
 
 ```text
 sourceFileChecksum
-definitionVersion
 discoveryMethodVersion
 processingPolicyVersion
 ```
@@ -809,7 +798,6 @@ SQL `025` 已将 `knowledge_file_metadata_value` 迁移为自包含 EAV，属性
 | `sourceTime` | `datetime` | 原始文档 |
 | `entityName` | `string` | KnowledgeEntity |
 | `aliases` | `stringList` | KnowledgeEntity |
-| `definitionVersion` | `string` | KnowledgeEntity |
 | `subjectFileId` | `string` | subject-local KnowledgeEntity |
 | `entityType` | `string` | KnowledgeEntity，可选 |
 
@@ -863,7 +851,6 @@ Discovery 和 Enrich 共用批次、状态、幂等、Callback 与分页查询�
 | `progress` | `smallint NULL` | 0 至 100 |
 | `input_fingerprint` | `varchar(128) NULL` | 幂等和 freshness 判断 |
 | `input_checksum` | `varchar(128) NULL` | 任务开始时被处理文件的 checksum，用于审计和并发校验 |
-| `definition_version` | `varchar(64) NULL` | Discovery 定义版本 |
 | `method_version` | `varchar(64) NULL` | 编排/提取方法版本 |
 | `index_version` | `varchar(64) NULL` | 实际使用的 AC snapshot 版本 |
 | `request_params` | `jsonb NULL` | 去除 callback 后的请求快照 |
@@ -905,7 +892,6 @@ Discovery 和 Enrich 共用批次、状态、幂等、Callback 与分页查询�
 | `target_locator_type` | `varchar(32) NOT NULL` | `KB_PATH`、`ENTITY_SURFACE` 或兼容性 `FS_ENTRY_ID` |
 | `target_locator_value` | `text NOT NULL` | 目标删除后仍可用的恢复键；与当前是否已解析到 ID 解耦 |
 | `target_suffix`（现有） | 改为 `text NULL` | openGauss A 兼容模式把空字符串视为 `NULL`；读取层继续归一为空后缀 |
-| `definition_version` | `varchar(64) NULL` | 生成关系时使用的定义版本 |
 | `source_task_id` | `bigint NULL REFERENCES knowledge_semantic_processing_task(kid) ON DELETE SET NULL` | 生成该断言的语义处理任务 |
 
 目标 ID 是当前解析结果，locator 是稳定恢复依据，两者不能混为一个概念：
@@ -972,7 +958,6 @@ PoC 可以从 metadata 中读取 `entityName` 和 `aliases` 后构建 AC snapsho
 | `normalized_surface` | 归一化词面 |
 | `surface_type` | `CANONICAL`、`ALIAS`、`QUALIFIED` |
 | `subject_fs_entry_id` | subject-local 主体，可空 |
-| `definition_version` | 词面对应定义版本 |
 | `is_deleted` | 逻辑删除 |
 | `created_at`、`updated_at` | 审计时间 |
 

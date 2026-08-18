@@ -36,7 +36,7 @@ class FakeCursor:
         return []
 
 
-async def test_create_processing_task_persists_versions_and_json_request():
+async def test_create_processing_task_persists_method_and_json_request():
     row = {"kid": 91, "task_type": "ENTITY_DISCOVERY"}
     cursor = FakeCursor(fetchone_results=[row])
     repo = KnowledgeSemanticProcessingTaskRepository()
@@ -52,7 +52,6 @@ async def test_create_processing_task_persists_versions_and_json_request():
         progress=0,
         input_fingerprint="fp-1",
         input_checksum="sha-1",
-        definition_version="ke/1.0",
         method_version="discovery/1.0",
         index_version="ac/18",
         request_params={"maxEntities": 12, "text": "中文"},
@@ -231,7 +230,6 @@ def test_additive_migration_creates_isolated_task_table_with_contracts():
         "progress",
         "input_fingerprint",
         "input_checksum",
-        "definition_version",
         "method_version",
         "index_version",
         "request_params",
@@ -239,6 +237,7 @@ def test_additive_migration_creates_isolated_task_table_with_contracts():
         "error_code",
     ):
         assert column in sql
+    assert "definition_version" not in sql
     assert "chk_knowledge_semantic_task_type" in sql
     assert "chk_knowledge_semantic_task_status" in sql
     assert "chk_knowledge_semantic_task_progress" in sql

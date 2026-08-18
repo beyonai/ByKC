@@ -32,16 +32,20 @@ from by_qa.knowledge_base.infrastructure.storage import (
 from by_qa.knowledge_base.services.document_update_service import (
     GeneratedOutgoingAssertion,
 )
-from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
-    ALLOWED_RELATION_CODES,
-    AhoCorasickIndex,
+from by_qa.knowledge_base.services.knowledge_entity_discovery import (
     EntityCandidate,
-    EvidenceFragment,
-    IdentityScope,
     KnowledgeEntityDiscovery,
+)
+from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
+    EvidenceFragment,
     KnowledgeEntityEnricher,
     KnowledgeEntityIdentity,
     RelationTarget,
+)
+from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
+    ALLOWED_RELATION_CODES,
+    AhoCorasickIndex,
+    IdentityScope,
     SurfaceEntry,
     SurfaceMatch,
     SurfacePosting,
@@ -53,6 +57,10 @@ DISCOVERY_TASK_TYPE = "ENTITY_DISCOVERY"
 ENRICH_TASK_TYPES = frozenset({"DOCUMENT_ENRICH", "ENTITY_ENRICH"})
 ENRICH_RELATION_SOURCE = "ENTITY_ENRICH"
 DISCOVERY_RELATION_SOURCE = "ENTITY_DISCOVERY"
+MAX_RECENT_RELATIONS = 50
+MAX_RELATION_DOCUMENTS = 3
+MAX_MATCHED_SECTIONS_PER_DOCUMENT = 6
+MAX_RELATION_DOCUMENT_CHARS = 5_000
 _SAFE_SLUG_RE = re.compile(r"[^\w-]+", re.UNICODE)
 _NON_LINK_PATH_TRANSLATION = str.maketrans(
     {
@@ -84,7 +92,6 @@ class KnowledgeEntityTaskContext:
     source_file_id: int
     file_path: str
     definition_version: str | None = None
-    enrich_version: str | None = None
     input_fingerprint: str | None = None
     input_checksum: str | None = None
     request_params: dict[str, Any] = field(default_factory=dict)
@@ -368,7 +375,6 @@ class KnowledgeEntityTaskWorker:
             enriched.attempts,
             enriched.template_coverage,
         )
-        enrich_version = context.enrich_version or entity.get("enrich_version") or "v1"
         full_markdown = self._render_entity_markdown(
             entity_name=identity.entity_name,
             body=enriched.markdown,
@@ -376,7 +382,6 @@ class KnowledgeEntityTaskWorker:
             definition_version=identity.definition_version,
             subject_file_id=identity.subject_file_id,
             entity_type=entity.get("entity_type"),
-            enrich_version=enrich_version,
         )
         checksum = context.input_checksum or entity.get("checksum")
         if not checksum:
@@ -702,7 +707,6 @@ class KnowledgeEntityTaskWorker:
             definition_version=definition_version,
             subject_file_id=subject_file_id,
             entity_type=candidate.entity_type,
-            enrich_version=None,
         )
         path = self._entity_path(candidate.entity_name)
         occupied = await self._get_entity_by_path(context, path)
@@ -943,56 +947,65 @@ class KnowledgeEntityTaskWorker:
         connection = await self._connection_factory()
         try:
             cursor = connection.cursor()
-            mentions = await self._reference_repository.list_relations_by_target(
-                cursor,
-                knowledge_base_id=identity.knowledge_base_id,
-                target_fs_entry_id=identity.file_id,
-                relation_code="MENTIONS",
-                limit=500,
-                offset=0,
+            relations = (
+                await self._reference_repository.list_recent_assertions_by_target(
+                    cursor,
+                    knowledge_base_id=identity.knowledge_base_id,
+                    target_fs_entry_id=identity.file_id,
+                    relation_code=None,
+                    limit=MAX_RECENT_RELATIONS,
+                    offset=0,
+                )
             )
-            markdown_refs = await self._reference_repository.list_sources_by_target(
-                cursor,
-                knowledge_base_id=identity.knowledge_base_id,
-                target_fs_entry_id=identity.file_id,
-            )
-            direct_ids = {int(item["source_fs_entry_id"]) for item in mentions}
-            explicit_ids = {int(item["source_fs_entry_id"]) for item in markdown_refs}
+            selected_relations: list[Mapping[str, Any]] = []
+            selected_source_ids: set[int] = set()
+            for relation in relations:
+                source_id = int(relation["source_fs_entry_id"])
+                if source_id in selected_source_ids:
+                    continue
+                selected_relations.append(relation)
+                selected_source_ids.add(source_id)
+                if len(selected_relations) >= MAX_RELATION_DOCUMENTS:
+                    break
             source_rows = await self._entity_repository.get_files_by_ids(
                 cursor,
                 knowledge_base_id=identity.knowledge_base_id,
-                fs_entry_ids=sorted(direct_ids | explicit_ids),
+                fs_entry_ids=list(selected_source_ids),
             )
         finally:
             await connection.close()
 
         fragments: list[EvidenceFragment] = []
-        for row in source_rows:
+        rows_by_id = {int(row["kid"]): row for row in source_rows}
+        for relation in selected_relations:
+            file_id = int(relation["source_fs_entry_id"])
+            row = rows_by_id.get(file_id)
+            if row is None:
+                continue
             content = await self._read_markdown(row)
-            file_id = int(row["kid"])
+            selected_content = self._select_entity_sections(
+                content,
+                names=(identity.entity_name, *identity.aliases),
+            )
+            if not selected_content:
+                continue
             fragments.append(
                 EvidenceFragment(
                     document_file_id=file_id,
                     document_path=str(row["file_path"]),
-                    content=content,
-                    direct_mention=file_id in direct_ids,
-                    explicit_reference=file_id in explicit_ids,
+                    content=selected_content,
+                    direct_mention=True,
+                    explicit_reference=True,
+                    relation_code=str(relation.get("relation_code") or "MENTIONS"),
                 )
             )
 
         params = context.request_params or {}
-        requested_codes = (
-            params.get("evidenceKnCodeList")
-            or params.get("evidence_kb_code_list")
-            or [context.kb_code]
-        )
-        authorized_codes = {str(code) for code in requested_codes}
-        authorized_codes.add(str(context.kb_code))
         query = " ".join((identity.entity_name, *identity.aliases)).strip()
         hits = await self._search.search(
             SearchRequest(
                 query=query,
-                kb_code_list=list(dict.fromkeys(str(code) for code in requested_codes)),
+                kb_code_list=[context.kb_code],
                 top_k=int(params.get("topK", params.get("top_k", 20))),
                 search_mode="mixedRecall",
             )
@@ -1003,15 +1016,11 @@ class KnowledgeEntityTaskWorker:
             for hit in hits:
                 kb_code = str(self._value(hit, "kb_code", "knCode"))
                 file_path = str(self._value(hit, "file_path", "filePath"))
-                if kb_code not in authorized_codes:
-                    continue
-                try:
-                    knowledge_base_id = int(kb_code)
-                except ValueError:
+                if kb_code != str(context.kb_code):
                     continue
                 row = await self._entity_repository.get_file_with_metadata(
                     cursor,
-                    knowledge_base_id=knowledge_base_id,
+                    knowledge_base_id=identity.knowledge_base_id,
                     file_path=file_path,
                 )
                 if row is None:
@@ -1028,6 +1037,43 @@ class KnowledgeEntityTaskWorker:
         finally:
             await search_connection.close()
         return fragments
+
+    @staticmethod
+    def _select_entity_sections(content: str, *, names: Sequence[str]) -> str:
+        """Keep bounded complete Markdown sections that mention the entity."""
+
+        normalized_names = tuple(
+            normalize_surface(name) for name in names if normalize_surface(name)
+        )
+        if not normalized_names:
+            return ""
+        body = re.sub(
+            r"\A---[ \t]*\n.*?\n---[ \t]*(?:\n|\Z)",
+            "",
+            content,
+            count=1,
+            flags=re.DOTALL,
+        ).strip()
+        sections = [
+            section.strip()
+            for section in re.split(r"(?=^#{1,6}\s)", body, flags=re.MULTILINE)
+            if section.strip()
+        ]
+        matches: list[str] = []
+        total_chars = 0
+        for section in sections:
+            normalized_section = normalize_surface(section)
+            if not any(name in normalized_section for name in normalized_names):
+                continue
+            remaining = MAX_RELATION_DOCUMENT_CHARS - total_chars
+            if remaining <= 0:
+                break
+            selected = section[:remaining]
+            matches.append(selected)
+            total_chars += len(selected)
+            if len(matches) >= MAX_MATCHED_SECTIONS_PER_DOCUMENT:
+                break
+        return "\n\n".join(matches)
 
     @staticmethod
     def _candidate_aliases(candidate: EntityCandidate) -> tuple[str, ...]:
@@ -1071,7 +1117,6 @@ class KnowledgeEntityTaskWorker:
         definition_version: str,
         subject_file_id: int | None,
         entity_type: str | None,
-        enrich_version: str | None,
     ) -> str:
         metadata: dict[str, Any] = {
             "documentKind": "knowledgeEntity",
@@ -1084,8 +1129,6 @@ class KnowledgeEntityTaskWorker:
             metadata["subjectFileId"] = subject_file_id
         if entity_type:
             metadata["entityType"] = entity_type
-        if enrich_version:
-            metadata["enrichVersion"] = enrich_version
         yaml_text = yaml.safe_dump(
             metadata,
             allow_unicode=True,

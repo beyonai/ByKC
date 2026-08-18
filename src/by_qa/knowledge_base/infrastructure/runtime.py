@@ -69,9 +69,13 @@ from by_qa.knowledge_base.services.file_metadata_update_service import (
     FileMetadataUpdateService,
 )
 from by_qa.knowledge_base.services.knowledge_base_service import KnowledgeBaseService
-from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
+from by_qa.knowledge_base.services.knowledge_entity_discovery import (
     KnowledgeEntityDiscovery,
+)
+from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
     KnowledgeEntityEnricher,
+)
+from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
     OpenAICompatibleKnowledgeEntityLLM,
 )
 from by_qa.knowledge_base.services.knowledge_entity_processing_service import (

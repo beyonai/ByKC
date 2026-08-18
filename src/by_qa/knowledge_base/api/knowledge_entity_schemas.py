@@ -88,11 +88,6 @@ class ProcessingEligibilityRequest(_ApiModel):
         default=None,
         validation_alias=AliasChoices("definitionVersion", "definition_version"),
     )
-    enrich_version: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("enrichVersion", "enrich_version"),
-    )
-
     _normalize_file_path = field_validator("file_path")(_validate_file_path)
 
 
@@ -133,14 +128,6 @@ class EntityEnrichRequest(_ApiModel):
         default=None,
         validation_alias=AliasChoices("filePath", "file_path"),
     )
-    enrich_version: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("enrichVersion", "enrich_version"),
-    )
-    evidence_kb_code_list: list[str] | None = Field(
-        default=None,
-        validation_alias=AliasChoices("evidenceKnCodeList", "evidence_kb_code_list"),
-    )
     top_k: int = Field(
         default=20,
         ge=1,
@@ -150,18 +137,6 @@ class EntityEnrichRequest(_ApiModel):
     force: bool = False
 
     _normalize_file_path = field_validator("file_path")(_validate_file_path)
-
-    @field_validator("evidence_kb_code_list")
-    @classmethod
-    def validate_evidence_kb_codes(cls, value: list[str] | None) -> list[str] | None:
-        if value is None:
-            return None
-        normalized = [code.strip() for code in value]
-        if any(not code for code in normalized):
-            raise ValueError("evidenceKnCodeList must not contain blank values")
-        if len(set(normalized)) != len(normalized):
-            raise ValueError("evidenceKnCodeList must not contain duplicate values")
-        return normalized
 
 
 class ProcessingTaskStatusRequest(_ApiModel):
@@ -293,9 +268,6 @@ class ProcessingBatchAccepted(_ApiModel):
     definition_version: str | None = Field(
         default=None, serialization_alias="definitionVersion"
     )
-    enrich_version: str | None = Field(
-        default=None, serialization_alias="enrichVersion"
-    )
     eligible_count: int = Field(ge=0, serialization_alias="eligibleCount")
     accepted_count: int = Field(ge=0, serialization_alias="acceptedCount")
     reused_count: int = Field(ge=0, serialization_alias="reusedCount")
@@ -314,9 +286,6 @@ class ProcessingTaskItem(_ApiModel):
     file_path: str = Field(serialization_alias="filePath")
     definition_version: str | None = Field(
         default=None, serialization_alias="definitionVersion"
-    )
-    enrich_version: str | None = Field(
-        default=None, serialization_alias="enrichVersion"
     )
     index_version: str | None = Field(default=None, serialization_alias="indexVersion")
     created_at: datetime = Field(serialization_alias="createdAt")

@@ -400,7 +400,7 @@ LLM 输出不断言特定遣词，但必须断言结构性和持久化不变式�
 | KE-M7 | 内容管理员 | 校验无后缀 MIME 回退 | `import no-suffix text/plain + application/octet-stream -> processingEligibility` | 仅规范化后 `text/*` 可通过；有后缀文件始终以后缀白名单为准 | 已写 |
 | KE-M8 | 内容管理员 | 校验 Enrich 格式和固定目录 | `processingEligibility(entityEnrich)` 覆盖保留目录外路径实体、保留目录 txt/pdf、md/markdown | 目录外返回 `KNOWLEDGE_ENTITY_PATH_REQUIRED`；非 Markdown 返回 `UNSUPPORTED_CONTENT_TYPE`；仅保留目录 md/markdown 继续身份/证据判定 | 已写 |
 | KE-M9 | 内容管理员 | 校验资格原因顺序和内容就绪 | `processingEligibility` 覆盖未构建、空正文、身份不全、无证据 | 依契约返回 `CONTENT_NOT_READY/IDENTITY_METADATA_INCOMPLETE/NO_EVIDENCE`；格式不支持时不被 sidecar 状态掩盖 | 已写部分（已覆盖未构建、身份不全、无证据和格式优先级，待补空正文） |
-| KE-M10 | 内容管理员 | 判定 freshness 和版本变化 | `successful task -> eligibility same input -> update content/evidence/version -> eligibility` | 相同指纹为 `ELIGIBLE_BUT_FRESH/INPUT_UNCHANGED`；checksum、证据或方法版本改变后为 `ELIGIBLE_AND_STALE` 且 reason 准确 | 已写 |
+| KE-M10 | 内容管理员 | 判定 Enrich freshness | `successful task -> eligibility -> insert newer incoming relation -> eligibility` | 无新关系为 `ELIGIBLE_BUT_FRESH/NO_NEW_RELATIONS`；入边断言创建时间晚于实体更新时为 `ELIGIBLE_AND_STALE/NEW_RELATION` | 已写 |
 
 ### Entity Discovery：单文件、全库、身份隔离和幂等
 
@@ -419,14 +419,14 @@ LLM 输出不断言特定遣词，但必须断言结构性和持久化不变式�
 
 | 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| KE-E1 | 知识编辑 | 单实体真实 Enrich | `seed entity+vectorized evidence -> entityEnrich(filePath) -> poll -> readFile/metadata/timeline` | 真实检索和 LLM 被调用；文档非空、身份不漂移，`enrichVersion`、checksum 和 `UPDATE` 时间线原子切换 | 已写 |
+| KE-E1 | 知识编辑 | 单实体真实 Enrich | `seed entity+vectorized evidence -> entityEnrich(filePath) -> poll -> readFile/metadata/timeline` | 真实检索和 LLM 被调用；文档非空、身份不漂移，checksum 和 `UPDATE` 时间线原子切换 | 已写 |
 | KE-E2 | 知识编辑 | 全库 Enrich | `seed eligible/ineligible entity docs -> entityEnrich(no filePath)` | 仅枚举当前库 `/KnowledgeEntity` 下合格 md/markdown；计数、共享 `batchId` 和任务行数一致 | 已写 |
 | KE-E3 | 知识编辑 | 模板只作软约束 | `entityEnrich -> readFile -> task details` | 缺章节、章节顺序变化或少量占位符最多记 warning，不使任务失败；空正文/身份漂移仍必须阻断 | 已写部分（已断言真实任务的 template coverage/warning 结构和成功提交，待补可控缺章节/占位符输出） |
 | KE-E4 | 知识编辑 | 无证据不产生半更新 | `entityEnrich(entity without authorized evidence) -> status/readFile/DB` | 受理前无证据计入 skipped 或执行中证据失效落 `SKIPPED/NO_EVIDENCE`；对象、checksum、关系和时间线均不半更新 | 已写 |
-| KE-E5 | 知识编辑 | 证据范围只能收窄 | `entityEnrich(evidenceKnCodeList subset/foreign/unknown)` | 实际召回不超过调用方权限与请求列表交集；不泄漏未授权证据或数量 | 已写部分（已覆盖当前库子集、外库 marker 不泄漏以及空值/重复校验，待补调用方权限与 foreign/unknown 交集） |
-| KE-E6 | 知识编辑 | 证据变化后重新富化 | `enrich success -> update evidence -> eligibility -> enrich` | evidence fileId/checksum 改变使指纹 stale；新任务写入新正文/关系并保留更新时间线 | 已写 |
+| KE-E5 | 知识编辑 | 证据严格限定同库 | `seed local/foreign evidence -> entityEnrich` | 关系证据和语义召回都只使用目标实体所在知识库；不泄漏外库 marker | 已写 |
+| KE-E6 | 知识编辑 | 新关系出现后重新富化 | `enrich success -> insert/rebuild relation evidence -> eligibility -> enrich` | 新入边断言的 `createdAt` 使任务 stale；新任务写入新正文/关系并保留更新时间线 | 已写 |
 | KE-E7 | 知识编辑 | 并发变更时拒绝陈旧写 | `start enrich -> concurrently update target -> wait task` | checksum 不一致时任务为 `FAILED/STALE_WRITE` 且可重试；保留并发 update 的正文、metadata 和关系 | 已写部分（已覆盖真实并发、旧签名拒绝和用户更新保留；当前错误码为 `PROCESSING_FAILED`，待实现 `STALE_WRITE`） |
-| KE-E8 | 接口使用者 | Enrich 不接受客户端模板或目标参数 | `entityEnrich` 附带 `template/targetKnCode/targetDirectoryPath` | extra 字段被拒绝；只使用 `enrichVersion` 指向的服务端软模板 | 已写 |
+| KE-E8 | 接口使用者 | Enrich 不接受客户端模板或目标参数 | `entityEnrich` 附带 `template/targetKnCode/targetDirectoryPath/evidenceKnCodeList` | extra 字段被拒绝；只使用服务端更新策略和当前库证据 | 已写 |
 
 ### 任务查询与内部 Python/SDK Callback
 

@@ -5,16 +5,20 @@ from types import SimpleNamespace
 import pytest
 
 from by_qa.knowledge_base.services import knowledge_entity_task_worker as worker_module
-from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
+from by_qa.knowledge_base.services.knowledge_entity_discovery import (
     DiscoveryDocumentContext,
-    EnrichmentResult,
     EntityCandidate,
     EntityDiscoveryResult,
+)
+from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
+    EnrichmentResult,
+    SemanticRelation,
+    organize_evidence,
+)
+from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
     IdentityScope,
     KnowledgeEntityOutputError,
     RelationCode,
-    SemanticRelation,
-    organize_evidence,
 )
 from by_qa.knowledge_base.services.knowledge_entity_task_worker import (
     KnowledgeEntityTaskContext,
@@ -81,7 +85,6 @@ def file_row(
     aliases: list[str] | None = None,
     subject_file_id: int | None = None,
     definition_version: str | None = None,
-    enrich_version: str | None = None,
     entity_type: str | None = None,
     checksum: str = "checksum-1",
 ) -> dict:
@@ -102,7 +105,6 @@ def file_row(
         "aliases": aliases or [],
         "subject_file_id": subject_file_id,
         "definition_version": definition_version,
-        "enrich_version": enrich_version,
         "entity_type": entity_type,
     }
 
@@ -240,8 +242,7 @@ class FakeReferenceRepository:
     def __init__(self) -> None:
         self.upserts: list[dict] = []
         self.deletes: list[dict] = []
-        self.incoming_mentions: list[dict] = []
-        self.markdown_sources: list[dict] = []
+        self.incoming_relations: list[dict] = []
 
     async def upsert_relation_assertion(self, cursor, **kwargs) -> dict:
         del cursor
@@ -255,13 +256,9 @@ class FakeReferenceRepository:
         self.deletes.append(kwargs)
         return []
 
-    async def list_relations_by_target(self, cursor, **kwargs) -> list[dict]:
+    async def list_recent_assertions_by_target(self, cursor, **kwargs) -> list[dict]:
         del cursor, kwargs
-        return list(self.incoming_mentions)
-
-    async def list_sources_by_target(self, cursor, **kwargs) -> list[dict]:
-        del cursor, kwargs
-        return list(self.markdown_sources)
+        return list(self.incoming_relations)
 
 
 class FakeDiscovery:
@@ -733,6 +730,8 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
     direct = file_row(10, "/docs/direct.md", content_key="direct")
     explicit = file_row(11, "/docs/reference.md", content_key="reference")
     recalled = file_row(12, "/docs/recalled.md", content_key="recalled")
+    recent_third = file_row(13, "/docs/recent-third.md", content_key="recent-third")
+    older_fourth = file_row(14, "/docs/older-fourth.md", content_key="older-fourth")
     valid = SemanticRelation(
         source_file_id=30,
         relation_code=RelationCode.PART_OF,
@@ -755,7 +754,16 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
         confidence=0.5,
     )
     deps = make_worker(
-        rows=[entity, target, other_kb_target, direct, explicit, recalled],
+        rows=[
+            entity,
+            target,
+            other_kb_target,
+            direct,
+            explicit,
+            recalled,
+            recent_third,
+            older_fourth,
+        ],
         objects={
             ("original", "entity"): b"# Beta",
             ("markdown", "entity-md"): b"# Beta\n\nOld content.",
@@ -766,6 +774,8 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
             ("original", "direct"): b"Direct Beta evidence.",
             ("original", "reference"): b"Explicit [[Beta]] evidence.",
             ("original", "recalled"): b"Recall source.",
+            ("original", "recent-third"): b"Recent Beta evidence.",
+            ("original", "older-fourth"): b"Older Beta evidence.",
         },
         enricher=FakeEnricher((valid, cross_kb, invalid_code)),
         search_hits=[
@@ -777,8 +787,12 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
             )
         ],
     )
-    deps.references.incoming_mentions = [{"source_fs_entry_id": 10}]
-    deps.references.markdown_sources = [{"source_fs_entry_id": 11}]
+    deps.references.incoming_relations = [
+        {"source_fs_entry_id": 10, "relation_code": "DEPENDS_ON"},
+        {"source_fs_entry_id": 11, "relation_code": "IS_A"},
+        {"source_fs_entry_id": 13, "relation_code": "PART_OF"},
+        {"source_fs_entry_id": 14, "relation_code": "MENTIONS"},
+    ]
 
     result = await deps.worker.run_task(
         KnowledgeEntityTaskContext(
@@ -789,14 +803,19 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
             source_file_id=30,
             file_path="/KnowledgeEntity/beta.md",
             definition_version="v2",
-            enrich_version="e3",
             input_checksum="before-enrich",
-            request_params={"evidenceKnCodeList": ["1"], "topK": 5},
+            request_params={"topK": 5},
             batch_id="batch-601",
         )
     )
 
-    assert {item.document_file_id for item in deps.enricher.evidence} == {10, 11, 12}
+    assert {item.document_file_id for item in deps.enricher.evidence} == {
+        10,
+        11,
+        12,
+        13,
+    }
+    assert 14 not in {item.document_file_id for item in deps.enricher.evidence}
     assert {target.file_id for target in deps.enricher.targets} == {20}
     assert deps.search.requests[0].search_mode == "mixedRecall"
     assert deps.search.requests[0].top_k == 5
@@ -810,7 +829,6 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
         "entityName": "Beta",
         "aliases": ["B"],
         "definitionVersion": "v2",
-        "enrichVersion": "e3",
     }
     assert b"# Beta" in update.file_content
     assert deps.ingestion.indexed_paths == ["/KnowledgeEntity/beta.md"]

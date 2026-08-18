@@ -142,7 +142,6 @@ v1 不新增 KnowledgeEntity 创建、修改、删除和读取接口：
 | `filePath` | string | 是 | 文档路径 |
 | `capability` | string | 是 | `entityDiscovery` 或 `entityEnrich` |
 | `definitionVersion` | string | 否 | Discovery 定义版本，默认当前稳定版本 |
-| `enrichVersion` | string | 否 | Enrich 方法版本，默认当前稳定版本 |
 
 请求示例：
 
@@ -181,8 +180,9 @@ v1 不新增 KnowledgeEntity 创建、修改、删除和读取接口：
 NEVER_PROCESSED
 INPUT_CHANGED
 METHOD_VERSION_CHANGED
-EVIDENCE_CHANGED
 INPUT_UNCHANGED
+NEW_RELATION
+NO_NEW_RELATIONS
 CAPABILITY_DISABLED
 DOCUMENT_KIND_MISMATCH
 UNSUPPORTED_FILE_FORMAT
@@ -342,12 +342,10 @@ Discovery 成功任务结果示例见任务状态接口。
 | --- | --- | --- | --- | --- |
 | `knCode` | string | 是 | - | 目标实体文档所属知识库 |
 | `filePath` | string | 否 | - | KnowledgeEntity 文档路径；不传表示处理本库 `/KnowledgeEntity` 下全部符合条件的实体文档 |
-| `enrichVersion` | string | 否 | 当前稳定版本 | Enrich 方法版本 |
-| `evidenceKnCodeList` | string[] | 否 | 调用方有权访问的知识库 | 证据检索范围 |
 | `topK` | integer | 否 | `20` | 语义证据候选上限，建议最大 100 |
 | `force` | boolean | 否 | `false` | 是否跳过 freshness 判断 |
 
-HTTP 请求中不包含 `callback` 或模板正文。模板由 `enrichVersion` 对应的服务端策略提供，并且只做软约束。
+HTTP 请求中不包含 `callback` 或模板正文。Enrich 只在当前知识库内收集证据，更新策略随服务代码发布。
 
 请求示例：
 
@@ -355,8 +353,6 @@ HTTP 请求中不包含 `callback` 或模板正文。模板由 `enrichVersion` �
 {
   "knCode": "1",
   "filePath": "/KnowledgeEntity/OSOT.md",
-  "enrichVersion": "ke-enrich/1.0",
-  "evidenceKnCodeList": ["1", "2"],
   "topK": 20,
   "force": false
 }
@@ -372,7 +368,6 @@ HTTP 请求中不包含 `callback` 或模板正文。模板由 `enrichVersion` �
     "batchId": "ee-20260817-0001",
     "scope": "SINGLE_FILE",
     "taskType": "DOCUMENT_ENRICH",
-    "enrichVersion": "ke-enrich/1.0",
     "eligibleCount": 1,
     "acceptedCount": 1,
     "reusedCount": 0,
@@ -482,7 +477,6 @@ HTTP 请求中不包含 `callback` 或模板正文。模板由 `enrichVersion` �
         "fileId": "1024",
         "filePath": "/原始文档/AI时代的组织革命.md",
         "definitionVersion": "ke/1.0",
-        "enrichVersion": null,
         "indexVersion": "ac/18",
         "createdAt": "2026-08-17T10:00:00+08:00",
         "startedAt": "2026-08-17T10:00:01+08:00",
@@ -732,11 +726,9 @@ processingPolicyVersion
 Enrich 输入指纹至少包含：
 
 ```text
-entityIdentityMetadata
-evidenceFileIdsAndChecksums
-semanticRelationVersions
-enrichVersion
-templateVersion
+entityFileId
+latestRelationId
+latestRelationCreatedAt
 ```
 
 规则：
@@ -820,7 +812,6 @@ SQL `025` 已将 `knowledge_file_metadata_value` 迁移为自包含 EAV，属性
 | `definitionVersion` | `string` | KnowledgeEntity |
 | `subjectFileId` | `string` | subject-local KnowledgeEntity |
 | `entityType` | `string` | KnowledgeEntity，可选 |
-| `enrichVersion` | `string` | KnowledgeEntity，可选 |
 
 `subjectFileId` 建议使用 `string`，避免接口层大整数精度和 `numeric` 序列化差异。
 
@@ -873,7 +864,6 @@ Discovery 和 Enrich 共用批次、状态、幂等、Callback 与分页查询�
 | `input_fingerprint` | `varchar(128) NULL` | 幂等和 freshness 判断 |
 | `input_checksum` | `varchar(128) NULL` | 任务开始时被处理文件的 checksum，用于审计和并发校验 |
 | `definition_version` | `varchar(64) NULL` | Discovery 定义版本 |
-| `enrich_version` | `varchar(64) NULL` | Enrich 方法版本 |
 | `method_version` | `varchar(64) NULL` | 编排/提取方法版本 |
 | `index_version` | `varchar(64) NULL` | 实际使用的 AC snapshot 版本 |
 | `request_params` | `jsonb NULL` | 去除 callback 后的请求快照 |

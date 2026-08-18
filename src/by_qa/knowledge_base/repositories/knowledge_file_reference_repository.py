@@ -617,6 +617,41 @@ class KnowledgeFileReferenceRepository:
         )
         return total
 
+    async def list_recent_assertions_by_target(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        target_fs_entry_id: int,
+        relation_code: str | Sequence[str] | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List physical incoming assertions by insertion time, newest first."""
+
+        self._validate_pagination(limit=limit, offset=offset)
+        relation_sql, relation_params = self._relation_filter(relation_code)
+        await cursor.execute(
+            f"""
+            {self._select_with_source()}
+            WHERE kfr.knowledge_base_id = %(knowledge_base_id)s
+              AND kfr.target_fs_entry_id = %(target_fs_entry_id)s
+              AND kfr.status = 'resolved'
+              AND source.is_deleted = FALSE
+              {relation_sql}
+            ORDER BY kfr.created_at DESC, kfr.kid DESC
+            LIMIT %(limit)s OFFSET %(offset)s
+            """,
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "target_fs_entry_id": target_fs_entry_id,
+                "limit": limit,
+                "offset": offset,
+                **relation_params,
+            },
+        )
+        return await self._fetchall(cursor)
+
     async def resolve_pending_for_path(
         self,
         cursor: Any,

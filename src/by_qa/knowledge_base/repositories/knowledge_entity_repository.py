@@ -23,7 +23,6 @@ class KnowledgeEntityRepository:
         "definitionVersion",
         "subjectFileId",
         "entityType",
-        "enrichVersion",
     )
     _LIST_METADATA_FIELDS = frozenset({"processingCapabilities", "aliases"})
     _OUTPUT_FIELD_BY_PROPERTY = {
@@ -34,7 +33,6 @@ class KnowledgeEntityRepository:
         "definitionVersion": "definition_version",
         "subjectFileId": "subject_file_id",
         "entityType": "entity_type",
-        "enrichVersion": "enrich_version",
     }
 
     async def get_file_with_metadata(
@@ -245,7 +243,6 @@ class KnowledgeEntityRepository:
                     "definition_version": None,
                     "subject_file_id": None,
                     "entity_type": None,
-                    "enrich_version": None,
                 }
                 records[file_id] = record
             cls._apply_metadata(record, row)

@@ -71,6 +71,7 @@ def original(file_id=10, path="/docs/source.md", **updates):
         "markdown_bucket_name": "markdown",
         "markdown_object_key": f"{file_id}.md",
         "line_count": 3,
+        "updated_at": datetime(2026, 8, 17, tzinfo=timezone.utc),
         "mime_type": "text/markdown",
         "document_kind": "original",
         "processing_capabilities": [],
@@ -175,6 +176,7 @@ class Relations:
         self.outgoing = outgoing or []
         self.incoming = incoming or []
         self.markdown_sources = markdown_sources or []
+        self.target_queries = []
 
     async def list_relations_by_source(self, cursor, *, limit, offset, **kwargs):
         del cursor, kwargs
@@ -182,6 +184,13 @@ class Relations:
 
     async def list_relations_by_target(self, cursor, *, limit, offset, **kwargs):
         del cursor, kwargs
+        return self.incoming[offset : offset + limit]
+
+    async def list_recent_assertions_by_target(
+        self, cursor, *, limit, offset, **kwargs
+    ):
+        del cursor
+        self.target_queries.append({"limit": limit, "offset": offset, **kwargs})
         return self.incoming[offset : offset + limit]
 
     async def count_relations_by_source(self, cursor, **kwargs):
@@ -254,7 +263,7 @@ async def test_eligibility_uses_content_fingerprint_and_reports_fresh_task():
     assert stale.reason_code == "NEVER_PROCESSED"
 
     fingerprint = service._fingerprint(
-        file_row, ProcessingCapability.ENTITY_DISCOVERY, "ke/1.0", None, [], []
+        file_row, ProcessingCapability.ENTITY_DISCOVERY, "ke/1.0", []
     )
     service.knowledge_semantic_processing_task_repository.rows.append(
         {
@@ -278,7 +287,7 @@ async def test_eligibility_uses_content_fingerprint_and_reports_fresh_task():
     assert fresh.last_successful_task_id == "80"
 
 
-async def test_enrich_fingerprint_canonicalizes_opengauss_identity_and_timestamp():
+async def test_enrich_fingerprint_canonicalizes_latest_relation_timestamp():
     service, _ = make_service([original()])
     entity = original(
         21,
@@ -288,31 +297,23 @@ async def test_enrich_fingerprint_canonicalizes_opengauss_identity_and_timestamp
         aliases=["Child alias"],
         definition_version="v1",
     )
-    evidence_files = [original(10, checksum="evidence-checksum")]
     utc_timestamp = datetime(2026, 8, 17, 9, 30, 0, 123456, tzinfo=timezone.utc)
     local_timestamp = utc_timestamp.astimezone(timezone(timedelta(hours=8)))
 
     fingerprints = {
         service._fingerprint(
-            {**entity, "subject_file_id": subject_value},
+            entity,
             ProcessingCapability.ENTITY_ENRICH,
             None,
-            "ke-enrich/1.0",
-            [{"kid": 31, "updated_at": timestamp}],
-            evidence_files,
+            [{"kid": 31, "created_at": timestamp}],
         )
-        for subject_value, timestamp in (
-            (21, utc_timestamp),
-            ("21", local_timestamp),
-            (Decimal("21"), local_timestamp),
-            (Decimal("21.0"), utc_timestamp),
-        )
+        for timestamp in (utc_timestamp, local_timestamp)
     }
 
     assert len(fingerprints) == 1
 
 
-async def test_enrich_fingerprint_rejects_fractional_subject_file_id():
+async def test_enrich_fingerprint_changes_with_latest_relation_watermark():
     service, _ = make_service([original()])
     entity = original(
         21,
@@ -320,20 +321,20 @@ async def test_enrich_fingerprint_rejects_fractional_subject_file_id():
         document_kind="knowledgeEntity",
         entity_name="Child",
         definition_version="v1",
-        subject_file_id=Decimal("21.5"),
     )
-
-    with pytest.raises(
-        ValueError, match="subjectFileId numeric metadata must be an integer"
-    ):
-        service._fingerprint(
-            entity,
-            ProcessingCapability.ENTITY_ENRICH,
-            None,
-            "ke-enrich/1.0",
-            [],
-            [],
-        )
+    first = service._fingerprint(
+        entity,
+        ProcessingCapability.ENTITY_ENRICH,
+        None,
+        [{"kid": 31, "created_at": datetime(2026, 8, 17, tzinfo=timezone.utc)}],
+    )
+    second = service._fingerprint(
+        entity,
+        ProcessingCapability.ENTITY_ENRICH,
+        None,
+        [{"kid": 32, "created_at": datetime(2026, 8, 18, tzinfo=timezone.utc)}],
+    )
+    assert first != second
 
 
 async def test_invalid_subject_file_id_is_ineligible_instead_of_json_failure():
@@ -724,13 +725,90 @@ async def test_enrich_accepts_resolved_markdown_reference_as_evidence():
         definition_version="ke/1.0",
     )
     source = original(10)
-    relations = Relations(markdown_sources=[{"source_fs_entry_id": 10}])
+    relations = Relations(
+        incoming=[
+            {
+                "kid": 1,
+                "source_fs_entry_id": 10,
+                "relation_code": "MENTIONS",
+                "created_at": datetime(2026, 8, 18, tzinfo=timezone.utc),
+            }
+        ]
+    )
     service, _ = make_service([source, entity], relations=relations)
     accepted = await service.enrich_knowledge_entities(
         EntityEnrichRequest(knCode="7", filePath="/KnowledgeEntity/A.md")
     )
     assert accepted.eligible_count == 1
     assert accepted.accepted_count == 1
+
+
+@pytest.mark.parametrize(
+    ("relation_created_at", "expected", "reason"),
+    [
+        (
+            datetime(2026, 8, 19, tzinfo=timezone.utc),
+            ProcessingEligibility.ELIGIBLE_AND_STALE,
+            "NEW_RELATION",
+        ),
+        (
+            datetime(2026, 8, 17, tzinfo=timezone.utc),
+            ProcessingEligibility.ELIGIBLE_BUT_FRESH,
+            "NO_NEW_RELATIONS",
+        ),
+    ],
+)
+async def test_enrich_staleness_uses_any_recent_relation_creation_time(
+    relation_created_at, expected, reason
+):
+    entity = original(
+        20,
+        "/KnowledgeEntity/A.md",
+        document_kind="knowledgeEntity",
+        entity_name="A",
+        aliases=[],
+        definition_version="ke/1.0",
+        updated_at=datetime(2026, 8, 18, tzinfo=timezone.utc),
+    )
+    source = original(10)
+    relations = Relations(
+        incoming=[
+            {
+                "kid": 9,
+                "source_fs_entry_id": 10,
+                "relation_code": "DEPENDS_ON",
+                "created_at": relation_created_at,
+            }
+        ]
+    )
+    tasks = Tasks(
+        [
+            {
+                "kid": 80,
+                "knowledge_base_id": 7,
+                "fs_entry_id": 20,
+                "file_path": entity["file_path"],
+                "task_type": "DOCUMENT_ENRICH",
+                "status": "succeeded",
+                "input_fingerprint": "previous",
+                "definition_version": None,
+                "finished_at": datetime(2026, 8, 18, tzinfo=timezone.utc),
+            }
+        ]
+    )
+    service, _ = make_service([source, entity], relations=relations, tasks=tasks)
+
+    result = await service.evaluate_processing_eligibility(
+        ProcessingEligibilityRequest(
+            knCode="7",
+            filePath=entity["file_path"],
+            capability="entityEnrich",
+        )
+    )
+
+    assert result.eligibility == expected
+    assert result.reason_code == reason
+    assert relations.target_queries[0]["relation_code"] is None
 
 
 async def test_accept_creates_per_file_task_and_worker_lifecycle_callbacks():
@@ -838,7 +916,7 @@ async def test_same_fingerprint_succeeded_task_is_reused_without_scheduling():
     file_row = original()
     service, _ = make_service([file_row])
     fingerprint = service._fingerprint(
-        file_row, ProcessingCapability.ENTITY_DISCOVERY, "ke/1.0", None, [], []
+        file_row, ProcessingCapability.ENTITY_DISCOVERY, "ke/1.0", []
     )
     service.knowledge_semantic_processing_task_repository.rows.append(
         {
@@ -865,7 +943,7 @@ async def test_pending_same_fingerprint_is_reused_under_file_lock():
     file_row = original()
     service, connection = make_service([file_row])
     fingerprint = service._fingerprint(
-        file_row, ProcessingCapability.ENTITY_DISCOVERY, "ke/1.0", None, [], []
+        file_row, ProcessingCapability.ENTITY_DISCOVERY, "ke/1.0", []
     )
     service.knowledge_semantic_processing_task_repository.rows.append(
         {
@@ -929,7 +1007,6 @@ async def test_status_filters_by_optional_file_and_hides_details():
                 "current_stage": "failed",
                 "progress": 100,
                 "definition_version": "ke/1.0",
-                "enrich_version": None,
                 "index_version": None,
                 "created_at": now,
                 "started_at": now,

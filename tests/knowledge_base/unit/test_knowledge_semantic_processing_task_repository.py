@@ -232,7 +232,6 @@ def test_additive_migration_creates_isolated_task_table_with_contracts():
         "input_fingerprint",
         "input_checksum",
         "definition_version",
-        "enrich_version",
         "method_version",
         "index_version",
         "request_params",

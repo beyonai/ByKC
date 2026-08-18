@@ -13,26 +13,30 @@ from by_qa.core.model_config import LLMModelProfile, ModelConfig
 from by_qa.knowledge_base.services import (
     knowledge_entity_intelligence as intelligence_module,
 )
-from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
-    AhoCorasickIndex,
-    EvidenceFragment,
-    IdentityScope,
+from by_qa.knowledge_base.services.knowledge_entity_discovery import (
     KnowledgeEntityDiscovery,
+    build_discovery_context,
+    normalize_entity_candidates,
+)
+from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
+    EvidenceFragment,
     KnowledgeEntityEnricher,
     KnowledgeEntityIdentity,
+    RelationTarget,
+    organize_evidence,
+)
+from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
+    AhoCorasickIndex,
+    IdentityScope,
     KnowledgeEntityLLMError,
     KnowledgeEntityOutputError,
     OpenAICompatibleKnowledgeEntityLLM,
     RelationCode,
-    RelationTarget,
     SurfaceEntry,
     SurfaceMatch,
     SurfacePosting,
-    build_discovery_context,
-    normalize_entity_candidates,
     normalize_surface,
     normalize_text_with_offsets,
-    organize_evidence,
 )
 
 
@@ -506,7 +510,7 @@ async def test_enrich_uses_soft_template_pins_identity_and_discards_bad_relation
     )
     assert llm.calls[0][1] is True
     assert "template is writing guidance" in llm.calls[0][0][0]["content"]
-    assert "fileId=100" in llm.calls[0][0][1]["content"]
+    assert "sourceFileId=100" in llm.calls[0][0][1]["content"]
 
 
 @pytest.mark.asyncio

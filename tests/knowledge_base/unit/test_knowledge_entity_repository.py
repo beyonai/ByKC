@@ -98,11 +98,6 @@ async def test_get_file_with_metadata_folds_eav_values_and_storage_fields():
                     value_type="string",
                     value_string="system",
                 ),
-                file_row(
-                    property_name="enrichVersion",
-                    value_type="string",
-                    value_string="enrich/1.0",
-                ),
             ]
         ]
     )
@@ -135,7 +130,6 @@ async def test_get_file_with_metadata_folds_eav_values_and_storage_fields():
         "definition_version": "ke/1.0",
         "subject_file_id": "200",
         "entity_type": "system",
-        "enrich_version": "enrich/1.0",
     }
     sql, params = cursor.executed[0]
     assert "fe.virtual_path = %(file_path)s" in sql

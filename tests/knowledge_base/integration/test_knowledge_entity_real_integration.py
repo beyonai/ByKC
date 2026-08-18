@@ -299,7 +299,6 @@ def _eligibility(
     file_path: str,
     capability: str,
     definition_version: str | None = None,
-    enrich_version: str | None = None,
 ) -> dict:
     body: dict[str, Any] = {
         "knCode": kb_code,
@@ -308,8 +307,6 @@ def _eligibility(
     }
     if definition_version is not None:
         body["definitionVersion"] = definition_version
-    if enrich_version is not None:
-        body["enrichVersion"] = enrich_version
     return _assert_success(
         client.post(
             "/api/v1/knowledgeItems/processingEligibility",
@@ -990,11 +987,10 @@ stores stable entity names and aliases for knowledge-governance workflows.
                 client,
                 kb_code=kb_code,
                 file_path=entity_path,
-                field_names=["documentKind", "entityName", "enrichVersion"],
+                field_names=["documentKind", "entityName"],
             )
             assert enriched_metadata["documentKind"]["value"] == "knowledgeEntity"
             assert enriched_metadata["entityName"]["value"]
-            assert enriched_metadata["enrichVersion"]["value"] == "ke-enrich/1.0"
             after_enrich_metadata = _metadata(
                 client,
                 kb_code=kb_code,
@@ -1037,16 +1033,7 @@ stores stable entity names and aliases for knowledge-governance workflows.
                 capability="entityEnrich",
             )
             assert enrich_fresh["eligibility"] == "ELIGIBLE_BUT_FRESH"
-            assert enrich_fresh["reasonCode"] == "INPUT_UNCHANGED"
-            enrich_version_stale = _eligibility(
-                client,
-                kb_code=kb_code,
-                file_path=entity_path,
-                capability="entityEnrich",
-                enrich_version="ke-enrich/next-integration",
-            )
-            assert enrich_version_stale["eligibility"] == "ELIGIBLE_AND_STALE"
-            assert enrich_version_stale["reasonCode"] == "METHOD_VERSION_CHANGED"
+            assert enrich_fresh["reasonCode"] == "NO_NEW_RELATIONS"
 
             # Enrichment replaces only this entity's generated outgoing edges;
             # the endpoint must remain queryable even when the model emits none.
@@ -2196,14 +2183,13 @@ integration subject described by this current-KB source.
             )
 
             # KE-E2/E5: whole-KB enumeration selects only the one eligible
-            # Markdown entity. Restrict semantic retrieval to the current KB;
+            # Markdown entity. Semantic retrieval is fixed to the current KB;
             # the foreign marker must never enter the LLM result.
             whole_batch = _assert_success(
                 client.post(
                     "/api/v1/knowledgeItems/entityEnrich",
                     json={
                         "knCode": kb_code,
-                        "evidenceKnCodeList": [kb_code],
                         "topK": 5,
                     },
                 )
@@ -2237,20 +2223,10 @@ integration subject described by this current-KB source.
                 row["producer_run_id"] == f"entity-enrich:{first_task['taskId']}"
                 for row in first_outgoing
             )
-            first_request = _db_rows(
-                """
-                SELECT request_params
-                FROM knowledge_semantic_processing_task
-                WHERE kid = %(task_id)s
-                """,
-                {"task_id": int(first_task["taskId"])},
-            )[0]["request_params"]
-            assert first_request["evidence_kb_code_list"] == [kb_code]
-            assert foreign_kb_code not in first_request["evidence_kb_code_list"]
-
-            # KE-E6/M10/R4: changing an evidence checksum makes the entity
-            # stale. The second Enrich writes a new timeline entry and replaces
-            # every outgoing assertion with the second producer run.
+            # KE-E6/M10/R4: rebuilding the changed related source creates a
+            # newer incoming relation assertion and makes the entity stale.
+            # The second Enrich writes a new timeline entry and replaces every
+            # outgoing assertion with the second producer run.
             evidence_v2 = evidence_v1.replace(local_marker_v1, local_marker_v2)
             _update_markdown(
                 client,
@@ -2266,7 +2242,7 @@ integration subject described by this current-KB source.
                 capability="entityEnrich",
             )
             assert stale_after_evidence["eligibility"] == "ELIGIBLE_AND_STALE"
-            assert stale_after_evidence["reasonCode"] == "EVIDENCE_CHANGED"
+            assert stale_after_evidence["reasonCode"] == "NEW_RELATION"
 
             second_batch = _assert_success(
                 client.post(
@@ -2274,7 +2250,6 @@ integration subject described by this current-KB source.
                     json={
                         "knCode": kb_code,
                         "filePath": entity_path,
-                        "evidenceKnCodeList": [kb_code],
                         "topK": 5,
                     },
                 )
@@ -2310,7 +2285,7 @@ integration subject described by this current-KB source.
                 capability="entityEnrich",
             )
             assert fresh_after_second["eligibility"] == "ELIGIBLE_BUT_FRESH"
-            assert fresh_after_second["reasonCode"] == "INPUT_UNCHANGED"
+            assert fresh_after_second["reasonCode"] == "NO_NEW_RELATIONS"
 
             # KE-E7: mutate the target while the real Enrich LLM is running.
             # The stale referSignature rejects the worker write; the concurrent
@@ -2331,7 +2306,6 @@ integration subject described by this current-KB source.
                     json={
                         "knCode": kb_code,
                         "filePath": entity_path,
-                        "evidenceKnCodeList": [kb_code],
                         "topK": 5,
                     },
                 )

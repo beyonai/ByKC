@@ -156,7 +156,6 @@ Enrich 不得改变实体身份、权限和证据边界，但文档章节、标�
 | `definitionVersion` | 是 | 创建或最近重新判定时使用的实体定义版本 |
 | `subjectFileId` | 否 | 不存在表示 global；存在表示 subject-local |
 | `entityType` | 否 | 轻量类型描述，v1 不要求完整本体枚举 |
-| `enrichVersion` | 否 | 最近一次成功 Enrich 使用的方法版本 |
 | `processingCapabilities` | 否 | 覆盖默认处理能力；实体文档默认仅启用 `entityEnrich` |
 
 任务状态、Callback、mention 位置、共现计数和向量候选不放入实体 metadata。当前 metadata 支持扁平 string、stringList、number、boolean 和 datetime，见 [`metadata_types.py`](../../../src/by_qa/knowledge_base/metadata_types.py)。
@@ -213,7 +212,7 @@ needsDiscovery = canDiscover
                  + 文档 checksum、definitionVersion 或 discoveryMethodVersion 已变化
 
 needsEnrich = canEnrich
-              + 身份、证据集合/证据 checksum 或 enrichVersion 已变化
+              + 尚未成功 Enrich，或存在 createdAt 晚于实体 updatedAt 的入边断言
 ```
 
 AC `indexVersion` 的每次变化不自动使全库原始文档失效；新增或变更词面通过定向回扫或定期 reconciliation 处理。Enrich 自己产生的新 checksum 也不能再次触发 Enrich。
@@ -548,7 +547,7 @@ Enrich 以实体稳定身份为中心，从多份授权证据中组织可阅读�
 - 可选目标 KnowledgeEntity 路径；传入时处理该实体，不传时处理本库 `/KnowledgeEntity` 下全部合格实体文档；
 - 当前 `entityName`、`aliases`、`subjectFileId` 和 `definitionVersion`；
 - 目标文档 checksum；
-- 可选 `enrichVersion`、检索范围和内部 Callback。
+- 可选内部 Callback。
 
 全库触发只改变调度范围，不改变执行原子单元：每个实体文档独立召回、生成、校验和提交，并形成自己的任务记录；同批次共享 `batchId`。
 
@@ -556,11 +555,10 @@ Enrich 以实体稳定身份为中心，从多份授权证据中组织可阅读�
 
 按优先级收集：
 
-1. 通过 `MENTIONS` 指向目标实体的原始文档；
-2. 实体正文中已有的原始文档引用；
-3. 使用标准名、别名和 subject 限定名做全文/向量混合检索；
-4. 通过 `PART_OF`、`IS_A`、`DEPENDS_ON` 连接的实体文档；
-5. 与目标实体有高信号共现的候选证据。
+1. 查询当前库中指向目标实体的所有类型入边物理断言，按关系 `createdAt` 降序；
+2. 按顺序对 source 文档去重，只读取最近 3 份关系文档；
+3. 从每份文档中提取包含标准名或别名的完整 Markdown 章节；
+4. 使用标准名、别名和 subject 限定名在当前库做语义检索，作为补充证据。
 
 ByKC 现有检索支持全文、向量融合和 metadata 过滤，可作为证据召回基础，见 [`knowledge_item_search_service.py`](../../../src/by_qa/knowledge_base/services/knowledge_item_search_service.py)。
 
@@ -568,7 +566,7 @@ ByKC 现有检索支持全文、向量融合和 metadata 过滤，可作为证�
 
 - 排除目标文档自身和无权限文档；
 - 按文档和片段去重；
-- 直接提及和明确引用优先于语义相关；
+- 最近的明确关系文档优先于语义相关；
 - 只有语义相关而无身份连接的片段不能单独证明强关系；
 - 记录每个片段的来源文档和位置。
 
@@ -582,6 +580,8 @@ LLM 主要生成 Markdown 正文，不生成权威身份 metadata。
 - 章节可以自适应组织，不强制填满模板；
 - 无证据内容应删除或明确标识为不确定；
 - 关系候选与正文一起生成，但单独归一化和验证。
+
+v1 采用一次受控的“全文档编辑”调用：将现有文档作为基线，保留有证据支持的内容和结构，再把新证据编辑到相关章节。暂不引入多轮 read/write/edit agent，避免放大延迟、token 成本和 CAS 并发写窗口。
 
 以下情况只产生 warning，不导致失败：
 
@@ -824,7 +824,7 @@ definitionVersion = ke/1.0
 - `1.x`：增加可选属性、别名规则或归一化优化，不改变实体边界；
 - `2.0`：改变“什么是 KnowledgeEntity”的语义边界，例如未来允许某类具名事件成为实体。
 
-Enrich 使用独立 `enrichVersion`，索引使用独立 `indexVersion`。
+Enrich 策略随代码发布，不再维护硬编码的独立 `enrichVersion`；索引仍使用独立 `indexVersion`。
 
 ### 16.2 升级流程
 
@@ -911,7 +911,7 @@ Enrich 使用独立 `enrichVersion`，索引使用独立 `indexVersion`。
 - discovery/enrich 任务数、成功率、失败分类和分阶段延迟；
 - 重试次数；
 - Callback 调用数、异常数和执行时间；
-- 每个任务使用的 `definitionVersion`、`enrichVersion`、`indexVersion` 和模型版本。
+- 每个任务使用的 `definitionVersion`、`indexVersion` 和模型版本。
 
 ## 18. 分阶段落地
 

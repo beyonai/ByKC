@@ -199,15 +199,20 @@ def test_enrich_route_supports_whole_kb_and_passes_no_callback():
     service = FakeKnowledgeEntityService()
     response = make_client(service).post(
         "/api/v1/knowledgeItems/entityEnrich",
-        json={"knCode": "1", "evidenceKnCodeList": ["1", "2"]},
+        json={"knCode": "1"},
     )
 
     assert response.json()["resultMsg"] == "accepted"
     operation, request, callback = service.calls[0]
     assert operation == "enrich"
     assert request.file_path is None
-    assert request.evidence_kb_code_list == ["1", "2"]
     assert callback is None
+
+    removed_field = make_client(service).post(
+        "/api/v1/knowledgeItems/entityEnrich",
+        json={"knCode": "1", "evidenceKnCodeList": ["1", "2"]},
+    )
+    assert removed_field.json()["resultCode"] == "-1"
 
 
 def test_status_route_queries_by_kb_and_optional_path():

@@ -75,6 +75,25 @@ async def test_upsert_relation_assertion_persists_exact_evidence_and_stable_loca
     assert params["target_locator_value"] == "/KnowledgeEntity/Foo.md"
 
 
+async def test_list_recent_assertions_by_target_orders_physical_insertions():
+    cursor = FakeCursor(fetchall_results=[[]])
+    repo = KnowledgeFileReferenceRepository()
+
+    await repo.list_recent_assertions_by_target(
+        cursor,
+        knowledge_base_id=3,
+        target_fs_entry_id=12,
+        relation_code=None,
+        limit=3,
+    )
+
+    sql, params = cursor.executed[0]
+    normalized = " ".join(sql.split())
+    assert "ORDER BY kfr.created_at DESC, kfr.kid DESC" in normalized
+    assert "relation_code = ANY" not in normalized
+    assert params["limit"] == 3
+
+
 async def test_create_reference_is_a_mentions_assertion_adapter():
     cursor = FakeCursor(fetchone_results=[{"kid": 21}])
     repo = KnowledgeFileReferenceRepository()

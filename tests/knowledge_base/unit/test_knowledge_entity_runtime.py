@@ -80,8 +80,11 @@ async def test_build_knowledge_entity_processing_service_composes_real_worker(
     assert service.worker._document_update is document_update
     assert service.worker._chunker is chunker
     assert service.worker._search is search
-    assert service.worker._discovery._llm is service.worker._enricher._llm
+    assert service.worker._discovery._llm is not service.worker._enricher._llm
     assert service.worker._discovery._llm._provider is provider
+    assert service.worker._enricher._llm._provider is provider
+    assert service.worker._discovery._llm._temperature == 0.0
+    assert service.worker._enricher._llm._temperature is None
     assert calls == [
         ("get_config", LLMModelProfile.EMBEDDING),
         ("storage", settings, embedding_config),

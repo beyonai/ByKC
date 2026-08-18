@@ -610,6 +610,47 @@ async def test_discovery_anchors_readable_path_when_entity_name_metadata_is_miss
 
 
 @pytest.mark.asyncio
+async def test_discovery_does_not_anchor_incidental_ac_match_omitted_by_salience() -> (
+    None
+):
+    source = file_row(10, "/docs/source.md", content_key="source")
+    incidental = file_row(
+        20,
+        "/KnowledgeEntity/alpha.md",
+        content_key="alpha",
+        markdown_key="alpha-md",
+        document_kind="knowledgeEntity",
+        entity_name="Alpha",
+        definition_version="v1",
+    )
+    deps = make_worker(
+        rows=[source, incidental],
+        objects={
+            ("original", "source"): b"Alpha appears only in a footnote.",
+            ("original", "alpha"): b"# Alpha",
+            ("markdown", "alpha-md"): b"# Alpha",
+        },
+        discovery=FakeDiscovery(()),
+    )
+
+    result = await deps.worker.run_task(
+        KnowledgeEntityTaskContext(
+            task_id=504,
+            task_type="ENTITY_DISCOVERY",
+            kb_code="1",
+            knowledge_base_id=1,
+            source_file_id=10,
+            file_path="/docs/source.md",
+        )
+    )
+
+    assert deps.discovery.known_matches
+    assert result.target_file_ids == ()
+    assert result.result_payload["actions"] == []
+    assert deps.references.upserts == []
+
+
+@pytest.mark.asyncio
 async def test_discovery_rejects_conflicting_metadata_at_readable_path():
     source = file_row(10, "/docs/source.md", content_key="source")
     conflicting = file_row(

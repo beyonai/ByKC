@@ -190,18 +190,18 @@ class KnowledgeEntityTaskWorker:
             knowledge_base_id=int(context.knowledge_base_id),
             subject_file_id=source.get("subject_file_id"),
         )
-        anchored_ids, anchor_warnings = self._unique_anchored_entity_ids(
+        matched_entity_ids, match_warnings = self._unique_matched_entity_ids(
             known_matches,
             source_file_id=int(context.source_file_id),
         )
         logger.info(
             "knowledge_entity_discovery matching completed: batch_id=%s task_id=%s "
             "kb=%s source_file_id=%s file_path=%s task_type=%s "
-            "vocabulary_entity_count=%s match_count=%s anchored_count=%s",
+            "vocabulary_entity_count=%s match_count=%s matched_identity_count=%s",
             *self._context_log_args(context),
             len(all_surfaces),
             len(known_matches),
-            len(anchored_ids),
+            len(matched_entity_ids),
         )
         request_params = context.request_params or {}
         max_entities = int(
@@ -229,11 +229,12 @@ class KnowledgeEntityTaskWorker:
             for item in all_surfaces
             if int(item["knowledge_base_id"]) == int(context.knowledge_base_id)
         ]
-        warnings = [*anchor_warnings, *discovery.warnings]
+        warnings = [*match_warnings, *discovery.warnings]
         actions: list[dict[str, Any]] = []
-        target_ids = set(anchored_ids)
-        for entity_id in sorted(anchored_ids):
-            actions.append({"action": "ANCHORED", "entityFileId": entity_id})
+        # AC matches guide canonical naming and identity resolution, but they do
+        # not bypass the model's content-salience decision.  Only identities in
+        # the complete discovered candidate set become MENTIONS targets.
+        target_ids: set[int] = set()
 
         for candidate in discovery.candidates:
             owner_id = self._resolve_subject_owner(
@@ -593,20 +594,20 @@ class KnowledgeEntityTaskWorker:
         )
 
     @staticmethod
-    def _unique_anchored_entity_ids(
+    def _unique_matched_entity_ids(
         matches: Sequence[SurfaceMatch], *, source_file_id: int
     ) -> tuple[set[int], list[str]]:
-        anchored: set[int] = set()
+        matched_entity_ids: set[int] = set()
         warnings: list[str] = []
         for match in matches:
             ids = {posting.entity_file_id for posting in match.anchorable_postings}
             if len(ids) == 1:
                 entity_id = next(iter(ids))
                 if entity_id != source_file_id:
-                    anchored.add(entity_id)
+                    matched_entity_ids.add(entity_id)
             elif len(ids) > 1:
                 warnings.append(f"ambiguous surface not anchored: {match.matched_text}")
-        return anchored, warnings
+        return matched_entity_ids, warnings
 
     @staticmethod
     def _resolve_subject_owner(

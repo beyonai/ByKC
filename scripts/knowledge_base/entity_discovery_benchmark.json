@@ -1,0 +1,55 @@
+{
+  "ByKC-deep-tech-analysis.md": {
+    "requiredAnyOf": [
+      ["ByKC"],
+      ["BaseQAEngine"],
+      ["StreamEvent"],
+      ["ServiceToolDispatcher"],
+      ["Agent DSL", "AgentDSL"],
+      ["OperationRegistry"],
+      ["Instant QA Engine", "InstantQAEngine"],
+      ["KnowledgeBaseConfig", "QARetrievalConfig"]
+    ],
+    "forbidden": [
+      "ByKC 深度技术分析报告（第二阶段）",
+      "2026-08-12"
+    ]
+  },
+  "palantir-2026-08.md": {
+    "requiredAnyOf": [
+      ["Palantir"],
+      ["object timeline"],
+      ["Palantir AIP", "AIP"],
+      ["AWS Bedrock"],
+      ["DeepSeek V3.2"],
+      ["GLM 5"],
+      ["Kimi 2.5"],
+      ["SuperRepo"],
+      ["Foundry CLI"],
+      ["Ontology"]
+    ],
+    "forbidden": [
+      "2026-08-11",
+      "2026-08-04",
+      "SuperRepo announcement"
+    ]
+  },
+  "小红书写作规范.md": {
+    "requiredAnyOf": [
+      ["小红书"],
+      ["内容结构规范", "内容结构", "标题与开头钩子"],
+      ["图片与封面规范", "图片与封面", "封面规范"],
+      ["输出格式规范", "输出格式", "Markdown"],
+      ["Emoji 使用规范", "Emoji"],
+      ["话题标签规范", "话题标签"],
+      ["禁止项", "合规"],
+      ["互动引导规范", "互动引导"],
+      ["微信公众号格式的关键差异", "渠道差异", "迁移原则"]
+    ],
+    "forbidden": [
+      "小红书写作规范",
+      "3 秒",
+      "30 秒"
+    ]
+  }
+}

@@ -26,6 +26,7 @@ from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
     RelationCode,
     RelationTarget,
     SurfaceEntry,
+    SurfaceMatch,
     SurfacePosting,
     build_discovery_context,
     normalize_entity_candidates,
@@ -165,12 +166,17 @@ def test_subject_local_alias_requires_subject_context_but_qualified_name_does_no
     assert with_context[0].anchorable_postings == (subject_posting,)
 
 
-def test_discovery_context_keeps_head_tail_and_heading_map_within_16k() -> None:
+def test_discovery_context_keeps_original_head_tail_frame_within_16k() -> None:
     markdown = (
         "HEAD-TOKEN\n"
-        + ("x" * 9_000)
+        + ("x" * 4_000)
+        + "\nQUARTER-TOKEN\n"
+        + ("x" * 4_500)
         + "\n## 中部标题\n"
-        + ("y" * 9_000)
+        + "MIDDLE-TOKEN\n"
+        + ("y" * 4_500)
+        + "\nTHREE-QUARTER-TOKEN\n"
+        + ("y" * 4_000)
         + "\nTAIL-TOKEN"
     )
 
@@ -178,8 +184,9 @@ def test_discovery_context_keeps_head_tail_and_heading_map_within_16k() -> None:
 
     assert context.truncated is True
     assert len(context.excerpt) <= 16_000
-    assert context.excerpt.startswith("HEAD-TOKEN")
-    assert context.excerpt.endswith("TAIL-TOKEN")
+    assert "HEAD-TOKEN" in context.excerpt
+    assert "TAIL-TOKEN" in context.excerpt
+    assert "[DOCUMENT END]" in context.excerpt
     assert "[DOCUMENT HEADING MAP]" in context.excerpt
     assert any("中部标题" in heading for heading in context.heading_map)
     assert "中部标题" in context.excerpt
@@ -242,7 +249,7 @@ async def test_discovery_retries_strict_json_and_filters_non_entities(
     discovery = KnowledgeEntityDiscovery(llm)
 
     result = await discovery.discover(
-        "# OSOT\n文档内容",
+        ("# OSOT\n文档内容\nOSOT 是文档的核心理论。\nOCG 是 OSOT 定义的稳定组成机制。"),
         log_context={
             "batch_id": "batch-1",
             "task_id": 51,
@@ -263,7 +270,7 @@ async def test_discovery_retries_strict_json_and_filters_non_entities(
     assert any("event_or_fact" in warning for warning in result.warnings)
     assert any("unstable_identity" in warning for warning in result.warnings)
     assert len(llm.calls) == 2
-    assert llm.calls[0][1] is True
+    assert llm.calls[0][1] is False
     assert "Previous output was invalid" in llm.calls[1][0][-1]["content"]
     assert "KnowledgeEntity v1" in llm.calls[0][0][0]["content"]
     rendered_logs = "\n".join(log_messages)
@@ -273,6 +280,55 @@ async def test_discovery_retries_strict_json_and_filters_non_entities(
     assert "task_id=51" in rendered_logs
     assert "文档内容" not in rendered_logs
     assert "Object-oriented theory" not in rendered_logs
+
+
+@pytest.mark.asyncio
+async def test_discovery_prompt_is_independent_of_existing_entity_vocabulary() -> None:
+    output = json.dumps(
+        [
+            {
+                "entityName": "OSOT",
+                "localName": "OSOT",
+                "identityScope": "global",
+                "candidateKind": "entity",
+                "stableIdentity": True,
+                "evidence": "OSOT 是文档的核心理论。",
+            }
+        ],
+        ensure_ascii=False,
+    )
+    llm = _FakeLLM(output, output)
+    posting = _posting(10, 1, "OSOT")
+    known_matches = tuple(
+        SurfaceMatch(
+            surface="OSOT",
+            normalized_surface="osot",
+            matched_text="OSOT",
+            start=start,
+            end=start + 4,
+            postings=(posting,),
+            anchorable_postings=(posting,),
+        )
+        for start in (2, 7, 12, 17)
+    )
+
+    discovery = KnowledgeEntityDiscovery(llm)
+    markdown = "# OSOT\nOSOT 是文档的核心理论。"
+    baseline = await discovery.discover(markdown)
+    populated = await discovery.discover(
+        markdown,
+        known_matches=known_matches,
+    )
+
+    assert baseline.candidates == populated.candidates
+    assert len(llm.calls) == 1
+    system_prompt = llm.calls[0][0][0]["content"]
+    user_prompt = llm.calls[0][0][1]["content"]
+    normalized_prompt = " ".join(system_prompt.split())
+    assert "resolved after extraction" in normalized_prompt
+    assert "external state" in normalized_prompt
+    assert "fileId=10" not in user_prompt
+    assert "Known AC matches" not in user_prompt
 
 
 def test_candidate_normalization_requires_a_stable_subject_and_caps_at_twelve() -> None:
@@ -301,6 +357,44 @@ def test_candidate_normalization_requires_a_stable_subject_and_caps_at_twelve() 
     assert all(candidate.entity_name != "无主体-局部概念" for candidate in candidates)
     assert any("subject_not_stable" in warning for warning in warnings)
     assert any("truncated" in warning for warning in warnings)
+
+
+def test_candidate_normalization_repairs_paraphrased_evidence_from_source() -> None:
+    candidates, warnings = normalize_entity_candidates(
+        [
+            {
+                "entityName": "OSOT",
+                "localName": "OSOT",
+                "identityScope": "global",
+                "evidence": "OSOT 是一套核心理论。",
+            }
+        ],
+        source_text="文档原文只说：OSOT 是一种方法。",
+    )
+
+    assert [candidate.evidence for candidate in candidates] == [
+        "文档原文只说：OSOT 是一种方法。"
+    ]
+    assert warnings == ("candidate[0] evidence repaired from document",)
+
+
+def test_candidate_normalization_discards_invalid_evidence_without_name_mention() -> (
+    None
+):
+    candidates, warnings = normalize_entity_candidates(
+        [
+            {
+                "entityName": "OSOT",
+                "localName": "OSOT",
+                "identityScope": "global",
+                "evidence": "OSOT 是一套核心理论。",
+            }
+        ],
+        source_text="这段原文没有提到候选实体。",
+    )
+
+    assert candidates == ()
+    assert warnings == ("candidate[0] discarded: evidence_not_in_document",)
 
 
 @pytest.mark.asyncio
@@ -478,6 +572,7 @@ async def test_openai_compatible_client_uses_core_provider_and_injected_http_cli
 
     client = OpenAICompatibleKnowledgeEntityLLM(
         provider=_Provider(),
+        temperature=0.0,
         timeout=12.5,
         client_factory=client_factory,
     )
@@ -494,7 +589,7 @@ async def test_openai_compatible_client_uses_core_provider_and_injected_http_cli
     assert captured["payload"] == {
         "thinking": {"type": "disabled"},
         "model": "knowledge-model",
-        "temperature": 0.1,
+        "temperature": 0.0,
         "messages": [{"role": "user", "content": "discover"}],
         "response_format": {"type": "json_object"},
     }

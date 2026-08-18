@@ -43,9 +43,9 @@ from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
 
 DEFAULT_DEFINITION_VERSION = "ke/1.0"
 DEFAULT_ENRICH_VERSION = "ke-enrich/1.0"
-DISCOVERY_METHOD_VERSION = "discovery/1.0"
+DISCOVERY_METHOD_VERSION = "discovery/1.2"
 ENRICH_METHOD_VERSION = "enrich/1.0"
-PROCESSING_POLICY_VERSION = "entity-policy/1.0"
+PROCESSING_POLICY_VERSION = "entity-policy/1.2"
 ENRICH_TEMPLATE_VERSION = "entity-template/1.0"
 
 _TEXT_DOCUMENT_SUFFIXES = frozenset(

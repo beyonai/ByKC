@@ -400,7 +400,12 @@ async def build_knowledge_entity_processing_service(
         settings, provider=provider
     )
 
-    llm = OpenAICompatibleKnowledgeEntityLLM(provider=provider)
+    # Entity extraction is an information-selection task.  Keep sampling
+    # deterministic instead of inheriting the creative standard-model default.
+    discovery_llm = OpenAICompatibleKnowledgeEntityLLM(
+        provider=provider, temperature=0.0
+    )
+    enrichment_llm = OpenAICompatibleKnowledgeEntityLLM(provider=provider)
     worker = KnowledgeEntityTaskWorker(
         connection_factory=connection_factory,
         knowledge_entity_repository=knowledge_entity_repository,
@@ -410,8 +415,8 @@ async def build_knowledge_entity_processing_service(
         document_update_service=document_update_service,
         document_chunking_service=document_chunking_service,
         knowledge_item_search_service=search_service,
-        knowledge_entity_discovery=KnowledgeEntityDiscovery(llm),
-        knowledge_entity_enricher=KnowledgeEntityEnricher(llm),
+        knowledge_entity_discovery=KnowledgeEntityDiscovery(discovery_llm),
+        knowledge_entity_enricher=KnowledgeEntityEnricher(enrichment_llm),
     )
     service = KnowledgeEntityProcessingOrchestrator(
         connection_factory=connection_factory,

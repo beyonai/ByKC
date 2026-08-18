@@ -34,6 +34,7 @@ def file_row(
     value_type: str | None = None,
     value_string=None,
     value_string_list=None,
+    value_boolean=None,
 ):
     return {
         "kid": kid,
@@ -53,7 +54,7 @@ def file_row(
         "value_type": value_type,
         "value_string": value_string,
         "value_number": None,
-        "value_boolean": None,
+        "value_boolean": value_boolean,
         "value_datetime": None,
         "value_string_list": value_string_list,
     }
@@ -93,6 +94,11 @@ async def test_get_file_with_metadata_folds_eav_values_and_storage_fields():
                     value_type="string",
                     value_string="system",
                 ),
+                file_row(
+                    property_name="entityEnriched",
+                    value_type="boolean",
+                    value_boolean=True,
+                ),
             ]
         ]
     )
@@ -124,12 +130,14 @@ async def test_get_file_with_metadata_folds_eav_values_and_storage_fields():
         "aliases": ["OSOT", "OCG"],
         "subject_file_id": "200",
         "entity_type": "system",
+        "entity_enriched": True,
     }
     sql, params = cursor.executed[0]
     assert "fe.virtual_path = %(file_path)s" in sql
     assert "mv.property_name = ANY(%(property_names)s)" in sql
     assert params["file_path"] == "/docs/a.md"
     assert "entityName" in params["property_names"]
+    assert "entityEnriched" in params["property_names"]
     assert "definitionVersion" not in params["property_names"]
 
 
@@ -296,6 +304,7 @@ async def test_list_entity_surfaces_supports_systemwide_and_same_kb_snapshots():
             "entity_name": "Alpha",
             "aliases": ["A", "First"],
             "subject_file_id": None,
+            "entity_enriched": None,
         },
         {
             "kid": 20,
@@ -306,6 +315,7 @@ async def test_list_entity_surfaces_supports_systemwide_and_same_kb_snapshots():
             "entity_name": "Beta",
             "aliases": [],
             "subject_file_id": "21",
+            "entity_enriched": None,
         },
     ]
     assert [item["kid"] for item in kb_result] == [10]

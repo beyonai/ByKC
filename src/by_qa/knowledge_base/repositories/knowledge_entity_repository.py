@@ -22,6 +22,7 @@ class KnowledgeEntityRepository:
         "aliases",
         "subjectFileId",
         "entityType",
+        "entityEnriched",
     )
     _LIST_METADATA_FIELDS = frozenset({"processingCapabilities", "aliases"})
     _OUTPUT_FIELD_BY_PROPERTY = {
@@ -31,6 +32,7 @@ class KnowledgeEntityRepository:
         "aliases": "aliases",
         "subjectFileId": "subject_file_id",
         "entityType": "entity_type",
+        "entityEnriched": "entity_enriched",
     }
 
     async def get_file_with_metadata(
@@ -176,7 +178,12 @@ class KnowledgeEntityRepository:
             """,
             {
                 "knowledge_base_id": knowledge_base_id,
-                "property_names": ["entityName", "aliases", "subjectFileId"],
+                "property_names": [
+                    "entityName",
+                    "aliases",
+                    "subjectFileId",
+                    "entityEnriched",
+                ],
             },
         )
         return self._fold_surface_rows(await cursor.fetchall())
@@ -240,6 +247,7 @@ class KnowledgeEntityRepository:
                     "aliases": [],
                     "subject_file_id": None,
                     "entity_type": None,
+                    "entity_enriched": None,
                 }
                 records[file_id] = record
             cls._apply_metadata(record, row)
@@ -263,6 +271,7 @@ class KnowledgeEntityRepository:
                     "entity_name": None,
                     "aliases": [],
                     "subject_file_id": None,
+                    "entity_enriched": None,
                 }
                 records[file_id] = record
             cls._apply_metadata(record, row)

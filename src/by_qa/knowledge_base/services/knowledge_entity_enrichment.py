@@ -9,6 +9,7 @@ from collections import Counter
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 from by_qa.core import logger
 from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
@@ -75,7 +76,7 @@ def organize_evidence(
     max_total_chars: int = DEFAULT_EVIDENCE_CHARS,
     max_fragments: int = DEFAULT_EVIDENCE_FRAGMENTS,
     max_fragment_chars: int = DEFAULT_FRAGMENT_CHARS,
-    max_fragments_per_document: int = 6,
+    max_fragments_per_document: int = 25,
 ) -> EvidenceBundle:
     """Filter, deduplicate, prioritize, and bound enrichment evidence."""
 
@@ -194,6 +195,14 @@ The Markdown must begin with the exact supplied H1 identity title. Do not emit
 YAML front matter. Relations are optional and must use only MENTIONS, PART_OF,
 IS_A, or DEPENDS_ON, with an existing targetFileId supplied in the context. A
 relation needs explicit evidence; co-occurrence or similarity alone is insufficient.
+
+Produce a coherent, standalone entity document rather than an evidence dump.
+Remove temporary discovery scaffolding when the same information is integrated
+into useful sections. Every fact, number, mechanism, evaluation, or uncertainty
+drawn from supplied evidence must cite its source at the first relevant statement
+using the exact Markdown source reference supplied with that evidence. Never cite
+an evidence number such as E1, a bare file name, or an invented path. Preserve
+supported existing links and place source citations next to the claims they support.
 
 Return one strict JSON object and nothing else:
 {"markdown":"...","relations":[{"relationCode":"PART_OF","targetFileId":1,
@@ -479,10 +488,13 @@ def _build_enrichment_messages(
             else "unknown"
         )
         relation = item.relation_code or "semantic-match"
+        source_reference = format_source_reference(item.document_path)
         evidence_blocks.append(
             f"[E{index}] sourceFileId={item.document_file_id} "
             f"path={item.document_path} relation={relation} "
-            f"location={location}\n{item.content}"
+            f"location={location}\n"
+            f"Source reference (use this exact Markdown when citing): "
+            f"{source_reference}\n{item.content}"
         )
     targets = (
         "\n".join(
@@ -516,6 +528,14 @@ Bounded authorized evidence:
         {"role": "system", "content": ENRICH_SYSTEM_PROMPT},
         {"role": "user", "content": user},
     ]
+
+
+def format_source_reference(document_path: str) -> str:
+    path = str(document_path or "").strip()
+    label = path.rsplit("/", 1)[-1] or path or "知识库文档"
+    label = label.replace("[", "［").replace("]", "］")
+    target = quote(path, safe="/:@-._~!$&'*+,;=%")
+    return f"[{label}]({target})"
 
 
 def _template_coverage(markdown: str, template: str) -> tuple[tuple[str, ...], float]:
@@ -579,6 +599,7 @@ __all__ = [
     "RelationTarget",
     "SemanticRelation",
     "normalize_enriched_markdown",
+    "format_source_reference",
     "normalize_relations",
     "organize_evidence",
 ]

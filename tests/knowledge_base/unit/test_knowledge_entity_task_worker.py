@@ -13,6 +13,7 @@ from by_qa.knowledge_base.services.knowledge_entity_discovery import (
 from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
     EnrichmentResult,
     SemanticRelation,
+    format_source_reference,
     organize_evidence,
 )
 from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
@@ -85,6 +86,7 @@ def file_row(
     aliases: list[str] | None = None,
     subject_file_id: int | None = None,
     entity_type: str | None = None,
+    entity_enriched: bool | None = None,
     checksum: str = "checksum-1",
 ) -> dict:
     return {
@@ -104,6 +106,7 @@ def file_row(
         "aliases": aliases or [],
         "subject_file_id": subject_file_id,
         "entity_type": entity_type,
+        "entity_enriched": entity_enriched,
     }
 
 
@@ -138,6 +141,7 @@ class FakeEntityRepository:
                 "entity_name": row["entity_name"],
                 "aliases": list(row["aliases"]),
                 "subject_file_id": row["subject_file_id"],
+                "entity_enriched": row.get("entity_enriched"),
             }
             for row in self.rows.values()
             if row.get("document_kind") == "knowledgeEntity"
@@ -192,6 +196,7 @@ class FakeIngestion:
             aliases=metadata.get("aliases", []),
             subject_file_id=metadata.get("subjectFileId"),
             entity_type=metadata.get("entityType"),
+            entity_enriched=metadata.get("entityEnriched"),
         )
         return {
             "fs_entry_id": file_id,
@@ -312,8 +317,13 @@ class FakeEnricher:
         bundle = organize_evidence(self.evidence, target_file_id=identity.file_id)
         if not bundle.fragments:
             raise KnowledgeEntityOutputError("enrichment requires authorized evidence")
+        source = bundle.fragments[0]
         return EnrichmentResult(
-            markdown=f"# {identity.entity_name}\n\n## 核心事实\n\n已富化内容。",
+            markdown=(
+                f"# {identity.entity_name}\n\n## 核心事实\n\n"
+                f"已富化内容。[{source.document_path.rsplit('/', 1)[-1]}]"
+                f"({source.document_path})"
+            ),
             relations=self.relations,
             warnings=("soft-template-warning",),
             discarded_relation_count=1,
@@ -382,13 +392,11 @@ def test_entity_path_uses_readable_name_without_identity_signature(
     assert KnowledgeEntityTaskWorker._entity_path(entity_name) == expected_path
 
 
-def test_discovery_source_path_cannot_be_parsed_as_a_reference() -> None:
-    rendered = KnowledgeEntityTaskWorker._non_link_source_path(
-        "/docs/[source](target)-byqa-ref://42.md"
-    )
+def test_discovery_source_path_is_rendered_as_a_markdown_reference() -> None:
+    rendered = format_source_reference("/docs/source file.md")
 
-    assert rendered == ("/docs/&#91;source&#93;&#40;target&#41;-byqa-ref&#58;//42.md")
-    assert detect_reference_spans(rendered) == []
+    assert rendered == "[source file.md](/docs/source%20file.md)"
+    assert detect_reference_spans(rendered)[0][3] == "/docs/source%20file.md"
     assert detect_reference_token_spans(rendered) == []
 
 
@@ -410,6 +418,7 @@ async def test_discovery_anchors_only_unique_current_kb_and_creates_fixed_entiti
         markdown_key="alpha-md",
         document_kind="knowledgeEntity",
         entity_name="Alpha",
+        entity_enriched=True,
         aliases=["A"],
     )
     cross_kb = file_row(
@@ -481,6 +490,7 @@ async def test_discovery_anchors_only_unique_current_kb_and_creates_fixed_entiti
     }
     assert anchored == {20}
     assert len(deps.ingestion.uploads) == 2
+    assert all(request.process_front_matter for request in deps.ingestion.uploads)
     assert any(
         action.get("entityFileId") == 20
         and action.get("entityName") == "Alpha"
@@ -497,6 +507,7 @@ async def test_discovery_anchors_only_unique_current_kb_and_creates_fixed_entiti
         parse_front_matter(request.file_content) for request in deps.ingestion.uploads
     ]
     assert metadata[0]["documentKind"] == "knowledgeEntity"
+    assert metadata[0]["entityEnriched"] is False
     assert "definitionVersion" not in metadata[0]
     assert metadata[1]["subjectFileId"] == 20
     assert "Worker" in metadata[1]["aliases"]
@@ -525,8 +536,9 @@ async def test_discovery_anchors_only_unique_current_kb_and_creates_fixed_entiti
     }
     for request in deps.ingestion.uploads:
         _, body = split_front_matter(request.file_content)
-        assert "来源文档：/docs/source.md".encode() in body
-        assert detect_reference_spans(body.decode("utf-8")) == []
+        spans = detect_reference_spans(body.decode("utf-8"))
+        assert len(spans) == 1
+        assert {span[3] for span in spans} == {"/docs/source.md"}
     assert deps.discovery.log_context == {
         "batch_id": "batch-501",
         "task_id": 501,
@@ -633,6 +645,7 @@ async def test_discovery_does_not_anchor_incidental_ac_match_omitted_by_salience
         markdown_key="alpha-md",
         document_kind="knowledgeEntity",
         entity_name="Alpha",
+        entity_enriched=True,
     )
     deps = make_worker(
         rows=[source, incidental],
@@ -727,6 +740,7 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
         markdown_key="alpha-md",
         document_kind="knowledgeEntity",
         entity_name="Alpha",
+        entity_enriched=True,
     )
     other_kb_target = file_row(
         99,
@@ -740,6 +754,15 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
     direct = file_row(10, "/docs/direct.md", content_key="direct")
     explicit = file_row(11, "/docs/reference.md", content_key="reference")
     recalled = file_row(12, "/docs/recalled.md", content_key="recalled")
+    unenriched = file_row(
+        15,
+        "/KnowledgeEntity/draft.md",
+        content_key="draft",
+        markdown_key="draft-md",
+        document_kind="knowledgeEntity",
+        entity_name="Beta Draft",
+        entity_enriched=False,
+    )
     recent_third = file_row(13, "/docs/recent-third.md", content_key="recent-third")
     older_fourth = file_row(14, "/docs/older-fourth.md", content_key="older-fourth")
     valid = SemanticRelation(
@@ -773,6 +796,7 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
             recalled,
             recent_third,
             older_fourth,
+            unenriched,
         ],
         objects={
             ("original", "entity"): b"# Beta",
@@ -786,15 +810,29 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
             ("original", "recalled"): b"Recall source.",
             ("original", "recent-third"): b"Recent Beta evidence.",
             ("original", "older-fourth"): b"Older Beta evidence.",
+            ("original", "draft"): b"# Beta Draft",
+            ("markdown", "draft-md"): b"# Beta Draft\n\nUnenriched Beta evidence.",
         },
         enricher=FakeEnricher((valid, cross_kb, invalid_code)),
         search_hits=[
             SimpleNamespace(
                 kb_code="1",
+                file_path="/KnowledgeEntity/beta.md",
+                chunk_text="Current Beta content.",
+                score=0.99,
+            ),
+            SimpleNamespace(
+                kb_code="1",
+                file_path="/KnowledgeEntity/draft.md",
+                chunk_text="Unenriched Beta evidence.",
+                score=0.9,
+            ),
+            SimpleNamespace(
+                kb_code="1",
                 file_path="/docs/recalled.md",
                 chunk_text="Semantic Beta evidence.",
                 score=0.72,
-            )
+            ),
         ],
     )
     deps.references.incoming_relations = [
@@ -828,17 +866,47 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
     assert {target.file_id for target in deps.enricher.targets} == {20}
     assert deps.search.requests[0].search_mode == "mixedRecall"
     assert deps.search.requests[0].top_k == 5
+    assert deps.search.requests[0].where == {
+        "and": [
+            {
+                "ne": {
+                    "fieldName": "filePath",
+                    "value": "/KnowledgeEntity/beta.md",
+                }
+            },
+            {
+                "or": [
+                    {
+                        "ne": {
+                            "fieldName": "documentKind",
+                            "value": "knowledgeEntity",
+                        }
+                    },
+                    {
+                        "eq": {
+                            "fieldName": "entityEnriched",
+                            "value": True,
+                        }
+                    },
+                ]
+            },
+        ]
+    }
+    assert "Old content." in deps.search.requests[0].query
 
     update = deps.updater.requests[0]
     assert update.refer_signature == "before-enrich"
+    assert update.process_front_matter is True
     metadata = parse_front_matter(update.file_content)
     assert metadata == {
         "documentKind": "knowledgeEntity",
         "processingCapabilities": ["entityEnrich"],
         "entityName": "Beta",
         "aliases": ["B"],
+        "entityEnriched": True,
     }
     assert b"# Beta" in update.file_content
+    assert b"[direct.md](/docs/direct.md)" in update.file_content
     assert deps.ingestion.indexed_paths == ["/KnowledgeEntity/beta.md"]
     generated = deps.updater.generated_assertions[0]
     assert len(generated) == 1

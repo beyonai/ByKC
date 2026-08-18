@@ -170,24 +170,26 @@ def test_subject_local_alias_requires_subject_context_but_qualified_name_does_no
     assert with_context[0].anchorable_postings == (subject_posting,)
 
 
-def test_discovery_context_keeps_original_head_tail_frame_within_16k() -> None:
+def test_discovery_context_keeps_original_head_tail_frame_within_50k() -> None:
     markdown = (
         "HEAD-TOKEN\n"
-        + ("x" * 4_000)
+        + ("x" * 12_000)
         + "\nQUARTER-TOKEN\n"
-        + ("x" * 4_500)
+        + ("x" * 12_000)
         + "\n## 中部标题\n"
         + "MIDDLE-TOKEN\n"
-        + ("y" * 4_500)
+        + ("y" * 12_000)
         + "\nTHREE-QUARTER-TOKEN\n"
-        + ("y" * 4_000)
+        + ("y" * 12_000)
+        + "\nEND-FRAME\n"
+        + ("z" * 12_000)
         + "\nTAIL-TOKEN"
     )
 
     context = build_discovery_context(markdown)
 
     assert context.truncated is True
-    assert len(context.excerpt) <= 16_000
+    assert len(context.excerpt) <= 50_000
     assert "HEAD-TOKEN" in context.excerpt
     assert "TAIL-TOKEN" in context.excerpt
     assert "[文档结尾]" in context.excerpt
@@ -484,6 +486,24 @@ def test_evidence_organization_is_authorized_deduplicated_prioritized_and_bounde
     assert bundle.warnings
 
 
+def test_default_enrichment_evidence_budget_is_50k() -> None:
+    fragments = [
+        EvidenceFragment(
+            1,
+            "/docs/source.md",
+            f"{index:02d}" + ("x" * 1_998),
+            start=index,
+            end=index + 1,
+        )
+        for index in range(1, 31)
+    ]
+
+    bundle = organize_evidence(fragments)
+
+    assert bundle.total_chars == 50_000
+    assert len(bundle.fragments) == 25
+
+
 @pytest.mark.asyncio
 async def test_enrich_uses_soft_template_pins_identity_and_discards_bad_relations() -> (
     None
@@ -557,6 +577,8 @@ async def test_enrich_uses_soft_template_pins_identity_and_discards_bad_relation
     assert llm.calls[0][1] is True
     assert "template is writing guidance" in llm.calls[0][0][0]["content"]
     assert "sourceFileId=100" in llm.calls[0][0][1]["content"]
+    assert "[osot.md](/papers/osot.md)" in llm.calls[0][0][1]["content"]
+    assert "exact Markdown source reference" in llm.calls[0][0][0]["content"]
 
 
 @pytest.mark.asyncio

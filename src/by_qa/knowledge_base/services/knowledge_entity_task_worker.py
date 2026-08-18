@@ -42,6 +42,7 @@ from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
     KnowledgeEntityEnricher,
     KnowledgeEntityIdentity,
     RelationTarget,
+    format_source_reference,
 )
 from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
     ALLOWED_RELATION_CODES,
@@ -62,19 +63,12 @@ MAX_RECENT_RELATIONS = 50
 MAX_RELATION_DOCUMENTS = 3
 MAX_MATCHED_SECTIONS_PER_DOCUMENT = 6
 MAX_RELATION_DOCUMENT_CHARS = 5_000
+MAX_SEARCH_QUERY_CHARS = 1_000
+MAX_SEMANTIC_FRAGMENTS_PER_DOCUMENT = 25
+MIN_SEMANTIC_SCORE_RATIO = 0.7
+STRONG_SEMANTIC_SCORE_RATIO = 0.97
+ENTITY_ENRICHED_PROPERTY = "entityEnriched"
 _SAFE_SLUG_RE = re.compile(r"[^\w-]+", re.UNICODE)
-_NON_LINK_PATH_TRANSLATION = str.maketrans(
-    {
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        "[": "&#91;",
-        "]": "&#93;",
-        "(": "&#40;",
-        ")": "&#41;",
-        ":": "&#58;",
-    }
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -396,13 +390,16 @@ class KnowledgeEntityTaskWorker:
         evidence = await self._collect_evidence(
             context,
             identity=identity,
+            existing_markdown=existing_markdown,
         )
         relation_targets = tuple(
             RelationTarget(
                 file_id=int(item["kid"]), entity_name=str(item["entity_name"])
             )
             for item in current_surfaces
-            if int(item["kid"]) != identity.file_id and item.get("entity_name")
+            if int(item["kid"]) != identity.file_id
+            and item.get("entity_name")
+            and item.get("entity_enriched") is True
         )
         logger.info(
             "knowledge_entity_enrich evidence ready: batch_id=%s task_id=%s "
@@ -445,6 +442,7 @@ class KnowledgeEntityTaskWorker:
             aliases=identity.aliases,
             subject_file_id=identity.subject_file_id,
             entity_type=entity.get("entity_type"),
+            entity_enriched=True,
         )
         checksum = context.input_checksum or entity.get("checksum")
         if not checksum:
@@ -760,13 +758,13 @@ class KnowledgeEntityTaskWorker:
             body=(
                 f"# {candidate.entity_name}\n\n"
                 "## 实体定义与边界\n\n"
-                f"{candidate.evidence}\n\n"
-                "## 发现来源\n\n"
-                f"来源文档：{self._non_link_source_path(context.file_path)}\n"
+                f"{candidate.evidence} "
+                f"{format_source_reference(context.file_path)}\n\n"
             ),
             aliases=aliases,
             subject_file_id=subject_file_id,
             entity_type=candidate.entity_type,
+            entity_enriched=False,
         )
         path = self._entity_path(candidate.entity_name)
         occupied = await self._get_entity_by_path(context, path)
@@ -997,6 +995,7 @@ class KnowledgeEntityTaskWorker:
         context: KnowledgeEntityTaskContext | Any,
         *,
         identity: KnowledgeEntityIdentity,
+        existing_markdown: str,
     ) -> list[EvidenceFragment]:
         connection = await self._connection_factory()
         try:
@@ -1055,22 +1054,29 @@ class KnowledgeEntityTaskWorker:
             )
 
         params = context.request_params or {}
-        query = " ".join((identity.entity_name, *identity.aliases)).strip()
+        query = self._build_enrichment_search_query(
+            existing_markdown,
+            names=(identity.entity_name, *identity.aliases),
+        )
         hits = await self._search.search(
             SearchRequest(
                 query=query,
                 kb_code_list=[context.kb_code],
                 top_k=int(params.get("topK", params.get("top_k", 20))),
                 search_mode="mixedRecall",
+                where=self._enrichment_search_where(context.file_path),
             )
         )
         search_connection = await self._connection_factory()
         try:
             cursor = search_connection.cursor()
+            semantic_candidates: list[tuple[Any, Mapping[str, Any]]] = []
             for hit in hits:
                 kb_code = str(self._value(hit, "kb_code", "knCode"))
                 file_path = str(self._value(hit, "file_path", "filePath"))
-                if kb_code != str(context.kb_code):
+                if kb_code != str(context.kb_code) or file_path == str(
+                    context.file_path
+                ):
                     continue
                 row = await self._entity_repository.get_file_with_metadata(
                     cursor,
@@ -1079,18 +1085,138 @@ class KnowledgeEntityTaskWorker:
                 )
                 if row is None:
                     continue
+                if int(row["kid"]) == identity.file_id:
+                    continue
+                if (
+                    row.get("document_kind") == "knowledgeEntity"
+                    and row.get("entity_enriched") is not True
+                ):
+                    continue
+                semantic_candidates.append((hit, row))
+
+            best_score = max(
+                (
+                    float(self._value(hit, "score") or 0.0)
+                    for hit, _ in semantic_candidates
+                ),
+                default=0.0,
+            )
+            document_counts: dict[int, int] = {}
+            seen_content: set[str] = set()
+            for hit, row in semantic_candidates:
+                content = str(self._value(hit, "chunk_text", "chunkText")).strip()
+                score = float(self._value(hit, "score") or 0.0)
+                file_id = int(row["kid"])
+                normalized_content = normalize_surface(content)
+                if (
+                    not content
+                    or normalized_content in seen_content
+                    or document_counts.get(file_id, 0)
+                    >= MAX_SEMANTIC_FRAGMENTS_PER_DOCUMENT
+                    or (
+                        best_score > 0 and score < best_score * MIN_SEMANTIC_SCORE_RATIO
+                    )
+                    or (
+                        best_score > 0
+                        and score < best_score * STRONG_SEMANTIC_SCORE_RATIO
+                        and not self._text_mentions_entity(
+                            content, names=(identity.entity_name, *identity.aliases)
+                        )
+                    )
+                    or self._is_stub_evidence(
+                        content, names=(identity.entity_name, *identity.aliases)
+                    )
+                ):
+                    continue
+                seen_content.add(normalized_content)
+                document_counts[file_id] = document_counts.get(file_id, 0) + 1
                 fragments.append(
                     EvidenceFragment(
-                        document_file_id=int(row["kid"]),
-                        document_path=file_path,
-                        content=str(self._value(hit, "chunk_text", "chunkText")),
-                        semantic_score=float(self._value(hit, "score") or 0.0),
+                        document_file_id=file_id,
+                        document_path=str(row["file_path"]),
+                        content=content,
+                        start=self._optional_int(
+                            self._value(hit, "start_line", "startLine")
+                        ),
+                        end=self._optional_int(self._value(hit, "end_line", "endLine")),
+                        semantic_score=score,
                         authorized=True,
                     )
                 )
         finally:
             await search_connection.close()
         return fragments
+
+    @staticmethod
+    def _enrichment_search_where(file_path: str) -> dict[str, Any]:
+        return {
+            "and": [
+                {"ne": {"fieldName": "filePath", "value": str(file_path)}},
+                {
+                    "or": [
+                        {
+                            "ne": {
+                                "fieldName": "documentKind",
+                                "value": "knowledgeEntity",
+                            }
+                        },
+                        {
+                            "eq": {
+                                "fieldName": ENTITY_ENRICHED_PROPERTY,
+                                "value": True,
+                            }
+                        },
+                    ]
+                },
+            ]
+        }
+
+    @staticmethod
+    def _build_enrichment_search_query(content: str, *, names: Sequence[str]) -> str:
+        body = re.sub(
+            r"\A---[ \t]*\n.*?\n---[ \t]*(?:\n|\Z)",
+            "",
+            content,
+            count=1,
+            flags=re.DOTALL,
+        ).strip()
+        factual_lines = [
+            line.strip()
+            for line in body.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        parts = [*(name.strip() for name in names if name.strip()), *factual_lines]
+        return "\n".join(dict.fromkeys(parts))[:MAX_SEARCH_QUERY_CHARS]
+
+    @staticmethod
+    def _text_mentions_entity(content: str, *, names: Sequence[str]) -> bool:
+        normalized_content = normalize_surface(content)
+        return any(
+            normalized_name in normalized_content
+            for name in names
+            if (normalized_name := normalize_surface(name))
+        )
+
+    @staticmethod
+    def _is_stub_evidence(content: str, *, names: Sequence[str]) -> bool:
+        normalized_names = {
+            normalize_surface(name) for name in names if normalize_surface(name)
+        }
+        lines = [
+            re.sub(r"^#{1,6}\s*", "", line).strip()
+            for line in content.splitlines()
+            if line.strip()
+        ]
+        return bool(lines and normalized_names) and all(
+            normalize_surface(line) in normalized_names for line in lines
+        )
+
+    @staticmethod
+    def _optional_int(value: Any) -> int | None:
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _select_entity_sections(content: str, *, names: Sequence[str]) -> str:
@@ -1157,12 +1283,6 @@ class KnowledgeEntityTaskWorker:
         return f"{ENTITY_DIRECTORY}/{slug}.md"
 
     @staticmethod
-    def _non_link_source_path(file_path: str) -> str:
-        """Render provenance text without creating links or stable-ref tokens."""
-
-        return str(file_path).translate(_NON_LINK_PATH_TRANSLATION)
-
-    @staticmethod
     def _render_entity_markdown(
         *,
         entity_name: str,
@@ -1170,12 +1290,14 @@ class KnowledgeEntityTaskWorker:
         aliases: Sequence[str],
         subject_file_id: int | None,
         entity_type: str | None,
+        entity_enriched: bool,
     ) -> str:
         metadata: dict[str, Any] = {
             "documentKind": "knowledgeEntity",
             "processingCapabilities": ["entityEnrich"],
             "entityName": entity_name,
             "aliases": list(aliases),
+            ENTITY_ENRICHED_PROPERTY: entity_enriched,
         }
         if subject_file_id is not None:
             metadata["subjectFileId"] = subject_file_id

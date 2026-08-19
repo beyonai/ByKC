@@ -10,7 +10,7 @@
 - 如何在不建设重型 global/subject namespace 的情况下解决身份限定；
 - 第一版应支持哪些明确、可验证的实体关系；
 - 如何利用多份证据富化实体文档，并将模板保持为软约束；
-- 如何通过内部 Python/SDK Callback 连接异步任务；
+- 如何通过可注入 Callback Protocol 连接异步任务；
 - KnowledgeEntity 定义、索引和富化方法后续如何版本化升级。
 
 本文档描述方法论和目标设计，不规定具体类名、函数名、HTTP 路由或数据库迁移步骤。
@@ -22,6 +22,7 @@
 - [元数据 API](./metadata_api.md)
 - [知识获取、结构化打标与导入流程](./knowledge-acquisition-structured-import-design.md)
 - [KnowledgeEntity 发现与文档富化接口设计](./knowledge-entity-api.md)
+- [KnowledgeEntity 后台处理与 Callback 设计](./knowledge-entity-background-processing-callback-design.md)
 
 ## 2. 范围与非目标
 
@@ -33,7 +34,7 @@
 - 已有实体锚定、新实体发现和实体文档创建；
 - 实体文档的证据召回、富化、引用和原子更新；
 - 第一版关系白名单及其证据规则；
-- discovery/enrich 异步任务的内部 Python/SDK Callback；
+- discovery/enrich 异步任务的文件完成和批次完成 Callback Protocol；
 - 评测、可观测性和分阶段落地方式。
 
 ### 2.2 非目标
@@ -41,7 +42,7 @@
 - 不引入独立 KnowledgeEntity 主数据表；
 - 不建设草稿—审核—发布流程；
 - 不建设 namespace 表、namespace 树或复杂的父子命名空间；
-- 第一版不支持 HTTP Callback、Webhook 或跨进程 callable 序列化；
+- 核心方法论不规定 Callback 的 HTTP、MQ、Webhook 或其他传输实现；
 - 第一版不建设独立关系证据表或关系证据查询层；
 - 不使用向量相似度直接自动合并实体；
 - 不把共现、相似和“相关”直接持久化为业务关系；
@@ -266,11 +267,13 @@ flowchart TD
     Evidence --> Generate["软模板生成"]
     Generate --> Validate["身份、权限、引用和并发强校验"]
     Validate --> Persist["原子更新和时间线"]
-    AC --> Callback["内部 Callback 事件"]
-    Persist --> Callback
+    Mention --> DiscoveryDone["Discovery 文件任务终态"]
+    Persist --> EnrichDone["Enrich 文件任务终态"]
+    DiscoveryDone --> Callback["Callback Protocol"]
+    EnrichDone --> Callback
 ```
 
-实体发现和 Enrich 是两个可独立调度、重试和查询的能力，不要求每次连续执行。
+实体发现和 Enrich 是两个可独立调度和查询的能力，不要求每次连续执行；文件任务失败后不自动重试。
 
 ## 8. 全系统词表与 AC 自动机
 
@@ -330,7 +333,7 @@ normalizedSurface
 
 - 知识库标识；
 - 可选原始文档路径；传入时处理单文件，不传时处理该知识库全部合格原始文档；
-- 可选发现数量限制、模型配置和内部 Callback。
+- 可选发现数量限制和模型配置；Callback 由服务启动时注入，不属于请求输入。
 
 不将独立 ontology object 列表作为 KnowledgeEntity 发现的必要输入。`entityType` 在 v1 中只做辅助分类，不决定实体是否成立。
 
@@ -545,7 +548,7 @@ Enrich 以实体稳定身份为中心，从多份授权证据中组织可阅读�
 - 可选目标 KnowledgeEntity 路径；传入时处理该实体，不传时处理本库 `/KnowledgeEntity` 下全部合格实体文档；
 - 当前 `entityName`、`aliases` 和 `subjectFileId`；
 - 目标文档 checksum；
-- 可选内部 Callback。
+- Callback 由服务启动时注入，不属于 Enrich 请求输入。
 
 全库触发只改变调度范围，不改变执行原子单元：每个实体文档独立召回、生成、校验和提交，并形成自己的任务记录；同批次共享 `batchId`。
 
@@ -622,84 +625,45 @@ discardedRelationCount
 4. 删除本次更新文档的全部出边，不删除其他文档指向它的入边；
 5. 重写 Markdown 引用为带章节/行/偏移证据的 `MENTIONS`，并写入当次 Enrich 产生的结构化关系；
 6. 在同一数据库事务中更新文件摘要、派生状态和更新时间线，对象存储失败时恢复旧字节；
-7. 提交成功后才发送 `task.succeeded` Callback；
+7. 文件任务终态提交后才调用文件完成 Callback；
 8. 任何失败都保留上一版有效文档及其出边快照。
 
 出边所有权遵循“source 文档管理自己的出边”。Enrich 更新文档，因此对该 source 做全量替换；Discovery 不改正文，因此只替换该 source 上由 `ENTITY_DISCOVERY` 生产的 `MENTIONS` 断言，不删除 Markdown Parser 生产的断言。
 
 现有时间线基础见 [`knowledge_file_update_timeline`](../../../src/by_qa/knowledge_base/sql/027_knowledge_file_update_timeline.sql)。
 
-## 12. 内部 Python/SDK Callback
+## 12. Callback Protocol
 
 ### 12.1 范围和协议
 
-v1 只支持内部 Python/SDK 调用，不支持 HTTP URL、Webhook、用户上传代码、跨进程 callable 序列化或服务重启后的持久化回调恢复。
-
-概念签名：
+核心只定义可注入异步 Protocol，不规定具体实现使用 HTTP、RPC、MQ、outbox 或本地函数。
 
 ```python
-TaskCallback = Callable[[TaskEvent], Awaitable[None] | None]
+class KnowledgeEntityProcessingCallback(Protocol):
+    async def on_file_completed(
+        self,
+        event: FileCompletedCallbackInput,
+    ) -> None: ...
+
+    async def on_batch_completed(
+        self,
+        event: BatchCompletedCallbackInput,
+    ) -> None: ...
 ```
 
-Discovery 和 Enrich 接受可选 Callback：
+Protocol 输入模型、返回值、异常隔离、`extra_params` 和可靠性边界统一由 [KnowledgeEntity 后台处理与 Callback 设计](./knowledge-entity-background-processing-callback-design.md) 定义。本文档不维护第二套字段协议。
 
-```python
-discover(..., callback: TaskCallback | None = None) -> batch_acceptance
-enrich(..., callback: TaskCallback | None = None) -> batch_acceptance
-```
+### 12.2 核心语义
 
-同步 Callback 可以兼容包装，但不得阻塞核心事件循环。
-
-### 12.2 事件模型
-
-`TaskEvent` 是不可变快照，至少包含：
-
-```text
-eventId
-taskId
-batchId
-taskType
-eventType
-stage
-status
-sequence
-progress
-sourceFileId
-targetFileIds
-resultSummary
-error
-occurredAt
-```
-
-v1 事件：
-
-- `task.started`；
-- `stage.completed`；
-- `task.succeeded`；
-- `task.failed`。
-
-建议阶段名：
-
-```text
-load_document
-vocabulary_match
-entity_extract
-identity_resolve
-entity_persist
-evidence_retrieve
-document_generate
-document_persist
-```
-
-### 12.3 执行语义
-
-- Callback 是进程内 best-effort 通知；
+- 只调用文件完成和批次完成两个方法；
+- Callback 实现通过 provider 或依赖注入提供；
 - Callback 异常被捕获和记录，不改变主任务状态；
 - Callback 不接收数据库连接、事务或可变任务内部对象；
-- 对应数据提交后才触发阶段完成或成功事件；
-- 进程崩溃可能导致终态事件丢失，v1 不声明 exactly-once；
+- 任务或批次终态提交后才调用 Protocol；
+- 具体传输、认证、重试、持久化和监控由实现方控制；
+- 进程崩溃可能导致终态已提交但 Protocol 尚未调用；
 - 任务查询结果是最终事实来源；
-- 默认只通知阶段完成和终态，避免高频进度事件。
+- 不发送 started、阶段进度或心跳 Callback。
 
 ## 13. 向量同义候选召回
 
@@ -815,7 +779,7 @@ KnowledgeEntity 文档和关系不保存 `definitionVersion`。实体身份由 `
 5. 同一身份升级时保留 `fileId`；
 6. 发布新方法版本后重建 AC 和向量索引；
 7. 对受影响实体按需重新 Enrich；
-8. 通过内部 Callback 通知批处理阶段和结果。
+8. 通过 Callback Protocol 通知文件和批次完成结果。
 
 这是版本迁移任务，不是内容草稿审核流。
 
@@ -907,7 +871,7 @@ KnowledgeEntity 文档和关系不保存 `definitionVersion`。实体身份由 `
 - 建立最小有效实体文档格式；
 - 保留 `knowledge_build_task` 专用于文件构建，新增 `knowledge_semantic_processing_task` 统一承载 discovery/enrich，并支持同批文件共享 `batchId`；
 - 保留原 `026` 不变，通过增量脚本把 `knowledge_file_reference` 扩展为统一关系断言投影；
-- 支持内部 Python/SDK Callback。
+- 支持可注入 Callback Protocol。
 
 ### 阶段 2：AC 与实体发现
 
@@ -953,5 +917,5 @@ KnowledgeEntity 文档和关系不保存 `definitionVersion`。实体身份由 `
 - v1 复用扩展后的 `knowledge_file_reference` 保存统一关系断言和轻量位置证据，不建设独立关系证据层；
 - 共现、相似和“相关”是检索或统计信号，不是持久化业务关系；
 - Enrich 保护身份和证据边界，模板只做软约束；
-- Callback v1 只支持进程内 Python/SDK callable，失败不影响主任务；
+- Callback 核心只定义文件完成和批次完成 Protocol，具体实现失败不影响主任务；
 - KnowledgeEntity 定义、Enrich 方法和索引快照分别版本化，以 shadow 评测和批处理迁移完成升级。

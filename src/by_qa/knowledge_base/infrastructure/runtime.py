@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from os import getenv
+from os import getenv, getpid
+from socket import gethostname
 from typing import Any
+from uuid import uuid4
 
 from by_qa.config import Settings
 from by_qa.core import logger
@@ -47,6 +49,9 @@ from by_qa.knowledge_base.repositories.knowledge_item_chunk_repository import (
 from by_qa.knowledge_base.repositories.knowledge_item_search_repository import (
     KnowledgeItemSearchRepository,
 )
+from by_qa.knowledge_base.repositories.knowledge_semantic_processing_batch_repository import (
+    KnowledgeSemanticProcessingBatchRepository,
+)
 from by_qa.knowledge_base.repositories.knowledge_semantic_processing_task_repository import (
     KnowledgeSemanticProcessingTaskRepository,
 )
@@ -69,6 +74,13 @@ from by_qa.knowledge_base.services.file_metadata_update_service import (
     FileMetadataUpdateService,
 )
 from by_qa.knowledge_base.services.knowledge_base_service import KnowledgeBaseService
+from by_qa.knowledge_base.services.knowledge_entity_background_runner import (
+    KnowledgeEntityBackgroundRunner,
+)
+from by_qa.knowledge_base.services.knowledge_entity_callback import (
+    KnowledgeEntityCallbackInvoker,
+    load_knowledge_entity_processing_callback,
+)
 from by_qa.knowledge_base.services.knowledge_entity_discovery import (
     KnowledgeEntityDiscovery,
 )
@@ -390,6 +402,7 @@ async def build_knowledge_entity_processing_service(
     knowledge_base_repository = KnowledgeBaseRepository()
     knowledge_entity_repository = KnowledgeEntityRepository()
     semantic_processing_task_repository = KnowledgeSemanticProcessingTaskRepository()
+    semantic_processing_batch_repository = KnowledgeSemanticProcessingBatchRepository()
     knowledge_file_reference_repository = KnowledgeFileReferenceRepository()
     storage_provider = await build_storage_provider(
         settings, embedding_config=embedding_config
@@ -422,19 +435,46 @@ async def build_knowledge_entity_processing_service(
         knowledge_entity_discovery=KnowledgeEntityDiscovery(discovery_llm),
         knowledge_entity_enricher=KnowledgeEntityEnricher(enrichment_llm),
     )
+    callback_invoker = KnowledgeEntityCallbackInvoker(
+        callback=load_knowledge_entity_processing_callback()
+    )
     service = KnowledgeEntityProcessingOrchestrator(
         connection_factory=connection_factory,
         knowledge_base_repository=knowledge_base_repository,
         knowledge_entity_repository=knowledge_entity_repository,
+        knowledge_semantic_processing_batch_repository=(
+            semantic_processing_batch_repository
+        ),
         knowledge_semantic_processing_task_repository=semantic_processing_task_repository,
         knowledge_file_reference_repository=knowledge_file_reference_repository,
         worker=worker,
+        callback_invoker=callback_invoker,
     )
+    if getattr(settings, "knowledge_entity_worker_enabled", False):
+        worker_id = settings.knowledge_entity_worker_id.strip() or (
+            f"{gethostname()}:{getpid()}:{uuid4().hex[:12]}"
+        )
+        service.background_runner = KnowledgeEntityBackgroundRunner(
+            connection_factory=connection_factory,
+            task_repository=semantic_processing_task_repository,
+            batch_repository=semantic_processing_batch_repository,
+            worker=worker,
+            callback_invoker=callback_invoker,
+            worker_id=worker_id,
+            concurrency=settings.knowledge_entity_worker_concurrency,
+            poll_seconds=settings.knowledge_entity_worker_poll_seconds,
+            task_timeout_seconds=settings.knowledge_entity_task_timeout_seconds,
+            lease_seconds=settings.knowledge_entity_lease_seconds,
+            heartbeat_seconds=settings.knowledge_entity_heartbeat_seconds,
+            reaper_seconds=settings.knowledge_entity_reaper_seconds,
+            status_log_seconds=(settings.knowledge_entity_worker_status_log_seconds),
+            shutdown_grace_seconds=(settings.knowledge_entity_shutdown_grace_seconds),
+        )
     logger.info(
-        "knowledge_entity_runtime build completed: orchestrator_type=%s, worker_type=%s, scheduler_type=%s",
+        "knowledge_entity_runtime build completed: orchestrator_type=%s, worker_type=%s, background_runner_enabled=%s",
         type(service).__name__,
         type(worker).__name__,
-        type(service.task_scheduler).__name__,
+        service.background_runner is not None,
     )
     return service
 

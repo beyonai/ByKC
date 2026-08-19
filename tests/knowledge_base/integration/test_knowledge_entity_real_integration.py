@@ -1628,14 +1628,23 @@ entity and links to its canonical file.
             )
 
             # KE-T4: use the same application-scoped real service as an SDK
-            # caller. Callback events are emitted only after each persisted
-            # transition; terminal status is then verified through HTTP.
-            events: list[Any] = []
+            # caller. The configured Protocol receives only committed file and
+            # batch terminal events; status is then verified through HTTP.
+            file_events: list[Any] = []
+            batch_events: list[Any] = []
 
-            async def sdk_discovery(callback) -> Any:
+            class CapturingCallback:
+                async def on_file_completed(self, event: Any) -> None:
+                    file_events.append(event)
+
+                async def on_batch_completed(self, event: Any) -> None:
+                    batch_events.append(event)
+
+            async def sdk_discovery(callback_provider) -> Any:
                 service = (
                     await main_module.resolve_knowledge_entity_processing_service()
                 )
+                service.callback_invoker.callback = callback_provider
                 return await service.discover_knowledge_entities(
                     EntityDiscoveryRequest(
                         knCode=kb_code,
@@ -1643,10 +1652,9 @@ entity and links to its canonical file.
                         maxEntities=1,
                         force=True,
                     ),
-                    callback=callback,
                 )
 
-            callback_batch = client.portal.call(sdk_discovery, events.append)
+            callback_batch = client.portal.call(sdk_discovery, CapturingCallback())
             assert callback_batch.accepted_count == 1
             callback_task_id = callback_batch.tasks[0].task_id
             callback_tasks = _wait_for_batch(
@@ -1657,17 +1665,16 @@ entity and links to its canonical file.
             )
             assert callback_tasks[0]["status"] == "SUCCEEDED"
             callback_events = [
-                event for event in events if event.task_id == callback_task_id
+                event for event in file_events if event.task_id == callback_task_id
             ]
-            assert [event.event_type for event in callback_events] == [
-                "task.accepted",
-                "task.started",
-                "task.succeeded",
-            ]
-            assert [event.sequence for event in callback_events] == [0, 1, 2]
-            assert [event.progress for event in callback_events] == [0, 1, 100]
+            assert len(callback_events) == 1
+            assert callback_events[0].status.value == "SUCCEEDED"
+            assert callback_events[0].progress.completed_count == 1
             assert all(
                 event.batch_id == callback_batch.batch_id for event in callback_events
+            )
+            assert any(
+                event.batch_id == callback_batch.batch_id for event in batch_events
             )
 
             # KE-R2: force creates a new producer run but replaces the old
@@ -1695,11 +1702,18 @@ entity and links to its canonical file.
             assert after_force_relation["assertionCount"] == 2
 
             # KE-T5: callback failure is isolated from the task transaction.
-            def raising_callback(event: Any) -> None:
-                del event
-                raise RuntimeError("intentional integration callback failure")
+            class RaisingCallback:
+                async def on_file_completed(self, event: Any) -> None:
+                    del event
+                    raise RuntimeError("intentional integration callback failure")
 
-            failing_callback_batch = client.portal.call(sdk_discovery, raising_callback)
+                async def on_batch_completed(self, event: Any) -> None:
+                    del event
+                    raise RuntimeError("intentional integration callback failure")
+
+            failing_callback_batch = client.portal.call(
+                sdk_discovery, RaisingCallback()
+            )
             failing_callback_tasks = _wait_for_batch(
                 client,
                 kb_code=kb_code,

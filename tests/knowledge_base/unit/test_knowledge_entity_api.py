@@ -9,6 +9,7 @@ from by_qa.knowledge_base.api import routes
 from by_qa.knowledge_base.api.knowledge_entity_schemas import (
     EntityDiscoveryRequest,
     EntityEnrichRequest,
+    ProcessingBatchStatusRequest,
     ProcessingTaskStatusRequest,
     SemanticRelationsRequest,
 )
@@ -30,8 +31,8 @@ class FakeKnowledgeEntityService:
             "reasonCode": "NEVER_PROCESSED",
         }
 
-    async def discover_knowledge_entities(self, request, *, callback=None):
-        self.calls.append(("discovery", request, callback))
+    async def discover_knowledge_entities(self, request):
+        self.calls.append(("discovery", request, None))
         return {
             "batchId": "ed-1",
             "scope": "WHOLE_KB" if request.file_path is None else "SINGLE_FILE",
@@ -43,8 +44,8 @@ class FakeKnowledgeEntityService:
             "tasks": [],
         }
 
-    async def enrich_knowledge_entities(self, request, *, callback=None):
-        self.calls.append(("enrich", request, callback))
+    async def enrich_knowledge_entities(self, request):
+        self.calls.append(("enrich", request, None))
         return {
             "batchId": "ee-1",
             "scope": "WHOLE_KB" if request.file_path is None else "SINGLE_FILE",
@@ -62,6 +63,32 @@ class FakeKnowledgeEntityService:
             "knowledgeBaseId": "11",
             "knCode": request.kb_code,
             "total": 0,
+            "pageNum": request.page_num,
+            "pageSize": request.page_size,
+            "data": [],
+        }
+
+    async def get_processing_batch_status(self, request):
+        self.calls.append(("batch_status", request, None))
+        return {
+            "batchId": request.batch_id,
+            "knowledgeBaseId": "11",
+            "knCode": request.kb_code,
+            "taskType": "ENTITY_DISCOVERY",
+            "scope": "WHOLE_KB",
+            "status": "PROCESSING",
+            "version": 1,
+            "totalCount": 2,
+            "completedCount": 1,
+            "pendingCount": 1,
+            "runningCount": 0,
+            "succeededCount": 1,
+            "failedCount": 0,
+            "skippedCount": 0,
+            "progress": 50,
+            "extraParams": {"requestId": "req-1"},
+            "createdAt": "2026-08-18T00:00:00Z",
+            "completedAt": None,
             "pageNum": request.page_num,
             "pageSize": request.page_size,
             "data": [],
@@ -105,13 +132,29 @@ def make_client(service: FakeKnowledgeEntityService | None) -> TestClient:
 
 
 def test_discovery_and_enrich_requests_support_whole_kb_scope():
-    discovery = EntityDiscoveryRequest.model_validate({"knCode": "1"})
+    discovery = EntityDiscoveryRequest.model_validate(
+        {"knCode": "1", "extraParams": {"requestId": "req-1"}}
+    )
     enrich = EntityEnrichRequest.model_validate({"knCode": "1"})
 
     assert discovery.file_path is None
     assert discovery.max_entities == 12
+    assert discovery.extra_params == {"requestId": "req-1"}
     assert enrich.file_path is None
     assert enrich.top_k == 20
+
+
+def test_extra_params_rejects_oversized_or_deep_payloads():
+    with pytest.raises(ValidationError, match="16384"):
+        EntityDiscoveryRequest.model_validate(
+            {"knCode": "1", "extraParams": {"value": "x" * 17000}}
+        )
+
+    nested = "leaf"
+    for _ in range(9):
+        nested = {"value": nested}
+    with pytest.raises(ValidationError, match="depth"):
+        EntityEnrichRequest.model_validate({"knCode": "1", "extraParams": nested})
 
 
 @pytest.mark.parametrize(
@@ -152,6 +195,16 @@ def test_task_status_is_scoped_by_kb_with_optional_file_path():
 
     with pytest.raises(ValidationError):
         ProcessingTaskStatusRequest.model_validate({"taskId": "9001"})
+
+
+def test_batch_status_requires_kb_and_batch_identity():
+    request = ProcessingBatchStatusRequest.model_validate(
+        {"knCode": "1", "batchId": "ed-1", "pageSize": 20}
+    )
+
+    assert request.kb_code == "1"
+    assert request.batch_id == "ed-1"
+    assert request.page_size == 20
 
 
 def test_semantic_relation_request_has_no_evidence_switch():
@@ -245,6 +298,20 @@ def test_status_route_queries_by_kb_and_optional_path():
     assert operation == "status"
     assert request.file_path == "/docs/a.md"
     assert request.task_type.value == "ENTITY_DISCOVERY"
+
+
+def test_batch_status_route_returns_progress_and_extra_params():
+    service = FakeKnowledgeEntityService()
+    response = make_client(service).post(
+        "/api/v1/knowledgeItems/processingBatchStatus",
+        json={"knCode": "1", "batchId": "ed-1"},
+    )
+
+    result = response.json()["resultObject"]
+    assert result["completedCount"] == 1
+    assert result["progress"] == 50
+    assert result["extraParams"] == {"requestId": "req-1"}
+    assert service.calls[0][0] == "batch_status"
 
 
 def test_eligibility_and_semantic_relation_routes_delegate_to_service():

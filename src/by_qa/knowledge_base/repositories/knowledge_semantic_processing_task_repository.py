@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from by_qa.core import logger
@@ -26,6 +26,7 @@ class KnowledgeSemanticProcessingTaskRepository:
         task_type: str,
         status: str = "pending",
         batch_id: str | None = None,
+        file_path_snapshot: str = "",
         current_stage: str | None = None,
         progress: int | None = 0,
         input_fingerprint: str | None = None,
@@ -33,6 +34,12 @@ class KnowledgeSemanticProcessingTaskRepository:
         method_version: str | None = None,
         index_version: str | None = None,
         request_params: dict[str, Any] | None = None,
+        extra_params: Mapping[str, Any] | None = None,
+        result_payload: Mapping[str, Any] | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        failure_kind: str | None = None,
+        outcome_uncertain: bool = False,
     ) -> dict[str, Any] | None:
         """Create one Discovery or Enrich task for an actual input file."""
         normalized_task_type = self._normalize_task_type(task_type)
@@ -49,6 +56,7 @@ class KnowledgeSemanticProcessingTaskRepository:
                 fs_entry_id,
                 task_type,
                 batch_id,
+                file_path_snapshot,
                 status,
                 current_stage,
                 progress,
@@ -57,7 +65,14 @@ class KnowledgeSemanticProcessingTaskRepository:
                 method_version,
                 index_version,
                 request_params,
+                extra_params,
+                result_payload,
+                error_code,
+                error_message,
+                failure_kind,
+                outcome_uncertain,
                 started_at,
+                finished_at,
                 created_at,
                 updated_at
             )
@@ -66,6 +81,7 @@ class KnowledgeSemanticProcessingTaskRepository:
                 %(fs_entry_id)s,
                 %(task_type)s,
                 %(batch_id)s,
+                %(file_path_snapshot)s,
                 %(status)s::varchar(32),
                 %(current_stage)s,
                 %(progress)s,
@@ -74,9 +90,24 @@ class KnowledgeSemanticProcessingTaskRepository:
                 %(method_version)s,
                 %(index_version)s,
                 %(request_params)s::jsonb,
+                %(extra_params)s::jsonb,
+                %(result_payload)s::jsonb,
+                %(error_code)s,
+                %(error_message)s,
+                %(failure_kind)s,
+                %(outcome_uncertain)s,
                 CASE
                     WHEN %(status)s::varchar(32) = 'running'::varchar(32)
                         THEN NOW()
+                    ELSE NULL
+                END,
+                CASE
+                    WHEN %(status)s::varchar(32) IN (
+                        'succeeded'::varchar(32),
+                        'failed'::varchar(32),
+                        'skipped'::varchar(32),
+                        'cancelled'::varchar(32)
+                    ) THEN NOW()
                     ELSE NULL
                 END,
                 NOW(),
@@ -89,6 +120,7 @@ class KnowledgeSemanticProcessingTaskRepository:
                 "fs_entry_id": fs_entry_id,
                 "task_type": normalized_task_type,
                 "batch_id": batch_id,
+                "file_path_snapshot": file_path_snapshot,
                 "status": normalized_status,
                 "current_stage": current_stage,
                 "progress": normalized_progress,
@@ -96,7 +128,13 @@ class KnowledgeSemanticProcessingTaskRepository:
                 "input_checksum": input_checksum,
                 "method_version": method_version,
                 "index_version": index_version,
-                "request_params": self._json_value(request_params),
+                "request_params": self._json_value(request_params or {}),
+                "extra_params": self._json_value(extra_params or {}),
+                "result_payload": self._json_value(result_payload),
+                "error_code": error_code,
+                "error_message": error_message,
+                "failure_kind": failure_kind,
+                "outcome_uncertain": outcome_uncertain,
             },
         )
         row = await cursor.fetchone()
@@ -230,13 +268,13 @@ class KnowledgeSemanticProcessingTaskRepository:
             WITH ranked_tasks AS (
                 SELECT
                     task.*,
-                    fs.virtual_path AS file_path,
+                    COALESCE(fs.virtual_path, task.file_path_snapshot) AS file_path,
                     ROW_NUMBER() OVER (
                         PARTITION BY task.fs_entry_id, task.task_type
                         ORDER BY task.created_at DESC, task.kid DESC
                     ) AS task_rank
                 FROM knowledge_semantic_processing_task task
-                JOIN knowledge_fs_entry fs ON fs.kid = task.fs_entry_id
+                LEFT JOIN knowledge_fs_entry fs ON fs.kid = task.fs_entry_id
                 WHERE {" AND ".join(conditions)}
             )
             SELECT
@@ -246,6 +284,7 @@ class KnowledgeSemanticProcessingTaskRepository:
                 file_path,
                 task_type,
                 batch_id,
+                file_path_snapshot,
                 status,
                 current_stage,
                 progress,
@@ -254,9 +293,16 @@ class KnowledgeSemanticProcessingTaskRepository:
                 method_version,
                 index_version,
                 request_params,
+                extra_params,
                 result_payload,
                 error_code,
                 error_message,
+                failure_kind,
+                outcome_uncertain,
+                worker_id,
+                lease_token,
+                heartbeat_at,
+                lease_expires_at,
                 started_at,
                 finished_at,
                 created_at,
@@ -340,6 +386,192 @@ class KnowledgeSemanticProcessingTaskRepository:
         )
         return total
 
+    async def claim_next_task(
+        self,
+        cursor: Any,
+        *,
+        worker_id: str,
+        lease_token: str,
+        lease_seconds: int,
+    ) -> dict[str, Any] | None:
+        """Atomically claim one pending task without blocking other runners."""
+        if lease_seconds < 1:
+            raise ValueError("lease_seconds must be greater than 0")
+        await cursor.execute(
+            """
+            UPDATE knowledge_semantic_processing_task
+            SET status = 'running',
+                current_stage = 'started',
+                progress = 1,
+                worker_id = %(worker_id)s,
+                lease_token = %(lease_token)s,
+                heartbeat_at = NOW(),
+                lease_expires_at = NOW()
+                    + (%(lease_seconds)s * INTERVAL '1 second'),
+                started_at = COALESCE(started_at, NOW()),
+                updated_at = NOW()
+            WHERE kid IN (
+                SELECT kid
+                FROM knowledge_semantic_processing_task
+                WHERE status = 'pending'
+                ORDER BY created_at, kid
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING *
+            """,
+            {
+                "worker_id": worker_id,
+                "lease_token": lease_token,
+                "lease_seconds": lease_seconds,
+            },
+        )
+        return await cursor.fetchone()
+
+    async def refresh_lease(
+        self,
+        cursor: Any,
+        *,
+        task_id: int,
+        worker_id: str,
+        lease_token: str,
+        lease_seconds: int,
+    ) -> bool:
+        """Refresh only the lease still owned by the calling worker."""
+        await cursor.execute(
+            """
+            UPDATE knowledge_semantic_processing_task
+            SET heartbeat_at = NOW(),
+                lease_expires_at = NOW()
+                    + (%(lease_seconds)s * INTERVAL '1 second'),
+                updated_at = NOW()
+            WHERE kid = %(task_id)s
+              AND status = 'running'
+              AND worker_id = %(worker_id)s
+              AND lease_token = %(lease_token)s
+            RETURNING kid
+            """,
+            {
+                "task_id": task_id,
+                "worker_id": worker_id,
+                "lease_token": lease_token,
+                "lease_seconds": lease_seconds,
+            },
+        )
+        return await cursor.fetchone() is not None
+
+    async def finish_claimed_task(
+        self,
+        cursor: Any,
+        *,
+        task_id: int,
+        lease_token: str,
+        status: str,
+        current_stage: str,
+        index_version: str | None = None,
+        result_payload: Mapping[str, Any] | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        failure_kind: str | None = None,
+        outcome_uncertain: bool = False,
+    ) -> dict[str, Any] | None:
+        """Finish an owned running task and fence stale workers."""
+        normalized_status = self._normalize_status(status)
+        if normalized_status not in {"succeeded", "failed"}:
+            raise ValueError("claimed task may only finish as succeeded or failed")
+        await cursor.execute(
+            """
+            UPDATE knowledge_semantic_processing_task
+            SET status = %(status)s,
+                current_stage = %(current_stage)s,
+                progress = 100,
+                index_version = %(index_version)s,
+                result_payload = %(result_payload)s::jsonb,
+                error_code = %(error_code)s,
+                error_message = %(error_message)s,
+                failure_kind = %(failure_kind)s,
+                outcome_uncertain = %(outcome_uncertain)s,
+                worker_id = NULL,
+                lease_token = NULL,
+                heartbeat_at = NULL,
+                lease_expires_at = NULL,
+                finished_at = NOW(),
+                updated_at = NOW()
+            WHERE kid = %(task_id)s
+              AND status = 'running'
+              AND lease_token = %(lease_token)s
+            RETURNING *
+            """,
+            {
+                "task_id": task_id,
+                "lease_token": lease_token,
+                "status": normalized_status,
+                "current_stage": current_stage,
+                "index_version": index_version,
+                "result_payload": self._json_value(result_payload),
+                "error_code": error_code,
+                "error_message": error_message,
+                "failure_kind": failure_kind,
+                "outcome_uncertain": outcome_uncertain,
+            },
+        )
+        return await cursor.fetchone()
+
+    async def lock_next_expired_task(self, cursor: Any) -> dict[str, Any] | None:
+        """Lock one expired running task for Lease Reaper processing."""
+        await cursor.execute(
+            """
+            SELECT *
+            FROM knowledge_semantic_processing_task
+            WHERE status = 'running'
+              AND lease_expires_at < NOW()
+            ORDER BY lease_expires_at, kid
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+            """
+        )
+        return await cursor.fetchone()
+
+    async def fail_locked_expired_task(
+        self, cursor: Any, *, task_id: int
+    ) -> dict[str, Any] | None:
+        """Fail an expired task previously locked by the current transaction."""
+        await cursor.execute(
+            """
+            UPDATE knowledge_semantic_processing_task
+            SET status = 'failed',
+                current_stage = 'failed',
+                progress = 100,
+                error_code = 'WORKER_LOST',
+                error_message = 'Worker lease expired during execution',
+                failure_kind = 'WORKER_LOST',
+                outcome_uncertain = TRUE,
+                worker_id = NULL,
+                lease_token = NULL,
+                heartbeat_at = NULL,
+                lease_expires_at = NULL,
+                finished_at = NOW(),
+                updated_at = NOW()
+            WHERE kid = %(task_id)s
+              AND status = 'running'
+              AND lease_expires_at < NOW()
+            RETURNING *
+            """,
+            {"task_id": task_id},
+        )
+        return await cursor.fetchone()
+
+    async def get_task(self, cursor: Any, *, task_id: int) -> dict[str, Any] | None:
+        await cursor.execute(
+            """
+            SELECT *
+            FROM knowledge_semantic_processing_task
+            WHERE kid = %(task_id)s
+            """,
+            {"task_id": task_id},
+        )
+        return await cursor.fetchone()
+
     def _processing_filters(
         self,
         *,
@@ -391,7 +623,7 @@ class KnowledgeSemanticProcessingTaskRepository:
         if offset < 0:
             raise ValueError("offset must be greater than or equal to 0")
 
-    def _json_value(self, value: dict[str, Any] | None) -> str | None:
+    def _json_value(self, value: Mapping[str, Any] | None) -> str | None:
         if value is None:
             return None
         return json.dumps(value, ensure_ascii=False)

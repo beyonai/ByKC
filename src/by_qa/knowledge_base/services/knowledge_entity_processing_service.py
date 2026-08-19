@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
-import inspect
 import json
 import time
 from collections import Counter
@@ -13,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import PurePosixPath
-from typing import Any, Protocol
+from typing import Any
 from uuid import uuid4
 
 from by_qa.core import logger
@@ -21,6 +19,9 @@ from by_qa.knowledge_base.api.knowledge_entity_schemas import (
     EntityDiscoveryRequest,
     EntityEnrichRequest,
     ProcessingBatchAccepted,
+    ProcessingBatchStatus,
+    ProcessingBatchStatusRequest,
+    ProcessingBatchStatusResult,
     ProcessingCapability,
     ProcessingEligibility,
     ProcessingEligibilityRequest,
@@ -40,6 +41,13 @@ from by_qa.knowledge_base.api.knowledge_entity_schemas import (
     SemanticRelationsRequest,
 )
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
+from by_qa.knowledge_base.services.knowledge_entity_callback import (
+    BatchCompletedCallbackInput,
+    KnowledgeEntityCallbackInvoker,
+    build_batch_progress,
+    invoke_terminal_callbacks,
+    json_mapping,
+)
 
 DISCOVERY_METHOD_VERSION = "discovery/1.3"
 ENRICH_METHOD_VERSION = "enrich/1.0"
@@ -133,111 +141,27 @@ def _canonical_json(value: Any) -> str:
     )
 
 
-@dataclass(frozen=True)
-class TaskEvent:
-    """Immutable, in-process callback event."""
-
-    event_id: str
-    task_id: str
-    batch_id: str
-    task_type: ProcessingTaskType
-    event_type: str
-    stage: str | None
-    status: ProcessingTaskStatus
-    sequence: int
-    progress: int
-    source_file_id: str | None
-    target_file_ids: tuple[str, ...] = ()
-    result_summary: Mapping[str, Any] | None = None
-    error: Mapping[str, Any] | None = None
-    occurred_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-
-
-TaskCallback = Callable[[TaskEvent], Awaitable[None] | None]
-
-
-@dataclass(frozen=True)
-class TaskExecutionContext:
-    """Stable hand-off from orchestration to a processing worker."""
-
-    task_id: int
-    batch_id: str
-    task_type: ProcessingTaskType
-    kb_code: str
-    knowledge_base_id: int
-    source_file_id: int
-    file_path: str
-    input_fingerprint: str
-    input_checksum: str | None
-    request_params: Mapping[str, Any]
-
-
-@dataclass(frozen=True)
-class TaskWorkerResult:
-    result_payload: Mapping[str, Any] | None = None
-    target_file_ids: tuple[int, ...] = ()
-    index_version: str | None = None
-
-
-class KnowledgeEntityTaskWorker(Protocol):
-    async def run_task(
-        self, context: TaskExecutionContext
-    ) -> TaskWorkerResult | Mapping[str, Any] | None: ...
-
-
-class KnowledgeEntityTaskScheduler(Protocol):
-    def schedule(self, task_factory: Callable[[], Awaitable[None]]) -> None: ...
-
-
-class AsyncioTaskScheduler:
-    """Default same-process scheduler, required for callable callbacks."""
-
-    def __init__(self) -> None:
-        self._tasks: set[asyncio.Task[None]] = set()
-
-    def schedule(self, task_factory: Callable[[], Awaitable[None]]) -> None:
-        task = asyncio.create_task(task_factory())
-        self._tasks.add(task)
-        logger.debug(
-            "knowledge_entity_task_scheduler task scheduled: active_task_count=%s",
-            len(self._tasks),
-        )
-        task.add_done_callback(self._task_done)
-
-    def _task_done(self, task: asyncio.Task[None]) -> None:
-        self._tasks.discard(task)
-        if task.cancelled():
-            logger.warning(
-                "knowledge_entity_task_scheduler task cancelled: active_task_count=%s",
-                len(self._tasks),
-            )
-            return
-        failure = task.exception()
-        if failure is not None:
-            logger.error(
-                "knowledge_entity_task_scheduler task failed: error_type=%s, active_task_count=%s",
-                type(failure).__name__,
-                len(self._tasks),
-                exc_info=(type(failure), failure, failure.__traceback__),
-            )
-            return
-        logger.debug(
-            "knowledge_entity_task_scheduler task completed: active_task_count=%s",
-            len(self._tasks),
-        )
-
-
 @dataclass
 class KnowledgeEntityProcessingOrchestrator:
     connection_factory: Callable[[], Awaitable[Any]]
     knowledge_base_repository: Any
     knowledge_entity_repository: Any
     knowledge_semantic_processing_task_repository: Any
+    knowledge_semantic_processing_batch_repository: Any
     knowledge_file_reference_repository: Any
-    worker: KnowledgeEntityTaskWorker
-    task_scheduler: KnowledgeEntityTaskScheduler = field(
-        default_factory=AsyncioTaskScheduler
+    worker: Any
+    callback_invoker: KnowledgeEntityCallbackInvoker = field(
+        default_factory=KnowledgeEntityCallbackInvoker
     )
+    background_runner: Any | None = None
+
+    async def start(self) -> None:
+        if self.background_runner is not None:
+            await self.background_runner.start()
+
+    async def stop(self) -> None:
+        if self.background_runner is not None:
+            await self.background_runner.stop()
 
     async def evaluate_processing_eligibility(
         self, request: ProcessingEligibilityRequest
@@ -273,27 +197,21 @@ class KnowledgeEntityProcessingOrchestrator:
     async def discover_knowledge_entities(
         self,
         request: EntityDiscoveryRequest,
-        *,
-        callback: TaskCallback | None = None,
     ) -> ProcessingBatchAccepted:
         return await self._accept(
             request=request,
             capability=ProcessingCapability.ENTITY_DISCOVERY,
             task_type=ProcessingTaskType.ENTITY_DISCOVERY,
-            callback=callback,
         )
 
     async def enrich_knowledge_entities(
         self,
         request: EntityEnrichRequest,
-        *,
-        callback: TaskCallback | None = None,
     ) -> ProcessingBatchAccepted:
         return await self._accept(
             request=request,
             capability=ProcessingCapability.ENTITY_ENRICH,
             task_type=ProcessingTaskType.DOCUMENT_ENRICH,
-            callback=callback,
         )
 
     async def get_processing_task_status(
@@ -351,6 +269,63 @@ class KnowledgeEntityProcessingOrchestrator:
                 len(rows),
             )
             return result
+        finally:
+            await connection.close()
+
+    async def get_processing_batch_status(
+        self, request: ProcessingBatchStatusRequest
+    ) -> ProcessingBatchStatusResult:
+        connection = await self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            knowledge_base_id = await self._resolve_kb(cursor, request.kb_code)
+            batch = await self.knowledge_semantic_processing_batch_repository.get_batch(
+                cursor,
+                batch_id=request.batch_id,
+                knowledge_base_id=knowledge_base_id,
+            )
+            if batch is None:
+                raise KnowledgeBaseValidationError(
+                    f"processing batch not found: {request.batch_id}"
+                )
+            counts = await self.knowledge_semantic_processing_batch_repository.count_tasks_by_status(
+                cursor, batch_id=request.batch_id
+            )
+            rows = await self.knowledge_semantic_processing_task_repository.list_processing_tasks(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                batch_id=request.batch_id,
+                latest_only=False,
+                limit=request.page_size,
+                offset=(request.page_num - 1) * request.page_size,
+            )
+            total_count = int(batch["total_count"])
+            completed_count = int(batch["completed_count"])
+            return ProcessingBatchStatusResult(
+                batch_id=str(batch["batch_id"]),
+                knowledge_base_id=str(knowledge_base_id),
+                kb_code=request.kb_code,
+                task_type=ProcessingTaskType(str(batch["task_type"]).upper()),
+                scope=ProcessingScope(str(batch["scope"]).upper()),
+                status=ProcessingBatchStatus(str(batch["status"]).upper()),
+                version=int(batch["version"]),
+                total_count=total_count,
+                completed_count=completed_count,
+                pending_count=int(counts.get("pending", 0)),
+                running_count=int(counts.get("running", 0)),
+                succeeded_count=int(counts.get("succeeded", 0)),
+                failed_count=int(counts.get("failed", 0)),
+                skipped_count=int(counts.get("skipped", 0)),
+                progress=(
+                    100 if total_count == 0 else completed_count * 100 // total_count
+                ),
+                extra_params=json_mapping(batch.get("extra_params")) or {},
+                created_at=batch["created_at"],
+                completed_at=batch.get("completed_at"),
+                page_num=request.page_num,
+                page_size=request.page_size,
+                data=[self._task_item(row, request.include_details) for row in rows],
+            )
         finally:
             await connection.close()
 
@@ -475,7 +450,6 @@ class KnowledgeEntityProcessingOrchestrator:
         request: EntityDiscoveryRequest | EntityEnrichRequest,
         capability: ProcessingCapability,
         task_type: ProcessingTaskType,
-        callback: TaskCallback | None,
     ) -> ProcessingBatchAccepted:
         batch_id = self._batch_id(task_type)
         acceptance_started_at = time.perf_counter()
@@ -485,18 +459,19 @@ class KnowledgeEntityProcessingOrchestrator:
             else ProcessingScope.WHOLE_KB
         )
         logger.info(
-            "knowledge_entity_processing_service batch acceptance started: batch_id=%s, kb_code=%s, file_path=%s, task_type=%s, scope=%s, force=%s, callback_configured=%s",
+            "knowledge_entity_processing_service batch acceptance started: batch_id=%s, kb_code=%s, file_path=%s, task_type=%s, scope=%s, force=%s",
             batch_id,
             request.kb_code,
             request.file_path,
             task_type.value,
             scope.value,
             request.force,
-            callback is not None,
         )
         connection = await self.connection_factory()
-        contexts: list[TaskExecutionContext] = []
         summaries: list[ProcessingTaskSummary] = []
+        terminal_callbacks: list[
+            tuple[dict[str, Any], dict[str, Any], dict[str, int]]
+        ] = []
         eligible_count = reused_count = skipped_count = 0
         eligibility_counts: Counter[str] = Counter()
         reason_counts: Counter[str] = Counter()
@@ -530,115 +505,151 @@ class KnowledgeEntityProcessingOrchestrator:
                 scope.value,
                 len(files),
             )
+            batch = (
+                await self.knowledge_semantic_processing_batch_repository.create_batch(
+                    cursor,
+                    batch_id=batch_id,
+                    knowledge_base_id=knowledge_base_id,
+                    task_type=task_type.value,
+                    scope=scope.value,
+                    total_count=len(files),
+                    extra_params=request.extra_params,
+                )
+            )
+            if batch is None:
+                raise RuntimeError("failed to create semantic processing batch")
+            params = request.model_dump(
+                mode="json", by_alias=True, exclude={"extra_params"}
+            )
             for file_row in files:
+                file_id = self._row_id(file_row)
+                file_path = str(file_row["file_path"])
+                skip_reason: str | None = None
+                reused_task_id: int | None = None
+                evaluation: _Evaluation | None = None
                 if (
                     capability == ProcessingCapability.ENTITY_DISCOVERY
-                    and self._inside_entity_directory(str(file_row["file_path"]))
+                    and self._inside_entity_directory(file_path)
                 ):
-                    skipped_count += 1
+                    skip_reason = "ENTITY_DIRECTORY_EXCLUDED"
                     reason_counts["ENTITY_DIRECTORY_EXCLUDED"] += 1
-                    continue
-                evaluation = await self._evaluate_file(
-                    cursor,
-                    request.kb_code,
-                    knowledge_base_id,
-                    file_row,
-                    capability,
-                )
-                eligibility_counts[evaluation.result.eligibility.value] += 1
-                reason_counts[evaluation.result.reason_code or "NONE"] += 1
-                logger.debug(
-                    "knowledge_entity_processing_service file eligibility evaluated: batch_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s, eligibility=%s, reason_code=%s",
-                    batch_id,
-                    knowledge_base_id,
-                    request.kb_code,
-                    evaluation.result.file_id,
-                    evaluation.result.file_path,
-                    task_type.value,
-                    evaluation.result.eligibility.value,
-                    evaluation.result.reason_code,
-                )
-                if evaluation.result.eligibility == ProcessingEligibility.INELIGIBLE:
-                    skipped_count += 1
-                    continue
-                eligible_count += 1
-                await self._lock_file(cursor, self._row_id(file_row))
-                reusable = await self._find_active_task(
-                    cursor,
-                    knowledge_base_id,
-                    self._row_id(file_row),
-                    task_type,
-                )
-                if reusable is None and not request.force:
-                    reusable = await self._find_fresh_task(
+                else:
+                    evaluation = await self._evaluate_file(
                         cursor,
+                        request.kb_code,
                         knowledge_base_id,
-                        self._row_id(file_row),
-                        task_type,
-                        evaluation.input_fingerprint,
+                        file_row,
+                        capability,
                     )
-                if reusable is not None:
-                    reused_count += 1
-                    summaries.append(self._task_summary(reusable, reused=True))
+                    eligibility_counts[evaluation.result.eligibility.value] += 1
+                    reason_counts[evaluation.result.reason_code or "NONE"] += 1
                     logger.debug(
-                        "knowledge_entity_processing_service task reused: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_path=%s, task_type=%s, status=%s",
+                        "knowledge_entity_processing_service file eligibility evaluated: batch_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s, eligibility=%s, reason_code=%s",
                         batch_id,
-                        self._row_id(reusable),
                         knowledge_base_id,
                         request.kb_code,
-                        file_row["file_path"],
+                        evaluation.result.file_id,
+                        evaluation.result.file_path,
                         task_type.value,
-                        reusable["status"],
+                        evaluation.result.eligibility.value,
+                        evaluation.result.reason_code,
                     )
-                    continue
-                params = request.model_dump(mode="json", by_alias=True)
+                    if (
+                        evaluation.result.eligibility
+                        == ProcessingEligibility.INELIGIBLE
+                    ):
+                        skip_reason = evaluation.result.reason_code or "INELIGIBLE"
+                    else:
+                        eligible_count += 1
+                        await self._lock_file(cursor, file_id)
+                        reusable = await self._find_active_task(
+                            cursor,
+                            knowledge_base_id,
+                            file_id,
+                            task_type,
+                        )
+                        if reusable is not None:
+                            skip_reason = "ALREADY_PROCESSING"
+                            reused_task_id = self._row_id(reusable)
+                        elif not request.force:
+                            reusable = await self._find_fresh_task(
+                                cursor,
+                                knowledge_base_id,
+                                file_id,
+                                task_type,
+                                evaluation.input_fingerprint,
+                            )
+                            if reusable is not None:
+                                skip_reason = "INPUT_UNCHANGED"
+                                reused_task_id = self._row_id(reusable)
+                status = "skipped" if skip_reason else "pending"
+                if skip_reason:
+                    skipped_count += 1
+                if reused_task_id is not None:
+                    reused_count += 1
+                result_payload = None
+                if skip_reason:
+                    result_payload = {"reasonCode": skip_reason}
+                    if reused_task_id is not None:
+                        key = (
+                            "activeTaskId"
+                            if skip_reason == "ALREADY_PROCESSING"
+                            else "reusedTaskId"
+                        )
+                        result_payload[key] = str(reused_task_id)
                 created = await self.knowledge_semantic_processing_task_repository.create_processing_task(
                     cursor,
                     knowledge_base_id=knowledge_base_id,
-                    fs_entry_id=self._row_id(file_row),
+                    fs_entry_id=file_id,
                     task_type=task_type.value,
-                    status="pending",
+                    status=status,
                     batch_id=batch_id,
-                    current_stage="accepted",
-                    progress=0,
-                    input_fingerprint=evaluation.input_fingerprint,
+                    file_path_snapshot=file_path,
+                    current_stage="skipped" if skip_reason else "accepted",
+                    progress=100 if skip_reason else 0,
+                    input_fingerprint=(
+                        evaluation.input_fingerprint if evaluation is not None else None
+                    ),
                     input_checksum=file_row.get("checksum"),
-                    method_version=evaluation.method_version,
+                    method_version=(
+                        evaluation.method_version if evaluation is not None else None
+                    ),
                     request_params=params,
+                    extra_params=request.extra_params,
+                    result_payload=result_payload,
                 )
                 if created is None:
                     raise RuntimeError("failed to create processing task")
-                context = TaskExecutionContext(
-                    task_id=self._row_id(created),
-                    batch_id=batch_id,
-                    task_type=task_type,
-                    kb_code=request.kb_code,
-                    knowledge_base_id=knowledge_base_id,
-                    source_file_id=self._row_id(file_row),
-                    file_path=str(file_row["file_path"]),
-                    input_fingerprint=evaluation.input_fingerprint,
-                    input_checksum=file_row.get("checksum"),
-                    request_params=params,
-                )
-                contexts.append(context)
                 logger.info(
-                    "knowledge_entity_processing_service task created: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s, status=pending",
+                    "knowledge_entity_processing_service task created: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s, status=%s",
                     batch_id,
-                    context.task_id,
+                    self._row_id(created),
                     knowledge_base_id,
                     request.kb_code,
-                    context.source_file_id,
-                    context.file_path,
+                    file_id,
+                    file_path,
                     task_type.value,
+                    status,
                 )
                 summaries.append(
                     ProcessingTaskSummary(
-                        task_id=str(context.task_id),
-                        status=ProcessingTaskStatus.PENDING,
-                        file_id=str(context.source_file_id),
-                        file_path=context.file_path,
+                        task_id=str(self._row_id(created)),
+                        status=ProcessingTaskStatus(status.upper()),
+                        file_id=str(file_id),
+                        file_path=file_path,
+                        reused=reused_task_id is not None,
                     )
                 )
+                if skip_reason:
+                    batch = await self.knowledge_semantic_processing_batch_repository.advance_batch(
+                        cursor, batch_id=batch_id
+                    )
+                    if batch is None:
+                        raise RuntimeError("failed to advance batch for skipped task")
+                    counts = await self.knowledge_semantic_processing_batch_repository.count_tasks_by_status(
+                        cursor, batch_id=batch_id
+                    )
+                    terminal_callbacks.append((created, batch, counts))
             await connection.commit()
         except Exception as exc:
             await connection.rollback()
@@ -665,226 +676,39 @@ class KnowledgeEntityProcessingOrchestrator:
             scope.value,
             len(files),
             eligible_count,
-            len(contexts),
+            len(files) - skipped_count,
             reused_count,
             skipped_count,
             dict(eligibility_counts),
             dict(reason_counts),
             (time.perf_counter() - acceptance_started_at) * 1000,
         )
-        for context in contexts:
-            await self._notify(
-                callback,
-                self._event(context, "task.accepted", 0, 0),
-                context=context,
+        for task, terminal_batch, counts in terminal_callbacks:
+            await invoke_terminal_callbacks(
+                self.callback_invoker, task, terminal_batch, counts
             )
-            try:
-                self.task_scheduler.schedule(
-                    lambda current=context: self._run_task(current, callback)
+        if not files:
+            await self.callback_invoker.batch_completed(
+                BatchCompletedCallbackInput(
+                    batch_id=batch_id,
+                    task_type=task_type,
+                    knowledge_base_id=str(knowledge_base_id),
+                    kb_code=request.kb_code,
+                    progress=build_batch_progress(batch, {}),
+                    extra_params=request.extra_params,
+                    completed_at=batch.get("completed_at"),
                 )
-                logger.info(
-                    "knowledge_entity_processing_service task scheduled: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s",
-                    context.batch_id,
-                    context.task_id,
-                    context.knowledge_base_id,
-                    context.kb_code,
-                    context.source_file_id,
-                    context.file_path,
-                    context.task_type.value,
-                )
-            except Exception as exc:
-                await self._fail_scheduling(context, callback, exc)
+            )
         return ProcessingBatchAccepted(
             batch_id=batch_id,
             scope=scope,
             task_type=task_type,
             eligible_count=eligible_count,
-            accepted_count=len(contexts),
+            accepted_count=len(files) - skipped_count,
             reused_count=reused_count,
             skipped_count=skipped_count,
             tasks=summaries,
         )
-
-    async def _run_task(
-        self, context: TaskExecutionContext, callback: TaskCallback | None
-    ) -> None:
-        task_started_at = time.perf_counter()
-        logger.info(
-            "knowledge_entity_processing_service task execution started: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s",
-            context.batch_id,
-            context.task_id,
-            context.knowledge_base_id,
-            context.kb_code,
-            context.source_file_id,
-            context.file_path,
-            context.task_type.value,
-        )
-        await self._update_task(
-            context,
-            status="running",
-            current_stage="started",
-            progress=1,
-            started=True,
-        )
-        await self._notify(
-            callback,
-            self._event(context, "task.started", 1, 1),
-            context=context,
-        )
-        try:
-            worker_result = await self.worker.run_task(context)
-            result, targets, index_version = self._worker_result(worker_result)
-            await self._update_task(
-                context,
-                status="succeeded",
-                current_stage="completed",
-                progress=100,
-                result_payload=result,
-                index_version=index_version,
-                finished=True,
-            )
-            await self._notify(
-                callback,
-                self._event(
-                    context,
-                    "task.succeeded",
-                    2,
-                    100,
-                    target_file_ids=targets,
-                    result_summary=result,
-                ),
-                context=context,
-            )
-            logger.info(
-                "knowledge_entity_processing_service task execution succeeded: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s, target_count=%s, index_version=%s, elapsed_ms=%.2f",
-                context.batch_id,
-                context.task_id,
-                context.knowledge_base_id,
-                context.kb_code,
-                context.source_file_id,
-                context.file_path,
-                context.task_type.value,
-                len(targets),
-                index_version,
-                (time.perf_counter() - task_started_at) * 1000,
-            )
-        except Exception as exc:
-            error = {
-                "errorCode": getattr(exc, "error_code", "PROCESSING_FAILED"),
-                "message": str(exc),
-                "retryable": bool(getattr(exc, "retryable", True)),
-            }
-            logger.exception(
-                "knowledge_entity_processing_service task execution failed: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s, error_code=%s, error_type=%s, retryable=%s, elapsed_ms=%.2f",
-                context.batch_id,
-                context.task_id,
-                context.knowledge_base_id,
-                context.kb_code,
-                context.source_file_id,
-                context.file_path,
-                context.task_type.value,
-                error["errorCode"],
-                type(exc).__name__,
-                error["retryable"],
-                (time.perf_counter() - task_started_at) * 1000,
-            )
-            try:
-                await self._update_task(
-                    context,
-                    status="failed",
-                    current_stage="failed",
-                    progress=100,
-                    error_code=str(error["errorCode"]),
-                    error_message=str(error["message"]),
-                    finished=True,
-                )
-            finally:
-                await self._notify(
-                    callback,
-                    self._event(context, "task.failed", 2, 100, error=error),
-                    context=context,
-                )
-
-    async def _fail_scheduling(
-        self,
-        context: TaskExecutionContext,
-        callback: TaskCallback | None,
-        exc: Exception,
-    ) -> None:
-        error = {
-            "errorCode": "SCHEDULING_FAILED",
-            "message": str(exc),
-            "retryable": True,
-        }
-        logger.error(
-            "knowledge_entity_processing_service task scheduling failed: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s, error_type=%s",
-            context.batch_id,
-            context.task_id,
-            context.knowledge_base_id,
-            context.kb_code,
-            context.source_file_id,
-            context.file_path,
-            context.task_type.value,
-            type(exc).__name__,
-            exc_info=(type(exc), exc, exc.__traceback__),
-        )
-        await self._update_task(
-            context,
-            status="failed",
-            current_stage="scheduling_failed",
-            progress=100,
-            error_code="SCHEDULING_FAILED",
-            error_message=str(exc),
-            finished=True,
-        )
-        await self._notify(
-            callback,
-            self._event(context, "task.failed", 1, 100, error=error),
-            context=context,
-        )
-
-    async def _update_task(self, context: TaskExecutionContext, **updates: Any) -> None:
-        connection = await self.connection_factory()
-        try:
-            cursor = connection.cursor()
-            await self.knowledge_semantic_processing_task_repository.update_processing_task(
-                cursor,
-                task_id=context.task_id,
-                task_type=context.task_type.value,
-                **updates,
-            )
-            await connection.commit()
-            logger.debug(
-                "knowledge_entity_processing_service task state persisted: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s, status=%s, current_stage=%s, progress=%s",
-                context.batch_id,
-                context.task_id,
-                context.knowledge_base_id,
-                context.kb_code,
-                context.source_file_id,
-                context.file_path,
-                context.task_type.value,
-                updates.get("status"),
-                updates.get("current_stage"),
-                updates.get("progress"),
-            )
-        except Exception as exc:
-            await connection.rollback()
-            logger.exception(
-                "knowledge_entity_processing_service task state persistence failed: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s, target_status=%s, target_stage=%s, error_type=%s",
-                context.batch_id,
-                context.task_id,
-                context.knowledge_base_id,
-                context.kb_code,
-                context.source_file_id,
-                context.file_path,
-                context.task_type.value,
-                updates.get("status"),
-                updates.get("current_stage"),
-                type(exc).__name__,
-            )
-            raise
-        finally:
-            await connection.close()
 
     async def _evaluate_file(
         self,
@@ -1253,14 +1077,19 @@ class KnowledgeEntityProcessingOrchestrator:
             status=ProcessingTaskStatus(str(row["status"]).upper()),
             current_stage=row.get("current_stage"),
             progress=row.get("progress"),
-            file_id=str(row["fs_entry_id"]),
+            file_id=(
+                str(row["fs_entry_id"]) if row.get("fs_entry_id") is not None else None
+            ),
             file_path=str(row["file_path"]),
             index_version=row.get("index_version"),
             created_at=row["created_at"],
             started_at=row.get("started_at"),
             finished_at=row.get("finished_at"),
-            result=row.get("result_payload") if include_details else None,
+            result=(
+                json_mapping(row.get("result_payload")) if include_details else None
+            ),
             error=error,
+            extra_params=json_mapping(row.get("extra_params")) or {},
         )
 
     def _task_summary(
@@ -1327,108 +1156,6 @@ class KnowledgeEntityProcessingOrchestrator:
             else None,
             representative_evidence=representative_evidence,
         )
-
-    def _worker_result(
-        self, value: TaskWorkerResult | Mapping[str, Any] | None
-    ) -> tuple[dict[str, Any] | None, tuple[int, ...], str | None]:
-        if value is None:
-            return None, (), None
-        if isinstance(value, TaskWorkerResult):
-            return (
-                dict(value.result_payload)
-                if value.result_payload is not None
-                else None,
-                value.target_file_ids,
-                value.index_version,
-            )
-        if all(
-            hasattr(value, attribute)
-            for attribute in ("result_payload", "target_file_ids", "index_version")
-        ):
-            result_payload = getattr(value, "result_payload")
-            return (
-                dict(result_payload) if result_payload is not None else None,
-                tuple(int(item) for item in getattr(value, "target_file_ids")),
-                getattr(value, "index_version"),
-            )
-        payload = dict(value)
-        targets = payload.pop("target_file_ids", payload.pop("targetFileIds", ()))
-        index_version = payload.pop("index_version", payload.pop("indexVersion", None))
-        return payload, tuple(int(item) for item in targets), index_version
-
-    def _event(
-        self,
-        context: TaskExecutionContext,
-        event_type: str,
-        sequence: int,
-        progress: int,
-        *,
-        target_file_ids: tuple[int, ...] = (),
-        result_summary: Mapping[str, Any] | None = None,
-        error: Mapping[str, Any] | None = None,
-    ) -> TaskEvent:
-        status_by_event = {
-            "task.accepted": ProcessingTaskStatus.PENDING,
-            "task.started": ProcessingTaskStatus.RUNNING,
-            "task.succeeded": ProcessingTaskStatus.SUCCEEDED,
-            "task.failed": ProcessingTaskStatus.FAILED,
-        }
-        return TaskEvent(
-            event_id=uuid4().hex,
-            task_id=str(context.task_id),
-            batch_id=context.batch_id,
-            task_type=context.task_type,
-            event_type=event_type,
-            stage=None,
-            status=status_by_event[event_type],
-            sequence=sequence,
-            progress=progress,
-            source_file_id=str(context.source_file_id),
-            target_file_ids=tuple(str(item) for item in target_file_ids),
-            result_summary=result_summary,
-            error=error,
-        )
-
-    async def _notify(
-        self,
-        callback: TaskCallback | None,
-        event: TaskEvent,
-        *,
-        context: TaskExecutionContext,
-    ) -> None:
-        if callback is None:
-            return
-        try:
-            result = callback(event)
-            if inspect.isawaitable(result):
-                await result
-            logger.debug(
-                "knowledge_entity_processing_service callback delivered: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s, event_type=%s, status=%s",
-                context.batch_id,
-                context.task_id,
-                context.knowledge_base_id,
-                context.kb_code,
-                context.source_file_id,
-                context.file_path,
-                context.task_type.value,
-                event.event_type,
-                event.status.value,
-            )
-        except Exception as exc:
-            logger.warning(
-                "knowledge_entity_processing_service callback failed: batch_id=%s, task_id=%s, knowledge_base_id=%s, kb_code=%s, file_id=%s, file_path=%s, task_type=%s, event_type=%s, status=%s, error_type=%s",
-                context.batch_id,
-                context.task_id,
-                context.knowledge_base_id,
-                context.kb_code,
-                context.source_file_id,
-                context.file_path,
-                context.task_type.value,
-                event.event_type,
-                event.status.value,
-                type(exc).__name__,
-                exc_info=True,
-            )
 
     def _batch_id(self, task_type: ProcessingTaskType) -> str:
         prefix = "ed" if task_type == ProcessingTaskType.ENTITY_DISCOVERY else "ee"

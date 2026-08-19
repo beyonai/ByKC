@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
@@ -10,6 +9,7 @@ import pytest
 from by_qa.knowledge_base.api.knowledge_entity_schemas import (
     EntityDiscoveryRequest,
     EntityEnrichRequest,
+    ProcessingBatchStatusRequest,
     ProcessingCapability,
     ProcessingEligibility,
     ProcessingEligibilityRequest,
@@ -20,9 +20,7 @@ from by_qa.knowledge_base.services import (
     knowledge_entity_processing_service as processing_module,
 )
 from by_qa.knowledge_base.services.knowledge_entity_processing_service import (
-    AsyncioTaskScheduler,
     KnowledgeEntityProcessingOrchestrator,
-    TaskWorkerResult,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -150,15 +148,17 @@ class Tasks:
         row = {
             "kid": 100 + len(self.rows),
             **values,
-            "file_path": "/docs/source.md",
+            "file_path": values.get("file_path_snapshot", "/docs/source.md"),
             "created_at": datetime.now(timezone.utc),
             "started_at": None,
             "finished_at": None,
             "index_version": None,
-            "result_payload": None,
-            "error_code": None,
-            "error_message": None,
         }
+        row.setdefault("result_payload", None)
+        row.setdefault("error_code", None)
+        row.setdefault("error_message", None)
+        row.setdefault("failure_kind", None)
+        row.setdefault("outcome_uncertain", False)
         self.rows.append(row)
         return row
 
@@ -168,6 +168,54 @@ class Tasks:
         row = next(row for row in self.rows if row["kid"] == task_id)
         row.update({key: value for key, value in updates.items() if value is not None})
         return row
+
+
+class Batches:
+    def __init__(self, tasks):
+        self.tasks = tasks
+        self.rows = {}
+
+    async def create_batch(self, cursor, **values):
+        del cursor
+        values.setdefault("completed_count", 0)
+        values.setdefault("version", 0)
+        completed = values["completed_count"] == values["total_count"]
+        row = {
+            **values,
+            "status": "completed" if completed else "processing",
+            "completed_at": datetime.now(timezone.utc) if completed else None,
+            "created_at": datetime.now(timezone.utc),
+        }
+        self.rows[values["batch_id"]] = row
+        return row
+
+    async def advance_batch(self, cursor, *, batch_id, completed_delta=1):
+        del cursor
+        row = self.rows[batch_id]
+        row["completed_count"] += completed_delta
+        row["version"] += completed_delta
+        if row["completed_count"] == row["total_count"]:
+            row["status"] = "completed"
+            row["completed_at"] = datetime.now(timezone.utc)
+        return dict(row)
+
+    async def count_tasks_by_status(self, cursor, *, batch_id):
+        del cursor
+        counts = {}
+        for row in self.tasks.rows:
+            if row.get("batch_id") == batch_id:
+                counts[row["status"]] = counts.get(row["status"], 0) + 1
+        return counts
+
+    async def get_batch(self, cursor, *, batch_id, knowledge_base_id=None):
+        del cursor
+        row = self.rows.get(batch_id)
+        if row is None or (
+            knowledge_base_id is not None
+            and row["knowledge_base_id"] != knowledge_base_id
+        ):
+            return None
+        return dict(row)
 
 
 class Relations:
@@ -231,7 +279,9 @@ class Scheduler:
 
 
 def make_service(files, *, tasks=None, relations=None, worker=None, scheduler=None):
+    del scheduler
     connection = Connection()
+    task_repository = tasks or Tasks()
 
     async def connection_factory():
         return connection
@@ -241,10 +291,10 @@ def make_service(files, *, tasks=None, relations=None, worker=None, scheduler=No
             connection_factory=connection_factory,
             knowledge_base_repository=KBRepo(),
             knowledge_entity_repository=EntityRepo(files),
-            knowledge_semantic_processing_task_repository=tasks or Tasks(),
+            knowledge_semantic_processing_task_repository=task_repository,
             knowledge_file_reference_repository=relations or Relations(),
             worker=worker or Worker(),
-            task_scheduler=scheduler or Scheduler(),
+            knowledge_semantic_processing_batch_repository=Batches(task_repository),
         ),
         connection,
     )
@@ -580,7 +630,15 @@ async def test_whole_kb_discovery_schedules_only_text_documents():
     assert accepted.eligible_count == 4
     assert accepted.accepted_count == 4
     assert accepted.skipped_count == 2
-    assert len(scheduler.factories) == 4
+    assert scheduler.factories == []
+    assert [
+        row["status"]
+        for row in service.knowledge_semantic_processing_task_repository.rows
+    ].count("pending") == 4
+    assert [
+        row["status"]
+        for row in service.knowledge_semantic_processing_task_repository.rows
+    ].count("skipped") == 2
 
 
 async def test_whole_kb_enrich_schedules_only_markdown_entities():
@@ -631,7 +689,15 @@ async def test_whole_kb_enrich_schedules_only_markdown_entities():
     assert accepted.eligible_count == 2
     assert accepted.accepted_count == 2
     assert accepted.skipped_count == 1
-    assert len(scheduler.factories) == 2
+    assert scheduler.factories == []
+    assert [
+        row["status"]
+        for row in service.knowledge_semantic_processing_task_repository.rows
+    ].count("pending") == 2
+    assert [
+        row["status"]
+        for row in service.knowledge_semantic_processing_task_repository.rows
+    ].count("skipped") == 1
 
 
 async def test_missing_metadata_defaults_ordinary_document_to_discovery_input():
@@ -666,7 +732,7 @@ async def test_whole_kb_discovery_accepts_unclassified_ordinary_files_only():
     assert accepted.eligible_count == 1
     assert accepted.accepted_count == 1
     assert accepted.skipped_count == 1
-    assert len(scheduler.factories) == 1
+    assert scheduler.factories == []
 
 
 async def test_missing_kind_in_entity_directory_never_defaults_to_original():
@@ -825,44 +891,32 @@ async def test_enrich_staleness_uses_any_recent_relation_creation_time(
     assert relations.target_queries[0]["relation_code"] is None
 
 
-async def test_accept_creates_per_file_task_and_worker_lifecycle_callbacks():
+async def test_accept_persists_pending_task_without_request_scheduler():
     scheduler = Scheduler()
-    worker = Worker(TaskWorkerResult({"createdCount": 1}, (22,), "ac/4"))
+    worker = Worker()
     tasks = Tasks()
     service, connection = make_service(
         [original()], tasks=tasks, worker=worker, scheduler=scheduler
     )
-    events = []
-
-    def callback(event):
-        events.append(event)
-        if event.event_type == "task.started":
-            raise RuntimeError("callback failure must be ignored")
-
     accepted = await service.discover_knowledge_entities(
-        EntityDiscoveryRequest(knCode="7", filePath="/docs/source.md"),
-        callback=callback,
+        EntityDiscoveryRequest(
+            knCode="7",
+            filePath="/docs/source.md",
+            extraParams={"requestId": "req-1"},
+        ),
     )
     assert accepted.accepted_count == 1
     assert accepted.tasks[0].status.value == "PENDING"
-    assert events[0].event_type == "task.accepted"
-
-    await scheduler.run_all()
-    assert worker.contexts[0].input_checksum == "sha-source"
-    assert [event.event_type for event in events] == [
-        "task.accepted",
-        "task.started",
-        "task.succeeded",
-    ]
-    assert tasks.rows[0]["status"] == "succeeded"
-    assert tasks.rows[0]["index_version"] == "ac/4"
+    assert scheduler.factories == []
+    assert worker.contexts == []
+    assert tasks.rows[0]["status"] == "pending"
+    assert tasks.rows[0]["extra_params"] == {"requestId": "req-1"}
+    assert "extraParams" not in tasks.rows[0]["request_params"]
     assert connection.locked_ids == [10]
     assert connection.rollbacks == 0
 
 
-async def test_lifecycle_logs_correlation_without_callback_or_result_payload(
-    monkeypatch,
-):
+async def test_acceptance_logs_correlation_without_extra_params(monkeypatch):
     captured = []
 
     def capture(level):
@@ -876,18 +930,15 @@ async def test_lifecycle_logs_correlation_without_callback_or_result_payload(
     monkeypatch.setattr(processing_module.logger, "info", capture("info"))
     monkeypatch.setattr(processing_module.logger, "warning", capture("warning"))
     scheduler = Scheduler()
-    worker = Worker(TaskWorkerResult({"secretResult": "do-not-log"}, (22,), "ac/4"))
-    service, _ = make_service([original()], worker=worker, scheduler=scheduler)
-
-    def callback(event):
-        if event.event_type == "task.started":
-            raise RuntimeError("sensitive callback detail")
+    service, _ = make_service([original()], scheduler=scheduler)
 
     accepted = await service.discover_knowledge_entities(
-        EntityDiscoveryRequest(knCode="7", filePath="/docs/source.md"),
-        callback=callback,
+        EntityDiscoveryRequest(
+            knCode="7",
+            filePath="/docs/source.md",
+            extraParams={"secret": "do-not-log"},
+        ),
     )
-    await scheduler.run_all()
 
     rendered = "\n".join(message for _, message in captured)
     assert f"batch_id={accepted.batch_id}" in rendered
@@ -896,34 +947,8 @@ async def test_lifecycle_logs_correlation_without_callback_or_result_payload(
     assert "file_path=/docs/source.md" in rendered
     assert "task_type=ENTITY_DISCOVERY" in rendered
     assert "batch accepted" in rendered
-    assert "task state persisted" in rendered
-    assert "callback delivered" in rendered
-    assert "callback failed" in rendered
-    assert "error_type=RuntimeError" in rendered
     assert "do-not-log" not in rendered
-    assert "sensitive callback detail" not in rendered
     assert "sha-source" not in rendered
-
-
-async def test_asyncio_scheduler_observes_failure_without_error_detail(monkeypatch):
-    captured = []
-
-    def capture(message, *args, **kwargs):
-        del kwargs
-        captured.append(message % args)
-
-    monkeypatch.setattr(processing_module.logger, "error", capture)
-    scheduler = AsyncioTaskScheduler()
-
-    async def fail():
-        raise RuntimeError("sensitive scheduler detail")
-
-    scheduler.schedule(fail)
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
-
-    assert any("error_type=RuntimeError" in message for message in captured)
-    assert all("sensitive scheduler detail" not in message for message in captured)
 
 
 async def test_same_fingerprint_succeeded_task_is_reused_without_scheduling():
@@ -950,7 +975,13 @@ async def test_same_fingerprint_succeeded_task_is_reused_without_scheduling():
     )
     assert accepted.accepted_count == 0
     assert accepted.reused_count == 1
-    assert accepted.tasks[0].task_id == "81"
+    assert accepted.tasks[0].task_id != "81"
+    assert accepted.tasks[0].status.value == "SKIPPED"
+    created = service.knowledge_semantic_processing_task_repository.rows[-1]
+    assert created["result_payload"] == {
+        "reasonCode": "INPUT_UNCHANGED",
+        "reusedTaskId": "81",
+    }
 
 
 async def test_pending_same_fingerprint_is_reused_under_file_lock():
@@ -976,6 +1007,7 @@ async def test_pending_same_fingerprint_is_reused_under_file_lock():
         EntityDiscoveryRequest(knCode="7", filePath="/docs/source.md")
     )
     assert accepted.reused_count == 1
+    assert accepted.tasks[0].status.value == "SKIPPED"
     assert connection.locked_ids == [10]
 
 
@@ -1001,7 +1033,13 @@ async def test_force_reuses_active_task_even_when_fingerprint_changed():
 
     assert accepted.accepted_count == 0
     assert accepted.reused_count == 1
-    assert accepted.tasks[0].task_id == "83"
+    assert accepted.tasks[0].task_id != "83"
+    assert accepted.tasks[0].status.value == "SKIPPED"
+    created = service.knowledge_semantic_processing_task_repository.rows[-1]
+    assert created["result_payload"] == {
+        "reasonCode": "ALREADY_PROCESSING",
+        "activeTaskId": "83",
+    }
     assert connection.locked_ids == [10]
 
 
@@ -1038,6 +1076,28 @@ async def test_status_filters_by_optional_file_and_hides_details():
     assert page.data[0].error is None
 
 
+async def test_batch_status_reports_per_file_progress_and_extra_params():
+    service, _ = make_service([original()])
+    accepted = await service.discover_knowledge_entities(
+        EntityDiscoveryRequest(
+            knCode="7",
+            filePath="/docs/source.md",
+            extraParams={"requestId": "req-1"},
+        )
+    )
+
+    result = await service.get_processing_batch_status(
+        ProcessingBatchStatusRequest(knCode="7", batchId=accepted.batch_id)
+    )
+
+    assert result.total_count == 1
+    assert result.completed_count == 0
+    assert result.pending_count == 1
+    assert result.progress == 0
+    assert result.extra_params == {"requestId": "req-1"}
+    assert result.data[0].extra_params == {"requestId": "req-1"}
+
+
 async def test_both_relation_direction_merges_by_relation_id_before_paging():
     files = [
         original(10, "/docs/source.md"),
@@ -1069,7 +1129,7 @@ async def test_both_relation_direction_merges_by_relation_id_before_paging():
     assert page.data[0].direction.value == "INCOMING"
 
 
-async def test_relation_preserves_zero_confidence_and_worker_result_is_duck_typed():
+async def test_relation_preserves_zero_confidence_and_evidence_fields():
     files = [
         original(10, document_kind=None),
         original(11, "/KnowledgeEntity/A.md", document_kind=None),
@@ -1107,14 +1167,3 @@ async def test_relation_preserves_zero_confidence_and_worker_result_is_duck_type
         "Guide / Concepts"
     )
     assert page.data[0].representative_evidence.start_line == 8
-
-    class ForeignResult:
-        result_payload = {"ok": True}
-        target_file_ids = (11,)
-        index_version = "ac/5"
-
-    assert service._worker_result(ForeignResult()) == (
-        {"ok": True},
-        (11,),
-        "ac/5",
-    )

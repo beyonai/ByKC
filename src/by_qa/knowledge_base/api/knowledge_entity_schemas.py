@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+import json
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Protocol
@@ -27,6 +27,27 @@ def _validate_file_path(value: str | None) -> str | None:
     if any(part == ".." for part in normalized.split("/")):
         raise ValueError("filePath must not contain '..'")
     return "/" + "/".join(part for part in normalized.split("/") if part)
+
+
+def _validate_extra_params(value: dict[str, Any]) -> dict[str, Any]:
+    def depth(item: Any, current: int = 0) -> int:
+        if isinstance(item, dict):
+            return max(
+                (depth(child, current + 1) for child in item.values()), default=current
+            )
+        if isinstance(item, list):
+            return max((depth(child, current + 1) for child in item), default=current)
+        return current
+
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError("extraParams must contain JSON values") from exc
+    if len(encoded) > 16 * 1024:
+        raise ValueError("extraParams must not exceed 16384 UTF-8 bytes")
+    if depth(value) > 8:
+        raise ValueError("extraParams nesting depth must not exceed 8")
+    return value
 
 
 class ProcessingCapability(StrEnum):
@@ -57,6 +78,11 @@ class ProcessingTaskStatus(StrEnum):
 class ProcessingScope(StrEnum):
     SINGLE_FILE = "SINGLE_FILE"
     WHOLE_KB = "WHOLE_KB"
+
+
+class ProcessingBatchStatus(StrEnum):
+    PROCESSING = "PROCESSING"
+    COMPLETED = "COMPLETED"
 
 
 class SemanticRelationCode(StrEnum):
@@ -105,8 +131,14 @@ class EntityDiscoveryRequest(_ApiModel):
         validation_alias=AliasChoices("maxEntities", "max_entities"),
     )
     force: bool = False
+    extra_params: dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("extraParams", "extra_params"),
+        serialization_alias="extraParams",
+    )
 
     _normalize_file_path = field_validator("file_path")(_validate_file_path)
+    _normalize_extra_params = field_validator("extra_params")(_validate_extra_params)
 
 
 class EntityEnrichRequest(_ApiModel):
@@ -127,8 +159,14 @@ class EntityEnrichRequest(_ApiModel):
         validation_alias=AliasChoices("topK", "top_k"),
     )
     force: bool = False
+    extra_params: dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("extraParams", "extra_params"),
+        serialization_alias="extraParams",
+    )
 
     _normalize_file_path = field_validator("file_path")(_validate_file_path)
+    _normalize_extra_params = field_validator("extra_params")(_validate_extra_params)
 
 
 class ProcessingTaskStatusRequest(_ApiModel):
@@ -186,6 +224,34 @@ class ProcessingTaskStatusRequest(_ApiModel):
         if value is not None and len(set(value)) != len(value):
             raise ValueError("statusList must not contain duplicate values")
         return value
+
+
+class ProcessingBatchStatusRequest(_ApiModel):
+    """Query one durable batch and its per-file progress."""
+
+    kb_code: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("knCode", "kb_code"),
+    )
+    batch_id: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("batchId", "batch_id"),
+    )
+    include_details: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("includeDetails", "include_details"),
+    )
+    page_num: int = Field(
+        default=1,
+        ge=1,
+        validation_alias=AliasChoices("pageNum", "page_num"),
+    )
+    page_size: int = Field(
+        default=50,
+        ge=1,
+        le=500,
+        validation_alias=AliasChoices("pageSize", "page_size"),
+    )
 
 
 class SemanticRelationsRequest(_ApiModel):
@@ -271,7 +337,7 @@ class ProcessingTaskItem(_ApiModel):
     status: ProcessingTaskStatus
     current_stage: str | None = Field(default=None, serialization_alias="currentStage")
     progress: int | None = Field(default=None, ge=0, le=100)
-    file_id: str = Field(serialization_alias="fileId")
+    file_id: str | None = Field(serialization_alias="fileId")
     file_path: str = Field(serialization_alias="filePath")
     index_version: str | None = Field(default=None, serialization_alias="indexVersion")
     created_at: datetime = Field(serialization_alias="createdAt")
@@ -279,6 +345,9 @@ class ProcessingTaskItem(_ApiModel):
     finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")
     result: dict[str, Any] | None = None
     error: dict[str, Any] | None = None
+    extra_params: dict[str, Any] = Field(
+        default_factory=dict, serialization_alias="extraParams"
+    )
 
 
 class ProcessingTaskPage(_ApiModel):
@@ -286,6 +355,34 @@ class ProcessingTaskPage(_ApiModel):
     kb_code: str = Field(serialization_alias="knCode")
     file_path: str | None = Field(default=None, serialization_alias="filePath")
     total: int = Field(ge=0)
+    page_num: int = Field(ge=1, serialization_alias="pageNum")
+    page_size: int = Field(ge=1, serialization_alias="pageSize")
+    data: list[ProcessingTaskItem]
+
+
+class ProcessingBatchStatusResult(_ApiModel):
+    batch_id: str = Field(serialization_alias="batchId")
+    knowledge_base_id: str = Field(serialization_alias="knowledgeBaseId")
+    kb_code: str = Field(serialization_alias="knCode")
+    task_type: ProcessingTaskType = Field(serialization_alias="taskType")
+    scope: ProcessingScope
+    status: ProcessingBatchStatus
+    version: int = Field(ge=0)
+    total_count: int = Field(ge=0, serialization_alias="totalCount")
+    completed_count: int = Field(ge=0, serialization_alias="completedCount")
+    pending_count: int = Field(ge=0, serialization_alias="pendingCount")
+    running_count: int = Field(ge=0, serialization_alias="runningCount")
+    succeeded_count: int = Field(ge=0, serialization_alias="succeededCount")
+    failed_count: int = Field(ge=0, serialization_alias="failedCount")
+    skipped_count: int = Field(ge=0, serialization_alias="skippedCount")
+    progress: int = Field(ge=0, le=100)
+    extra_params: dict[str, Any] = Field(
+        default_factory=dict, serialization_alias="extraParams"
+    )
+    created_at: datetime = Field(serialization_alias="createdAt")
+    completed_at: datetime | None = Field(
+        default=None, serialization_alias="completedAt"
+    )
     page_num: int = Field(ge=1, serialization_alias="pageNum")
     page_size: int = Field(ge=1, serialization_alias="pageSize")
     data: list[ProcessingTaskItem]
@@ -344,11 +441,11 @@ class SemanticRelationPage(_ApiModel):
 KnowledgeEntityServiceResult = (
     ProcessingEligibilityResult
     | ProcessingBatchAccepted
+    | ProcessingBatchStatusResult
     | ProcessingTaskPage
     | SemanticRelationPage
     | dict[str, Any]
 )
-TaskCallback = Callable[[Any], Awaitable[None] | None]
 
 
 class KnowledgeEntityProcessingService(Protocol):
@@ -361,20 +458,20 @@ class KnowledgeEntityProcessingService(Protocol):
     async def discover_knowledge_entities(
         self,
         request: EntityDiscoveryRequest,
-        *,
-        callback: TaskCallback | None = None,
     ) -> ProcessingBatchAccepted | dict[str, Any]: ...
 
     async def enrich_knowledge_entities(
         self,
         request: EntityEnrichRequest,
-        *,
-        callback: TaskCallback | None = None,
     ) -> ProcessingBatchAccepted | dict[str, Any]: ...
 
     async def get_processing_task_status(
         self, request: ProcessingTaskStatusRequest
     ) -> ProcessingTaskPage | dict[str, Any]: ...
+
+    async def get_processing_batch_status(
+        self, request: ProcessingBatchStatusRequest
+    ) -> ProcessingBatchStatusResult | dict[str, Any]: ...
 
     async def get_semantic_relations(
         self, request: SemanticRelationsRequest

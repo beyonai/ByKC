@@ -9,20 +9,22 @@
 - 异步实体文档 Enrich；
 - 统一任务状态和结果查询；
 - 语义关系查询；
-- 内部 Python/SDK Callback；
+- 可注入 Callback Protocol；
 - 幂等、错误码和并发语义；
 - 接口落地所需的数据表复用与增改建议。
 
 方法论和实体定义见 [KnowledgeEntity 发现、身份治理与文档富化方法论设计](./knowledge-entity-discovery-enrichment-design.md)。
+
+持久化后台 runner、文件/批次进度和可注入 Callback Protocol 的目标设计见 [KnowledgeEntity 后台处理与 Callback 设计](./knowledge-entity-background-processing-callback-design.md)。本文档第 9 节只保留概念签名，Callback 输入与运行时语义以目标设计为准。
 
 ## 2. 设计原则
 
 - KnowledgeEntity 是 `knowledgeItems` 的一种，不设计独立实体 CRUD；
 - 原始文档和实体文档继续使用现有文档导入、读取、更新、metadata 和引用接口；
 - HTTP 请求只能提交可序列化参数，不包含 Python callable；
-- 自定义 Callback 只通过内部 Python/SDK 方法传入；
+- Callback 实现通过 provider 或依赖注入配置，不作为单次请求参数；
 - discovery 和 enrich 都是异步任务；一次请求形成一个 `batchId`，每个实际处理文件形成一个 `taskId`；
-- 任务查询结果是最终事实来源，Callback 只是进程内通知；
+- 任务查询结果是最终事实来源，Callback 只是终态后的扩展调用；
 - 无草稿、审核和发布接口；
 - 模板覆盖不足不作为 Enrich 接口失败条件；
 - Markdown 引用是带正文位置证据的 `MENTIONS` 断言，与 Discovery/Enrich 关系共用一套持久化和生命周期；兼容引用接口只是物理出现视图。
@@ -214,6 +216,7 @@ PERMISSION_DENIED
 | `filePath` | string | 否 | - | 原始文档路径；不传表示处理该知识库下全部符合条件的原始文档 |
 | `maxEntities` | integer | 否 | `12` | 最大实体数，v1 不得超过 12 |
 | `force` | boolean | 否 | `false` | 是否跳过 freshness 判断；不跳过资格和权限校验 |
+| `extraParams` | object | 否 | `{}` | 发起方透传参数；保存到 batch/task 并传入 Callback |
 
 HTTP 请求中不包含 `callback` 字段。
 
@@ -321,7 +324,7 @@ Discovery 成功任务结果示例见任务状态接口。
 - 全系统词表只用于高性能候选召回，最终锚定、别名合并、关系建立和新实体创建都限定在当前知识库，不建立跨库实体关系；
 - `maxEntities` 是每个源文件的结果上限，不是整个批次共享上限；不得通过截断隐藏已发生的写入；
 - `force=true` 会跳过已成功任务的 freshness 复用并创建新任务；如同文件同类型仍有 `PENDING/RUNNING` 任务，则复用该活动任务，身份和关系写入仍保持幂等；
-- 新实体及 `MENTIONS` 写入成功后才触发对应阶段 Callback。
+- Discovery 文件任务进入终态并提交后才调用文件完成 Callback。
 
 ## 6. 文档富化接口
 
@@ -337,6 +340,7 @@ Discovery 成功任务结果示例见任务状态接口。
 | `filePath` | string | 否 | - | KnowledgeEntity 文档路径；不传表示处理本库 `/KnowledgeEntity` 下全部符合条件的实体文档 |
 | `topK` | integer | 否 | `20` | 语义证据候选上限，建议最大 100 |
 | `force` | boolean | 否 | `false` | 是否跳过 freshness 判断 |
+| `extraParams` | object | 否 | `{}` | 发起方透传参数；保存到 batch/task 并传入 Callback |
 
 HTTP 请求中不包含 `callback` 或模板正文。Enrich 只在当前知识库内收集证据，更新策略随服务代码发布。
 
@@ -398,7 +402,7 @@ HTTP 请求中不包含 `callback` 或模板正文。Enrich 只在当前知识�
 - 身份漂移、空正文、无权限引用和并发 checksum 冲突阻断写入；
 - 非法关系被丢弃并记录，不阻断合法正文写入；
 - Enrich 自己生成的新 checksum 不再次触发同一 Enrich；
-- 文档和关系提交成功后才发送成功 Callback。
+- Enrich 文件任务进入终态并提交后才调用文件完成 Callback。
 
 ## 7. 任务状态接口
 
@@ -501,11 +505,22 @@ HTTP 请求中不包含 `callback` 或模板正文。Enrich 只在当前知识�
 }
 ```
 
-`includeDetails=false` 时省略 `result` 和 `error`。失败任务仍使用正常成功信封，任务项的 `status=FAILED`，并在启用明细时返回 `errorCode`、`message` 和 `retryable`。
+`includeDetails=false` 时省略 `result` 和 `error`。失败任务仍使用正常成功信封，任务项的 `status=FAILED`，并在启用明细时返回 `errorCode` 和 `message`。`extraParams` 用于对账，不受 `includeDetails` 影响。
 
 一次全库触发不额外创建“父任务”记录：所有文件任务共用 `batchId`。因此可按知识库查看整体任务面，也可叠加 `filePath` 或 `batchId` 精确收窄范围。
 
 知识库存在但没有匹配任务时返回 `total=0` 和空 `data`，不是 `TASK_NOT_FOUND`；传入的 `filePath` 本身不存在时返回 `DOCUMENT_NOT_FOUND`。
+
+### `POST /api/v1/knowledgeItems/processingBatchStatus`
+
+按 `knCode + batchId` 查询一次触发的整体进度和分页文件明细。请求支持 `includeDetails`、`pageNum`、`pageSize`。返回包含：
+
+- `status`：`PROCESSING` 或 `COMPLETED`；
+- `version`、`totalCount`、`completedCount` 和 0–100 的 `progress`；
+- `pendingCount`、`runningCount`、`succeededCount`、`failedCount`、`skippedCount`；
+- batch 的 `extraParams` 和分页 task 明细。
+
+单文件失败只增加 `failedCount`，batch 仍在所有文件进入终态后成为 `COMPLETED`。
 
 ## 8. 文档逻辑关系查询接口
 
@@ -623,82 +638,57 @@ v1 不提供独立证据正文查询，也不实现 `knowledge_document_relation
 ### 9.1 概念签名
 
 ```python
-TaskCallback = Callable[[TaskEvent], Awaitable[None] | None]
-
 async def evaluate_processing_eligibility(
     request: ProcessingEligibilityRequest,
 ) -> ProcessingEligibilityResult: ...
 
 async def discover_knowledge_entities(
     request: EntityDiscoveryRequest,
-    *,
-    callback: TaskCallback | None = None,
 ) -> ProcessingBatchAccepted: ...
 
 async def enrich_knowledge_entities(
     request: EntityEnrichRequest,
-    *,
-    callback: TaskCallback | None = None,
 ) -> ProcessingBatchAccepted: ...
 
 async def get_processing_task_status(
     request: ProcessingTaskStatusRequest,
 ) -> ProcessingTaskPage: ...
+
+async def get_processing_batch_status(
+    request: ProcessingBatchStatusRequest,
+) -> ProcessingBatchStatusResult: ...
 ```
 
-`EntityDiscoveryRequest.file_path` 和 `EntityEnrichRequest.file_path` 均可为空，语义与 HTTP 全库触发一致；`ProcessingTaskStatusRequest` 以知识库为必选条件、文件路径为可选条件。HTTP 层调用相同 service，但固定传入 `callback=None`。只有同一 Python 进程中的 SDK 调用方可以传 callable。
+`EntityDiscoveryRequest.file_path` 和 `EntityEnrichRequest.file_path` 均可为空，语义与 HTTP 全库触发一致；`ProcessingTaskStatusRequest` 以知识库为必选条件、文件路径为可选条件。
 
-### 9.2 Callback 事件
+Callback 不是单次请求参数，而是在服务启动时注入的实现。HTTP 和内部 SDK 请求使用同一个 Callback 实例。
+
+### 9.2 Callback Protocol
 
 ```python
-class TaskEvent:
-    event_id: str
-    task_id: str
-    batch_id: str
-    task_type: str
-    event_type: str
-    stage: str | None
-    status: str
-    sequence: int
-    progress: int
-    source_file_id: str | None
-    target_file_ids: tuple[str, ...]
-    result_summary: Mapping[str, Any] | None
-    error: Mapping[str, Any] | None
-    occurred_at: datetime
+class KnowledgeEntityProcessingCallback(Protocol):
+    async def on_file_completed(
+        self,
+        event: FileCompletedCallbackInput,
+    ) -> None: ...
+
+    async def on_batch_completed(
+        self,
+        event: BatchCompletedCallbackInput,
+    ) -> None: ...
 ```
 
-v1 事件：
-
-```text
-task.started
-stage.completed
-task.succeeded
-task.failed
-```
-
-示例：
-
-```python
-async def on_task_event(event: TaskEvent) -> None:
-    if event.event_type == "task.succeeded":
-        await refresh_local_cache(event.target_file_ids)
-
-accepted = await discover_knowledge_entities(
-    request,
-    callback=on_task_event,
-)
-```
+`FileCompletedCallbackInput`、`BatchCompletedCallbackInput`、返回值和异常隔离语义统一定义在后台处理与 Callback 设计中，本文档不重复维护字段清单。
 
 ### 9.3 Callback 语义
 
-- callable 保存在进程内，不写入数据库；
-- 任务必须在能够持有该 callable 的同一进程执行；
+- 核心只调用文件完成和批次完成两个方法；
+- Callback 实现由 provider 或依赖注入提供；
+- 具体传输、认证、重试、持久化和监控由实现方控制；
 - Callback 异常被捕获和记录，不改变主任务结果；
-- 成功和阶段完成事件在对应数据提交后触发；
-- 服务重启可能丢失 Callback；
-- v1 不承诺 exactly-once；
-- Callback 不接收数据库连接、事务对象或可变内部状态。
+- Callback 不接收数据库连接、事务对象或可变内部状态；
+- 服务硬 kill 可能发生终态已提交但 Protocol 尚未调用的情况；
+- 状态查询是最终事实来源。
 
 ## 10. 幂等与错误码
 
@@ -827,11 +817,11 @@ Enrich 对实体 Markdown 的更新可以继续记录为 `UPDATE`，因此 v1 �
 
 当后续需要明确记录 `MERGE`、`SPLIT`、`RENAME` 时，再扩展时间线事件类型或引入专门的身份治理审计记录。
 
-### 11.3 新增：`knowledge_semantic_processing_task`（增量 SQL `029`）
+### 11.3 新增：语义处理 batch/task（SQL `029`）
 
 `knowledge_build_task` 的边界保持不变，只记录文件到 Markdown、chunk 和向量索引的构建任务。不在 `006`、`013` 中增加 `task_type` 或改写原有索引。
 
-Discovery 和 Enrich 共用批次、状态、幂等、Callback 与分页查询模型，因此不按任务类型拆成两张表。新表仅承载 `ENTITY_DISCOVERY`、`DOCUMENT_ENRICH` 两类语义处理任务，不作为全系统通用任务表。
+Discovery 和 Enrich 共用一张 `knowledge_semantic_processing_batch` 和一张 `knowledge_semantic_processing_task`，不引入 Callback 表。batch 保存总数、完成数、版本和 `extra_params`；task 以单文件为粒度，保存执行、租约和结果状态。
 
 统一语义：
 
@@ -845,35 +835,42 @@ Discovery 和 Enrich 共用批次、状态、幂等、Callback 与分页查询�
 | 字段 | 建议 | 说明 |
 | --- | --- | --- |
 | `knowledge_base_id` | `bigint NOT NULL` | 知识库 ID |
-| `fs_entry_id` | `bigint NOT NULL` | 被处理文件 ID；路径查询时 join 文档表 |
+| `fs_entry_id` | `bigint NULL` | 被处理文件 ID；文件删除后可置空 |
 | `task_type` | `varchar(32) NOT NULL` | `ENTITY_DISCOVERY` 或 `DOCUMENT_ENRICH` |
-| `batch_id` | `varchar(64) NULL` | 一次单文件或全库触发的批次 ID |
-| `progress` | `smallint NULL` | 0 至 100 |
+| `batch_id` | `varchar(64) NOT NULL` | 一次单文件或全库触发的批次 ID |
+| `file_path_snapshot` | `text NOT NULL` | 接受时的路径快照 |
+| `progress` | `smallint NOT NULL` | 0 至 100 |
 | `input_fingerprint` | `varchar(128) NULL` | 幂等和 freshness 判断 |
 | `input_checksum` | `varchar(128) NULL` | 任务开始时被处理文件的 checksum，用于审计和并发校验 |
 | `method_version` | `varchar(64) NULL` | 编排/提取方法版本 |
 | `index_version` | `varchar(64) NULL` | 实际使用的 AC snapshot 版本 |
-| `request_params` | `jsonb NULL` | 去除 callback 后的请求快照 |
+| `request_params` | `jsonb NOT NULL` | 去除 `extraParams` 后的执行请求快照 |
+| `extra_params` | `jsonb NOT NULL` | 发起方透传数据 |
 | `result_payload` | `jsonb NULL` | 每文件任务结果，不作为独立证据表 |
 | `error_code` | `varchar(64) NULL` | 结构化错误码 |
 | `error_message` | `text NULL` | 错误详情 |
+| `failure_kind` / `outcome_uncertain` | - | 失败分类与副作用是否不确定 |
+| `worker_id` / `lease_token` | - | worker 所有权与陈旧 worker 隔离 |
+| `heartbeat_at` / `lease_expires_at` | - | 心跳与过期扫描 |
 
-一次全库请求先完成资格筛选，再为每个实际处理文件创建一行，所有行共享 `batch_id`；不增加父任务或批次表。未满足资格的文件只进入接受响应的 `skippedCount`，不强制落一条 `SKIPPED` 记录；执行中才发现证据失效等情况时，文件任务可以落为 `skipped`。
+一次触发为所有候选文件创建 task：可执行文件为 `pending`，资格不符或幂等复用的文件为 `skipped`。因此 batch 进度与文件回调都可以由这两张表对账。
 
 新表建议增加：
 
 - `(knowledge_base_id, task_type, created_at DESC, kid DESC)`：全库状态查询；
 - `(knowledge_base_id, fs_entry_id, task_type, created_at DESC, kid DESC)`：可选路径查询；
-- `(batch_id, created_at, kid)`：批次查询；
+- `(batch_id, status, kid)`：批次分类与分页查询；
+- `(status, created_at, kid) WHERE status='pending'`：多进程抢占；
+- `(lease_expires_at, kid) WHERE status='running'`：过期任务扫描；
 - `(task_type, fs_entry_id, input_fingerprint, status)`：幂等复用；
 - `(fs_entry_id, task_type) WHERE status IN ('pending', 'running')` 部分唯一索引：防止同一文件的同类活动任务重复接受。
 
 仓储边界：
 
 - `KnowledgeBuildTaskRepository` 保留原有构建方法，不感知 `task_type`；
-- 新增 `KnowledgeSemanticProcessingTaskRepository`，负责语义处理任务的创建、更新、分页和计数；
+- 新增 batch/task repository，负责批次进度、抢占、租约、终态、分页和计数；
 - 按 `knowledge_base_id`、可选 `fs_entry_id`、可选 `batch_id` 分页查询；
-- Callback callable 不写数据库，进程内执行器通过 `taskId` 暂时持有引用。
+- Callback 实现不写入任务表，由服务启动时的 provider 或依赖注入提供。
 
 ### 11.4 增量扩展：`knowledge_file_reference`（SQL `030`，原 `026` 不变）
 

@@ -62,7 +62,7 @@ async def test_create_processing_task_persists_method_and_json_request():
     assert "INSERT INTO knowledge_semantic_processing_task" in sql
     assert "knowledge_build_task" not in sql
     assert "%(request_params)s::jsonb" in sql
-    assert sql.count("%(status)s::varchar(32)") == 2
+    assert sql.count("%(status)s::varchar(32)") == 3
     assert "'running'::varchar(32)" in sql
     assert params["task_type"] == "ENTITY_DISCOVERY"
     assert params["status"] == "pending"
@@ -87,6 +87,8 @@ async def test_create_processing_task_normalizes_explicit_null_progress():
     )
 
     assert cursor.executed[0][1]["progress"] == 0
+    assert json.loads(cursor.executed[0][1]["request_params"]) == {}
+    assert json.loads(cursor.executed[0][1]["extra_params"]) == {}
 
 
 async def test_update_processing_task_is_scoped_to_task_type():
@@ -219,28 +221,38 @@ async def test_processing_task_methods_reject_invalid_progress(progress):
 def test_additive_migration_creates_isolated_task_table_with_contracts():
     sql = " ".join(MIGRATION_PATH.read_text(encoding="utf-8").split())
 
+    assert "CREATE TABLE IF NOT EXISTS knowledge_semantic_processing_batch" in sql
     assert "CREATE TABLE IF NOT EXISTS knowledge_semantic_processing_task" in sql
-    assert "ALTER TABLE knowledge_build_task" not in sql
+    assert "ALTER TABLE knowledge_build_task" in sql
+    assert "parent_semantic_task_id" in sql
     assert "DROP INDEX" not in sql
     assert "ENTITY_DISCOVERY" in sql
     assert "DOCUMENT_ENRICH" in sql
     for column in (
         "task_type",
         "batch_id",
+        "file_path_snapshot",
         "progress",
         "input_fingerprint",
         "input_checksum",
         "method_version",
         "index_version",
         "request_params",
+        "extra_params",
         "result_payload",
         "error_code",
+        "failure_kind",
+        "outcome_uncertain",
+        "worker_id",
+        "lease_expires_at",
+        "heartbeat_at",
     ):
         assert column in sql
     assert "definition_version" not in sql
     assert "chk_knowledge_semantic_task_type" in sql
     assert "chk_knowledge_semantic_task_status" in sql
     assert "chk_knowledge_semantic_task_progress" in sql
+    assert "chk_knowledge_semantic_batch_counts" in sql
     assert "current_stage varchar(32)" in sql
     assert "uq_knowledge_semantic_task_active_per_file" in sql
     assert "WHERE status IN ('pending', 'running')" in sql

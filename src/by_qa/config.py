@@ -168,6 +168,54 @@ class Settings(BaseSettings):
         gt=0,
         alias="KB_UPDATE_TIMELINE_LLM_TIMEOUT_SECONDS",
     )
+    knowledge_entity_worker_enabled: bool = Field(
+        default=True,
+        alias="KNOWLEDGE_ENTITY_WORKER_ENABLED",
+    )
+    knowledge_entity_worker_id: str = Field(
+        default="",
+        alias="KNOWLEDGE_ENTITY_WORKER_ID",
+    )
+    knowledge_entity_worker_concurrency: int = Field(
+        default=4,
+        ge=1,
+        alias="KNOWLEDGE_ENTITY_WORKER_CONCURRENCY",
+    )
+    knowledge_entity_worker_poll_seconds: float = Field(
+        default=3.0,
+        gt=0,
+        alias="KNOWLEDGE_ENTITY_WORKER_POLL_SECONDS",
+    )
+    knowledge_entity_task_timeout_seconds: float = Field(
+        default=1200.0,
+        gt=0,
+        alias="KNOWLEDGE_ENTITY_TASK_TIMEOUT_SECONDS",
+    )
+    knowledge_entity_lease_seconds: int = Field(
+        default=180,
+        ge=2,
+        alias="KNOWLEDGE_ENTITY_LEASE_SECONDS",
+    )
+    knowledge_entity_heartbeat_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        alias="KNOWLEDGE_ENTITY_HEARTBEAT_SECONDS",
+    )
+    knowledge_entity_reaper_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        alias="KNOWLEDGE_ENTITY_REAPER_SECONDS",
+    )
+    knowledge_entity_worker_status_log_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        alias="KNOWLEDGE_ENTITY_WORKER_STATUS_LOG_SECONDS",
+    )
+    knowledge_entity_shutdown_grace_seconds: float = Field(
+        default=60.0,
+        ge=0,
+        alias="KNOWLEDGE_ENTITY_SHUTDOWN_GRACE_SECONDS",
+    )
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -211,6 +259,17 @@ class Settings(BaseSettings):
         if value == -1 or value > 0:
             return value
         raise ValueError("EMBEDDING_BATCH_MAX_TEXTS must be greater than 0 or -1")
+
+    @field_validator("knowledge_entity_heartbeat_seconds")
+    @classmethod
+    def _validate_knowledge_entity_heartbeat_seconds(cls, value: float, info) -> float:
+        lease_seconds = info.data.get("knowledge_entity_lease_seconds", 180)
+        if value >= lease_seconds:
+            raise ValueError(
+                "KNOWLEDGE_ENTITY_HEARTBEAT_SECONDS must be less than "
+                "KNOWLEDGE_ENTITY_LEASE_SECONDS"
+            )
+        return value
 
     @field_validator(
         "llm_standard_extra_body", "llm_lightweight_extra_body", mode="before"

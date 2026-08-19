@@ -652,6 +652,11 @@ async def _shutdown_knowledge_base_runtime(enabled_modules: list[str]) -> None:
     """Stop optional runtime services when the application shuts down."""
     if (
         "knowledge_base" in enabled_modules
+        and _knowledge_entity_processing_service is not None
+    ):
+        await _knowledge_entity_processing_service.stop()
+    if (
+        "knowledge_base" in enabled_modules
         and _knowledge_fetch_cache_cleanup_service is not None
     ):
         await _knowledge_fetch_cache_cleanup_service.stop()
@@ -669,6 +674,10 @@ async def lifespan(application):
         "application startup: enabled_modules=%s",
         ",".join(enabled_modules) if enabled_modules else "none",
     )
+
+    if "knowledge_base" in enabled_modules and settings.knowledge_entity_worker_enabled:
+        entity_service = await _get_or_build_knowledge_entity_processing_service()
+        await entity_service.start()
 
     yield
 

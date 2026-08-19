@@ -35,6 +35,40 @@ def test_settings_accept_kb_ingestion_env_vars():
     assert settings.embedding_batch_max_texts == 12
 
 
+def test_settings_validate_knowledge_entity_runner_lease_configuration():
+    settings = Settings(
+        _env_file=None,
+        KNOWLEDGE_ENTITY_WORKER_CONCURRENCY=8,
+        KNOWLEDGE_ENTITY_WORKER_POLL_SECONDS=4,
+        KNOWLEDGE_ENTITY_TASK_TIMEOUT_SECONDS=900,
+        KNOWLEDGE_ENTITY_LEASE_SECONDS=60,
+        KNOWLEDGE_ENTITY_HEARTBEAT_SECONDS=10,
+        KNOWLEDGE_ENTITY_WORKER_STATUS_LOG_SECONDS=15,
+    )
+
+    assert settings.knowledge_entity_worker_concurrency == 8
+    assert settings.knowledge_entity_worker_poll_seconds == 4
+    assert settings.knowledge_entity_task_timeout_seconds == 900
+    assert settings.knowledge_entity_lease_seconds == 60
+    assert settings.knowledge_entity_heartbeat_seconds == 10
+    assert settings.knowledge_entity_worker_status_log_seconds == 15
+
+    with pytest.raises(ValidationError, match="must be less than"):
+        Settings(
+            _env_file=None,
+            KNOWLEDGE_ENTITY_LEASE_SECONDS=30,
+            KNOWLEDGE_ENTITY_HEARTBEAT_SECONDS=30,
+        )
+
+    with pytest.raises(
+        ValidationError, match="KNOWLEDGE_ENTITY_WORKER_STATUS_LOG_SECONDS"
+    ):
+        Settings(_env_file=None, KNOWLEDGE_ENTITY_WORKER_STATUS_LOG_SECONDS=0)
+
+    with pytest.raises(ValidationError, match="KNOWLEDGE_ENTITY_TASK_TIMEOUT_SECONDS"):
+        Settings(_env_file=None, KNOWLEDGE_ENTITY_TASK_TIMEOUT_SECONDS=0)
+
+
 def test_settings_accept_shared_db_env_vars():
     """Settings should expose shared database connection parts."""
     settings = Settings(

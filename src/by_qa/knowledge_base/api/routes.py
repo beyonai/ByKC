@@ -19,6 +19,7 @@ from by_qa.knowledge_base.api.knowledge_entity_schemas import (
     EntityDiscoveryRequest,
     EntityEnrichRequest,
     KnowledgeEntityProcessingService,
+    ProcessingBatchStatusRequest,
     ProcessingEligibilityRequest,
     ProcessingTaskStatusRequest,
     SemanticRelationsRequest,
@@ -1559,10 +1560,7 @@ def register_routes(
         )
         try:
             service = await _get_knowledge_entity_service()
-            result = await service.discover_knowledge_entities(
-                request,
-                callback=None,
-            )
+            result = await service.discover_knowledge_entities(request)
         except KnowledgeBaseConfigurationError as exc:
             return _documented_error_response(
                 result_msg=str(exc),
@@ -1605,10 +1603,7 @@ def register_routes(
         )
         try:
             service = await _get_knowledge_entity_service()
-            result = await service.enrich_knowledge_entities(
-                request,
-                callback=None,
-            )
+            result = await service.enrich_knowledge_entities(request)
         except KnowledgeBaseConfigurationError as exc:
             return _documented_error_response(
                 result_msg=str(exc),
@@ -1666,6 +1661,47 @@ def register_routes(
             )
         except Exception as exc:
             logger.exception("processing_task_status error: %s", exc)
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error",
+                result_object=_knowledge_entity_error_object(exc),
+                status_code=500,
+            )
+        return _documented_success_response(
+            result_object=_serialize_knowledge_entity_result(result)
+        )
+
+    @app.post("/api/v1/knowledgeItems/processingBatchStatus")
+    async def processing_batch_status(body: dict[str, Any] = Body(...)):
+        try:
+            request = ProcessingBatchStatusRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        logger.info(
+            "processing_batch_status request received: kb_code=%s, batch_id=%s",
+            request.kb_code,
+            request.batch_id,
+        )
+        try:
+            service = await _get_knowledge_entity_service()
+            result = await service.get_processing_batch_status(request)
+        except KnowledgeBaseConfigurationError as exc:
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object=_knowledge_entity_error_object(exc),
+                status_code=503,
+            )
+        except KnowledgeBaseValidationError as exc:
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object=_knowledge_entity_error_object(exc),
+                status_code=422,
+            )
+        except Exception as exc:
+            logger.exception("processing_batch_status error: %s", exc)
             return _documented_error_response(
                 result_msg=str(exc) or "internal error",
                 result_object=_knowledge_entity_error_object(exc),

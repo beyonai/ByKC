@@ -19,7 +19,7 @@
 KnowledgeEntity 定义和业务处理方法仍以以下文档为准：
 
 - [KnowledgeEntity 发现、身份治理与文档富化方法论设计](./knowledge-entity-discovery-enrichment-design.md)
-- [KnowledgeEntity 发现与文档富化接口设计](./knowledge-entity-api.md)
+- [KnowledgeEntity 异步处理约定](./api/entity-processing.md)
 
 ## 2. 最终决策
 

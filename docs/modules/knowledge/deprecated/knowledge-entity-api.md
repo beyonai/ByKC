@@ -1,6 +1,6 @@
 # KnowledgeEntity 发现与文档富化接口设计
 
-> **文档已拆分。** 接口请从 [API 文档导航](api/README.md) 进入，公共任务语义见 [KnowledgeEntity 异步处理约定](api/entity-processing.md)。本文保留为设计和历史长示例参考。
+> **已废弃：** 本文是历史聚合版，不再作为有效接口契约。当前接口请从 [API 文档导航](../api/README.md) 进入，公共任务语义见 [KnowledgeEntity 异步处理约定](../api/entity-processing.md)。
 
 ## 1. 文档目标
 
@@ -15,9 +15,9 @@
 - 幂等、错误码和并发语义；
 - 接口落地所需的数据表复用与增改建议。
 
-方法论和实体定义见 [KnowledgeEntity 发现、身份治理与文档富化方法论设计](./knowledge-entity-discovery-enrichment-design.md)。
+方法论和实体定义见 [KnowledgeEntity 发现、身份治理与文档富化方法论设计](../knowledge-entity-discovery-enrichment-design.md)。
 
-持久化后台 runner、文件/批次进度和可注入 Callback Protocol 的目标设计见 [KnowledgeEntity 后台处理与 Callback 设计](./knowledge-entity-background-processing-callback-design.md)。本文档第 9 节只保留概念签名，Callback 输入与运行时语义以目标设计为准。
+持久化后台 runner、文件/批次进度和可注入 Callback Protocol 的目标设计见 [KnowledgeEntity 后台处理与 Callback 设计](../knowledge-entity-background-processing-callback-design.md)。本文档第 9 节只保留概念签名，Callback 输入与运行时语义以目标设计为准。
 
 ## 2. 设计原则
 

@@ -1,6 +1,6 @@
 # 知识模块元数据与检索扩展接口说明
 
-> **文档已拆分。** 接口请从 [API 文档导航](api/README.md) 进入，公共语义见 [元数据与 Agent DSL](api/metadata-and-dsl.md)。本文保留为历史长文参考。
+> **已废弃：** 本文是历史聚合版，不再作为有效接口契约。当前接口请从 [API 文档导航](../api/README.md) 进入，公共语义见 [元数据与 Agent DSL](../api/metadata-and-dsl.md)。
 
 ## 文档范围
 
@@ -656,7 +656,7 @@ Agent DSL 版纯元数据检索，只返回文件级结果。
 
 ### `POST /api/v1/knowledgeItems/search`
 
-基于 [knowledgeItems-search](api/interfaces/knowledgeItems-search.md) 的 Agent DSL 版 chunk 级语义检索。
+基于 [knowledgeItems-search](../api/interfaces/knowledgeItems-search.md) 的 Agent DSL 版 chunk 级语义检索。
 
 说明：
 

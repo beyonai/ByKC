@@ -13,7 +13,7 @@
 ## Source Documents
 
 - Spec: `docs/superpowers/specs/2026-07-08-stable-markdown-resource-reference-design.md`
-- API contract: `docs/modules/knowledge/api.md`
+- Historical API contract: `docs/modules/knowledge/deprecated/api.md`
 - Relevant skills for execution: @superpowers:subagent-driven-development, @superpowers:executing-plans, @superpowers:test-driven-development, @superpowers:verification-before-completion
 
 ## File Structure
@@ -565,7 +565,7 @@ Add:
 - `MoveKnowledgeItemsSummary`
 - `MoveKnowledgeItemsResponse`
 
-Use serialization aliases matching `docs/modules/knowledge/api.md`.
+Use serialization aliases matching the historical contract in `docs/modules/knowledge/deprecated/api.md`.
 
 - [ ] **Step 3: Add route**
 
@@ -813,7 +813,7 @@ git commit -m "test: cover stable markdown references through api"
 ### Task 14: Final Verification And Documentation Sync
 
 **Files:**
-- Modify only if needed: `docs/modules/knowledge/api.md`
+- Historical file modified by this plan: `docs/modules/knowledge/deprecated/api.md`
 - Modify only if needed: `docs/superpowers/specs/2026-07-08-stable-markdown-resource-reference-design.md`
 
 - [ ] **Step 1: Run focused unit test suites**
@@ -866,7 +866,7 @@ Check:
 - [ ] **Step 5: Commit final documentation fixes if any**
 
 ```bash
-git add docs/modules/knowledge/api.md docs/superpowers/specs/2026-07-08-stable-markdown-resource-reference-design.md
+git add docs/modules/knowledge/deprecated/api.md docs/superpowers/specs/2026-07-08-stable-markdown-resource-reference-design.md
 git commit -m "docs: sync stable reference implementation notes"
 ```
 

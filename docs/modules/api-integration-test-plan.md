@@ -6,7 +6,7 @@
 
 参考依据：
 
-- `docs/modules/knowledge/api.md`
+- `docs/modules/knowledge/api/README.md`
 - `src/by_qa/knowledge_base/api/routes.py`
 - `src/by_qa/knowledge_base/api/schemas.py`
 
@@ -346,7 +346,7 @@
 
 - 本组场景覆盖 `processingEligibility`、`entityDiscovery`、`entityEnrich`、`processingTaskStatus` 和 `semanticRelations`，并与 import/update/metadata/move/delete/references 等现有链路交叉验证。
 - 本组统一使用 `KE` 编号；只有真实集成用例完整断言该行场景才标“已写”，只覆盖其中一部分为“已写部分”；单元测试、组件测试和人工实库验证不得改变本节状态。
-- 相关接口契约见 `docs/modules/knowledge/knowledge-entity-api.md`，方法论和生命周期见 `docs/modules/knowledge/knowledge-entity-discovery-enrichment-design.md`。
+- 相关接口契约见 `docs/modules/knowledge/api/README.md` 和 `docs/modules/knowledge/api/entity-processing.md`，方法论和生命周期见 `docs/modules/knowledge/knowledge-entity-discovery-enrichment-design.md`。
 
 ### 硬性运行边界：集成测试禁止使用替身
 

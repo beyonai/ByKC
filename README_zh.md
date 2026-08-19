@@ -304,7 +304,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/knowledgeItems/search \
   -d '{"knCodeList": ["74"], "query": "如何使用", "topK": 3, "searchMode": "mixedRecall"}'
 ```
 
-如果需要为文件定义业务属性、写入元数据、做纯结构化检索，或在全文/向量/混合检索中叠加 `where` 过滤，请查看独立文档 [元数据与检索扩展接口](docs/modules/knowledge/metadata_api.md)。
+如果需要为文件定义业务属性、写入元数据、做纯结构化检索，或在全文/向量/混合检索中叠加 `where` 过滤，请查看 [元数据与 Agent DSL](docs/modules/knowledge/api/metadata-and-dsl.md)。
 
 知识构建完成后，可使用仓库提供的问答脚本直接提问：
 
@@ -325,10 +325,10 @@ python examples/e2e_kb_qa/run_instant_qa.py --help
 
 ### 知识库 API
 
-知识库接口文档分为两部分：
+知识库 API 文档使用统一导航：
 
-- 基础知识库接口：文档与目录管理、知识构建、原文读取与下载，详见 [知识模块接口说明](docs/modules/knowledge/api.md)
-- 元数据与检索扩展接口：元数据字段管理、文件级元数据维护、结构化检索、带 DSL 过滤的检索能力，详见 [元数据与检索扩展接口](docs/modules/knowledge/metadata_api.md)
+- 接口导航与逐接口文档：[知识模块 API](docs/modules/knowledge/api/README.md)
+- 元数据类型与过滤语法：[元数据与 Agent DSL](docs/modules/knowledge/api/metadata-and-dsl.md)
 
 当前内置能力包括：
 

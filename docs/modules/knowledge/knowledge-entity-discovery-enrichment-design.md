@@ -19,9 +19,9 @@
 
 - [知识模块设计](./design.md)
 - [知识模块处理流程](./process.md)
-- [元数据 API](./metadata_api.md)
+- [元数据与 Agent DSL](./api/metadata-and-dsl.md)
 - [知识获取、结构化打标与导入流程](./knowledge-acquisition-structured-import-design.md)
-- [KnowledgeEntity 发现与文档富化接口设计](./knowledge-entity-api.md)
+- [KnowledgeEntity 接口导航](./api/README.md)
 - [KnowledgeEntity 后台处理与 Callback 设计](./knowledge-entity-background-processing-callback-design.md)
 
 ## 2. 范围与非目标

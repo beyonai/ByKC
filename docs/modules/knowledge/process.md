@@ -2,7 +2,7 @@
 
 相关文档：
 
-- [api.md](./api.md)
+- [API 文档导航](./api/README.md)
 - [framework.md](./framework.md)
 - [design.md](./design.md)
 - [minio.md](./minio.md)

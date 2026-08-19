@@ -305,7 +305,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/knowledgeItems/search \
   -d '{"knCodeList": ["74"], "query": "how to use", "topK": 3, "searchMode": "mixedRecall"}'
 ```
 
-If you need to define business metadata fields, write file metadata, run pure structured filtering, or add `where` filters to full-text / vector / hybrid retrieval, see the separate [Metadata and Retrieval Extension API](docs/modules/knowledge/metadata_api.md).
+If you need to define business metadata fields, write file metadata, run pure structured filtering, or add `where` filters to full-text / vector / hybrid retrieval, see [Metadata and Agent DSL](docs/modules/knowledge/api/metadata-and-dsl.md).
 
 After knowledge is built, use the QA scripts in the repo to ask questions:
 
@@ -326,10 +326,10 @@ python examples/e2e_kb_qa/run_instant_qa.py --help
 
 ### Knowledge Base API
 
-The knowledge base documentation is split into two parts:
+The knowledge base API documentation uses a unified navigation page:
 
-- Base knowledge-base APIs: document and directory management, knowledge build, original-content reading, and file download. See [Knowledge Module API](docs/modules/knowledge/api.md)
-- Metadata and retrieval extension APIs: metadata field management, file-level metadata maintenance, structured retrieval, and DSL-filtered retrieval. See [Metadata and Retrieval Extension API](docs/modules/knowledge/metadata_api.md)
+- API navigation and endpoint reference: [Knowledge Module API](docs/modules/knowledge/api/README.md)
+- Shared metadata types and filtering syntax: [Metadata and Agent DSL](docs/modules/knowledge/api/metadata-and-dsl.md)
 
 Current built-in capabilities include:
 

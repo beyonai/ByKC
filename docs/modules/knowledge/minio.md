@@ -8,7 +8,7 @@
 
 - [framework.md](./framework.md)
 - [design.md](./design.md)
-- [api.md](./api.md)
+- [API 文档导航](./api/README.md)
 - [process.md](./process.md)
 
 ## 客户端实现

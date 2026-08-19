@@ -152,7 +152,7 @@ async def test_discovery_retries_strict_json_and_filters_non_entities(
             "evidence": "临时角色。",
         },
     ]
-    llm = _FakeLLM("```json\n[]\n```", json.dumps(raw_candidates, ensure_ascii=False))
+    llm = _FakeLLM("not json", json.dumps(raw_candidates, ensure_ascii=False))
     discovery = KnowledgeEntityDiscovery(llm)
 
     result = await discovery.discover(
@@ -187,6 +187,58 @@ async def test_discovery_retries_strict_json_and_filters_non_entities(
     assert "task_id=51" in rendered_logs
     assert "文档内容" not in rendered_logs
     assert "Object-oriented theory" not in rendered_logs
+
+
+@pytest.mark.asyncio
+async def test_discovery_accepts_think_preface_and_json_fence_without_retry() -> None:
+    raw_candidates = [
+        {
+            "entityName": "ByDC",
+            "localName": "ByDC",
+            "identityScope": "global",
+            "candidateKind": "entity",
+            "stableIdentity": True,
+            "evidence": "ByDC 是一个企业数据中枢。",
+        }
+    ]
+    output = (
+        "<think>\nLet me analyze the document carefully.\n</think>\n\n"
+        "```json\n"
+        f"{json.dumps(raw_candidates, ensure_ascii=False)}\n"
+        "```"
+    )
+    llm = _FakeLLM(output)
+
+    result = await KnowledgeEntityDiscovery(llm).discover(
+        "# ByDC\nByDC 是一个企业数据中枢。"
+    )
+
+    assert result.attempts == 1
+    assert [candidate.entity_name for candidate in result.candidates] == ["ByDC"]
+    assert len(llm.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_discovery_repairs_malformed_json_without_retry() -> None:
+    output = """[
+      {
+        "entityName": "ByDC",
+        "localName": "ByDC",
+        "identityScope": "global",
+        "candidateKind": "entity",
+        "stableIdentity": true,
+        "evidence": "ByDC 是一个企业数据中枢。",
+      }
+    ]"""
+    llm = _FakeLLM(output)
+
+    result = await KnowledgeEntityDiscovery(llm).discover(
+        "# ByDC\nByDC 是一个企业数据中枢。"
+    )
+
+    assert result.attempts == 1
+    assert [candidate.entity_name for candidate in result.candidates] == ["ByDC"]
+    assert len(llm.calls) == 1
 
 
 @pytest.mark.asyncio

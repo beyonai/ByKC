@@ -50,6 +50,7 @@ knowledge = [
     "xlrd>=2.0.0",
     "jieba>=0.42.1",
     "by-framework==0.2.2.dev11",
+    "json_repair==0.52.2",
     "lxml==6.1.0",
     "urllib3==2.7.0",
     "redis==7.4.0"

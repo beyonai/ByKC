@@ -18,6 +18,7 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 import httpx
+import json_repair
 
 from by_qa.core import logger
 from by_qa.core.model_config import (
@@ -37,6 +38,14 @@ _HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$")
 _H1_RE = re.compile(r"^\s{0,3}#(?!#)\s+.*$")
 _MARKDOWN_FENCE_RE = re.compile(
     r"\A\s*```(?:markdown|md)?\s*\n(?P<body>.*?)\n```\s*\Z",
+    re.DOTALL | re.IGNORECASE,
+)
+_JSON_FENCE_RE = re.compile(
+    r"\A\s*```(?:json)?\s*\n(?P<body>.*?)\n```\s*\Z",
+    re.DOTALL | re.IGNORECASE,
+)
+_LEADING_THINK_RE = re.compile(
+    r"\A\s*<think\b[^>]*>.*?</think>\s*",
     re.DOTALL | re.IGNORECASE,
 )
 _FRONT_MATTER_RE = re.compile(r"\A\s*---[ \t]*\n.*?\n---[ \t]*(?:\n|\Z)", re.DOTALL)
@@ -376,7 +385,7 @@ async def _complete_strict_json(
         # prompt and retry validator instead of sending a contradictory format.
         raw = await llm.complete(retry_messages, json_mode=expected_type is dict)
         try:
-            parsed = json.loads(raw)
+            parsed = _parse_json_output(raw)
         except (json.JSONDecodeError, TypeError) as exc:
             last_error = f"JSON parse error: {exc}"
             logger.warning(
@@ -423,6 +432,31 @@ async def _complete_strict_json(
     raise KnowledgeEntityOutputError(
         f"LLM output remained invalid after {max_attempts} attempts: {last_error}"
     )
+
+
+def _normalize_json_output(raw: str) -> str:
+    """Remove supported model reasoning wrappers around one JSON payload."""
+
+    if not isinstance(raw, str):
+        raise TypeError("LLM output must be text")
+    normalized = raw.lstrip("\ufeff")
+    while match := _LEADING_THINK_RE.match(normalized):
+        normalized = normalized[match.end() :]
+    if fence := _JSON_FENCE_RE.fullmatch(normalized):
+        normalized = fence.group("body")
+    return normalized.strip()
+
+
+def _parse_json_output(raw: str) -> Any:
+    """Parse normalized JSON, repairing only an apparent array or object payload."""
+
+    normalized = _normalize_json_output(raw)
+    try:
+        return json.loads(normalized)
+    except json.JSONDecodeError:
+        if not normalized.startswith(("[", "{")):
+            raise
+        return json_repair.loads(normalized, skip_json_loads=True)
 
 
 def _safe_log_context(context: Mapping[str, Any] | None) -> str:

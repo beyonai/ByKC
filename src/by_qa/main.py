@@ -54,7 +54,7 @@ API_MODULES = (
         name="knowledge_base",
         route_module="by_qa.knowledge_base.api.routes",
         register_function="register_routes",
-        required_packages=("fastapi", "aioboto3", "psycopg"),
+        required_packages=("fastapi", "aioboto3", "psycopg", "json_repair"),
         register_kwargs_factory=lambda: {
             "get_knowledge_base_service": resolve_knowledge_base_service,
             "get_knowledge_item_ingestion_service": (

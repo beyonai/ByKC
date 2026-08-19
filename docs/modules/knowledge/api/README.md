@@ -1,6 +1,6 @@
 # 知识模块 API 文档
 
-本目录是知识模块 HTTP API 的统一入口。当前共有 **31 个逻辑接口**；其中 6 个接口额外注册了 `knowledge-items` 兼容路径，因此 FastAPI 中共有 37 个路径（包含 `/health`）。
+本目录是知识模块 HTTP API 的统一入口。当前共有 **33 个逻辑接口**；包含兼容路径后，FastAPI 中共有 41 个路径（包含 `/health`）。
 
 ## 公共文档
 
@@ -80,6 +80,8 @@
 | `POST` | `/api/v1/knowledgeItems/processingTaskStatus` | [processingTaskStatus](interfaces/processingTaskStatus.md) |
 | `POST` | `/api/v1/knowledgeItems/processingBatchStatus` | [processingBatchStatus](interfaces/processingBatchStatus.md) |
 | `POST` | `/api/v1/knowledgeItems/semanticRelations` | [semanticRelations](interfaces/semanticRelations.md) |
+| `POST` | `/api/v1/knowledgeEntities/delete` | [knowledgeEntities-delete](interfaces/knowledgeEntities-delete.md) |
+| `POST` | `/api/v1/knowledgeEntities/aliases/delete` | [knowledgeEntityAliases-delete](interfaces/knowledgeEntityAliases-delete.md) |
 
 ## 文档维护规则
 

@@ -10,6 +10,7 @@ from by_qa.knowledge_base.services.bootstrap_service import (
     KnowledgeBaseSchemaBootstrapService,
     SchemaMigration,
     normalize_embedding_table_name,
+    normalize_entity_embedding_table_name,
     split_sql_statements,
 )
 from by_qa.knowledge_base.services.errors import KnowledgeBaseConfigurationError
@@ -19,6 +20,13 @@ def test_normalize_embedding_table_name_rewrites_unsafe_characters():
     """Embedding table names should be stable and SQL-safe."""
     assert (
         normalize_embedding_table_name("BGE-M3 Large") == "chunk_embedding_bge_m3_large"
+    )
+
+
+def test_normalize_entity_embedding_table_name_rewrites_unsafe_characters():
+    assert (
+        normalize_entity_embedding_table_name("Text-Embedding-V4")
+        == "knowledge_entity_embedding_text_embedding_v4"
     )
 
 
@@ -35,6 +43,9 @@ def test_build_schema_statements_include_current_chunk_and_projection_tables():
     assert "knowledge_chunk_retrieval_mv" in ddl
     assert "knowledge_fetch_cache_index" in ddl
     assert "chunk_embedding_bge_m3" in ddl
+    assert "create table if not exists knowledge_entity" in ddl.lower()
+    assert "knowledge_entity_embedding_bge_m3" in ddl
+    assert "representation in ('full', 'local_name')" in ddl.lower()
     assert "vector(1024)" in ddl
 
 

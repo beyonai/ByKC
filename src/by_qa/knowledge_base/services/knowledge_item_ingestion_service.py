@@ -133,6 +133,7 @@ class KnowledgeItemIngestionService:
     embedding_dimension: int
     knowledge_build_task_repository: Any | None = None
     knowledge_fetch_cache_repository: Any | None = None
+    knowledge_entity_asset_repository: Any | None = None
     file_metadata_value_repository: Any | None = None
     knowledge_file_reference_repository: Any | None = None
     markdown_reference_rewriter: Any | None = None
@@ -888,6 +889,12 @@ class KnowledgeItemIngestionService:
                     f"knowledge item not found: {request.file_path}"
                 )
             fs_entry_id = int(file_row["kid"])
+            if self.knowledge_entity_asset_repository is not None:
+                await self.knowledge_entity_asset_repository.clear_fs_entry_ids(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    fs_entry_ids=[fs_entry_id],
+                )
             if self.knowledge_file_reference_repository is not None:
                 await self.knowledge_file_reference_repository.delete_outgoing_for_source_fs_entry_id(
                     cursor,

@@ -26,15 +26,11 @@ from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
     organize_evidence,
 )
 from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
-    AhoCorasickIndex,
     IdentityScope,
     KnowledgeEntityLLMError,
     KnowledgeEntityOutputError,
     OpenAICompatibleKnowledgeEntityLLM,
     RelationCode,
-    SurfaceEntry,
-    SurfaceMatch,
-    SurfacePosting,
     normalize_surface,
     normalize_text_with_offsets,
 )
@@ -55,21 +51,6 @@ class _FakeLLM:
         return self.outputs.pop(0)
 
 
-def _posting(
-    file_id: int,
-    kb_id: int,
-    entity_name: str,
-    *,
-    surface_type: str = "entityName",
-) -> SurfacePosting:
-    return SurfacePosting(
-        entity_file_id=file_id,
-        knowledge_base_id=kb_id,
-        entity_name=entity_name,
-        surface_type=surface_type,
-    )
-
-
 def test_surface_normalization_uses_nfkc_casefold_and_whitespace_collapse() -> None:
     assert normalize_surface("  ＡＰＩ\u3000Straße  ") == "api strasse"
     assert normalize_surface("e\u0301") == "é"
@@ -88,86 +69,6 @@ def test_surface_normalization_uses_nfkc_casefold_and_whitespace_collapse() -> N
         accent_start, accent_start + 1
     )
     assert "x e\u0301 y"[original_start:original_end] == "e\u0301"
-
-
-def test_aho_corasick_keeps_multi_postings_current_kb_and_longest_overlap() -> None:
-    index = AhoCorasickIndex(
-        [
-            SurfaceEntry("OSOT", _posting(10, 1, "OSOT")),
-            SurfaceEntry("OSOT-OCG", _posting(11, 1, "OSOT-OCG")),
-            SurfaceEntry("OSOT-OCG", _posting(99, 2, "OSOT-OCG")),
-            SurfaceEntry("知识", _posting(20, 1, "知识")),
-            SurfaceEntry("知识实体", _posting(21, 1, "知识实体")),
-            SurfaceEntry("实体", _posting(22, 1, "实体")),
-        ],
-        version="snapshot-7",
-    )
-
-    matches = index.scan("OSOT-OCG 与 OSOT 都是知识实体。", current_knowledge_base_id=1)
-
-    assert index.version == "snapshot-7"
-    assert [match.normalized_surface for match in matches] == [
-        "osot-ocg",
-        "osot",
-        "知识实体",
-    ]
-    assert [posting.entity_file_id for posting in matches[0].postings] == [11, 99]
-    assert [posting.entity_file_id for posting in matches[0].anchorable_postings] == [
-        11
-    ]
-    assert matches[0].is_anchorable is True
-
-
-def test_aho_corasick_enforces_ascii_word_boundaries_and_maps_nfkc_offsets() -> None:
-    index = AhoCorasickIndex([SurfaceEntry("API", _posting(1, 1, "API"))])
-    document = "API APIs XAPI API2，中ＡＰＩ。"
-
-    matches = index.scan(document, current_knowledge_base_id=1)
-
-    assert [match.matched_text for match in matches] == ["API", "ＡＰＩ"]
-    assert [(match.start, match.end) for match in matches] == [
-        (0, 3),
-        (document.index("Ａ"), document.index("Ｉ") + 1),
-    ]
-
-
-def test_systemwide_surface_without_current_kb_posting_is_not_anchorable() -> None:
-    index = AhoCorasickIndex([SurfaceEntry("同名词", _posting(9, 99, "他库实体"))])
-
-    match = index.scan("这里有同名词。", current_knowledge_base_id=1)[0]
-
-    assert match.postings[0].entity_file_id == 9
-    assert match.anchorable_postings == ()
-    assert match.is_anchorable is False
-
-
-def test_subject_local_alias_requires_subject_context_but_qualified_name_does_not() -> (
-    None
-):
-    subject_posting = SurfacePosting(
-        entity_file_id=11,
-        knowledge_base_id=1,
-        entity_name="OSOT-OCG",
-        surface_type="alias",
-        subject_file_id=10,
-    )
-    index = AhoCorasickIndex(
-        [
-            SurfaceEntry("OCG", subject_posting),
-            SurfaceEntry("OSOT-OCG", subject_posting),
-        ]
-    )
-
-    without_context = index.scan("OCG 与 OSOT-OCG", current_knowledge_base_id=1)
-    with_context = index.scan(
-        "OCG", current_knowledge_base_id=1, subject_context_file_ids={10}
-    )
-
-    assert without_context[0].normalized_surface == "ocg"
-    assert without_context[0].anchorable_postings == ()
-    assert without_context[1].normalized_surface == "osot-ocg"
-    assert without_context[1].anchorable_postings == (subject_posting,)
-    assert with_context[0].anchorable_postings == (subject_posting,)
 
 
 def test_discovery_context_keeps_original_head_tail_frame_within_50k() -> None:
@@ -289,7 +190,7 @@ async def test_discovery_retries_strict_json_and_filters_non_entities(
 
 
 @pytest.mark.asyncio
-async def test_discovery_prompt_is_independent_of_existing_entity_vocabulary() -> None:
+async def test_discovery_prompt_does_not_include_existing_entity_vocabulary() -> None:
     output = json.dumps(
         [
             {
@@ -304,29 +205,11 @@ async def test_discovery_prompt_is_independent_of_existing_entity_vocabulary() -
         ensure_ascii=False,
     )
     llm = _FakeLLM(output, output)
-    posting = _posting(10, 1, "OSOT")
-    known_matches = tuple(
-        SurfaceMatch(
-            surface="OSOT",
-            normalized_surface="osot",
-            matched_text="OSOT",
-            start=start,
-            end=start + 4,
-            postings=(posting,),
-            anchorable_postings=(posting,),
-        )
-        for start in (2, 7, 12, 17)
-    )
-
     discovery = KnowledgeEntityDiscovery(llm)
     markdown = "# OSOT\nOSOT 是文档的核心理论。"
-    baseline = await discovery.discover(markdown)
-    populated = await discovery.discover(
-        markdown,
-        known_matches=known_matches,
-    )
+    result = await discovery.discover(markdown)
 
-    assert baseline.candidates == populated.candidates
+    assert result.candidates[0].entity_name == "OSOT"
     assert len(llm.calls) == 1
     system_prompt = llm.calls[0][0][0]["content"]
     user_prompt = llm.calls[0][0][1]["content"]

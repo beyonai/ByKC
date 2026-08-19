@@ -1,0 +1,174 @@
+{
+  "cases": [
+    {
+      "id": "bykc-base-qa-engine-zh",
+      "mention": "ByKC-基础问答引擎",
+      "expected": "SAME",
+      "targetAnyOf": ["ByKC-BaseQAEngine", "ByKC-Base QA Engine"],
+      "subject": "ByKC",
+      "context": "基础问答引擎负责 QA 引擎的通用生命周期和流式搜索入口。",
+      "category": "cross_language",
+      "source": "user_case"
+    },
+    {
+      "id": "bykc-stream-event-zh",
+      "mention": "ByKC-流式事件",
+      "expected": "SAME",
+      "targetAnyOf": ["ByKC-StreamEvent", "StreamEvent"],
+      "subject": "ByKC",
+      "context": "流式事件定义了 token、answer、tool_call 等事件类型。",
+      "category": "cross_language",
+      "source": "ByKC-deep-tech-analysis.md"
+    },
+    {
+      "id": "bykc-service-tool-dispatcher-zh",
+      "mention": "ByKC-服务工具调度器",
+      "expected": "SAME",
+      "targetAnyOf": ["ByKC-ServiceToolDispatcher", "ServiceToolDispatcher"],
+      "subject": "ByKC",
+      "context": "服务工具调度器负责跨多个知识库并行分发检索请求。",
+      "category": "cross_language",
+      "source": "ByKC-deep-tech-analysis.md"
+    },
+    {
+      "id": "bykc-operation-registry-zh",
+      "mention": "ByKC-操作类型注册表",
+      "expected": "SAME",
+      "targetAnyOf": ["ByKC-OPERATION_REGISTRY", "ByKC-操作注册表"],
+      "subject": "ByKC",
+      "context": "操作类型注册表将操作类型映射到工具规范。",
+      "category": "cross_language",
+      "source": "ByKC-deep-tech-analysis.md"
+    },
+    {
+      "id": "bykc-agent-dsl-format",
+      "mention": "ByKC-AgentDSL",
+      "expected": "SAME",
+      "targetAnyOf": ["ByKC-Agent DSL", "Agent DSL", "AgentDSL"],
+      "subject": "ByKC",
+      "context": "Agent DSL 使用 JSON AST 表达结构化过滤条件。",
+      "category": "format_variant",
+      "source": "ByKC-deep-tech-analysis.md"
+    },
+    {
+      "id": "bykc-knowledge-entity-discovery-fixture",
+      "mention": "ByKC-知识实体发现器",
+      "expected": "SAME",
+      "targetAnyOf": ["ByKC-KnowledgeEntityDiscovery"],
+      "subject": "ByKC",
+      "context": "知识实体发现器从文档中抽取具有稳定身份的核心实体。",
+      "category": "cross_language_manual_fixture",
+      "source": "manual_fixture"
+    },
+    {
+      "id": "bykc-embedding-query-service-fixture",
+      "mention": "ByKC-嵌入查询服务",
+      "expected": "SAME",
+      "targetAnyOf": ["ByKC-EmbeddingQueryService"],
+      "subject": "ByKC",
+      "context": "嵌入查询服务调用向量模型生成查询向量。",
+      "category": "cross_language_manual_fixture",
+      "source": "manual_fixture"
+    },
+    {
+      "id": "gbrain-hybrid-search-zh",
+      "mention": "GBrain-混合检索",
+      "expected": "SAME",
+      "targetAnyOf": ["GBrain-Hybrid Search", "GBrain-混合检索"],
+      "subject": "GBrain",
+      "context": "混合检索采用多种确定性技术叠加，并结合知识图谱。",
+      "category": "cross_language",
+      "source": "GBrain-product-analysis.md"
+    },
+    {
+      "id": "maxkb-agentic-workflow-zh",
+      "mention": "MaxKB-智能体工作流",
+      "expected": "SAME",
+      "targetAnyOf": ["MaxKB-Agentic Workflow", "MaxKB-智能体工作流"],
+      "subject": "MaxKB",
+      "context": "智能体工作流支持通过节点编排构建复杂 Agent。",
+      "category": "cross_language",
+      "source": "MaxKB-product-analysis.md"
+    },
+    {
+      "id": "obsidian-local-first-zh",
+      "mention": "Obsidian-本地优先",
+      "expected": "SAME",
+      "targetAnyOf": ["Obsidian-Local-first", "Obsidian-本地优先"],
+      "subject": "Obsidian",
+      "context": "数据默认保存在用户本地，用户掌握文件所有权。",
+      "category": "cross_language",
+      "source": "Obsidian-product-analysis.md"
+    },
+    {
+      "id": "llm-wiki-ingest-zh",
+      "mention": "LLM Wiki-两阶段思维链摄入",
+      "expected": "SAME",
+      "targetAnyOf": ["LLM Wiki-两步链式思维摄入", "LLM Wiki-Ingest"],
+      "subject": "LLM Wiki",
+      "context": "两阶段思维链摄入先生成结构，再基于结构生成完整 Wiki 内容。",
+      "category": "cross_language",
+      "source": "LLM-Wiki-product-analysis.md"
+    },
+    {
+      "id": "palantir-object-timeline-zh",
+      "mention": "Palantir-对象时间线",
+      "expected": "SAME",
+      "targetAnyOf": ["Palantir-object timeline", "object timeline"],
+      "subject": "Palantir",
+      "context": "对象时间线记录业务对象随时间发生的状态变化。",
+      "category": "cross_language",
+      "source": "palantir-2026-08.md"
+    },
+    {
+      "id": "bykc-base-embedding-engine-negative",
+      "mention": "ByKC-BaseEmbeddingEngine",
+      "expected": "NEW",
+      "targetAnyOf": [],
+      "subject": "ByKC",
+      "context": "该引擎专门负责向量模型调用与 embedding 批处理。",
+      "category": "hard_negative",
+      "source": "synthetic_from_ByKC"
+    },
+    {
+      "id": "bykc-retrieval-engine-negative",
+      "mention": "ByKC-基础检索引擎",
+      "expected": "NEW",
+      "targetAnyOf": [],
+      "subject": "ByKC",
+      "context": "基础检索引擎只负责召回知识库内容，不负责生成问答结果。",
+      "category": "hard_negative",
+      "source": "synthetic_from_ByKC"
+    },
+    {
+      "id": "gbrain-vector-store-negative",
+      "mention": "GBrain-向量存储",
+      "expected": "NEW",
+      "targetAnyOf": [],
+      "subject": "GBrain",
+      "context": "向量存储是混合检索使用的底层数据结构，而不是混合检索方法本身。",
+      "category": "hard_negative",
+      "source": "synthetic_from_GBrain"
+    },
+    {
+      "id": "obsidian-cloud-first-negative",
+      "mention": "Obsidian-云端优先",
+      "expected": "NEW",
+      "targetAnyOf": [],
+      "subject": "Obsidian",
+      "context": "所有数据必须先写入云端，客户端只保留缓存。",
+      "category": "hard_negative",
+      "source": "synthetic_from_Obsidian"
+    },
+    {
+      "id": "maxkb-human-workflow-negative",
+      "mention": "MaxKB-人工审批工作流",
+      "expected": "NEW",
+      "targetAnyOf": [],
+      "subject": "MaxKB",
+      "context": "人工审批工作流要求每一步都由操作员确认，不是 Agentic Workflow 的别名。",
+      "category": "hard_negative",
+      "source": "synthetic_from_MaxKB"
+    }
+  ]
+}

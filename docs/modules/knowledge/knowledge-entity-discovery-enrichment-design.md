@@ -1,5 +1,7 @@
 # KnowledgeEntity 发现、身份治理与文档富化方法论设计
 
+> **版本说明**：本文记录 KnowledgeEntity v1 的文件中心方法论，当前代码仍以此为基础。v2 的实体持久化、名称/alias 自关联、按知识库向量召回和删除生命周期，以 [KnowledgeEntity 异名同义归一与性能优化设计](./knowledge-entity-synonym-resolution-performance-design.md) 为准。v2 实施后，该文档中“不引入独立实体表”“`fileId` 是实体身份”“每 worker/全系统 AC 词表”和“aliases 仅存文件 metadata”的条目均由 v2 设计取代；富化、证据和关系方法仍继续适用。
+
 ## 1. 文档目标
 
 本文档定义 ByKC 中 KnowledgeEntity 的目标方法论，用于指导后续的数据建模、能力设计、接口设计和评测。重点回答：
@@ -39,7 +41,7 @@
 
 ### 2.2 非目标
 
-- 不引入独立 KnowledgeEntity 主数据表；
+- **v1 决策（已由 v2 取代）**：不引入独立 KnowledgeEntity 主数据表；
 - 不建设草稿—审核—发布流程；
 - 不建设 namespace 表、namespace 树或复杂的父子命名空间；
 - 核心方法论不规定 Callback 的 HTTP、MQ、Webhook 或其他传输实现；
@@ -52,7 +54,9 @@
 
 ### 3.1 文档是唯一知识主体
 
-原始文档和 KnowledgeEntity 都是知识库文件，共用 `knowledge_fs_entry` 作为唯一内容主表。`knowledge_fs_entry.kid` 同时作为 KnowledgeEntity 的稳定身份 ID。
+> 本节描述 v1 文件中心模型。v2 改用 `knowledge_entity.kid` 作为实体身份，并仅以可空 `fs_entry_id` 锚定 KnowledgeEntity 文件。
+
+原始文档和 KnowledgeEntity 都是知识库文件，共用 `knowledge_fs_entry` 作为唯一内容主表。v1 中 `knowledge_fs_entry.kid` 同时作为 KnowledgeEntity 的稳定身份 ID。
 
 现有文件主模型见 [`knowledge_fs_entry`](../../../src/by_qa/knowledge_base/sql/002_knowledge_fs_entry.sql)，自定义属性使用现有 [`knowledge_file_metadata_value`](../../../src/by_qa/knowledge_base/sql/017_file_metadata_value.sql)。
 
@@ -905,7 +909,7 @@ KnowledgeEntity 文档和关系不保存 `definitionVersion`。实体身份由 `
 
 - 内容主体始终是知识库文档；
 - KnowledgeEntity 和原始文档共用 `knowledge_fs_entry`；
-- `fileId` 是实体稳定身份，metadata 表达文档类型和实体属性；
+- v1 使用 `fileId` 作为实体稳定身份；v2 改用实体表主键，metadata 不再是实体名称和 alias 的事实源；
 - `documentKind` 决定默认处理资格，`processingCapabilities` 覆盖策略，任务输入指纹决定是否需要重跑；
 - Discovery/Enrich 支持单文件和全库触发；不传文件路径时逐文件筛选并执行，同批任务共享 `batchId`；
 - 新实体只保存在源文档同库的 `/KnowledgeEntity` 目录，不接受自定义目标库和目标目录；

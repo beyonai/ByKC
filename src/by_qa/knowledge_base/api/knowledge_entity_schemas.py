@@ -169,6 +169,28 @@ class EntityEnrichRequest(_ApiModel):
     _normalize_extra_params = field_validator("extra_params")(_validate_extra_params)
 
 
+class DeleteKnowledgeEntityRequest(_ApiModel):
+    """Delete one canonical entity and its optional file anchor."""
+
+    kb_code: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("knCode", "kb_code"),
+    )
+    entity_id: int = Field(
+        gt=0,
+        validation_alias=AliasChoices("entityId", "entity_id"),
+    )
+
+
+class DeleteKnowledgeEntityAliasRequest(DeleteKnowledgeEntityRequest):
+    """Delete one alias owned by a canonical entity."""
+
+    alias_id: int = Field(
+        gt=0,
+        validation_alias=AliasChoices("aliasId", "alias_id"),
+    )
+
+
 class ProcessingTaskStatusRequest(_ApiModel):
     """Knowledge-base-scoped processing task query."""
 
@@ -438,12 +460,19 @@ class SemanticRelationPage(_ApiModel):
     data: list[SemanticRelationItem]
 
 
+class KnowledgeEntityDeleteResult(_ApiModel):
+    deleted_entity_count: int = Field(ge=0, serialization_alias="deletedEntityCount")
+    deleted_alias_count: int = Field(ge=0, serialization_alias="deletedAliasCount")
+    deleted_file_count: int = Field(ge=0, serialization_alias="deletedFileCount")
+
+
 KnowledgeEntityServiceResult = (
     ProcessingEligibilityResult
     | ProcessingBatchAccepted
     | ProcessingBatchStatusResult
     | ProcessingTaskPage
     | SemanticRelationPage
+    | KnowledgeEntityDeleteResult
     | dict[str, Any]
 )
 
@@ -476,3 +505,11 @@ class KnowledgeEntityProcessingService(Protocol):
     async def get_semantic_relations(
         self, request: SemanticRelationsRequest
     ) -> SemanticRelationPage | dict[str, Any]: ...
+
+    async def delete_knowledge_entity(
+        self, request: DeleteKnowledgeEntityRequest
+    ) -> KnowledgeEntityDeleteResult | dict[str, Any]: ...
+
+    async def delete_knowledge_entity_alias(
+        self, request: DeleteKnowledgeEntityAliasRequest
+    ) -> KnowledgeEntityDeleteResult | dict[str, Any]: ...

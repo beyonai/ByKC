@@ -216,6 +216,24 @@ class Settings(BaseSettings):
         ge=0,
         alias="KNOWLEDGE_ENTITY_SHUTDOWN_GRACE_SECONDS",
     )
+    entity_embedding_index_enabled: bool = Field(
+        default=True,
+        alias="ENTITY_EMBEDDING_INDEX_ENABLED",
+    )
+    entity_synonym_exact_alias_enabled: bool = Field(
+        default=True,
+        alias="ENTITY_SYNONYM_EXACT_ALIAS_ENABLED",
+    )
+    entity_synonym_adjudication_enabled: bool = Field(
+        default=True,
+        alias="ENTITY_SYNONYM_ADJUDICATION_ENABLED",
+    )
+    entity_synonym_top_k: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        alias="ENTITY_SYNONYM_TOP_K",
+    )
 
     @field_validator("log_level", mode="before")
     @classmethod

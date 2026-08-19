@@ -104,6 +104,22 @@ class FakeKnowledgeEntityService:
             "data": [],
         }
 
+    async def delete_knowledge_entity(self, request):
+        self.calls.append(("delete_entity", request, None))
+        return {
+            "deletedEntityCount": 1,
+            "deletedAliasCount": 2,
+            "deletedFileCount": 1,
+        }
+
+    async def delete_knowledge_entity_alias(self, request):
+        self.calls.append(("delete_alias", request, None))
+        return {
+            "deletedEntityCount": 0,
+            "deletedAliasCount": 1,
+            "deletedFileCount": 0,
+        }
+
 
 def make_client(service: FakeKnowledgeEntityService | None) -> TestClient:
     app = FastAPI()
@@ -352,3 +368,32 @@ def test_routes_remain_registerable_without_optional_entity_service_provider():
         "resultMsg": "knowledge entity processing service is not configured",
         "resultObject": {},
     }
+
+
+def test_entity_and_alias_delete_routes_validate_and_delegate():
+    service = FakeKnowledgeEntityService()
+    client = make_client(service)
+
+    entity = client.post(
+        "/api/v1/knowledgeEntities/delete",
+        json={"knCode": "1", "entityId": 123},
+    )
+    alias = client.post(
+        "/api/v1/knowledge-entities/aliases/delete",
+        json={"knCode": "1", "entityId": 123, "aliasId": 456},
+    )
+
+    assert entity.json()["resultObject"] == {
+        "deletedEntityCount": 1,
+        "deletedAliasCount": 2,
+        "deletedFileCount": 1,
+    }
+    assert alias.json()["resultObject"]["deletedAliasCount"] == 1
+    assert [call[0] for call in service.calls] == ["delete_entity", "delete_alias"]
+
+    invalid = client.post(
+        "/api/v1/knowledgeEntities/delete",
+        json={"knCode": "1", "entityId": 0},
+    )
+    assert invalid.json()["resultCode"] == "-1"
+    assert len(service.calls) == 2

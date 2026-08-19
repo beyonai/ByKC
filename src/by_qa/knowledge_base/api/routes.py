@@ -16,6 +16,8 @@ from pydantic import BaseModel, ValidationError
 
 from by_qa.core import logger
 from by_qa.knowledge_base.api.knowledge_entity_schemas import (
+    DeleteKnowledgeEntityAliasRequest,
+    DeleteKnowledgeEntityRequest,
     EntityDiscoveryRequest,
     EntityEnrichRequest,
     KnowledgeEntityProcessingService,
@@ -1583,6 +1585,80 @@ def register_routes(
         return _documented_success_response(
             result_object=_serialize_knowledge_entity_result(result),
             result_msg="accepted",
+        )
+
+    @app.post("/api/v1/knowledgeEntities/delete")
+    @app.post("/api/v1/knowledge-entities/delete")
+    async def delete_knowledge_entity(body: dict[str, Any] = Body(...)):
+        try:
+            request = DeleteKnowledgeEntityRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        try:
+            service = await _get_knowledge_entity_service()
+            result = await service.delete_knowledge_entity(request)
+        except KnowledgeBaseConfigurationError as exc:
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object=_knowledge_entity_error_object(exc),
+                status_code=503,
+            )
+        except KnowledgeBaseValidationError as exc:
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object=_knowledge_entity_error_object(exc),
+                status_code=422,
+            )
+        except Exception as exc:
+            logger.exception("delete_knowledge_entity error: %s", exc)
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error",
+                result_object=_knowledge_entity_error_object(exc),
+                status_code=500,
+            )
+        return _documented_success_response(
+            result_object=_serialize_knowledge_entity_result(result)
+        )
+
+    @app.post("/api/v1/knowledgeEntities/aliases/delete")
+    @app.post("/api/v1/knowledge-entities/aliases/delete")
+    async def delete_knowledge_entity_alias(body: dict[str, Any] = Body(...)):
+        try:
+            request = DeleteKnowledgeEntityAliasRequest.model_validate(body)
+        except ValidationError as exc:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                result_object={"errors": json.loads(exc.json())},
+                status_code=422,
+            )
+        try:
+            service = await _get_knowledge_entity_service()
+            result = await service.delete_knowledge_entity_alias(request)
+        except KnowledgeBaseConfigurationError as exc:
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object=_knowledge_entity_error_object(exc),
+                status_code=503,
+            )
+        except KnowledgeBaseValidationError as exc:
+            return _documented_error_response(
+                result_msg=str(exc),
+                result_object=_knowledge_entity_error_object(exc),
+                status_code=422,
+            )
+        except Exception as exc:
+            logger.exception("delete_knowledge_entity_alias error: %s", exc)
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error",
+                result_object=_knowledge_entity_error_object(exc),
+                status_code=500,
+            )
+        return _documented_success_response(
+            result_object=_serialize_knowledge_entity_result(result)
         )
 
     @app.post("/api/v1/knowledgeItems/entityEnrich")

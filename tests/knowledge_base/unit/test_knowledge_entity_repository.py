@@ -304,6 +304,7 @@ async def test_list_entity_surfaces_supports_systemwide_and_same_kb_snapshots():
             "entity_name": "Alpha",
             "aliases": ["A", "First"],
             "subject_file_id": None,
+            "entity_type": None,
             "entity_enriched": None,
         },
         {
@@ -315,6 +316,7 @@ async def test_list_entity_surfaces_supports_systemwide_and_same_kb_snapshots():
             "entity_name": "Beta",
             "aliases": [],
             "subject_file_id": "21",
+            "entity_type": None,
             "entity_enriched": None,
         },
     ]

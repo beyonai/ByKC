@@ -12,9 +12,8 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
-from collections import deque
-from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
 
@@ -189,230 +188,6 @@ def _continues_hangul_cluster(cluster: str, next_char: str) -> bool:
     last_code = ord(cluster[-1])
     is_lv_syllable = 0xAC00 <= last_code <= 0xD7A3 and (last_code - 0xAC00) % 28 == 0
     return is_lv_syllable and is_trailing
-
-
-@dataclass(frozen=True, slots=True)
-class SurfacePosting:
-    """One entity identity associated with a normalized vocabulary surface."""
-
-    entity_file_id: int
-    knowledge_base_id: int
-    entity_name: str
-    surface_type: str = "entityName"
-    subject_file_id: int | None = None
-    weight: float = 1.0
-
-
-@dataclass(frozen=True, slots=True)
-class SurfaceEntry:
-    """A raw surface and its posting used to construct an AC snapshot."""
-
-    surface: str
-    posting: SurfacePosting
-
-
-@dataclass(frozen=True, slots=True)
-class SurfaceMatch:
-    """One longest-priority AC hit mapped to original document offsets."""
-
-    surface: str
-    normalized_surface: str
-    matched_text: str
-    start: int
-    end: int
-    postings: tuple[SurfacePosting, ...]
-    anchorable_postings: tuple[SurfacePosting, ...]
-
-    @property
-    def is_anchorable(self) -> bool:
-        """Whether at least one posting belongs to the current knowledge base."""
-
-        return bool(self.anchorable_postings)
-
-
-@dataclass(slots=True)
-class _ACNode:
-    transitions: dict[str, int] = field(default_factory=dict)
-    failure: int = 0
-    outputs: list[str] = field(default_factory=list)
-
-
-class AhoCorasickIndex:
-    """Immutable multi-posting Aho-Corasick vocabulary snapshot.
-
-    Construction builds the trie and failure links once.  :meth:`scan` traverses
-    the normalized document once; it does not loop over vocabulary surfaces.
-    """
-
-    def __init__(self, entries: Iterable[SurfaceEntry], *, version: str = "") -> None:
-        postings: dict[str, list[SurfacePosting]] = {}
-        display_surfaces: dict[str, str] = {}
-        for entry in entries:
-            normalized = normalize_surface(entry.surface)
-            if not normalized:
-                continue
-            display_surfaces.setdefault(normalized, entry.surface.strip())
-            bucket = postings.setdefault(normalized, [])
-            if entry.posting not in bucket:
-                bucket.append(entry.posting)
-        self.version = version
-        self._postings = {key: tuple(value) for key, value in postings.items()}
-        self._display_surfaces = display_surfaces
-        self._nodes = [_ACNode()]
-        for surface in self._postings:
-            self._insert(surface)
-        self._build_failure_links()
-
-    @classmethod
-    def from_mapping(
-        cls,
-        mapping: Mapping[str, Sequence[SurfacePosting]],
-        *,
-        version: str = "",
-    ) -> AhoCorasickIndex:
-        """Construct a snapshot from ``surface -> postings`` input."""
-
-        return cls(
-            (
-                SurfaceEntry(surface=surface, posting=posting)
-                for surface, surface_postings in mapping.items()
-                for posting in surface_postings
-            ),
-            version=version,
-        )
-
-    def _insert(self, surface: str) -> None:
-        state = 0
-        for char in surface:
-            next_state = self._nodes[state].transitions.get(char)
-            if next_state is None:
-                next_state = len(self._nodes)
-                self._nodes[state].transitions[char] = next_state
-                self._nodes.append(_ACNode())
-            state = next_state
-        self._nodes[state].outputs.append(surface)
-
-    def _build_failure_links(self) -> None:
-        queue: deque[int] = deque()
-        for child in self._nodes[0].transitions.values():
-            self._nodes[child].failure = 0
-            queue.append(child)
-        while queue:
-            state = queue.popleft()
-            for char, child in self._nodes[state].transitions.items():
-                queue.append(child)
-                failure = self._nodes[state].failure
-                while failure and char not in self._nodes[failure].transitions:
-                    failure = self._nodes[failure].failure
-                self._nodes[child].failure = self._nodes[failure].transitions.get(
-                    char, 0
-                )
-                inherited = self._nodes[self._nodes[child].failure].outputs
-                if inherited:
-                    self._nodes[child].outputs.extend(inherited)
-
-    def scan(
-        self,
-        document: str,
-        *,
-        current_knowledge_base_id: int,
-        subject_context_file_ids: Collection[int] = (),
-    ) -> tuple[SurfaceMatch, ...]:
-        """Scan once, enforcing boundaries and longest-overlap priority.
-
-        All postings for the winning surface remain on one match.  The
-        ``anchorable_postings`` field is restricted to the current knowledge base;
-        system-wide postings from other knowledge bases are never silently bound.
-        A subject entity's qualified canonical name can anchor directly, while its
-        local alias requires that subject in ``subject_context_file_ids``.
-        """
-
-        normalized = normalize_text_with_offsets(document)
-        candidates: list[tuple[int, int, str]] = []
-        state = 0
-        for index, char in enumerate(normalized.text):
-            while state and char not in self._nodes[state].transitions:
-                state = self._nodes[state].failure
-            state = self._nodes[state].transitions.get(char, 0)
-            for surface in self._nodes[state].outputs:
-                start = index - len(surface) + 1
-                end = index + 1
-                if self._has_valid_word_boundaries(
-                    normalized.text, start, end, surface
-                ):
-                    candidates.append((start, end, surface))
-
-        selected = self._prefer_longest_non_overlapping(candidates)
-        matches: list[SurfaceMatch] = []
-        for start, end, surface in selected:
-            original_start, original_end = normalized.original_span(start, end)
-            surface_postings = self._postings[surface]
-            matches.append(
-                SurfaceMatch(
-                    surface=self._display_surfaces[surface],
-                    normalized_surface=surface,
-                    matched_text=document[original_start:original_end],
-                    start=original_start,
-                    end=original_end,
-                    postings=surface_postings,
-                    anchorable_postings=tuple(
-                        posting
-                        for posting in surface_postings
-                        if self._is_anchorable_posting(
-                            posting,
-                            surface=surface,
-                            current_knowledge_base_id=current_knowledge_base_id,
-                            subject_context_file_ids=subject_context_file_ids,
-                        )
-                    ),
-                )
-            )
-        return tuple(matches)
-
-    @staticmethod
-    def _is_anchorable_posting(
-        posting: SurfacePosting,
-        *,
-        surface: str,
-        current_knowledge_base_id: int,
-        subject_context_file_ids: Collection[int],
-    ) -> bool:
-        if posting.knowledge_base_id != current_knowledge_base_id:
-            return False
-        if posting.subject_file_id is None:
-            return True
-        if normalize_surface(posting.entity_name) == surface:
-            return True
-        return posting.subject_file_id in subject_context_file_ids
-
-    @staticmethod
-    def _has_valid_word_boundaries(
-        text: str, start: int, end: int, surface: str
-    ) -> bool:
-        if surface and surface[0].isascii() and surface[0].isalnum():
-            if start > 0 and _ASCII_WORD_RE.fullmatch(text[start - 1]):
-                return False
-        if surface and surface[-1].isascii() and surface[-1].isalnum():
-            if end < len(text) and _ASCII_WORD_RE.fullmatch(text[end]):
-                return False
-        return True
-
-    @staticmethod
-    def _prefer_longest_non_overlapping(
-        candidates: Iterable[tuple[int, int, str]],
-    ) -> list[tuple[int, int, str]]:
-        unique = set(candidates)
-        prioritized = sorted(
-            unique,
-            key=lambda item: (-(item[1] - item[0]), item[0], item[1], item[2]),
-        )
-        selected: list[tuple[int, int, str]] = []
-        for candidate in prioritized:
-            start, end = candidate[0], candidate[1]
-            if any(start < chosen[1] and end > chosen[0] for chosen in selected):
-                continue
-            selected.append(candidate)
-        return sorted(selected, key=lambda item: (item[0], item[1]))
 
 
 @dataclass(frozen=True, slots=True)
@@ -673,7 +448,6 @@ def _clean_name(value: str) -> str:
 
 __all__ = [
     "ALLOWED_RELATION_CODES",
-    "AhoCorasickIndex",
     "IdentityScope",
     "KnowledgeEntityIntelligenceError",
     "KnowledgeEntityLLM",
@@ -682,9 +456,6 @@ __all__ = [
     "NormalizedText",
     "OpenAICompatibleKnowledgeEntityLLM",
     "RelationCode",
-    "SurfaceEntry",
-    "SurfaceMatch",
-    "SurfacePosting",
     "normalize_surface",
     "normalize_text_with_offsets",
 ]

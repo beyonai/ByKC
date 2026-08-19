@@ -9,12 +9,11 @@ SDK and can be tested without a running database or object store.
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 import time
 import unicodedata
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import yaml
@@ -46,11 +45,7 @@ from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
 )
 from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
     ALLOWED_RELATION_CODES,
-    AhoCorasickIndex,
     IdentityScope,
-    SurfaceEntry,
-    SurfaceMatch,
-    SurfacePosting,
     normalize_surface,
 )
 
@@ -123,6 +118,7 @@ class KnowledgeEntityTaskWorker:
         knowledge_item_search_service: Any,
         knowledge_entity_discovery: KnowledgeEntityDiscovery,
         knowledge_entity_enricher: KnowledgeEntityEnricher,
+        knowledge_entity_asset_service: Any,
     ) -> None:
         self._connection_factory = connection_factory
         self._entity_repository = knowledge_entity_repository
@@ -134,6 +130,9 @@ class KnowledgeEntityTaskWorker:
         self._search = knowledge_item_search_service
         self._discovery = knowledge_entity_discovery
         self._enricher = knowledge_entity_enricher
+        if knowledge_entity_asset_service is None:
+            raise ValueError("knowledge_entity_asset_service is required")
+        self._asset_service = knowledge_entity_asset_service
 
     async def run_task(
         self, context: KnowledgeEntityTaskContext | Any
@@ -177,12 +176,8 @@ class KnowledgeEntityTaskWorker:
     async def _run_discovery(
         self, context: KnowledgeEntityTaskContext | Any
     ) -> KnowledgeEntityTaskExecutionResult:
-        logger.info(
-            "knowledge_entity_discovery started: batch_id=%s task_id=%s kb=%s "
-            "source_file_id=%s file_path=%s task_type=%s",
-            *self._context_log_args(context),
-        )
-        source, all_surfaces = await self._load_source_and_surfaces(context)
+        """Resolve only extracted candidates against the durable entity registry."""
+        source = await self._load_source(context)
         markdown = await self._read_markdown(source)
         markdown = (
             await self._search.resolve_markdown_texts(
@@ -190,195 +185,176 @@ class KnowledgeEntityTaskWorker:
                 texts=[markdown],
             )
         )[0]
-        index = self._build_surface_index(all_surfaces)
-        known_matches = self._scan_known_matches(
-            index,
-            markdown,
-            knowledge_base_id=int(context.knowledge_base_id),
-            subject_file_id=source.get("subject_file_id"),
-        )
-        matched_entity_ids, match_warnings = self._unique_matched_entity_ids(
-            known_matches,
-            source_file_id=int(context.source_file_id),
-        )
-        logger.info(
-            "knowledge_entity_discovery matching completed: batch_id=%s task_id=%s "
-            "kb=%s source_file_id=%s file_path=%s task_type=%s "
-            "vocabulary_entity_count=%s match_count=%s matched_identity_count=%s",
-            *self._context_log_args(context),
-            len(all_surfaces),
-            len(known_matches),
-            len(matched_entity_ids),
-        )
         request_params = context.request_params or {}
-        max_entities = int(
-            request_params.get("maxEntities", request_params.get("max_entities", 12))
-        )
         discovery = await self._discovery.discover(
             markdown,
-            known_matches=known_matches,
-            max_entities=max_entities,
+            max_entities=int(
+                request_params.get(
+                    "maxEntities", request_params.get("max_entities", 12)
+                )
+            ),
             log_context=self._intelligence_log_context(context),
         )
-        logger.info(
-            "knowledge_entity_discovery model completed: batch_id=%s task_id=%s "
-            "kb=%s source_file_id=%s file_path=%s task_type=%s "
-            "candidate_count=%s warning_count=%s attempts=%s context_truncated=%s",
-            *self._context_log_args(context),
-            len(discovery.candidates),
-            len(discovery.warnings),
-            discovery.attempts,
-            discovery.context.truncated,
-        )
-        source_document_log = json.dumps(
-            {
-                "knowledgeBaseId": int(context.knowledge_base_id),
-                "kbCode": str(context.kb_code),
-                "fileId": int(context.source_file_id),
-                "filePath": str(context.file_path),
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        logger.info(
-            "knowledge_entity_discovery entities found: batch_id=%s task_id=%s "
-            "kb=%s source_file_id=%s file_path=%s task_type=%s "
-            "source_document=%s entities=%s",
-            *self._context_log_args(context),
-            source_document_log,
-            json.dumps(
-                [
-                    {
-                        "entityName": candidate.entity_name,
-                        "identityScope": candidate.identity_scope.value,
-                        "subjectEntityName": candidate.subject_entity_name,
-                    }
-                    for candidate in discovery.candidates
-                ],
-                ensure_ascii=False,
-                separators=(",", ":"),
+        warnings = list(discovery.warnings)
+        actions: list[dict[str, Any]] = []
+        target_ids: set[int] = set()
+        projections: list[dict[str, Any]] = []
+        resolved_by_name: dict[str, tuple[Any, dict[str, Any]]] = {}
+        ordered_candidates = sorted(
+            enumerate(discovery.candidates),
+            key=lambda item: (
+                item[1].identity_scope is IdentityScope.SUBJECT,
+                item[0],
             ),
         )
+        for _, candidate in ordered_candidates:
+            subject_entity_id = None
+            subject_file_id = None
+            subject_name = candidate.subject_entity_name
+            if candidate.identity_scope is IdentityScope.SUBJECT:
+                subject_key = normalize_surface(subject_name or "")
+                owner = resolved_by_name.get(subject_key)
+                if owner is None:
+                    warnings.append(
+                        f"candidate discarded: unresolved same-KB subject for "
+                        f"{candidate.entity_name}"
+                    )
+                    actions.append(
+                        {"action": "DROPPED", "entityName": candidate.entity_name}
+                    )
+                    continue
+                subject_entity_id = int(owner[0].entity_id)
+                subject_file_id = self._optional_int(owner[1].get("kid"))
 
-        current_surfaces = [
-            item
-            for item in all_surfaces
-            if int(item["knowledge_base_id"]) == int(context.knowledge_base_id)
-        ]
-        warnings = [*match_warnings, *discovery.warnings]
-        actions: list[dict[str, Any]] = []
-        # AC matches guide canonical naming and identity resolution, but they do
-        # not bypass the model's content-salience decision.  Only identities in
-        # the complete discovered candidate set become MENTIONS targets.
-        target_ids: set[int] = set()
-
-        for candidate in discovery.candidates:
-            owner_id = self._resolve_subject_owner(
-                candidate, current_surfaces=current_surfaces
+            resolution = await self._asset_service.resolve_candidate(
+                knowledge_base_id=int(context.knowledge_base_id),
+                entity_name=candidate.entity_name,
+                local_name=candidate.local_name,
+                aliases=candidate.aliases,
+                subject_entity_id=subject_entity_id,
+                subject_name=subject_name,
+                entity_type=candidate.entity_type,
+                evidence=candidate.evidence,
             )
-            if candidate.identity_scope is IdentityScope.SUBJECT and owner_id is None:
-                warnings.append(
-                    f"candidate discarded: unresolved same-KB subject for "
-                    f"{candidate.entity_name}"
-                )
-                actions.append(
-                    {"action": "DROPPED", "entityName": candidate.entity_name}
-                )
-                continue
-
-            existing = self._find_existing_candidate(
+            warnings.extend(resolution.warnings)
+            canonical_candidate = replace(
                 candidate,
-                current_surfaces=current_surfaces,
-                subject_file_id=owner_id,
+                entity_name=resolution.canonical_name,
+                local_name=resolution.local_name,
+                aliases=tuple(
+                    dict.fromkeys(
+                        (
+                            *candidate.aliases,
+                            *(
+                                (candidate.entity_name,)
+                                if normalize_surface(candidate.entity_name)
+                                != normalize_surface(resolution.canonical_name)
+                                else ()
+                            ),
+                        )
+                    )
+                ),
+                subject_file_id=subject_file_id,
             )
-            if existing is not None:
-                entity_id = int(existing["kid"])
-                await self._ensure_indexed(context, existing)
-                action = "ANCHORED"
-            else:
-                entity_id, created, was_created = await self._create_or_reuse_entity(
-                    context,
-                    candidate=candidate,
-                    subject_file_id=owner_id,
+            projection = None
+            if resolution.fs_entry_id is not None:
+                projection = await self._get_entity_by_file_id(
+                    context, resolution.fs_entry_id
                 )
-                existing = created
-                current_surfaces.append(created)
-                action = "CREATED" if was_created else "ANCHORED"
-            if entity_id != int(context.source_file_id):
-                target_ids.add(entity_id)
+            if projection is None:
+                _, projection, _ = await self._create_or_reuse_entity(
+                    context,
+                    candidate=canonical_candidate,
+                    subject_file_id=subject_file_id,
+                )
+                await self._asset_service.attach_file(
+                    knowledge_base_id=int(context.knowledge_base_id),
+                    entity_id=resolution.entity_id,
+                    fs_entry_id=int(projection["kid"]),
+                )
+            else:
+                await self._ensure_indexed(context, projection)
+            projection = dict(projection)
+            projection["entity_name"] = resolution.canonical_name
+            projections.append(projection)
+            resolved_by_name[normalize_surface(candidate.entity_name)] = (
+                resolution,
+                projection,
+            )
+            resolved_by_name[normalize_surface(resolution.canonical_name)] = (
+                resolution,
+                projection,
+            )
+            file_id = int(projection["kid"])
+            if file_id != int(context.source_file_id):
+                target_ids.add(file_id)
             actions.append(
                 {
-                    "action": action,
-                    "entityName": existing.get("entity_name") or candidate.entity_name,
-                    "entityFileId": entity_id,
-                    "filePath": existing.get("file_path"),
+                    "action": "CREATED" if resolution.created else "ANCHORED",
+                    "inputEntityName": candidate.entity_name,
+                    "entityName": resolution.canonical_name,
+                    "canonicalEntityId": resolution.entity_id,
+                    "entityFileId": file_id,
+                    "filePath": projection.get("file_path"),
+                    "resolutionMethod": resolution.method.value,
+                    "aliasAdded": resolution.alias_added,
+                    "candidateCount": resolution.candidate_count,
                 }
             )
 
         await self._persist_mentions(
             context,
             target_file_ids=sorted(target_ids),
-            surfaces=current_surfaces,
-        )
-        logger.info(
-            "knowledge_entity_discovery persistence completed: batch_id=%s "
-            "task_id=%s kb=%s source_file_id=%s file_path=%s task_type=%s "
-            "created_count=%s anchored_count=%s dropped_count=%s "
-            "relation_replacement_count=%s",
-            *self._context_log_args(context),
-            sum(action["action"] == "CREATED" for action in actions),
-            sum(action["action"] == "ANCHORED" for action in actions),
-            sum(action["action"] == "DROPPED" for action in actions),
-            len(target_ids),
-        )
-        action_log_items = {
-            action_name: [
-                {
-                    key: action[key]
-                    for key in ("entityName", "entityFileId", "filePath")
-                    if action.get(key) is not None
-                }
-                for action in actions
-                if action["action"] == action_name
-            ]
-            for action_name in ("CREATED", "ANCHORED", "DROPPED")
-        }
-        logger.info(
-            "knowledge_entity_discovery entity changes: batch_id=%s task_id=%s "
-            "kb=%s source_file_id=%s file_path=%s task_type=%s "
-            "source_document=%s new_entities=%s existing_entities=%s "
-            "dropped_entities=%s",
-            *self._context_log_args(context),
-            source_document_log,
-            json.dumps(
-                action_log_items["CREATED"],
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ),
-            json.dumps(
-                action_log_items["ANCHORED"],
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ),
-            json.dumps(
-                action_log_items["DROPPED"],
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ),
+            surfaces=projections,
         )
         return KnowledgeEntityTaskExecutionResult(
             result_payload={
                 "taskType": DISCOVERY_TASK_TYPE,
                 "sourceFileId": int(context.source_file_id),
-                "matchedSurfaceCount": len(known_matches),
+                "matchedSurfaceCount": sum(
+                    action.get("resolutionMethod") in {"EXACT_CANONICAL", "EXACT_ALIAS"}
+                    for action in actions
+                ),
                 "candidateCount": len(discovery.candidates),
                 "actions": actions,
                 "warnings": list(dict.fromkeys(warnings)),
                 "attempts": discovery.attempts,
             },
             target_file_ids=tuple(sorted(target_ids)),
-            index_version=index.version,
+            index_version=None,
         )
+
+    async def _load_source(
+        self, context: KnowledgeEntityTaskContext | Any
+    ) -> dict[str, Any]:
+        connection = await self._connection_factory()
+        try:
+            source = await self._entity_repository.get_file_with_metadata(
+                connection.cursor(),
+                knowledge_base_id=int(context.knowledge_base_id),
+                file_path=context.file_path,
+            )
+            if source is None:
+                raise ValueError(f"source file not found: {context.file_path}")
+            if int(source["kid"]) != int(context.source_file_id):
+                raise ValueError("source file identity changed after task creation")
+            return dict(source)
+        finally:
+            await connection.close()
+
+    async def _get_entity_by_file_id(
+        self, context: KnowledgeEntityTaskContext | Any, fs_entry_id: int
+    ) -> dict[str, Any] | None:
+        connection = await self._connection_factory()
+        try:
+            rows = await self._entity_repository.get_files_by_ids(
+                connection.cursor(),
+                knowledge_base_id=int(context.knowledge_base_id),
+                fs_entry_ids=[fs_entry_id],
+            )
+            return dict(rows[0]) if rows else None
+        finally:
+            await connection.close()
 
     async def _run_enrich(
         self, context: KnowledgeEntityTaskContext | Any
@@ -531,28 +507,6 @@ class KnowledgeEntityTaskWorker:
             index_version=None,
         )
 
-    async def _load_source_and_surfaces(
-        self, context: KnowledgeEntityTaskContext | Any
-    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-        connection = await self._connection_factory()
-        try:
-            cursor = connection.cursor()
-            source = await self._entity_repository.get_file_with_metadata(
-                cursor,
-                knowledge_base_id=int(context.knowledge_base_id),
-                file_path=context.file_path,
-            )
-            if source is None:
-                raise ValueError(f"source file not found: {context.file_path}")
-            if int(source["kid"]) != int(context.source_file_id):
-                raise ValueError("source file identity changed after task creation")
-            surfaces = await self._entity_repository.list_entity_surfaces(
-                cursor, knowledge_base_id=None
-            )
-            return dict(source), [dict(item) for item in surfaces]
-        finally:
-            await connection.close()
-
     async def _load_entity_and_current_surfaces(
         self, context: KnowledgeEntityTaskContext | Any
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -602,152 +556,6 @@ class KnowledgeEntityTaskWorker:
             raise ValueError(f"file content is empty: {row.get('file_path')}")
         return text
 
-    @staticmethod
-    def _build_surface_index(surfaces: Sequence[Mapping[str, Any]]) -> AhoCorasickIndex:
-        entries: list[SurfaceEntry] = []
-        version_parts: list[str] = []
-        for item in surfaces:
-            entity_name = str(item.get("entity_name") or "").strip()
-            if not entity_name:
-                continue
-            posting_values = {
-                "entity_file_id": int(item["kid"]),
-                "knowledge_base_id": int(item["knowledge_base_id"]),
-                "entity_name": entity_name,
-                "subject_file_id": (
-                    int(item["subject_file_id"])
-                    if item.get("subject_file_id") is not None
-                    else None
-                ),
-            }
-            entries.append(
-                SurfaceEntry(
-                    surface=entity_name,
-                    posting=SurfacePosting(**posting_values, surface_type="entityName"),
-                )
-            )
-            for alias in item.get("aliases") or ():
-                if normalize_surface(str(alias)) == normalize_surface(entity_name):
-                    continue
-                entries.append(
-                    SurfaceEntry(
-                        surface=str(alias),
-                        posting=SurfacePosting(**posting_values, surface_type="alias"),
-                    )
-                )
-            version_parts.append(
-                f"{item['knowledge_base_id']}:{item['kid']}:{entity_name}:"
-                f"{','.join(item.get('aliases') or ())}"
-            )
-        version = hashlib.sha256("\n".join(version_parts).encode()).hexdigest()[:16]
-        return AhoCorasickIndex(entries, version=version)
-
-    @staticmethod
-    def _scan_known_matches(
-        index: AhoCorasickIndex,
-        markdown: str,
-        *,
-        knowledge_base_id: int,
-        subject_file_id: Any,
-    ) -> tuple[SurfaceMatch, ...]:
-        subject_context = (
-            {int(subject_file_id)} if subject_file_id is not None else set()
-        )
-        initial = index.scan(
-            markdown,
-            current_knowledge_base_id=knowledge_base_id,
-            subject_context_file_ids=subject_context,
-        )
-        subject_context.update(
-            posting.entity_file_id
-            for match in initial
-            for posting in match.anchorable_postings
-            if posting.subject_file_id is None
-        )
-        return index.scan(
-            markdown,
-            current_knowledge_base_id=knowledge_base_id,
-            subject_context_file_ids=subject_context,
-        )
-
-    @staticmethod
-    def _unique_matched_entity_ids(
-        matches: Sequence[SurfaceMatch], *, source_file_id: int
-    ) -> tuple[set[int], list[str]]:
-        matched_entity_ids: set[int] = set()
-        warnings: list[str] = []
-        for match in matches:
-            ids = {posting.entity_file_id for posting in match.anchorable_postings}
-            if len(ids) == 1:
-                entity_id = next(iter(ids))
-                if entity_id != source_file_id:
-                    matched_entity_ids.add(entity_id)
-            elif len(ids) > 1:
-                warnings.append(f"ambiguous surface not anchored: {match.matched_text}")
-        return matched_entity_ids, warnings
-
-    @staticmethod
-    def _resolve_subject_owner(
-        candidate: EntityCandidate,
-        *,
-        current_surfaces: Sequence[Mapping[str, Any]],
-    ) -> int | None:
-        if candidate.identity_scope is IdentityScope.GLOBAL:
-            return None
-        if candidate.subject_file_id is not None:
-            matches = {
-                int(item["kid"])
-                for item in current_surfaces
-                if int(item["kid"]) == candidate.subject_file_id
-            }
-        else:
-            subject_name = normalize_surface(candidate.subject_entity_name or "")
-            matches = {
-                int(item["kid"])
-                for item in current_surfaces
-                if item.get("entity_name")
-                and normalize_surface(str(item["entity_name"])) == subject_name
-                and item.get("subject_file_id") is None
-            }
-        return next(iter(matches)) if len(matches) == 1 else None
-
-    @staticmethod
-    def _find_existing_candidate(
-        candidate: EntityCandidate,
-        *,
-        current_surfaces: Sequence[Mapping[str, Any]],
-        subject_file_id: int | None,
-    ) -> dict[str, Any] | None:
-        candidate_surfaces = {
-            normalize_surface(value)
-            for value in (
-                candidate.entity_name,
-                candidate.local_name,
-                *candidate.aliases,
-            )
-            if normalize_surface(value)
-        }
-        matches: list[dict[str, Any]] = []
-        for raw in current_surfaces:
-            current_subject = raw.get("subject_file_id")
-            if subject_file_id is None:
-                if current_subject is not None:
-                    continue
-            elif current_subject is None or int(current_subject) != subject_file_id:
-                continue
-            entity_surfaces = {
-                normalize_surface(str(value))
-                for value in (raw.get("entity_name"), *(raw.get("aliases") or ()))
-                if value and normalize_surface(str(value))
-            }
-            if candidate_surfaces & entity_surfaces:
-                matches.append(dict(raw))
-        if len(matches) > 1:
-            raise ValueError(
-                f"ambiguous entity identity for candidate: {candidate.entity_name}"
-            )
-        return matches[0] if matches else None
-
     async def _create_or_reuse_entity(
         self,
         context: KnowledgeEntityTaskContext | Any,
@@ -755,15 +563,6 @@ class KnowledgeEntityTaskWorker:
         candidate: EntityCandidate,
         subject_file_id: int | None,
     ) -> tuple[int, dict[str, Any], bool]:
-        existing = await self._refresh_exact_candidate(
-            context,
-            candidate=candidate,
-            subject_file_id=subject_file_id,
-        )
-        if existing is not None:
-            await self._ensure_indexed(context, existing)
-            return int(existing["kid"]), existing, False
-
         aliases = self._candidate_aliases(candidate)
         content = self._render_entity_markdown(
             entity_name=candidate.entity_name,
@@ -799,14 +598,6 @@ class KnowledgeEntityTaskWorker:
                 )
             )
         except Exception:
-            concurrent = await self._refresh_exact_candidate(
-                context,
-                candidate=candidate,
-                subject_file_id=subject_file_id,
-            )
-            if concurrent is not None:
-                await self._ensure_indexed(context, concurrent)
-                return int(concurrent["kid"]), concurrent, False
             occupied = await self._get_entity_by_path(context, path)
             if occupied is not None:
                 anchored = self._validate_readable_path_identity(
@@ -871,27 +662,6 @@ class KnowledgeEntityTaskWorker:
         anchored["entity_name"] = existing_name or candidate.entity_name
         anchored["aliases"] = list(row.get("aliases") or ())
         return anchored
-
-    async def _refresh_exact_candidate(
-        self,
-        context: KnowledgeEntityTaskContext | Any,
-        *,
-        candidate: EntityCandidate,
-        subject_file_id: int | None,
-    ) -> dict[str, Any] | None:
-        connection = await self._connection_factory()
-        try:
-            cursor = connection.cursor()
-            surfaces = await self._entity_repository.list_entity_surfaces(
-                cursor, knowledge_base_id=int(context.knowledge_base_id)
-            )
-            return self._find_existing_candidate(
-                candidate,
-                current_surfaces=surfaces,
-                subject_file_id=subject_file_id,
-            )
-        finally:
-            await connection.close()
 
     async def _get_entity_by_path(
         self, context: KnowledgeEntityTaskContext | Any, path: str

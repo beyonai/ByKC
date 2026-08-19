@@ -28,6 +28,9 @@ from by_qa.knowledge_base.repositories.knowledge_base_repository import (
 from by_qa.knowledge_base.repositories.knowledge_build_task_repository import (
     KnowledgeBuildTaskRepository,
 )
+from by_qa.knowledge_base.repositories.knowledge_entity_asset_repository import (
+    KnowledgeEntityAssetRepository,
+)
 from by_qa.knowledge_base.repositories.knowledge_entity_repository import (
     KnowledgeEntityRepository,
 )
@@ -63,6 +66,7 @@ from by_qa.knowledge_base.repositories.retrieval_projection_repository import (
 )
 from by_qa.knowledge_base.services.bootstrap_service import (
     KnowledgeBaseSchemaBootstrapService,
+    normalize_entity_embedding_table_name,
 )
 from by_qa.knowledge_base.services.document_update_service import DocumentUpdateService
 from by_qa.knowledge_base.services.embedding_query_service import EmbeddingQueryService
@@ -92,6 +96,10 @@ from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
 )
 from by_qa.knowledge_base.services.knowledge_entity_processing_service import (
     KnowledgeEntityProcessingOrchestrator,
+)
+from by_qa.knowledge_base.services.knowledge_entity_synonym_resolution import (
+    KnowledgeEntityAssetService,
+    KnowledgeEntitySynonymAdjudicator,
 )
 from by_qa.knowledge_base.services.knowledge_entity_task_worker import (
     KnowledgeEntityTaskWorker,
@@ -268,6 +276,9 @@ async def build_knowledge_base_service(
         ),
         knowledge_file_reference_repository=KnowledgeFileReferenceRepository(),
         file_metadata_value_repository=FileMetadataValueRepository(),
+        knowledge_entity_asset_repository=KnowledgeEntityAssetRepository(
+            bootstrap.entity_embedding_table_name
+        ),
         cache_root=settings.kb_cache_path,
         cache_ttl_seconds=settings.kb_fetch_cache_ttl_seconds,
     )
@@ -312,6 +323,9 @@ async def build_knowledge_item_ingestion_service(
         ),
         embedding_dimension=dimension,
         knowledge_fetch_cache_repository=KnowledgeFetchCacheRepository(),
+        knowledge_entity_asset_repository=KnowledgeEntityAssetRepository(
+            bootstrap.entity_embedding_table_name
+        ),
         file_metadata_value_repository=FileMetadataValueRepository(),
         knowledge_file_reference_repository=KnowledgeFileReferenceRepository(),
         markdown_reference_rewriter=MarkdownReferenceRewriter(),
@@ -401,6 +415,13 @@ async def build_knowledge_entity_processing_service(
     connection_factory = build_connection_factory(settings)
     knowledge_base_repository = KnowledgeBaseRepository()
     knowledge_entity_repository = KnowledgeEntityRepository()
+    knowledge_entity_asset_repository = KnowledgeEntityAssetRepository(
+        normalize_entity_embedding_table_name(
+            embedding_config.model_name
+            if embedding_config is not None
+            else settings.embedding_model_name
+        )
+    )
     semantic_processing_task_repository = KnowledgeSemanticProcessingTaskRepository()
     semantic_processing_batch_repository = KnowledgeSemanticProcessingBatchRepository()
     knowledge_file_reference_repository = KnowledgeFileReferenceRepository()
@@ -423,6 +444,26 @@ async def build_knowledge_entity_processing_service(
         provider=provider, temperature=0.0
     )
     enrichment_llm = OpenAICompatibleKnowledgeEntityLLM(provider=provider)
+    asset_service = KnowledgeEntityAssetService(
+        connection_factory=connection_factory,
+        knowledge_base_repository=knowledge_base_repository,
+        asset_repository=knowledge_entity_asset_repository,
+        fs_entry_repository=KnowledgeFsEntryRepository(),
+        file_metadata_repository=FileMetadataValueRepository(),
+        embedding_service=EmbeddingQueryService(provider=provider),
+        adjudicator=KnowledgeEntitySynonymAdjudicator(discovery_llm),
+        ingestion_service=ingestion_service,
+        top_k=getattr(settings, "entity_synonym_top_k", 3),
+        exact_alias_enabled=getattr(
+            settings, "entity_synonym_exact_alias_enabled", True
+        ),
+        embedding_index_enabled=getattr(
+            settings, "entity_embedding_index_enabled", True
+        ),
+        adjudication_enabled=getattr(
+            settings, "entity_synonym_adjudication_enabled", True
+        ),
+    )
     worker = KnowledgeEntityTaskWorker(
         connection_factory=connection_factory,
         knowledge_entity_repository=knowledge_entity_repository,
@@ -434,6 +475,7 @@ async def build_knowledge_entity_processing_service(
         knowledge_item_search_service=search_service,
         knowledge_entity_discovery=KnowledgeEntityDiscovery(discovery_llm),
         knowledge_entity_enricher=KnowledgeEntityEnricher(enrichment_llm),
+        knowledge_entity_asset_service=asset_service,
     )
     callback_invoker = KnowledgeEntityCallbackInvoker(
         callback=load_knowledge_entity_processing_callback()
@@ -449,6 +491,7 @@ async def build_knowledge_entity_processing_service(
         knowledge_file_reference_repository=knowledge_file_reference_repository,
         worker=worker,
         callback_invoker=callback_invoker,
+        knowledge_entity_asset_service=asset_service,
     )
     if getattr(settings, "knowledge_entity_worker_enabled", False):
         worker_id = settings.knowledge_entity_worker_id.strip() or (

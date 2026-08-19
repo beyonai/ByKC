@@ -33,6 +33,12 @@ def normalize_embedding_table_name(model_name: str) -> str:
     return f"chunk_embedding_{normalized}"
 
 
+def normalize_entity_embedding_table_name(model_name: str) -> str:
+    """Convert model names into the dynamic KnowledgeEntity vector table name."""
+    normalized = re.sub(r"[^a-zA-Z0-9]+", "_", model_name.strip().lower()).strip("_")
+    return f"knowledge_entity_embedding_{normalized}"
+
+
 def split_sql_statements(script: str) -> list[str]:
     """Split a SQL script into top-level statements.
 
@@ -172,6 +178,9 @@ class KnowledgeBaseSchemaBootstrapService:
         self.embedding_model_name = embedding_model_name
         self.embedding_dimension = embedding_dimension
         self.embedding_table_name = normalize_embedding_table_name(embedding_model_name)
+        self.entity_embedding_table_name = normalize_entity_embedding_table_name(
+            embedding_model_name
+        )
         self.sql_directory = (
             sql_directory or Path(__file__).resolve().parents[1] / "sql"
         )
@@ -220,6 +229,8 @@ class KnowledgeBaseSchemaBootstrapService:
 
             async with connection.cursor() as cursor:
                 await self._validate_embedding_table(cursor)
+                if self._has_entity_embedding_template():
+                    await self._validate_entity_embedding_table(cursor)
             await connection.commit()
 
             for migration in migrations:
@@ -252,7 +263,7 @@ class KnowledgeBaseSchemaBootstrapService:
                 continue
             if path.name.endswith(".sql.tpl"):
                 content = self._render_template(content)
-                version = f"{path.name}:{self.embedding_table_name}"
+                version = self._template_migration_version(path)
             else:
                 version = path.name
             migrations.append(
@@ -518,10 +529,25 @@ class KnowledgeBaseSchemaBootstrapService:
             "{{ embedding_table_name }}", self.embedding_table_name
         )
         rendered = rendered.replace(
+            "{{ entity_embedding_table_name }}", self.entity_embedding_table_name
+        )
+        rendered = rendered.replace(
             "{{ embedding_dimension }}",
             str(self.embedding_dimension),
         )
         return rendered
+
+    def _template_migration_version(self, path: Path) -> str:
+        """Keep existing chunk ledger identities stable and isolate entity tables."""
+        if "{{ entity_embedding_table_name }}" in path.read_text(encoding="utf-8"):
+            return f"{path.name}:{self.entity_embedding_table_name}"
+        return f"{path.name}:{self.embedding_table_name}"
+
+    def _has_entity_embedding_template(self) -> bool:
+        return any(
+            "{{ entity_embedding_table_name }}" in path.read_text(encoding="utf-8")
+            for path in self.sql_directory.glob("*.sql.tpl")
+        )
 
     async def _validate_embedding_table(self, cursor) -> None:
         """Fail fast when an existing embedding table uses another vector dimension."""
@@ -557,6 +583,52 @@ class KnowledgeBaseSchemaBootstrapService:
             f"but EMBEDDING_DIMENSION={self.embedding_dimension} requires {expected_type}. "
             f"Existing rows: {row_count}. Run `make reset-kb-data` or migrate the table "
             "before starting the service."
+        )
+
+    async def _validate_entity_embedding_table(self, cursor) -> None:
+        """Fail fast when the active entity vector table has another dimension."""
+        await self._validate_vector_table_dimension(
+            cursor,
+            table_name=self.entity_embedding_table_name,
+            setting_name="EMBEDDING_DIMENSION",
+            table_label="KnowledgeEntity embedding table",
+        )
+
+    async def _validate_vector_table_dimension(
+        self,
+        cursor,
+        *,
+        table_name: str,
+        setting_name: str,
+        table_label: str,
+    ) -> None:
+        await cursor.execute(
+            """
+            SELECT format_type(a.atttypid, a.atttypmod)
+            FROM pg_attribute a
+            JOIN pg_class c ON a.attrelid = c.oid
+            JOIN pg_namespace n ON c.relnamespace = n.oid
+            WHERE n.nspname = current_schema()
+              AND c.relname = %(table_name)s
+              AND a.attname = 'embedding'
+              AND a.attnum > 0
+              AND NOT a.attisdropped
+            """,
+            {"table_name": table_name},
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return
+        existing_type = self._get_scalar_value(row, "format_type")
+        expected_type = f"vector({self.embedding_dimension})"
+        if existing_type == expected_type:
+            return
+        await cursor.execute(f"SELECT count(*) FROM {table_name}")
+        row_count = self._get_scalar_value(await cursor.fetchone(), "count")
+        raise KnowledgeBaseConfigurationError(
+            f"{table_label} {table_name} uses {existing_type}, but "
+            f"{setting_name}={self.embedding_dimension} requires {expected_type}. "
+            f"Existing rows: {row_count}. Migrate or rebuild the table before startup."
         )
 
     async def _prepare_extension_search_path(self, cursor) -> None:

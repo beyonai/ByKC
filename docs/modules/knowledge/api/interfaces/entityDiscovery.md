@@ -28,7 +28,7 @@
 | --- | --- | --- | --- | --- |
 | `knCode` | string | 是 | - | 原始文档所属知识库 |
 | `filePath` | string | 否 | - | 原始文档路径；不传表示处理该知识库下全部符合条件的原始文档 |
-| `maxEntities` | integer | 否 | `12` | 最大实体数，v1 不得超过 12 |
+| `maxEntities` | integer | 否 | `12` | 每个源文档的最大抽取实体数，不得超过 12 |
 | `force` | boolean | 否 | `false` | 是否跳过 freshness 判断；不跳过资格和权限校验 |
 | `extraParams` | object | 否 | `{}` | 发起方透传参数；保存到 batch/task 并传入 Callback |
 
@@ -115,11 +115,11 @@ Discovery 结果项语义：
 
 | `action` | 含义 |
 | --- | --- |
-| `ANCHORED` | AC 或精确名称/别名命中已有实体 |
-| `DISAMBIGUATED` | 同名多候选经上下文消歧后命中已有实体 |
-| `MERGED_AS_ALIAS` | 新名称经身份裁决成为已有实体别名 |
+| `ANCHORED` | 当前知识库内通过精确名称/alias 或同义裁决复用实体资产 |
 | `CREATED` | 创建新的最小有效 KnowledgeEntity 文档 |
 | `DROPPED` | 候选不满足实体定义或身份无法可信确认 |
+
+每个非丢弃 action 还返回 `canonicalEntityId`、`resolutionMethod`、`candidateCount` 和可空的 `aliasAdded`。`resolutionMethod` 可能为 `EXACT_CANONICAL`、`EXACT_ALIAS`、`SYNONYM_ADJUDICATED`、`CREATED_NEW` 或 `AMBIGUOUS_UNMERGED`。
 
 Discovery 成功任务结果示例见任务状态接口。
 
@@ -131,11 +131,13 @@ Discovery 成功任务结果示例见任务状态接口。
 - 新实体只写入源文档所在知识库的固定 `/KnowledgeEntity` 目录，目录不存在时自动创建；接口不允许调用方指定其他知识库或目录；
 - 新实体路径固定为 `/KnowledgeEntity/{规范可读名称}.md`，不附加 MD5、哈希签名或数字序号；
 - 同库规范路径已存在时直接锚定该文件，不创建副本：文件必须是 KnowledgeEntity，`entityName` 与候选相同或缺失，subject 身份一致；明显的元数据或文档类型冲突使任务失败；
-- Discovery 不自动覆盖已有实体的身份元数据或合并候选别名；缺失 `entityName` 时只在当前任务内以候选名完成锚定；
-- AC 已有实体清单只辅助规范命名和身份锚定，不作为 LLM 新实体发现的排除集；Discovery 先产生完整的内容显著实体集，再将其中的已有身份标记为 `ANCHORED`；
-- AC 命中但未通过内容显著性判定的偶发提及不写入 `MENTIONS`；同一正文在词表变化前后应保持相同的语义实体集；
+- LLM 先从正文抽取最多 12 个显著候选；worker 不加载全库实体、不把全量词表放入 Prompt，也不按任务构建 AC；
+- 抽取后先在当前知识库做规范名/alias 精确匹配；唯一兼容命中不调用额外 LLM；
+- 精确未命中时按当前知识库、Subject 和类型过滤，并使用 `full`、`local_name` 双视角 embedding 召回 Top 3；向量候选必须经过 `SAME/DIFFERENT/UNCERTAIN` 裁决，只有 `SAME` 才回写 alias；
+- 名称、alias 和 embedding 候选查询都严格限定在当前知识库；本库没有兼容结果时直接在本库创建实体，不读取其他知识库的实体资产；
+- 同一词面命中多个规范实体时记录 `AMBIGUOUS_SURFACE` 并保守新建，不按查询顺序选择；
 - 新实体正文中的来源路径以普通文本展示，不生成指向原始文档的 Markdown 链接；只持久化原始文档到实体的单向 `MENTIONS`，反向视图由查询层派生；
-- 全系统词表只用于高性能候选召回，最终锚定、别名合并、关系建立和新实体创建都限定在当前知识库，不建立跨库实体关系；
+- 实体名称、alias、Subject、类型和稳定实体 ID 以 `knowledge_entity` 为事实源；KnowledgeEntity Markdown 是可空的一一文件锚点；
 - `maxEntities` 是每个源文件的结果上限，不是整个批次共享上限；不得通过截断隐藏已发生的写入；
 - `force=true` 会跳过已成功任务的 freshness 复用并创建新任务；如同文件同类型仍有 `PENDING/RUNNING` 任务，则复用该活动任务，身份和关系写入仍保持幂等；
 - Discovery 文件任务进入终态并提交后才调用文件完成 Callback。

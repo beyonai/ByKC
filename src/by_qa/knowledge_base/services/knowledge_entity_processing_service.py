@@ -16,8 +16,11 @@ from uuid import uuid4
 
 from by_qa.core import logger
 from by_qa.knowledge_base.api.knowledge_entity_schemas import (
+    DeleteKnowledgeEntityAliasRequest,
+    DeleteKnowledgeEntityRequest,
     EntityDiscoveryRequest,
     EntityEnrichRequest,
+    KnowledgeEntityDeleteResult,
     ProcessingBatchAccepted,
     ProcessingBatchStatus,
     ProcessingBatchStatusRequest,
@@ -154,6 +157,7 @@ class KnowledgeEntityProcessingOrchestrator:
         default_factory=KnowledgeEntityCallbackInvoker
     )
     background_runner: Any | None = None
+    knowledge_entity_asset_service: Any | None = None
 
     async def start(self) -> None:
         if self.background_runner is not None:
@@ -213,6 +217,33 @@ class KnowledgeEntityProcessingOrchestrator:
             capability=ProcessingCapability.ENTITY_ENRICH,
             task_type=ProcessingTaskType.DOCUMENT_ENRICH,
         )
+
+    async def delete_knowledge_entity(
+        self, request: DeleteKnowledgeEntityRequest
+    ) -> KnowledgeEntityDeleteResult:
+        if self.knowledge_entity_asset_service is None:
+            raise KnowledgeBaseValidationError(
+                "knowledge entity asset service is not configured"
+            )
+        result = await self.knowledge_entity_asset_service.delete_entity(
+            kb_code=request.kb_code,
+            entity_id=request.entity_id,
+        )
+        return KnowledgeEntityDeleteResult.model_validate(result)
+
+    async def delete_knowledge_entity_alias(
+        self, request: DeleteKnowledgeEntityAliasRequest
+    ) -> KnowledgeEntityDeleteResult:
+        if self.knowledge_entity_asset_service is None:
+            raise KnowledgeBaseValidationError(
+                "knowledge entity asset service is not configured"
+            )
+        result = await self.knowledge_entity_asset_service.delete_alias(
+            kb_code=request.kb_code,
+            entity_id=request.entity_id,
+            alias_id=request.alias_id,
+        )
+        return KnowledgeEntityDeleteResult.model_validate(result)
 
     async def get_processing_task_status(
         self, request: ProcessingTaskStatusRequest

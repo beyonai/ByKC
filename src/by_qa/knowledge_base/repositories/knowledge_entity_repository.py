@@ -182,6 +182,7 @@ class KnowledgeEntityRepository:
                     "entityName",
                     "aliases",
                     "subjectFileId",
+                    "entityType",
                     "entityEnriched",
                 ],
             },
@@ -271,6 +272,7 @@ class KnowledgeEntityRepository:
                     "entity_name": None,
                     "aliases": [],
                     "subject_file_id": None,
+                    "entity_type": None,
                     "entity_enriched": None,
                 }
                 records[file_id] = record

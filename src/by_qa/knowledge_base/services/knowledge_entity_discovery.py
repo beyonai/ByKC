@@ -19,7 +19,6 @@ from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
     DiscoveryDocumentContext,
     IdentityScope,
     KnowledgeEntityLLM,
-    SurfaceMatch,
     _complete_strict_json,
     _safe_log_context,
     build_discovery_context,
@@ -129,7 +128,6 @@ class KnowledgeEntityDiscovery:
         self,
         markdown: str,
         *,
-        known_matches: Sequence[SurfaceMatch] = (),
         max_entities: int = MAX_DISCOVERED_ENTITIES,
         log_context: Mapping[str, Any] | None = None,
     ) -> EntityDiscoveryResult:
@@ -162,9 +160,8 @@ class KnowledgeEntityDiscovery:
             return cached
         logger.info(
             "knowledge_entity_intelligence discovery started: document_chars=%s "
-            "known_match_count=%s max_entities=%s context_truncated=%s%s",
+            "max_entities=%s context_truncated=%s%s",
             len(markdown),
-            len(known_matches),
             max_entities,
             context.truncated,
             _safe_log_context(log_context),

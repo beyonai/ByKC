@@ -1,0 +1,25 @@
+{
+  "entities": [
+    {
+      "entityName": "ByKC-KnowledgeEntityDiscovery",
+      "subjectEntityName": "ByKC",
+      "localName": "KnowledgeEntityDiscovery",
+      "aliases": [],
+      "sourceDocuments": ["manual_fixture"]
+    },
+    {
+      "entityName": "ByKC-EmbeddingQueryService",
+      "subjectEntityName": "ByKC",
+      "localName": "EmbeddingQueryService",
+      "aliases": [],
+      "sourceDocuments": ["manual_fixture"]
+    },
+    {
+      "entityName": "Obsidian-Local-first",
+      "subjectEntityName": "Obsidian",
+      "localName": "Local-first",
+      "aliases": [],
+      "sourceDocuments": ["manual_fixture"]
+    }
+  ]
+}

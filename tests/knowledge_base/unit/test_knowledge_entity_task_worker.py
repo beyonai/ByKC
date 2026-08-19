@@ -113,6 +113,7 @@ def file_row(
 class FakeEntityRepository:
     def __init__(self, rows: list[dict]) -> None:
         self.rows = {int(row["kid"]): row for row in rows}
+        self.list_surface_calls = 0
 
     async def get_file_with_metadata(
         self, cursor, *, knowledge_base_id: int, file_path: str
@@ -132,6 +133,7 @@ class FakeEntityRepository:
         self, cursor, *, knowledge_base_id: int | None = None
     ) -> list[dict]:
         del cursor
+        self.list_surface_calls += 1
         return [
             {
                 "kid": row["kid"],
@@ -266,15 +268,11 @@ class FakeReferenceRepository:
 class FakeDiscovery:
     def __init__(self, candidates: tuple[EntityCandidate, ...]) -> None:
         self.candidates = candidates
-        self.known_matches = ()
         self.log_context = None
 
-    async def discover(
-        self, markdown, *, known_matches, max_entities, log_context=None
-    ):
+    async def discover(self, markdown, *, max_entities, log_context=None):
         assert markdown
         assert max_entities == 12
-        self.known_matches = known_matches
         self.log_context = log_context
         return EntityDiscoveryResult(
             candidates=self.candidates,
@@ -302,6 +300,27 @@ class FakeSearch:
             )
             for text in texts
         ]
+
+
+class FakeCreatedAssetService:
+    def __init__(self) -> None:
+        self.attachments: list[dict] = []
+
+    async def resolve_candidate(self, **kwargs):
+        return SimpleNamespace(
+            entity_id=100,
+            canonical_name=kwargs["entity_name"],
+            local_name=kwargs["local_name"],
+            fs_entry_id=None,
+            method=SimpleNamespace(value="CREATED_NEW"),
+            alias_added=None,
+            candidate_count=0,
+            created=True,
+            warnings=(),
+        )
+
+    async def attach_file(self, **kwargs):
+        self.attachments.append(kwargs)
 
 
 class FakeEnricher:
@@ -353,6 +372,7 @@ def make_worker(
     discovery: FakeDiscovery | None = None,
     enricher: FakeEnricher | None = None,
     search_hits=(),
+    asset_service=None,
 ):
     factory = FakeConnectionFactory()
     repository = FakeEntityRepository(rows)
@@ -374,6 +394,7 @@ def make_worker(
         knowledge_item_search_service=search,
         knowledge_entity_discovery=discovery,
         knowledge_entity_enricher=enricher,
+        knowledge_entity_asset_service=asset_service or object(),
     )
     return SimpleNamespace(
         worker=worker,
@@ -387,6 +408,70 @@ def make_worker(
         enricher=enricher,
         search=search,
     )
+
+
+@pytest.mark.asyncio
+async def test_discovery_never_loads_or_builds_the_full_surface_vocabulary():
+    source = file_row(10, "/docs/source.md", content_key="source")
+    entity = file_row(
+        20,
+        "/KnowledgeEntity/ByKC-BaseQAEngine.md",
+        content_key="entity",
+        markdown_key="entity-md",
+        document_kind="knowledgeEntity",
+        entity_name="ByKC-BaseQAEngine",
+    )
+    candidate = EntityCandidate(
+        entity_name="ByKC-基础问答引擎",
+        local_name="基础问答引擎",
+        identity_scope=IdentityScope.GLOBAL,
+        evidence="ByKC 的基础问答引擎负责回答。",
+    )
+
+    class AssetService:
+        async def resolve_candidate(self, **kwargs):
+            assert kwargs["entity_name"] == candidate.entity_name
+            return SimpleNamespace(
+                entity_id=100,
+                canonical_name="ByKC-BaseQAEngine",
+                local_name="BaseQAEngine",
+                fs_entry_id=20,
+                method=SimpleNamespace(value="EXACT_ALIAS"),
+                alias_added=None,
+                candidate_count=1,
+                created=False,
+                warnings=(),
+            )
+
+        async def attach_file(self, **kwargs):
+            raise AssertionError(f"existing file must not be reattached: {kwargs}")
+
+    deps = make_worker(
+        rows=[source, entity],
+        objects={
+            ("original", "source"): b"ByKC uses a base QA engine.",
+            ("original", "entity"): b"# ByKC-BaseQAEngine",
+            ("markdown", "entity-md"): b"# ByKC-BaseQAEngine",
+        },
+        discovery=FakeDiscovery((candidate,)),
+        asset_service=AssetService(),
+    )
+
+    result = await deps.worker.run_task(
+        KnowledgeEntityTaskContext(
+            task_id=700,
+            task_type="ENTITY_DISCOVERY",
+            kb_code="1",
+            knowledge_base_id=1,
+            source_file_id=10,
+            file_path="/docs/source.md",
+        )
+    )
+
+    assert deps.repository.list_surface_calls == 0
+    assert result.index_version is None
+    assert result.result_payload["actions"][0]["canonicalEntityId"] == 100
+    assert result.result_payload["actions"][0]["resolutionMethod"] == "EXACT_ALIAS"
 
 
 @pytest.mark.parametrize(
@@ -412,183 +497,6 @@ def test_discovery_source_path_is_rendered_as_a_markdown_reference() -> None:
 
 
 @pytest.mark.asyncio
-async def test_discovery_anchors_only_unique_current_kb_and_creates_fixed_entities(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    log_messages: list[str] = []
-
-    def capture_log(message: str, *args, **_kwargs) -> None:
-        log_messages.append(message % args)
-
-    monkeypatch.setattr(worker_module.logger, "info", capture_log)
-    source = file_row(10, "/docs/source.md", content_key="source")
-    owner = file_row(
-        20,
-        "/KnowledgeEntity/alpha.md",
-        content_key="alpha",
-        markdown_key="alpha-md",
-        document_kind="knowledgeEntity",
-        entity_name="Alpha",
-        entity_enriched=True,
-        aliases=["A"],
-    )
-    cross_kb = file_row(
-        99,
-        "/KnowledgeEntity/cross.md",
-        kb_id=2,
-        content_key="cross",
-        markdown_key="cross-md",
-        document_kind="knowledgeEntity",
-        entity_name="Cross",
-    )
-    candidates = (
-        EntityCandidate(
-            entity_name="A",
-            local_name="A",
-            identity_scope=IdentityScope.GLOBAL,
-            evidence="The exact alias resolves to Alpha.",
-        ),
-        EntityCandidate(
-            entity_name="Beta/Unsafe",
-            local_name="Beta/Unsafe",
-            identity_scope=IdentityScope.GLOBAL,
-            evidence="Beta is a stable component.",
-            aliases=("Beta",),
-        ),
-        EntityCandidate(
-            entity_name="Alpha-Worker",
-            local_name="Worker",
-            identity_scope=IdentityScope.SUBJECT,
-            subject_entity_name="Alpha",
-            evidence="Worker belongs to Alpha.",
-        ),
-        EntityCandidate(
-            entity_name="Missing-Child",
-            local_name="Child",
-            identity_scope=IdentityScope.SUBJECT,
-            subject_entity_name="Missing",
-            evidence="The unresolved child is mentioned.",
-        ),
-    )
-    deps = make_worker(
-        rows=[source, owner, cross_kb],
-        objects={
-            ("original", "source"): b"Alpha and Cross are mentioned.",
-            ("original", "alpha"): b"# Alpha",
-            ("markdown", "alpha-md"): b"# Alpha",
-            ("original", "cross"): b"# Cross",
-            ("markdown", "cross-md"): b"# Cross",
-        },
-        discovery=FakeDiscovery(candidates),
-    )
-
-    result = await deps.worker.run_task(
-        KnowledgeEntityTaskContext(
-            task_id=501,
-            task_type="ENTITY_DISCOVERY",
-            kb_code="1",
-            knowledge_base_id=1,
-            source_file_id=10,
-            file_path="/docs/source.md",
-            batch_id="batch-501",
-        )
-    )
-
-    anchored = {
-        posting.entity_file_id
-        for match in deps.discovery.known_matches
-        for posting in match.anchorable_postings
-    }
-    assert anchored == {20}
-    assert len(deps.ingestion.uploads) == 2
-    assert all(request.process_front_matter for request in deps.ingestion.uploads)
-    assert any(
-        action.get("entityFileId") == 20
-        and action.get("entityName") == "Alpha"
-        and action["action"] == "ANCHORED"
-        for action in result.result_payload["actions"]
-    )
-    paths = [request.file_path for request in deps.ingestion.uploads]
-    assert paths == [
-        "/KnowledgeEntity/Beta-Unsafe.md",
-        "/KnowledgeEntity/Alpha-Worker.md",
-    ]
-
-    metadata = [
-        parse_front_matter(request.file_content) for request in deps.ingestion.uploads
-    ]
-    assert metadata[0]["documentKind"] == "knowledgeEntity"
-    assert metadata[0]["entityEnriched"] is False
-    assert "definitionVersion" not in metadata[0]
-    assert metadata[1]["subjectFileId"] == 20
-    assert "Worker" in metadata[1]["aliases"]
-    mention_targets = {item["target_fs_entry_id"] for item in deps.references.upserts}
-    assert mention_targets == set(result.target_file_ids)
-    assert 20 in mention_targets
-    assert 99 not in mention_targets
-    assert all(item["relation_code"] == "MENTIONS" for item in deps.references.upserts)
-    assert {item["source_fs_entry_id"] for item in deps.references.upserts} == {10}
-    assert all(item["target_fs_entry_id"] != 10 for item in deps.references.upserts)
-    assert all(item["source_task_id"] == 501 for item in deps.references.upserts)
-    assert deps.references.deletes == [
-        {
-            "knowledge_base_id": 1,
-            "source_fs_entry_id": 10,
-            "relation_code": "MENTIONS",
-            "discovered_by": "ENTITY_DISCOVERY",
-        }
-    ]
-    assert len(result.index_version) == 16
-    assert result.index_version != "v2"
-    assert {action["action"] for action in result.result_payload["actions"]} == {
-        "ANCHORED",
-        "CREATED",
-        "DROPPED",
-    }
-    for request in deps.ingestion.uploads:
-        _, body = split_front_matter(request.file_content)
-        spans = detect_reference_spans(body.decode("utf-8"))
-        assert len(spans) == 1
-        assert {span[3] for span in spans} == {"/docs/source.md"}
-    assert deps.discovery.log_context == {
-        "batch_id": "batch-501",
-        "task_id": 501,
-        "kb_code": "1",
-        "source_file_id": 10,
-        "file_path": "/docs/source.md",
-        "task_type": "ENTITY_DISCOVERY",
-    }
-    rendered_logs = "\n".join(log_messages)
-    assert "knowledge_entity_task_worker started" in rendered_logs
-    assert "knowledge_entity_discovery model completed" in rendered_logs
-    found_log = next(message for message in log_messages if "entities found" in message)
-    assert (
-        'source_document={"knowledgeBaseId":1,"kbCode":"1","fileId":10,'
-        '"filePath":"/docs/source.md"}' in found_log
-    )
-    assert '"entityName":"A"' in found_log
-    assert '"entityName":"Alpha-Worker"' in found_log
-    assert '"identityScope":"subject"' in found_log
-    assert "Worker belongs to Alpha" not in found_log
-    changes_log = next(
-        message for message in log_messages if "entity changes" in message
-    )
-    assert (
-        'source_document={"knowledgeBaseId":1,"kbCode":"1","fileId":10,'
-        '"filePath":"/docs/source.md"}' in changes_log
-    )
-    assert "new_entities=" in changes_log
-    assert '"entityName":"Beta/Unsafe"' in changes_log
-    assert "existing_entities=" in changes_log
-    assert '"entityName":"Alpha"' in changes_log
-    assert "dropped_entities=" in changes_log
-    assert '"entityName":"Missing-Child"' in changes_log
-    assert "relation_replacement_count=3" in rendered_logs
-    assert "batch_id=batch-501" in rendered_logs
-    assert "Alpha and Cross are mentioned" not in rendered_logs
-
-
-@pytest.mark.asyncio
 async def test_discovery_anchors_readable_path_when_entity_name_metadata_is_missing():
     source = file_row(10, "/docs/source.md", content_key="source")
     occupied = file_row(
@@ -599,6 +507,7 @@ async def test_discovery_anchors_readable_path_when_entity_name_metadata_is_miss
         document_kind="knowledgeEntity",
         entity_name=None,
     )
+    asset_service = FakeCreatedAssetService()
     deps = make_worker(
         rows=[source, occupied],
         objects={
@@ -616,6 +525,7 @@ async def test_discovery_anchors_readable_path_when_entity_name_metadata_is_miss
                 ),
             )
         ),
+        asset_service=asset_service,
     )
 
     result = await deps.worker.run_task(
@@ -631,58 +541,23 @@ async def test_discovery_anchors_readable_path_when_entity_name_metadata_is_miss
 
     assert deps.ingestion.uploads == []
     assert result.target_file_ids == (11,)
-    assert result.result_payload["actions"] == [
-        {
-            "action": "ANCHORED",
-            "entityName": "Alpha/Beta",
-            "entityFileId": 11,
-            "filePath": "/KnowledgeEntity/Alpha-Beta.md",
-        }
+    assert result.result_payload["actions"][0] == {
+        "action": "CREATED",
+        "inputEntityName": "Alpha/Beta",
+        "entityName": "Alpha/Beta",
+        "canonicalEntityId": 100,
+        "entityFileId": 11,
+        "filePath": "/KnowledgeEntity/Alpha-Beta.md",
+        "resolutionMethod": "CREATED_NEW",
+        "aliasAdded": None,
+        "candidateCount": 0,
+    }
+    assert asset_service.attachments == [
+        {"knowledge_base_id": 1, "entity_id": 100, "fs_entry_id": 11}
     ]
     assert len(deps.references.upserts) == 1
     assert deps.references.upserts[0]["source_fs_entry_id"] == 10
     assert deps.references.upserts[0]["target_fs_entry_id"] == 11
-
-
-@pytest.mark.asyncio
-async def test_discovery_does_not_anchor_incidental_ac_match_omitted_by_salience() -> (
-    None
-):
-    source = file_row(10, "/docs/source.md", content_key="source")
-    incidental = file_row(
-        20,
-        "/KnowledgeEntity/alpha.md",
-        content_key="alpha",
-        markdown_key="alpha-md",
-        document_kind="knowledgeEntity",
-        entity_name="Alpha",
-        entity_enriched=True,
-    )
-    deps = make_worker(
-        rows=[source, incidental],
-        objects={
-            ("original", "source"): b"Alpha appears only in a footnote.",
-            ("original", "alpha"): b"# Alpha",
-            ("markdown", "alpha-md"): b"# Alpha",
-        },
-        discovery=FakeDiscovery(()),
-    )
-
-    result = await deps.worker.run_task(
-        KnowledgeEntityTaskContext(
-            task_id=504,
-            task_type="ENTITY_DISCOVERY",
-            kb_code="1",
-            knowledge_base_id=1,
-            source_file_id=10,
-            file_path="/docs/source.md",
-        )
-    )
-
-    assert deps.discovery.known_matches
-    assert result.target_file_ids == ()
-    assert result.result_payload["actions"] == []
-    assert deps.references.upserts == []
 
 
 @pytest.mark.asyncio
@@ -711,6 +586,7 @@ async def test_discovery_rejects_conflicting_metadata_at_readable_path():
                 ),
             )
         ),
+        asset_service=FakeCreatedAssetService(),
     )
 
     with pytest.raises(

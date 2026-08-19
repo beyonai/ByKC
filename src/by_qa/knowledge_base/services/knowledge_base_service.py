@@ -70,6 +70,7 @@ class KnowledgeBaseService:
     markdown_reference_resolver: Any | None = None
     knowledge_file_reference_repository: Any | None = None
     file_metadata_value_repository: Any | None = None
+    knowledge_entity_asset_repository: Any | None = None
     cache_root: Path | None = None
     cache_ttl_seconds: int = 24 * 60 * 60
 
@@ -161,6 +162,13 @@ class KnowledgeBaseService:
                 cursor,
                 knowledge_base_id=knowledge_base_id,
             )
+            if self.knowledge_entity_asset_repository is not None:
+                await (
+                    self.knowledge_entity_asset_repository.delete_by_knowledge_base_id(
+                        cursor,
+                        knowledge_base_id=knowledge_base_id,
+                    )
+                )
             await cursor.execute(
                 """
                 DELETE FROM knowledge_chunk_retrieval_mv
@@ -319,6 +327,12 @@ class KnowledgeBaseService:
                     root_fs_entry_id=root_fs_entry_id,
                 )
             )
+            if self.knowledge_entity_asset_repository is not None:
+                await self.knowledge_entity_asset_repository.clear_fs_entry_ids(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    fs_entry_ids=fs_entry_ids,
+                )
             path_bound_storage = (
                 self.storage_provider is not None
                 and self.storage_provider.storage_path_bound_to_logical_path

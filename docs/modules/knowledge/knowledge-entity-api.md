@@ -1,5 +1,7 @@
 # KnowledgeEntity 发现与文档富化接口设计
 
+> **文档已拆分。** 接口请从 [API 文档导航](api/README.md) 进入，公共任务语义见 [KnowledgeEntity 异步处理约定](api/entity-processing.md)。本文保留为设计和历史长示例参考。
+
 ## 1. 文档目标
 
 本文档定义 KnowledgeEntity v1 的接口契约，包括：

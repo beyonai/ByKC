@@ -173,8 +173,8 @@ class FakeReferenceRepository:
         self.calls = calls
         self.next_id = 501
 
-    async def create_reference(self, cursor, **kwargs):
-        self.calls.append(("create_reference", kwargs))
+    async def upsert_markdown_relation(self, cursor, **kwargs):
+        self.calls.append(("upsert_markdown_relation", kwargs))
         row = {"kid": self.next_id, **kwargs}
         self.next_id += 1
         return row
@@ -237,16 +237,13 @@ class FakeMarkdownReferenceRewriter:
                 },
             )
         )
-        await kwargs["reference_repository"].create_reference(
+        await kwargs["reference_repository"].upsert_markdown_relation(
             kwargs["cursor"],
             knowledge_base_id=kwargs["knowledge_base_id"],
             source_fs_entry_id=kwargs["source_fs_entry_id"],
             target_fs_entry_id=None,
-            original_target="./later.png",
-            target_path="/docs/later.png",
-            target_suffix="",
-            target_kind="FILE",
-            status="unresolved",
+            normalized_target_path="/docs/later.png",
+            producer_run_id="test-markdown-run",
         )
         return text.replace("./later.png", "byqa-ref://501")
 
@@ -362,8 +359,8 @@ async def test_storage_write_failure_rolls_back_references_and_runs_cleanup():
         )
 
     names = _call_names(calls)
-    assert "create_reference" in names
-    assert names.index("create_reference") < names.index("storage_write")
+    assert "upsert_markdown_relation" in names
+    assert names.index("upsert_markdown_relation") < names.index("storage_write")
     assert names.index("rollback") < names.index("storage_delete_quietly")
     assert "commit" not in names
     assert connection.rolled_back is True

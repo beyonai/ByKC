@@ -889,6 +889,11 @@ class KnowledgeItemIngestionService:
                 )
             fs_entry_id = int(file_row["kid"])
             if self.knowledge_file_reference_repository is not None:
+                await self.knowledge_file_reference_repository.delete_outgoing_for_source_fs_entry_id(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    source_fs_entry_id=fs_entry_id,
+                )
                 await self.knowledge_file_reference_repository.mark_targets_deleted(
                     cursor,
                     knowledge_base_id=knowledge_base_id,

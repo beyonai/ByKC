@@ -62,9 +62,19 @@ class FakeFsEntryRepository:
 
 class FakeReferenceRepository:
     def __init__(self):
+        self.calls = []
+        self.deleted_sources = []
         self.deleted_targets = []
 
+    async def delete_outgoing_for_source_fs_entry_id(
+        self, cursor, *, knowledge_base_id, source_fs_entry_id
+    ):
+        self.calls.append("delete_outgoing")
+        self.deleted_sources.append((knowledge_base_id, source_fs_entry_id))
+        return []
+
     async def mark_targets_deleted(self, cursor, *, knowledge_base_id, targets):
+        self.calls.append("mark_targets_deleted")
         self.deleted_targets.append((knowledge_base_id, list(targets)))
         return []
 
@@ -74,7 +84,7 @@ class FakeStorageProvider:
 
 
 @pytest.mark.asyncio
-async def test_delete_knowledge_item_marks_inbound_references_broken_before_delete():
+async def test_delete_knowledge_item_removes_outgoing_and_breaks_inbound_references():
     connection = FakeConnection()
     fs_repo = FakeFsEntryRepository()
     reference_repo = FakeReferenceRepository()
@@ -97,6 +107,8 @@ async def test_delete_knowledge_item_marks_inbound_references_broken_before_dele
         DeleteKnowledgeItemRequest(kb_code="1", file_path="/docs/b.md")
     )
 
+    assert reference_repo.deleted_sources == [(1, 10)]
     assert reference_repo.deleted_targets == [(1, [(10, "/docs/b.md")])]
+    assert reference_repo.calls == ["delete_outgoing", "mark_targets_deleted"]
     assert fs_repo.soft_deleted == [(1, 10)]
     assert connection.committed == 1

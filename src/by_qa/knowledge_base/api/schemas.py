@@ -456,8 +456,22 @@ class KnowledgeItemReferenceSource(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     source_path: str = Field(serialization_alias="sourcePath")
-    original_target: str = Field(serialization_alias="originalTarget")
-    target_suffix: str = Field(default="", serialization_alias="targetSuffix")
+    original_target: str = Field(
+        serialization_alias="originalTarget",
+        description=(
+            "Relationship-level target locator. New Markdown relations use the "
+            "canonical knowledge-base path; legacy rows may contain the original "
+            "occurrence target."
+        ),
+    )
+    target_suffix: str = Field(
+        default="",
+        serialization_alias="targetSuffix",
+        description=(
+            "Legacy occurrence suffix. New Markdown relations keep query and "
+            "fragment suffixes inline in source Markdown and return an empty value."
+        ),
+    )
     target_path: str = Field(serialization_alias="targetPath")
     status: str
 

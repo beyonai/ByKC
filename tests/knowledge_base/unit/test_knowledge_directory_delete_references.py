@@ -63,15 +63,25 @@ class FakeFsEntryRepository:
 
 class FakeReferenceRepository:
     def __init__(self):
+        self.calls = []
+        self.deleted_sources = []
         self.deleted_targets = []
 
+    async def delete_outgoing_for_source_fs_entry_ids(
+        self, cursor, *, knowledge_base_id, source_fs_entry_ids
+    ):
+        self.calls.append("delete_outgoing")
+        self.deleted_sources.append((knowledge_base_id, list(source_fs_entry_ids)))
+        return []
+
     async def mark_targets_deleted(self, cursor, *, knowledge_base_id, targets):
+        self.calls.append("mark_targets_deleted")
         self.deleted_targets.append((knowledge_base_id, list(targets)))
         return []
 
 
 @pytest.mark.asyncio
-async def test_delete_directory_marks_inbound_references_for_subtree_files_only():
+async def test_delete_directory_removes_outgoing_and_breaks_inbound_references():
     connection = FakeConnection()
     fs_repo = FakeFsEntryRepository()
     reference_repo = FakeReferenceRepository()
@@ -90,8 +100,10 @@ async def test_delete_directory_marks_inbound_references_for_subtree_files_only(
         DeleteDirectoryRequest(kb_code="1", directory_path="/docs")
     )
 
+    assert reference_repo.deleted_sources == [(1, [10, 11, 12])]
     assert reference_repo.deleted_targets == [
         (1, [(11, "/docs/b.md"), (12, "/docs/sub/c.md")])
     ]
+    assert reference_repo.calls == ["delete_outgoing", "mark_targets_deleted"]
     assert fs_repo.soft_deleted == [(1, 10)]
     assert connection.committed == 1

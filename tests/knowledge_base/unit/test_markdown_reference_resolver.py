@@ -67,6 +67,48 @@ async def test_resolved_visible_target_returns_virtual_path_with_suffix():
     assert repository.calls[0]["reference_ids"] == [11]
 
 
+async def test_resolved_relation_preserves_inline_query_and_fragment():
+    resolved, repository = await _resolve(
+        ["[intro](byqa-ref://16#intro) [api](byqa-ref://16?download=1#api)"],
+        [
+            {
+                "kid": 16,
+                "knowledge_base_id": 7,
+                "status": "resolved",
+                "original_target": "/docs/original.md",
+                "target_suffix": "",
+                "target_virtual_path": "/docs/current.md",
+                "target_is_deleted": False,
+            }
+        ],
+    )
+
+    assert resolved == [
+        "[intro](/docs/current.md#intro) [api](/docs/current.md?download=1#api)"
+    ]
+    assert repository.calls[0]["reference_ids"] == [16]
+
+
+async def test_broken_relation_uses_canonical_path_with_inline_suffix():
+    resolved, repository = await _resolve(
+        ["[intro](byqa-ref://17?download=1#intro)"],
+        [
+            {
+                "kid": 17,
+                "knowledge_base_id": 7,
+                "status": "broken",
+                "original_target": "/docs/original.md",
+                "target_suffix": "",
+                "target_virtual_path": None,
+                "target_is_deleted": None,
+            }
+        ],
+    )
+
+    assert resolved == ["[intro](/docs/original.md?download=1#intro)"]
+    assert repository.calls[0]["reference_ids"] == [17]
+
+
 async def test_resolved_deleted_target_returns_original_target():
     resolved, repository = await _resolve(
         ["see byqa-ref://12"],

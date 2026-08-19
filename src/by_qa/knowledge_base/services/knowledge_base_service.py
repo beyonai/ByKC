@@ -334,6 +334,11 @@ class KnowledgeBaseService:
                     root_fs_entry_id=root_fs_entry_id,
                 )
             if self.knowledge_file_reference_repository is not None:
+                await self.knowledge_file_reference_repository.delete_outgoing_for_source_fs_entry_ids(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    source_fs_entry_ids=fs_entry_ids,
+                )
                 await self.knowledge_file_reference_repository.mark_targets_deleted(
                     cursor,
                     knowledge_base_id=knowledge_base_id,

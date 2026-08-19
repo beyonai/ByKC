@@ -197,7 +197,14 @@ class FakeFetchCacheRepository:
 
 class FakeReferenceRepository:
     def __init__(self):
+        self.deleted_sources = []
         self.deleted_targets = []
+
+    async def delete_outgoing_for_source_fs_entry_ids(
+        self, cursor, *, knowledge_base_id, source_fs_entry_ids
+    ):
+        self.deleted_sources.append((knowledge_base_id, list(source_fs_entry_ids)))
+        return []
 
     async def mark_targets_deleted(self, cursor, *, knowledge_base_id, targets):
         self.deleted_targets.append((knowledge_base_id, list(targets)))
@@ -355,6 +362,7 @@ async def test_delete_directory_marks_references_without_storage_delete_when_pat
 
     assert connection.committed == 1
     assert fs_repo.list_file_entries_called is True
+    assert reference_repo.deleted_sources == [(1, [10, 11])]
     assert reference_repo.deleted_targets == [(1, [(11, "/dir/file1.txt")])]
     assert prov.deleted_quietly == []
 

@@ -11,10 +11,34 @@ class FakeReferenceRepository:
     def __init__(self) -> None:
         self.rows: list[dict[str, Any]] = []
 
-    async def upsert_relation_assertion(
+    async def upsert_markdown_relation(
         self, cursor: Any, **kwargs: Any
     ) -> dict[str, Any]:
-        row = {"kid": len(self.rows) + 1, **kwargs}
+        del cursor
+        target_path = kwargs["normalized_target_path"]
+        target_fs_entry_id = kwargs["target_fs_entry_id"]
+        row = {
+            "kid": len(self.rows) + 1,
+            "knowledge_base_id": kwargs["knowledge_base_id"],
+            "source_fs_entry_id": kwargs["source_fs_entry_id"],
+            "target_fs_entry_id": target_fs_entry_id,
+            "relation_code": "MENTIONS",
+            "original_target": target_path,
+            "target_path": None if target_fs_entry_id is not None else target_path,
+            "target_suffix": "",
+            "target_kind": "FILE",
+            "status": "resolved" if target_fs_entry_id is not None else "unresolved",
+            "discovered_by": "MARKDOWN_PARSER",
+            "producer_run_id": kwargs["producer_run_id"],
+            "evidence_fingerprint": "relation-fingerprint",
+            "source_heading_path": None,
+            "start_line": None,
+            "end_line": None,
+            "start_offset": None,
+            "end_offset": None,
+            "target_locator_type": "KB_PATH",
+            "target_locator_value": target_path,
+        }
         self.rows.append(row)
         return row
 
@@ -34,6 +58,8 @@ class FakeFsEntryRepository:
     ) -> None:
         self.files = files or {}
         self.directories = directories or set()
+        self.file_reference_calls: list[str] = []
+        self.directory_calls: list[str] = []
 
     async def get_file_by_path(
         self, cursor: Any, *, knowledge_base_id: int, full_path: str
@@ -50,6 +76,7 @@ class FakeFsEntryRepository:
     async def get_file_reference_target_by_path(
         self, cursor: Any, *, knowledge_base_id: int, full_path: str
     ) -> dict[str, Any] | None:
+        self.file_reference_calls.append(full_path)
         return await self.get_file_by_path(
             cursor,
             knowledge_base_id=knowledge_base_id,
@@ -59,6 +86,7 @@ class FakeFsEntryRepository:
     async def get_directory_by_path(
         self, cursor: Any, *, knowledge_base_id: int, full_path: str
     ) -> dict[str, Any] | None:
+        self.directory_calls.append(full_path)
         if full_path not in self.directories:
             return None
         return {
@@ -100,16 +128,17 @@ async def test_existing_file_target_creates_resolved_reference_token():
     assert out == "see ![alt](byqa-ref://1) here"
     assertion = reference_repository.rows[0]
     assert assertion["target_fs_entry_id"] == 123
-    assert assertion["original_target"] == "images/x.png"
+    assert assertion["original_target"] == "/docs/p/images/x.png"
     assert assertion["relation_code"] == "MENTIONS"
     assert assertion["discovered_by"] == "MARKDOWN_PARSER"
     assert assertion["producer_run_id"] == "markdown-run-1"
     assert assertion["target_locator_type"] == "KB_PATH"
     assert assertion["target_locator_value"] == "/docs/p/images/x.png"
-    assert assertion["start_line"] == assertion["end_line"] == 1
-    assert assertion["start_offset"] == 4
-    assert assertion["end_offset"] == 24
-    assert len(assertion["evidence_fingerprint"]) == 64
+    assert assertion["source_heading_path"] is None
+    assert assertion["start_line"] is None
+    assert assertion["end_line"] is None
+    assert assertion["start_offset"] is None
+    assert assertion["end_offset"] is None
 
 
 async def test_missing_file_target_creates_unresolved_reference_token():
@@ -118,7 +147,7 @@ async def test_missing_file_target_creates_unresolved_reference_token():
     assert out == "![a](byqa-ref://1)"
     assertion = reference_repository.rows[0]
     assert assertion["target_fs_entry_id"] is None
-    assert assertion["original_target"] == "missing.png"
+    assert assertion["original_target"] == "/docs/p/missing.png"
     assert assertion["target_path"] == "/docs/p/missing.png"
     assert assertion["status"] == "unresolved"
     assert assertion["target_locator_type"] == "KB_PATH"
@@ -161,42 +190,42 @@ async def test_protocol_relative_external_url_remains_original_and_creates_no_re
     assert reference_repository.rows == []
 
 
-async def test_target_suffix_stored_separately_and_original_target_preserved():
+async def test_target_suffix_is_kept_inline_and_not_stored_on_relation():
     out, reference_repository = await _rewrite(
         "go [doc](a.md?download=1#sec) now",
         files={"/docs/p/a.md": 321},
     )
 
-    assert out == "go [doc](byqa-ref://1) now"
-    assert reference_repository.rows[0]["original_target"] == "a.md?download=1#sec"
-    assert reference_repository.rows[0]["target_suffix"] == "?download=1#sec"
+    assert out == "go [doc](byqa-ref://1?download=1#sec) now"
+    assert reference_repository.rows[0]["original_target"] == "/docs/p/a.md"
+    assert reference_repository.rows[0]["target_suffix"] == ""
     assert reference_repository.rows[0]["target_fs_entry_id"] == 321
     assert reference_repository.rows[0]["target_path"] is None
     assert reference_repository.rows[0]["target_kind"] == "FILE"
     assert reference_repository.rows[0]["status"] == "resolved"
 
 
-async def test_original_target_preserves_surrounding_whitespace_with_suffix():
+async def test_rewrite_drops_surrounding_target_whitespace_but_keeps_suffix():
     out, reference_repository = await _rewrite(
         "prefix [doc]( a.md#sec ) suffix",
         files={"/docs/p/a.md": 321},
     )
 
-    assert out == "prefix [doc](byqa-ref://1) suffix"
-    assert reference_repository.rows[0]["original_target"] == " a.md#sec "
-    assert reference_repository.rows[0]["target_suffix"] == "#sec"
+    assert out == "prefix [doc](byqa-ref://1#sec) suffix"
+    assert reference_repository.rows[0]["original_target"] == "/docs/p/a.md"
+    assert reference_repository.rows[0]["target_suffix"] == ""
     assert reference_repository.rows[0]["target_fs_entry_id"] == 321
     assert reference_repository.rows[0]["target_path"] is None
 
 
-async def test_percent_decoded_target_path_preserves_original_target():
+async def test_percent_decoded_target_path_is_stored_as_canonical_relation_path():
     out, reference_repository = await _rewrite(
         "![a](b%20c.png)",
         files={"/docs/p/b c.png": 55},
     )
 
     assert out == "![a](byqa-ref://1)"
-    assert reference_repository.rows[0]["original_target"] == "b%20c.png"
+    assert reference_repository.rows[0]["original_target"] == "/docs/p/b c.png"
     assert reference_repository.rows[0]["target_fs_entry_id"] == 55
 
 
@@ -211,7 +240,7 @@ async def test_skips_when_reference_count_exceeds_cap():
     assert reference_repository.rows == []
 
 
-async def test_records_heading_path_line_and_offsets_for_each_assertion():
+async def test_does_not_record_heading_line_or_offsets_for_markdown_relation():
     out, reference_repository = await _rewrite(
         "# Guide\n\n## Assets\n\nSee [diagram](image.png).\n",
         files={"/docs/p/image.png": 123},
@@ -219,10 +248,37 @@ async def test_records_heading_path_line_and_offsets_for_each_assertion():
 
     assert "byqa-ref://1" in out
     assertion = reference_repository.rows[0]
-    assert assertion["source_heading_path"] == "Guide / Assets"
-    assert assertion["start_line"] == assertion["end_line"] == 5
-    assert assertion["start_offset"] == 24
-    assert assertion["end_offset"] == 44
+    assert assertion["source_heading_path"] is None
+    assert assertion["start_line"] is None
+    assert assertion["end_line"] is None
+    assert assertion["start_offset"] is None
+    assert assertion["end_offset"] is None
+
+
+async def test_repeated_target_uses_one_relation_and_preserves_each_suffix():
+    reference_repository = FakeReferenceRepository()
+    fs_entry_repository = FakeFsEntryRepository(files={"/docs/p/a.md": 321})
+
+    out = await MarkdownReferenceRewriter().rewrite(
+        "[one](a.md#intro) [two](./a.md?download=1#api) ![img](a.md#diagram)",
+        source_dir="/docs/p",
+        knowledge_base_id=7,
+        source_fs_entry_id=42,
+        cursor=object(),
+        reference_repository=reference_repository,
+        fs_entry_repository=fs_entry_repository,
+        producer_run_id="markdown-run-1",
+    )
+
+    assert out == (
+        "[one](byqa-ref://1#intro) "
+        "[two](byqa-ref://1?download=1#api) "
+        "![img](byqa-ref://1#diagram)"
+    )
+    assert len(reference_repository.rows) == 1
+    assert reference_repository.rows[0]["original_target"] == "/docs/p/a.md"
+    assert fs_entry_repository.file_reference_calls == ["/docs/p/a.md"]
+    assert fs_entry_repository.directory_calls == []
 
 
 async def test_materializes_existing_token_to_current_path_before_deletion():
@@ -246,15 +302,27 @@ async def test_materializes_existing_token_to_current_path_before_deletion():
             "target_locator_type": "KB_PATH",
             "target_locator_value": "/docs/gone.png",
         },
+        {
+            "kid": 43,
+            "target_virtual_path": "/moved/doc.md",
+            "target_path": None,
+            "target_suffix": "",
+            "original_target": "/docs/doc.md",
+            "target_locator_type": "KB_PATH",
+            "target_locator_value": "/docs/doc.md",
+        },
     ]
 
     out = await MarkdownReferenceRewriter().materialize_existing_tokens(
-        "![a](byqa-ref://41) [b](byqa-ref://42)",
+        "![a](byqa-ref://41) [b](byqa-ref://42) [c](byqa-ref://43?download=1#intro)",
         cursor=object(),
         reference_repository=repository,
     )
 
-    assert out == "![a](/moved/image.png#preview) [b](/docs/gone.png)"
+    assert out == (
+        "![a](/moved/image.png#preview) [b](/docs/gone.png) "
+        "[c](/moved/doc.md?download=1#intro)"
+    )
 
 
 async def test_rejects_unknown_token_instead_of_persisting_dangling_reference():

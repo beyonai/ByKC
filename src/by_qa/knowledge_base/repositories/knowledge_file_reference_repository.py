@@ -17,6 +17,44 @@ class KnowledgeFileReferenceRepository:
     _RELATION_CODES = frozenset({"MENTIONS", "PART_OF", "IS_A", "DEPENDS_ON"})
     _TARGET_LOCATOR_TYPES = frozenset({"FS_ENTRY_ID", "KB_PATH", "ENTITY_SURFACE"})
 
+    async def upsert_markdown_relation(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        source_fs_entry_id: int,
+        target_fs_entry_id: int | None,
+        normalized_target_path: str,
+        producer_run_id: str,
+    ) -> dict[str, Any] | None:
+        """Insert one parser-owned logical relation for a source-target pair."""
+        target_path = normalized_target_path.strip()
+        if not target_path.startswith("/") or target_path == "/":
+            raise ValueError("normalized_target_path must be an absolute file path")
+        fingerprint_source = (
+            f"markdown-relation:{knowledge_base_id}:{source_fs_entry_id}:"
+            f"MENTIONS:KB_PATH:{target_path}"
+        )
+        return await self.upsert_relation_assertion(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            source_fs_entry_id=source_fs_entry_id,
+            target_fs_entry_id=target_fs_entry_id,
+            relation_code="MENTIONS",
+            original_target=target_path,
+            target_path=None if target_fs_entry_id is not None else target_path,
+            target_suffix="",
+            target_kind="FILE",
+            status="resolved" if target_fs_entry_id is not None else "unresolved",
+            discovered_by=self.MARKDOWN_PRODUCER,
+            producer_run_id=producer_run_id,
+            evidence_fingerprint=hashlib.sha256(
+                fingerprint_source.encode("utf-8")
+            ).hexdigest(),
+            target_locator_type="KB_PATH",
+            target_locator_value=target_path,
+        )
+
     async def upsert_relation_assertion(
         self,
         cursor: Any,
@@ -219,53 +257,6 @@ class KnowledgeFileReferenceRepository:
             )
         return row
 
-    async def create_reference(
-        self,
-        cursor: Any,
-        *,
-        knowledge_base_id: int,
-        source_fs_entry_id: int,
-        target_fs_entry_id: int | None,
-        original_target: str,
-        target_path: str | None,
-        target_suffix: str = "",
-        target_kind: str = "FILE",
-        status: str,
-        discovered_by: str = MARKDOWN_PRODUCER,
-        producer_run_id: str | None = None,
-        evidence_fingerprint: str | None = None,
-        source_heading_path: str | None = None,
-        start_line: int | None = None,
-        end_line: int | None = None,
-        start_offset: int | None = None,
-        end_offset: int | None = None,
-        target_locator_type: str | None = None,
-        target_locator_value: str | None = None,
-    ) -> dict[str, Any] | None:
-        """Compatibility adapter for a parsed Markdown MENTIONS assertion."""
-        return await self.upsert_relation_assertion(
-            cursor,
-            knowledge_base_id=knowledge_base_id,
-            source_fs_entry_id=source_fs_entry_id,
-            target_fs_entry_id=target_fs_entry_id,
-            relation_code="MENTIONS",
-            original_target=original_target,
-            target_path=target_path,
-            target_suffix=target_suffix,
-            target_kind=target_kind,
-            status=status,
-            discovered_by=discovered_by,
-            producer_run_id=producer_run_id,
-            evidence_fingerprint=evidence_fingerprint,
-            source_heading_path=source_heading_path,
-            start_line=start_line,
-            end_line=end_line,
-            start_offset=start_offset,
-            end_offset=end_offset,
-            target_locator_type=target_locator_type,
-            target_locator_value=target_locator_value,
-        )
-
     async def delete_outgoing_for_source_fs_entry_id(
         self,
         cursor: Any,
@@ -324,15 +315,39 @@ class KnowledgeFileReferenceRepository:
         )
         return rows
 
-    async def delete_for_source_fs_entry_id(
-        self, cursor: Any, *, source_fs_entry_id: int
-    ) -> None:
-        """Compatibility adapter deleting Markdown-parser-owned outgoing assertions."""
-        await self.delete_outgoing_for_source_fs_entry_id(
-            cursor,
-            source_fs_entry_id=source_fs_entry_id,
-            discovered_by=self.MARKDOWN_PRODUCER,
+    async def delete_outgoing_for_source_fs_entry_ids(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        source_fs_entry_ids: Sequence[int],
+    ) -> list[dict[str, Any]]:
+        """Delete every outgoing assertion owned by a set of source entries."""
+        normalized_source_ids = sorted({int(item) for item in source_fs_entry_ids})
+        if not normalized_source_ids:
+            return []
+        await cursor.execute(
+            """
+            DELETE FROM knowledge_file_reference
+            WHERE knowledge_base_id = %(knowledge_base_id)s
+              AND source_fs_entry_id = ANY(%(source_fs_entry_ids)s)
+            RETURNING kid, source_fs_entry_id, target_fs_entry_id,
+                      relation_code, discovered_by, producer_run_id
+            """,
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "source_fs_entry_ids": normalized_source_ids,
+            },
         )
+        rows = await self._fetchall(cursor)
+        log = logger.info if rows else logger.debug
+        log(
+            "outgoing relation assertions deleted for sources: kb_id=%s source_count=%s assertion_count=%s",
+            knowledge_base_id,
+            len(normalized_source_ids),
+            len(rows),
+        )
+        return rows
 
     async def list_assertions_by_source(
         self,

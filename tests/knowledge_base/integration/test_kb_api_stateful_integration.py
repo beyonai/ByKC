@@ -3025,13 +3025,13 @@ async def test_markdown_references_resolve_break_and_restore_through_read_and_se
     assert any("(/resolved/b.md)" in text for text in resolved_search)
     assert all("byqa-ref://" not in text for text in resolved_search)
 
-    assert "(b.md)" in pending_before_target
+    assert "(/pending/b.md)" in pending_before_target
     assert "byqa-ref://" not in pending_before_target
     assert "(/pending/b.md)" in pending_after_target
     assert delete_target.status_code == 200
-    assert "(b.md)" in pending_after_delete
+    assert "(/pending/b.md)" in pending_after_delete
     assert "byqa-ref://" not in pending_after_delete
-    assert any("(b.md)" in text for text in search_after_delete)
+    assert any("(/pending/b.md)" in text for text in search_after_delete)
     assert all("byqa-ref://" not in text for text in search_after_delete)
     assert "(/pending/b.md)" in pending_after_restore
     assert any("(/pending/b.md)" in text for text in search_after_restore)
@@ -3249,7 +3249,7 @@ async def test_markdown_references_follow_file_and_subtree_moves_without_rebuild
         item["filePath"].endswith("new/source/path/source.md")
         for item in moved_source_search_items
     )
-    assert "(missing.md)" in moved_source_read
+    assert "(/pending-source/missing.md)" in moved_source_read
     assert "/new/source/path/missing.md" not in moved_source_read
     assert "(/pending-source/missing.md)" in moved_source_after_old_target_upload
     assert "/new/source/path/missing.md" not in moved_source_after_old_target_upload
@@ -3317,7 +3317,7 @@ async def test_markdown_reference_downloads_resolve_across_move_delete_and_resto
     assert delete_target.status_code == 200
     assert "(/download/target/b.md)" in resolved_download
     assert "(/download/moved/b.md)" in moved_download
-    assert "(../target/b.md)" in broken_download
+    assert "(/download/target/b.md)" in broken_download
     assert "(/download/moved/b.md)" in restored_download
     assert "byqa-ref://" not in resolved_download
     assert "byqa-ref://" not in moved_download
@@ -3326,18 +3326,20 @@ async def test_markdown_reference_downloads_resolve_across_move_delete_and_resto
 
 
 @pytest.mark.integration
-async def test_markdown_reference_suffix_is_preserved_once_across_read_search_download(
+async def test_markdown_reference_relations_deduplicate_while_suffixes_stay_per_occurrence(
     monkeypatch, tmp_path
 ):
-    """query/fragment suffixes should resolve once and fall back to original target."""
+    """One relation should serve repeated targets with occurrence-local suffixes."""
     settings = _kb_settings(agent_data_path=tmp_path)
     _reset_runtime(monkeypatch, settings)
     _set_document_chunking_service(monkeypatch, EchoDocumentChunkingService())
     await _set_search_service(monkeypatch, settings)
 
-    original_target = "b.md?download=1#intro"
+    original_target = "/suffix/b.md"
     resolved_target = "/suffix/b.md?download=1#intro"
+    resolved_fragment_target = "/suffix/b.md#api"
     moved_target = "/suffix/moved/b.md?download=1#intro"
+    moved_fragment_target = "/suffix/moved/b.md#api"
 
     with TestClient(main_module.app) as client:
         kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
@@ -3352,7 +3354,12 @@ async def test_markdown_reference_suffix_is_preserved_once_across_read_search_do
             client,
             kb_code=kb_code,
             file_path="/suffix/a.md",
-            file_content=(b"suffix [b](b.md?download=1#intro)\nsuffix unique alpha\n"),
+            file_content=(
+                b"suffix [b](b.md?download=1#intro)\n"
+                b"fragment [b](./b.md#api)\n"
+                b"plain [b](b.md)\n"
+                b"suffix unique alpha\n"
+            ),
         )
         resolved_read = _read_file_data(
             client, kb_code=kb_code, file_path="/suffix/a.md"
@@ -3396,16 +3403,25 @@ async def test_markdown_reference_suffix_is_preserved_once_across_read_search_do
 
     assert delete_target.status_code == 200
     assert f"({resolved_target})" in resolved_read
+    assert f"({resolved_fragment_target})" in resolved_read
+    assert "(/suffix/b.md)" in resolved_read
     assert f"({resolved_target})" in resolved_download
+    assert f"({resolved_fragment_target})" in resolved_download
     assert any(f"({resolved_target})" in text for text in resolved_search)
+    assert any(f"({resolved_fragment_target})" in text for text in resolved_search)
+    assert len(resolved_refs) == 1
     assert resolved_refs[0]["originalTarget"] == original_target
-    assert resolved_refs[0]["targetSuffix"] == "?download=1#intro"
+    assert resolved_refs[0]["targetSuffix"] == ""
     assert resolved_refs[0]["targetPath"] == "/suffix/b.md"
     assert f"({moved_target})" in moved_read
+    assert f"({moved_fragment_target})" in moved_read
     assert f"({original_target})" in broken_read
-    assert f"({original_target})" in broken_download
+    assert f"({original_target}?download=1#intro)" in broken_read
+    assert f"({original_target}#api)" in broken_read
+    assert f"({original_target}?download=1#intro)" in broken_download
     assert "?download=1#intro?download=1#intro" not in broken_read
     assert f"({moved_target})" in restored_read
+    assert f"({moved_fragment_target})" in restored_read
     assert "byqa-ref://" not in resolved_read
     assert "byqa-ref://" not in broken_read
     assert "byqa-ref://" not in restored_read
@@ -3522,7 +3538,7 @@ def test_reference_query_filters_deleted_source_and_supports_outbound_and_all(
     assert outbound["inbound"] == []
     assert outbound["outbound"][0]["sourcePath"] == "/refs-api/source.md"
     assert outbound["outbound"][0]["targetPath"] == "/refs-api/target.md"
-    assert outbound["outbound"][0]["targetSuffix"] == "#part"
+    assert outbound["outbound"][0]["targetSuffix"] == ""
     assert outbound["outbound"][1]["targetPath"] == "/refs-api/ghost.md"
     assert inbound_before_delete["inbound"][0]["sourcePath"] == "/refs-api/source.md"
     assert inbound_after_delete["inbound"] == []
@@ -3704,7 +3720,7 @@ async def test_reference_normalization_and_chunk_boundaries_do_not_leak_tokens(
             direction="outbound",
         )
 
-    assert "(./b%20file.md#intro)" in read_before_target
+    assert "(/norm/b file.md#intro)" in read_before_target
     assert "(/norm/b file.md#intro)" in read_after_target
     assert "(../../outside.md)" in read_after_target
     assert any("(/norm/b file.md#intro)" in text for text in search_after_target)
@@ -3713,8 +3729,8 @@ async def test_reference_normalization_and_chunk_boundaries_do_not_leak_tokens(
     assert outbound_refs["outbound"] == [
         {
             "sourcePath": "/norm/source.md",
-            "originalTarget": "./b%20file.md#intro",
-            "targetSuffix": "#intro",
+            "originalTarget": "/norm/b file.md",
+            "targetSuffix": "",
             "targetPath": "/norm/b file.md",
             "status": "resolved",
         }
@@ -4215,7 +4231,7 @@ def test_zip_references_and_directory_delete_update_inbound_reference_state(
     assert zip_refs == [
         {
             "sourcePath": "/zip/a.md",
-            "originalTarget": "b.md",
+            "originalTarget": "/zip/b.md",
             "targetSuffix": "",
             "targetPath": "/zip/b.md",
             "status": "resolved",
@@ -4224,17 +4240,15 @@ def test_zip_references_and_directory_delete_update_inbound_reference_state(
 
     assert before_delete_refs[0]["status"] == "resolved"
     assert delete_dir.status_code == 200
-    assert "(/delete-targets/b1.md)" not in s1_after_delete
-    assert "(../delete-targets/b1.md)" in s1_after_delete
-    assert "(/delete-targets/sub/b2.md)" not in s2_after_delete
+    assert "(/delete-targets/b1.md)" in s1_after_delete
     assert before_delete_refs[0]["targetPath"] == "/delete-targets/sub/b2.md"
-    assert "(../delete-targets/sub/b2.md)" in s2_after_delete
+    assert "(/delete-targets/sub/b2.md)" in s2_after_delete
     assert "byqa-ref://" not in s1_after_delete
     assert "byqa-ref://" not in s2_after_delete
     assert b1_broken_refs == [
         {
             "sourcePath": "/delete-sources/s1.md",
-            "originalTarget": "../delete-targets/b1.md",
+            "originalTarget": "/delete-targets/b1.md",
             "targetSuffix": "",
             "targetPath": "/delete-targets/b1.md",
             "status": "broken",
@@ -4243,7 +4257,7 @@ def test_zip_references_and_directory_delete_update_inbound_reference_state(
     assert b2_broken_refs == [
         {
             "sourcePath": "/delete-sources/s2.md",
-            "originalTarget": "../delete-targets/sub/b2.md",
+            "originalTarget": "/delete-targets/sub/b2.md",
             "targetSuffix": "",
             "targetPath": "/delete-targets/sub/b2.md",
             "status": "broken",
@@ -4991,7 +5005,7 @@ async def test_document_update_markdown_reregisters_stable_source_references_and
     assert references["outbound"] == [
         {
             "sourcePath": "/docs/source.md",
-            "originalTarget": "../assets/new-logo.png",
+            "originalTarget": "/assets/new-logo.png",
             "targetSuffix": "",
             "targetPath": "/assets/new-logo.png",
             "status": "resolved",

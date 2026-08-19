@@ -689,11 +689,15 @@ async def test_delete_build_tasks_for_fs_entry_is_targeted():
     assert cursor.executed[-1][1] == {"fs_entry_id": 81}
 
 
-async def test_delete_references_for_source_does_not_target_inbound_references():
+async def test_delete_outgoing_references_does_not_target_inbound_references():
     repo = KnowledgeFileReferenceRepository()
-    cursor = FakeCursor()
+    cursor = FakeCursor(fetchall_results=[[]])
 
-    await repo.delete_for_source_fs_entry_id(cursor, source_fs_entry_id=81)
+    await repo.delete_outgoing_for_source_fs_entry_id(
+        cursor,
+        source_fs_entry_id=81,
+        discovered_by=repo.MARKDOWN_PRODUCER,
+    )
 
     sql, params = cursor.executed[-1]
     assert "DELETE FROM knowledge_file_reference" in sql

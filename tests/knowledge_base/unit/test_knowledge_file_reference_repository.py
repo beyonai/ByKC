@@ -75,6 +75,76 @@ async def test_upsert_relation_assertion_persists_exact_evidence_and_stable_loca
     assert params["target_locator_value"] == "/KnowledgeEntity/Foo.md"
 
 
+async def test_upsert_markdown_relation_persists_one_location_free_logical_edge():
+    row = {"kid": 52, "relation_code": "MENTIONS"}
+    cursor = FakeCursor(fetchone_results=[row])
+    repo = KnowledgeFileReferenceRepository()
+
+    result = await repo.upsert_markdown_relation(
+        cursor,
+        knowledge_base_id=3,
+        source_fs_entry_id=11,
+        target_fs_entry_id=12,
+        normalized_target_path="/docs/Target.md",
+        producer_run_id="rewrite-8",
+    )
+
+    assert result == row
+    _, params = cursor.executed[0]
+    assert params["original_target"] == "/docs/Target.md"
+    assert params["target_path"] is None
+    assert params["target_suffix"] == ""
+    assert params["status"] == "resolved"
+    assert params["relation_code"] == "MENTIONS"
+    assert params["discovered_by"] == "MARKDOWN_PARSER"
+    assert params["producer_run_id"] == "rewrite-8"
+    assert len(params["evidence_fingerprint"]) == 64
+    assert params["source_heading_path"] is None
+    assert params["start_line"] is None
+    assert params["end_line"] is None
+    assert params["start_offset"] is None
+    assert params["end_offset"] is None
+    assert params["target_locator_type"] == "KB_PATH"
+    assert params["target_locator_value"] == "/docs/Target.md"
+
+
+async def test_upsert_unresolved_markdown_relation_uses_canonical_pending_path():
+    cursor = FakeCursor(fetchone_results=[{"kid": 53}])
+    repo = KnowledgeFileReferenceRepository()
+
+    await repo.upsert_markdown_relation(
+        cursor,
+        knowledge_base_id=3,
+        source_fs_entry_id=11,
+        target_fs_entry_id=None,
+        normalized_target_path="/docs/missing.md",
+        producer_run_id="rewrite-9",
+    )
+
+    _, params = cursor.executed[0]
+    assert params["original_target"] == "/docs/missing.md"
+    assert params["target_path"] == "/docs/missing.md"
+    assert params["status"] == "unresolved"
+    assert params["target_suffix"] == ""
+
+
+async def test_upsert_markdown_relation_rejects_non_absolute_target_path():
+    repo = KnowledgeFileReferenceRepository()
+    cursor = FakeCursor()
+
+    with pytest.raises(ValueError, match="absolute file path"):
+        await repo.upsert_markdown_relation(
+            cursor,
+            knowledge_base_id=3,
+            source_fs_entry_id=11,
+            target_fs_entry_id=None,
+            normalized_target_path="docs/missing.md",
+            producer_run_id="rewrite-9",
+        )
+
+    assert cursor.executed == []
+
+
 async def test_list_recent_assertions_by_target_orders_physical_insertions():
     cursor = FakeCursor(fetchall_results=[[]])
     repo = KnowledgeFileReferenceRepository()
@@ -92,32 +162,6 @@ async def test_list_recent_assertions_by_target_orders_physical_insertions():
     assert "ORDER BY kfr.created_at DESC, kfr.kid DESC" in normalized
     assert "relation_code = ANY" not in normalized
     assert params["limit"] == 3
-
-
-async def test_create_reference_is_a_mentions_assertion_adapter():
-    cursor = FakeCursor(fetchone_results=[{"kid": 21}])
-    repo = KnowledgeFileReferenceRepository()
-
-    await repo.create_reference(
-        cursor,
-        knowledge_base_id=1,
-        source_fs_entry_id=5,
-        target_fs_entry_id=None,
-        original_target="missing.md#intro",
-        target_path="/docs/missing.md",
-        target_suffix="#intro",
-        status="unresolved",
-        evidence_fingerprint="offset:8:29",
-        target_locator_type="KB_PATH",
-        target_locator_value="/docs/missing.md",
-    )
-
-    sql, params = cursor.executed[0]
-    assert "INSERT INTO knowledge_file_reference" in sql
-    assert params["relation_code"] == "MENTIONS"
-    assert params["discovered_by"] == "MARKDOWN_PARSER"
-    assert params["status"] == "unresolved"
-    assert params["target_locator_type"] == "KB_PATH"
 
 
 async def test_upsert_relation_assertion_persists_generated_entity_relation():
@@ -220,16 +264,42 @@ async def test_delete_outgoing_scopes_by_source_relation_and_producer_run():
     assert params["discovered_by_values"] == ["ENTITY_DISCOVERY"]
 
 
-async def test_legacy_source_delete_only_owns_markdown_parser_assertions():
-    cursor = FakeCursor(fetchall_results=[[]])
+async def test_delete_outgoing_for_source_ids_deletes_all_producers_in_batch():
+    deleted_rows = [
+        {"kid": 41, "source_fs_entry_id": 11},
+        {"kid": 42, "source_fs_entry_id": 12},
+    ]
+    cursor = FakeCursor(fetchall_results=[deleted_rows])
     repo = KnowledgeFileReferenceRepository()
 
-    await repo.delete_for_source_fs_entry_id(cursor, source_fs_entry_id=9)
+    result = await repo.delete_outgoing_for_source_fs_entry_ids(
+        cursor,
+        knowledge_base_id=3,
+        source_fs_entry_ids=[12, 11, 12],
+    )
 
+    assert result == deleted_rows
     sql, params = cursor.executed[0]
-    assert "reference_type" not in sql
-    assert "discovered_by = ANY(%(discovered_by_values)s)" in sql
-    assert params["discovered_by_values"] == ["MARKDOWN_PARSER"]
+    assert "source_fs_entry_id = ANY(%(source_fs_entry_ids)s)" in sql
+    assert "discovered_by" not in sql.split("RETURNING", maxsplit=1)[0]
+    assert params == {
+        "knowledge_base_id": 3,
+        "source_fs_entry_ids": [11, 12],
+    }
+
+
+async def test_delete_outgoing_for_empty_source_ids_is_noop():
+    cursor = FakeCursor()
+    repo = KnowledgeFileReferenceRepository()
+
+    result = await repo.delete_outgoing_for_source_fs_entry_ids(
+        cursor,
+        knowledge_base_id=3,
+        source_fs_entry_ids=[],
+    )
+
+    assert result == []
+    assert cursor.executed == []
 
 
 async def test_list_by_reference_ids_resolves_any_assertion_id():

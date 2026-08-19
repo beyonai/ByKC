@@ -1496,6 +1496,33 @@ def test_chunking_hard_split_keeps_markdown_link_with_stable_token_whole():
     )
 
 
+def test_chunking_hard_split_keeps_stable_link_with_inline_suffix_whole():
+    from by_qa.knowledge_build.services.document_chunking_service import _TextBlock
+
+    service = _make_service()
+    service.chunk_size = 24
+    service.chunk_overlap = 0
+
+    span = "[target](byqa-ref://12345?download=1#intro)"
+    text = "字" * 8 + span + "字" * 30
+    block = _TextBlock(
+        text=text,
+        start_char=0,
+        end_char=len(text),
+        start_line=0,
+        end_line=0,
+        kind="paragraph",
+    )
+
+    parts = service._split_block_hard(block, text, service.chunk_size)
+
+    containing = [part for part in parts if span in part.text]
+    assert len(containing) == 1
+    assert not any(
+        "[target](byqa-ref://" in part.text and span not in part.text for part in parts
+    )
+
+
 def test_chunking_hard_split_keeps_markdown_image_with_stable_token_whole():
     from by_qa.knowledge_build.services.document_chunking_service import _TextBlock
 

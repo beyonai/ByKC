@@ -3,10 +3,8 @@
 
 from __future__ import annotations
 
-import hashlib
-import re
 import uuid
-from bisect import bisect_right
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import unquote
 
@@ -19,7 +17,12 @@ from by_qa.knowledge_common.markdown_reference import (
     split_target,
 )
 
-_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$")
+
+@dataclass(frozen=True)
+class _ReferenceOccurrence:
+    target_start: int
+    target_end: int
+    suffix: str
 
 
 class MarkdownReferenceRewriter:
@@ -130,7 +133,7 @@ class MarkdownReferenceRewriter:
         spans = detect_reference_spans(text)
         if not spans:
             logger.debug(
-                "markdown references rewritten: kb_id=%s source_id=%s producer_run_id=%s parsed_count=0 persisted_count=0 resolved_count=0 pending_count=0 skipped_count=0",
+                "markdown references rewritten: kb_id=%s source_id=%s producer_run_id=%s parsed_count=0 occurrence_count=0 relation_count=0 deduplicated_occurrence_count=0 resolved_relation_count=0 pending_relation_count=0 skipped_count=0",
                 knowledge_base_id,
                 source_fs_entry_id,
                 producer_run_id,
@@ -147,7 +150,7 @@ class MarkdownReferenceRewriter:
             )
             return text
 
-        source_contexts = self._source_contexts(text)
+        occurrences_by_target: dict[str, list[_ReferenceOccurrence]] = {}
         replacements: list[tuple[int, int, str]] = []
         resolved_count = 0
         pending_count = 0
@@ -164,54 +167,47 @@ class MarkdownReferenceRewriter:
                 skipped_count += 1
                 continue
 
+            target_start, target_end = self._target_bounds(
+                text=text,
+                start=start,
+                end=end,
+                alt=alt,
+                is_image=is_image,
+            )
+            occurrences_by_target.setdefault(resolved, []).append(
+                _ReferenceOccurrence(
+                    target_start=target_start,
+                    target_end=target_end,
+                    suffix=suffix,
+                )
+            )
+
+        for normalized_target_path, occurrences in occurrences_by_target.items():
             target_file = await fs_entry_repository.get_file_reference_target_by_path(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
-                full_path=resolved,
+                full_path=normalized_target_path,
             )
             if target_file is None:
                 target_directory = await fs_entry_repository.get_directory_by_path(
                     cursor,
                     knowledge_base_id=knowledge_base_id,
-                    full_path=resolved,
+                    full_path=normalized_target_path,
                 )
                 if target_directory is not None:
-                    skipped_count += 1
+                    skipped_count += len(occurrences)
                     continue
 
-            start_line, heading_path = self._context_at_offset(
-                start, source_contexts=source_contexts
-            )
-            end_line, _ = self._context_at_offset(
-                max(start, end - 1), source_contexts=source_contexts
-            )
-            evidence_fingerprint = hashlib.sha256(
-                f"{source_fs_entry_id}:{start}:{end}:{text[start:end]}".encode("utf-8")
-            ).hexdigest()
             target_file_id = (
                 self._row_value(target_file, "kid") if target_file is not None else None
             )
-            reference = await reference_repository.upsert_relation_assertion(
+            reference = await reference_repository.upsert_markdown_relation(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
                 source_fs_entry_id=source_fs_entry_id,
                 target_fs_entry_id=target_file_id,
-                relation_code="MENTIONS",
-                original_target=target,
-                target_path=None if target_file is not None else resolved,
-                target_suffix=suffix,
-                target_kind="FILE",
-                status="resolved" if target_file is not None else "unresolved",
-                discovered_by="MARKDOWN_PARSER",
+                normalized_target_path=normalized_target_path,
                 producer_run_id=producer_run_id,
-                evidence_fingerprint=evidence_fingerprint,
-                source_heading_path=heading_path,
-                start_line=start_line,
-                end_line=end_line,
-                start_offset=start,
-                end_offset=end,
-                target_locator_type="KB_PATH",
-                target_locator_value=resolved,
             )
             reference_id = self._row_value(reference, "kid")
             if reference_id is None:
@@ -221,25 +217,25 @@ class MarkdownReferenceRewriter:
             else:
                 resolved_count += 1
 
-            target_start, target_end = self._target_bounds(
-                text=text,
-                start=start,
-                end=end,
-                alt=alt,
-                is_image=is_image,
-            )
-            replacements.append(
-                (target_start, target_end, f"byqa-ref://{reference_id}")
+            replacements.extend(
+                (
+                    occurrence.target_start,
+                    occurrence.target_end,
+                    f"byqa-ref://{reference_id}{occurrence.suffix}",
+                )
+                for occurrence in occurrences
             )
 
         rewritten = self._apply_replacements(text, replacements)
         logger.info(
-            "markdown references rewritten: kb_id=%s source_id=%s producer_run_id=%s parsed_count=%s persisted_count=%s resolved_count=%s pending_count=%s skipped_count=%s",
+            "markdown references rewritten: kb_id=%s source_id=%s producer_run_id=%s parsed_count=%s occurrence_count=%s relation_count=%s deduplicated_occurrence_count=%s resolved_relation_count=%s pending_relation_count=%s skipped_count=%s",
             knowledge_base_id,
             source_fs_entry_id,
             producer_run_id,
             len(spans),
             len(replacements),
+            resolved_count + pending_count,
+            len(replacements) - resolved_count - pending_count,
             resolved_count,
             pending_count,
             skipped_count,
@@ -279,34 +275,6 @@ class MarkdownReferenceRewriter:
                 else str(locator_value)
             )
         return str(MarkdownReferenceRewriter._row_value(row, "original_target") or "")
-
-    @staticmethod
-    def _source_contexts(text: str) -> tuple[list[int], list[str | None]]:
-        line_starts: list[int] = []
-        heading_paths: list[str | None] = []
-        headings: dict[int, str] = {}
-        offset = 0
-        for line in text.splitlines(keepends=True) or [""]:
-            line_starts.append(offset)
-            heading = _HEADING_RE.match(line.rstrip("\r\n"))
-            if heading:
-                level = len(heading.group(1))
-                headings = {
-                    key: value for key, value in headings.items() if key < level
-                }
-                headings[level] = heading.group(2).strip()
-            path = " / ".join(headings[level] for level in sorted(headings))
-            heading_paths.append(path or None)
-            offset += len(line)
-        return line_starts, heading_paths
-
-    @staticmethod
-    def _context_at_offset(
-        offset: int, *, source_contexts: tuple[list[int], list[str | None]]
-    ) -> tuple[int, str | None]:
-        line_starts, heading_paths = source_contexts
-        line_index = max(0, bisect_right(line_starts, offset) - 1)
-        return line_index + 1, heading_paths[line_index]
 
     @staticmethod
     def _is_ineligible_target(target: str) -> bool:

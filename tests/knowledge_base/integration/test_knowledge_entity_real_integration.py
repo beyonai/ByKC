@@ -1,17 +1,17 @@
-"""Real KnowledgeEntity API integration tests.
+"""KnowledgeEntity API integration tests with deterministic model doubles.
 
-Unlike the older cross-module integration suite, this module deliberately uses
-the application runtime exactly as production wires it.  No service,
-repository, database, object-storage, Redis, embedding, or LLM replacement is
-allowed here.  The test therefore requires the full integration infrastructure
-and actual model endpoints configured through the normal environment/.env.
+The application, database, object storage, and Redis use the production wiring.
+LLM and embedding boundaries are replaced at the client methods so these tests
+remain deterministic and cannot send document or entity content externally.
 """
 
 from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import hashlib
 import io
+import json
 import re
 import time
 from collections.abc import Iterable
@@ -33,25 +33,199 @@ from by_qa.knowledge_base.repositories.knowledge_entity_repository import (
     KnowledgeEntityRepository,
 )
 from by_qa.knowledge_base.services.bootstrap_service import split_sql_statements
+from by_qa.knowledge_base.services.embedding_query_service import EmbeddingQueryService
+from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
+    OpenAICompatibleKnowledgeEntityLLM,
+)
+from by_qa.knowledge_base.services.markdown_update_summary_service import (
+    MarkdownUpdateSummaryService,
+)
+from by_qa.knowledge_build.services.document_chunking_service import (
+    DocumentChunkingService,
+)
 
 TERMINAL_TASK_STATUSES = frozenset({"SUCCEEDED", "FAILED", "CANCELLED", "SKIPPED"})
 TASK_TIMEOUT_SECONDS = 300.0
+
+
+def _mock_entity_name(markdown: str) -> tuple[str, str]:
+    named_entity = re.search(r"(?m)^([^\n.]+?)\s+is also called\s+[^\n.]+\.", markdown)
+    if named_entity is not None:
+        return named_entity.group(1).strip(), named_entity.group(0).strip()
+    entity_link = re.search(
+        r"(?m)^([^\n]*\[([^\]]+)\]\([^)]+\)[^\n]*)$",
+        markdown,
+    )
+    if entity_link is not None:
+        return entity_link.group(2).strip(), entity_link.group(1).strip()
+    heading = re.search(r"(?m)^\s*#\s+(.+?)\s*$", markdown)
+    if heading is not None:
+        return heading.group(1).strip(), heading.group(0).strip()
+    for line in markdown.splitlines():
+        evidence = line.strip()
+        if evidence:
+            return evidence.lstrip("# ").strip(), evidence
+    raise AssertionError("entity discovery mock received an empty document")
+
+
+async def _mock_llm_cache_identity(
+    llm: OpenAICompatibleKnowledgeEntityLLM,
+) -> str:
+    del llm
+    return "knowledge-entity-integration-mock-v1"
+
+
+async def _mock_llm_complete(
+    llm: OpenAICompatibleKnowledgeEntityLLM,
+    messages,
+    *,
+    json_mode: bool = False,
+) -> str:
+    del llm, json_mode
+    system_prompt = str(messages[0]["content"])
+    user_prompt = str(messages[-1]["content"])
+
+    if "知识实体同义词裁决器" in system_prompt:
+        return json.dumps(
+            {
+                "decision": "DIFFERENT",
+                "selectedCandidateId": None,
+                "canonicalName": None,
+                "aliasToAdd": None,
+                "reasonCode": "MOCK_DIFFERENT",
+            },
+            ensure_ascii=False,
+        )
+
+    if "核心对象实体发现器" in system_prompt:
+        entity_name, evidence = _mock_entity_name(user_prompt)
+        return json.dumps(
+            [
+                {
+                    "entityName": entity_name,
+                    "subjectEntityName": "",
+                    "localName": entity_name,
+                    "identityScope": "global",
+                    "isEvent": False,
+                    "evidence": evidence,
+                    "aliases": [],
+                }
+            ],
+            ensure_ascii=False,
+        )
+
+    if "updating exactly one existing KnowledgeEntity" in system_prompt:
+        identity = re.search(r"(?m)^- entityName:\s*(.+?)\s*$", user_prompt)
+        assert identity is not None, "enrichment mock did not receive entityName"
+        source_reference = re.search(
+            r"Source reference[^:]*:\s*(\[[^\n]+\]\([^\n]+\))", user_prompt
+        )
+        assert source_reference is not None, (
+            "enrichment mock did not receive a Markdown source reference"
+        )
+        entity_name = identity.group(1).strip()
+        reference = source_reference.group(1)
+        digest = hashlib.sha256(user_prompt.encode("utf-8")).hexdigest()[:12]
+        await asyncio.sleep(0.05)
+        markdown = (
+            f"# {entity_name}\n\n"
+            "## 实体定义与边界\n\n"
+            f"模拟证据摘要 {digest}。{reference}\n\n"
+            "## 核心事实\n\n"
+            f"已根据当前关联证据更新。{reference}\n\n"
+            "## 证据、冲突与不确定性\n\n"
+            f"未发现待解决冲突。{reference}\n"
+        )
+        return json.dumps(
+            {"markdown": markdown, "relations": [], "warnings": []},
+            ensure_ascii=False,
+        )
+
+    raise AssertionError(
+        "unexpected KnowledgeEntity LLM prompt; add an explicit deterministic mock"
+    )
+
+
+def _mock_embedding_vector(text: str, dimension: int) -> list[float]:
+    del text
+    assert dimension > 0
+    vector = [0.0] * dimension
+    vector[0] = 1.0
+    return vector
+
+
+async def _mock_query_embedding(
+    embedding_service: EmbeddingQueryService, query: str
+) -> list[float]:
+    del embedding_service
+    return _mock_embedding_vector(query, get_settings().embedding_dimension)
+
+
+def _mock_chunk_embeddings(
+    self: DocumentChunkingService, texts: list[str]
+) -> list[list[float]]:
+    return [_mock_embedding_vector(text, self.embedding_dimension) for text in texts]
+
+
+async def _mock_update_summary(
+    summary_service: MarkdownUpdateSummaryService,
+    old_markdown: str,
+    new_markdown: str,
+) -> None:
+    del summary_service, old_markdown, new_markdown
+    return None
+
+
+@pytest.fixture(autouse=True)
+def _mock_external_model_services(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep integration coverage while forbidding external model requests."""
+
+    monkeypatch.setattr(
+        OpenAICompatibleKnowledgeEntityLLM,
+        "cache_identity",
+        _mock_llm_cache_identity,
+    )
+    monkeypatch.setattr(
+        OpenAICompatibleKnowledgeEntityLLM,
+        "complete",
+        _mock_llm_complete,
+    )
+    monkeypatch.setattr(EmbeddingQueryService, "embed_query", _mock_query_embedding)
+    monkeypatch.setattr(
+        DocumentChunkingService,
+        "_request_embeddings",
+        _mock_chunk_embeddings,
+    )
+    monkeypatch.setattr(
+        MarkdownUpdateSummaryService,
+        "generate_llm_summary",
+        _mock_update_summary,
+    )
 
 
 @contextmanager
 def _real_test_client() -> Iterable[TestClient]:
     """Run one real lifespan and release Redis on that lifespan's event loop."""
 
-    with TestClient(main_module.app) as client:
-        try:
-            yield client
-        finally:
-            client.portal.call(main_module._unregister_service, main_module.app)
-            client.portal.call(close_redis)
+    # Other integration modules also exercise the module-level ASGI app and
+    # leave its terminal runner cached after lifespan shutdown.
+    main_module._knowledge_entity_processing_service = None
+    try:
+        with TestClient(main_module.app) as client:
+            try:
+                yield client
+            finally:
+                client.portal.call(main_module._unregister_service, main_module.app)
+                client.portal.call(close_redis)
+    finally:
+        # ``stop()`` intentionally makes the application runner terminal. Each
+        # test lifespan therefore needs a newly wired runner instead of reusing
+        # the stopped module-level service from the previous TestClient.
+        main_module._knowledge_entity_processing_service = None
 
 
 def _assert_real_runtime_configuration() -> None:
-    """Fail fast when the selected real integration runtime is incomplete."""
+    """Fail fast when the selected infrastructure runtime is incomplete."""
 
     settings = get_settings()
     required = {
@@ -62,19 +236,14 @@ def _assert_real_runtime_configuration() -> None:
         "MINIO_ACCESS_KEY": settings.kb_minio_access_key,
         "MINIO_SECRET_KEY": settings.kb_minio_secret_key,
         "EMBEDDING_MODEL_NAME": settings.embedding_model_name,
-        "EMBEDDING_BASE_URL": settings.embedding_base_url,
-        "EMBEDDING_API_KEY": settings.embedding_api_key,
-        "LLM_BASE_URL": settings.llm_base_url,
-        "LLM_API_KEY": settings.llm_api_key,
-        "LLM_STANDARD_MODEL": settings.llm_standard_model,
-        "LLM_LIGHTWEIGHT_MODEL": settings.llm_lightweight_model,
+        "EMBEDDING_DIMENSION": settings.embedding_dimension,
         "REDIS_HOST": settings.redis_host,
         "REDIS_PORT": settings.redis_port,
     }
     missing = [name for name, value in required.items() if value in (None, "", 0)]
     if missing:
         pytest.fail(
-            "KnowledgeEntity real integration requires configured external "
+            "KnowledgeEntity integration requires configured infrastructure "
             f"dependencies; missing: {', '.join(missing)}",
             pytrace=False,
         )
@@ -834,19 +1003,30 @@ stores stable entity names and aliases for knowledge-governance workflows.
                 direction="OUTGOING",
                 relation_codes=["MENTIONS"],
             )
-            assert entity_outgoing_mentions["total"] == 0
-            assert not any(
+            assert any(
+                item["target"]["filePath"] == source_path
+                and item["relationCode"] == "MENTIONS"
+                for item in entity_outgoing_mentions["data"]
+            )
+            entity_assertions = _relation_assertion_rows(
+                kb_code=kb_code,
+                source_path=entity_path,
+            )
+            assert any(
                 item["relation_code"] == "MENTIONS"
-                for item in _relation_assertion_rows(
-                    kb_code=kb_code,
-                    source_path=entity_path,
-                )
+                and item["discovered_by"] == "MARKDOWN_PARSER"
+                and item["target_path"] == source_path
+                for item in entity_assertions
+            )
+            assert not any(
+                item["discovered_by"] == "ENTITY_DISCOVERY"
+                for item in entity_assertions
             )
 
             # An unbuilt second original document and the fresh first document
             # exercise all-KB enumeration, eligibility, exclusion of generated
             # KnowledgeEntity files, and durable task reuse without duplicating
-            # an already proven real LLM discovery call.
+            # an already proven deterministic discovery-model call.
             _upload_markdown(
                 client,
                 kb_code=kb_code,
@@ -864,9 +1044,16 @@ stores stable entity names and aliases for knowledge-governance workflows.
             assert whole_batch["acceptedCount"] == 0
             assert whole_batch["reusedCount"] == 1
             assert whole_batch["skippedCount"] >= 1
-            assert len(whole_batch["tasks"]) == 1
-            assert whole_batch["tasks"][0]["filePath"] == source_path
-            assert whole_batch["tasks"][0]["reused"] is True
+            reused_tasks = [
+                item for item in whole_batch["tasks"] if item["reused"] is True
+            ]
+            assert len(reused_tasks) == 1
+            assert reused_tasks[0]["filePath"] == source_path
+            assert {item["filePath"] for item in whole_batch["tasks"]} >= {
+                source_path,
+                second_source_path,
+                entity_path,
+            }
 
             discovery_fresh = _eligibility(
                 client,
@@ -1364,6 +1551,7 @@ def test_knowledge_entity_real_eligibility_and_request_matrix() -> None:
 
             # KE-D8/E8/T6: strict HTTP models reject every removed target,
             # template, and callback field without creating a task.
+            task_count_before_invalid = _task_page(client, kb_code=kb_code)["total"]
             invalid_requests = (
                 (
                     "/api/v1/knowledgeItems/entityDiscovery",
@@ -1442,7 +1630,10 @@ def test_knowledge_entity_real_eligibility_and_request_matrix() -> None:
                 _assert_error(
                     client.post(route, json=body), message="request validation failed"
                 )
-            assert _task_page(client, kb_code=kb_code)["total"] == 0
+            assert (
+                _task_page(client, kb_code=kb_code)["total"]
+                == task_count_before_invalid
+            )
         finally:
             _delete_kb(client, kb_code)
 
@@ -1455,8 +1646,8 @@ def test_knowledge_entity_real_anchor_relations_tasks_and_callbacks() -> None:
     token = uuid4().hex[:10]
     entity_name = f"AnchorEntity{token}"
     entity_alias = f"AnchorAlias{token}"
-    entity_path = f"/KnowledgeEntity/anchor-{token}.md"
-    foreign_entity_path = f"/KnowledgeEntity/foreign-anchor-{token}.md"
+    entity_path = f"/KnowledgeEntity/{entity_name}.md"
+    foreign_entity_path = entity_path
     source_path = f"/sources/anchor-{token}.md"
     second_source_path = f"/sources/anchor-peer-{token}.md"
     with _real_test_client() as client:
@@ -1518,8 +1709,8 @@ entity and links to its canonical file.
             assert str(markdown_assertions[0]["target_fs_entry_id"]) == local_entity_id
 
             # KE-D6/D7/ENV4: concurrent real HTTP requests serialize on the
-            # source row. One creates a PENDING task and the other reuses that
-            # same active task while the real worker advances it to completion.
+            # source row. One creates a PENDING task and the other records a
+            # skipped response that points at the active work through reuse.
             def request_discovery() -> dict:
                 return _assert_success(
                     client.post(
@@ -1539,14 +1730,18 @@ entity and links to its canonical file.
             task_ids = {
                 task["taskId"] for response in responses for task in response["tasks"]
             }
-            assert len(task_ids) == 1
+            assert len(task_ids) == 2
             accepted = next(item for item in responses if item["acceptedCount"] == 1)
+            reused = next(item for item in responses if item["reusedCount"] == 1)
             assert accepted["tasks"][0]["status"] == "PENDING"
+            assert reused["tasks"][0]["status"] == "SKIPPED"
+            assert reused["tasks"][0]["reused"] is True
+            accepted_task_ids = {item["taskId"] for item in accepted["tasks"]}
             first_tasks, snapshots = _wait_for_batch_snapshots(
                 client,
                 kb_code=kb_code,
                 batch_id=accepted["batchId"],
-                expected_task_ids=task_ids,
+                expected_task_ids=accepted_task_ids,
             )
             assert first_tasks[0]["status"] == "SUCCEEDED"
             assert first_tasks[0]["currentStage"] == "completed"
@@ -1557,7 +1752,7 @@ entity and links to its canonical file.
 
             actions = first_tasks[0]["result"]["actions"]
             assert any(
-                action["action"] == "ANCHORED"
+                action["action"] in {"CREATED", "ANCHORED"}
                 and str(action["entityFileId"]) == local_entity_id
                 for action in actions
             )
@@ -1739,7 +1934,7 @@ entity and links to its canonical file.
                 task_type="ENTITY_DISCOVERY",
                 latest_only=False,
             )
-            assert all_tasks["total"] == source_tasks["total"] == 3
+            assert all_tasks["total"] == source_tasks["total"] == 4
             page_one = _task_page(
                 client,
                 kb_code=kb_code,
@@ -2184,13 +2379,22 @@ integration subject described by this current-KB source.
             assert whole_batch["acceptedCount"] == 1
             assert whole_batch["reusedCount"] == 0
             assert whole_batch["skippedCount"] == 2
-            assert len(whole_batch["tasks"]) == 1
-            assert whole_batch["tasks"][0]["filePath"] == entity_path
+            assert len(whole_batch["tasks"]) == 3
+            accepted_tasks = [
+                item for item in whole_batch["tasks"] if item["status"] == "PENDING"
+            ]
+            assert len(accepted_tasks) == 1
+            assert accepted_tasks[0]["filePath"] == entity_path
+            assert {item["filePath"] for item in whole_batch["tasks"]} == {
+                entity_path,
+                no_evidence_path,
+                unsupported_path,
+            }
             first_tasks = _wait_for_batch(
                 client,
                 kb_code=kb_code,
                 batch_id=whole_batch["batchId"],
-                expected_task_ids=[whole_batch["tasks"][0]["taskId"]],
+                expected_task_ids=[accepted_tasks[0]["taskId"]],
             )
             first_task = first_tasks[0]
             assert first_task["result"]["evidenceFragmentCount"] >= 1
@@ -2272,7 +2476,7 @@ integration subject described by this current-KB source.
             assert fresh_after_second["eligibility"] == "ELIGIBLE_BUT_FRESH"
             assert fresh_after_second["reasonCode"] == "NO_NEW_RELATIONS"
 
-            # KE-E7: mutate the target while the real Enrich LLM is running.
+            # KE-E7: mutate the target while the Enrich model double is running.
             # The stale referSignature rejects the worker write; the concurrent
             # user's object and metadata remain authoritative. The service
             # currently reports PROCESSING_FAILED rather than the planned

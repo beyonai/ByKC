@@ -1223,13 +1223,13 @@ async def test_metadata_is_deactivated_with_file_directory_and_kb_deletion(monke
             file_path="/file.md",
             file_content=b"---\nstatus: active\n---\n# File\n",
         )
-        assert await _metadata_row_counts(settings, kb_code=file_kb) == (1, 0)
+        assert await _metadata_row_counts(settings, kb_code=file_kb) == (2, 0)
         file_delete = client.post(
             "/api/v1/knowledgeItems/delete",
             json={"knCode": file_kb, "filePath": "/file.md"},
         )
         assert file_delete.json()["resultCode"] == "0"
-        assert await _metadata_row_counts(settings, kb_code=file_kb) == (0, 1)
+        assert await _metadata_row_counts(settings, kb_code=file_kb) == (0, 2)
 
         directory_kb = _create_kb(
             client, f"Metadata directory delete {uuid4().hex[:12]}"
@@ -1242,13 +1242,13 @@ async def test_metadata_is_deactivated_with_file_directory_and_kb_deletion(monke
                 file_path=f"/docs/{name}",
                 file_content=f"---\nowner: {name}\n---\n# Doc\n".encode(),
             )
-        assert await _metadata_row_counts(settings, kb_code=directory_kb) == (2, 0)
+        assert await _metadata_row_counts(settings, kb_code=directory_kb) == (4, 0)
         directory_delete = client.post(
             "/api/v1/directories/delete",
             json={"knCode": directory_kb, "directoryPath": "/docs"},
         )
         assert directory_delete.json()["resultCode"] == "0"
-        assert await _metadata_row_counts(settings, kb_code=directory_kb) == (0, 2)
+        assert await _metadata_row_counts(settings, kb_code=directory_kb) == (0, 4)
 
         deleted_kb = _create_kb(client, f"Metadata KB delete {uuid4().hex[:12]}")
         _upload_file(
@@ -1257,13 +1257,13 @@ async def test_metadata_is_deactivated_with_file_directory_and_kb_deletion(monke
             file_path="/kb.md",
             file_content=b"---\ncategory: policy\n---\n# KB\n",
         )
-        assert await _metadata_row_counts(settings, kb_code=deleted_kb) == (1, 0)
+        assert await _metadata_row_counts(settings, kb_code=deleted_kb) == (2, 0)
         kb_delete = client.post(
             "/api/v1/knowledgeBases/delete",
             json={"knCode": deleted_kb},
         )
         assert kb_delete.json()["resultCode"] == "0"
-        assert await _metadata_row_counts(settings, kb_code=deleted_kb) == (0, 1)
+        assert await _metadata_row_counts(settings, kb_code=deleted_kb) == (0, 2)
 
 
 @pytest.mark.integration
@@ -2510,7 +2510,9 @@ def test_download_file_returns_original_bytes_with_non_ascii_filename(
         )
 
     assert response.status_code == 200
-    assert response.content == original_content.encode("utf-8")
+    downloaded_metadata, downloaded_body = split_front_matter(response.content)
+    assert downloaded_metadata == {"documentKind": "original"}
+    assert downloaded_body == original_content.encode("utf-8")
     assert response.headers["content-type"].startswith("text/markdown")
     assert (
         response.headers["content-disposition"]
@@ -4649,7 +4651,9 @@ def test_import_zip_auto_creates_nested_directories(monkeypatch, tmp_path):
     ][0]
     assert item["success"] is True
     assert download.status_code == 200
-    assert download.content == body
+    downloaded_metadata, downloaded_body = split_front_matter(download.content)
+    assert downloaded_metadata == {"documentKind": "original"}
+    assert downloaded_body == body
 
 
 @pytest.mark.integration
@@ -4826,11 +4830,8 @@ def test_import_zip_rewrites_references_when_target_exists(monkeypatch, tmp_path
 
 
 @pytest.mark.integration
-def test_import_zip_leaves_references_unchanged_when_unresolvable(
-    monkeypatch, tmp_path
-):
-    """References that cannot be resolved are left unchanged: missing target, external URL,
-    anchor-only link, and a `..` path escaping the KB root."""
+def test_import_zip_normalizes_unresolved_internal_references(monkeypatch, tmp_path):
+    """Missing internal targets are normalized while skipped references stay unchanged."""
     import io
     import zipfile
 
@@ -4863,8 +4864,14 @@ def test_import_zip_leaves_references_unchanged_when_unresolvable(
 
     assert resp.status_code == 200
     assert all(d["success"] for d in resp.json()["resultObject"]["data"])
-    # every reference is left exactly as written
-    assert download.content == doc
+    downloaded_metadata, downloaded_body = split_front_matter(download.content)
+    assert downloaded_metadata == {"documentKind": "original"}
+    assert downloaded_body == (
+        b"![miss](/t/missing.png)\n"
+        b"![ext](https://host/x.png)\n"
+        b"[anchor](#section)\n"
+        b"![esc](../../../x.png)\n"
+    )
 
 
 @pytest.mark.integration
@@ -4927,7 +4934,11 @@ async def test_document_update_markdown_replaces_content_and_invalidates_derived
     assert response.status_code == 200
     assert response.json()["resultCode"] == "0"
     downloaded_metadata, downloaded_body = split_front_matter(raw_bytes)
-    assert downloaded_metadata == {"title": "After", "owner": "Platform"}
+    assert downloaded_metadata == {
+        "title": "After",
+        "owner": "Platform",
+        "documentKind": "original",
+    }
     assert downloaded_body == b"# After\nnew-only-token\n"
     assert build_status.json()["resultCode"] == "-1"
     assert "build task not found" in build_status.json()["resultMsg"]
@@ -5405,10 +5416,11 @@ async def test_refer_signature_success_stale_rejection_and_exact_metadata_filter
         )
         assert new_metadata["fileSignature"]["value"] != old_signature
         assert new_metadata["updatedAt"]["value"] >= old_metadata["updatedAt"]["value"]
-        assert (
+        downloaded_metadata, downloaded_body = split_front_matter(
             _download_file_bytes(client, kb_code=kb_code, file_path="/docs/a.md")
-            == b"# New\n"
         )
+        assert downloaded_metadata == {"documentKind": "original"}
+        assert downloaded_body == b"# New\n"
 
         stale_update = client.post(
             "/api/v1/knowledgeItems/update",
@@ -5420,10 +5432,11 @@ async def test_refer_signature_success_stale_rejection_and_exact_metadata_filter
             files={"fileContent": ("a.md", b"# Stale\n", "text/markdown")},
         )
         assert stale_update.json()["resultCode"] == "-1"
-        assert (
+        downloaded_metadata, downloaded_body = split_front_matter(
             _download_file_bytes(client, kb_code=kb_code, file_path="/docs/a.md")
-            == b"# New\n"
         )
+        assert downloaded_metadata == {"documentKind": "original"}
+        assert downloaded_body == b"# New\n"
         assert (
             _get_file_metadata(
                 client,

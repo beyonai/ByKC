@@ -632,6 +632,7 @@ async def test_real_enrich_worker_model_failure_keeps_minio_and_db_unchanged(
         knowledge_item_search_service=search,
         knowledge_entity_discovery=object(),
         knowledge_entity_enricher=enrichment_model,
+        knowledge_entity_asset_service=object(),
     )
 
     with pytest.raises(RuntimeError, match="deterministic enrichment model failure"):

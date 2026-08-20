@@ -25,10 +25,7 @@ from by_qa.knowledge_base.build_status import (
     BUILD_STEP_VECTORIZING,
 )
 from by_qa.knowledge_base.infrastructure.storage import StorageLocation
-from by_qa.knowledge_base.metadata_types import (
-    infer_metadata_value_type,
-    normalize_metadata_value,
-)
+from by_qa.knowledge_base.metadata_types import prepare_front_matter_metadata_value
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
 from by_qa.knowledge_base.services.knowledge_document_metadata import (
     ensure_document_kind_metadata,
@@ -552,14 +549,14 @@ class KnowledgeItemIngestionService:
             return
 
         for field_name, value in front_matter.items():
-            value_type = infer_metadata_value_type(value)
+            value_type, normalized_value = prepare_front_matter_metadata_value(value)
             await self.file_metadata_value_repository.upsert_value(
                 cursor,
                 fs_entry_id=fs_entry_id,
                 knowledge_base_id=knowledge_base_id,
                 property_name=str(field_name),
                 value_type=value_type,
-                value=normalize_metadata_value(value, value_type),
+                value=normalized_value,
             )
 
     async def file_to_markdown_index(

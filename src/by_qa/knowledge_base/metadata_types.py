@@ -7,6 +7,7 @@ sync.
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Final
@@ -28,6 +29,12 @@ VALUE_TYPE_TO_COLUMN: Final[dict[str, str]] = {
     "boolean": "value_boolean",
     "datetime": "value_datetime",
 }
+
+_ISO_DATE_RE: Final[re.Pattern[str]] = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_ISO_DATETIME_RE: Final[re.Pattern[str]] = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}"
+    r"(?::\d{2}(?:\.\d+)?)?(?:[Zz]|[+-]\d{2}:\d{2})?$"
+)
 
 
 # Reserved system fields surfaced through the metadata DSL. These are
@@ -133,3 +140,28 @@ def normalize_metadata_value(value: Any, value_type: str) -> Any:
     if value_type == "string" and not isinstance(value, str):
         return str(value)
     return value
+
+
+def prepare_front_matter_metadata_value(value: Any) -> tuple[str, Any]:
+    """Infer and normalize a YAML value, including quoted ISO timestamps."""
+    parsed_datetime = (
+        _parse_iso_datetime_string(value) if isinstance(value, str) else None
+    )
+    if parsed_datetime is not None:
+        return "datetime", parsed_datetime
+
+    value_type = infer_metadata_value_type(value)
+    return value_type, normalize_metadata_value(value, value_type)
+
+
+def _parse_iso_datetime_string(value: str) -> date | datetime | None:
+    """Parse strict ISO date/time strings without coercing date-like free text."""
+    try:
+        if _ISO_DATE_RE.fullmatch(value):
+            return date.fromisoformat(value)
+        if _ISO_DATETIME_RE.fullmatch(value):
+            normalized = value[:-1] + "+00:00" if value.endswith(("Z", "z")) else value
+            return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    return None

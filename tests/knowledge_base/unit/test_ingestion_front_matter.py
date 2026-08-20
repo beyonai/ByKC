@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime, timezone
+
+import pytest
+
+from by_qa.knowledge_base.metadata_types import prepare_front_matter_metadata_value
+from by_qa.knowledge_base.services.knowledge_item_ingestion_service import (
+    KnowledgeItemIngestionService,
+)
 from by_qa.knowledge_base.services.markdown_front_matter import (
     parse_front_matter,
     split_front_matter,
@@ -48,3 +56,75 @@ def test_split_front_matter_preserves_invalid_yaml_content():
 
     assert metadata == {}
     assert body == content
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("2026-08-18", date(2026, 8, 18)),
+        (
+            "2026-08-18T10:30:00+08:00",
+            datetime.fromisoformat("2026-08-18T10:30:00+08:00"),
+        ),
+        (
+            "2026-08-18T02:30:00Z",
+            datetime(2026, 8, 18, 2, 30, tzinfo=timezone.utc),
+        ),
+    ],
+)
+def test_prepare_front_matter_metadata_value_coerces_quoted_iso_datetime(
+    value, expected
+):
+    assert prepare_front_matter_metadata_value(value) == ("datetime", expected)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2026-02-30",
+        "2026-08-18 draft",
+        " 2026-08-18 ",
+        "v2026-08-18",
+    ],
+)
+def test_prepare_front_matter_metadata_value_preserves_date_like_strings(value):
+    assert prepare_front_matter_metadata_value(value) == ("string", value)
+
+
+@pytest.mark.asyncio
+async def test_ingestion_stores_quoted_iso_date_as_datetime_metadata():
+    class MetadataRepository:
+        def __init__(self):
+            self.calls = []
+
+        async def upsert_value(self, cursor, **kwargs):
+            self.calls.append(kwargs)
+
+    repository = MetadataRepository()
+    service = object.__new__(KnowledgeItemIngestionService)
+    service.file_metadata_value_repository = repository
+
+    await service._apply_front_matter_metadata(
+        object(),
+        fs_entry_id=11,
+        knowledge_base_id=7,
+        file_path="article.md",
+        content=b'---\ntitle: "AI systems"\npublished_date: "2026-08-18"\n---\n',
+    )
+
+    assert repository.calls == [
+        {
+            "fs_entry_id": 11,
+            "knowledge_base_id": 7,
+            "property_name": "title",
+            "value_type": "string",
+            "value": "AI systems",
+        },
+        {
+            "fs_entry_id": 11,
+            "knowledge_base_id": 7,
+            "property_name": "published_date",
+            "value_type": "datetime",
+            "value": date(2026, 8, 18),
+        },
+    ]

@@ -43,14 +43,13 @@ from by_qa.knowledge_base.api.knowledge_entity_schemas import (
     SemanticRelationPage,
     SemanticRelationsRequest,
 )
-from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
-from by_qa.knowledge_base.services.knowledge_entity_callback import (
-    BatchCompletedCallbackInput,
-    KnowledgeEntityCallbackInvoker,
-    build_batch_progress,
-    invoke_terminal_callbacks,
-    json_mapping,
+from by_qa.knowledge_base.events import (
+    KnowledgeEventPublisherInvoker,
+    build_semantic_empty_batch_event,
+    build_semantic_terminal_events,
+    normalize_json_mapping,
 )
+from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
 
 DISCOVERY_METHOD_VERSION = "discovery/1.3"
 ENRICH_METHOD_VERSION = "enrich/1.0"
@@ -153,8 +152,8 @@ class KnowledgeEntityProcessingOrchestrator:
     knowledge_semantic_processing_batch_repository: Any
     knowledge_file_reference_repository: Any
     worker: Any
-    callback_invoker: KnowledgeEntityCallbackInvoker = field(
-        default_factory=KnowledgeEntityCallbackInvoker
+    event_publisher_invoker: KnowledgeEventPublisherInvoker = field(
+        default_factory=KnowledgeEventPublisherInvoker
     )
     background_runner: Any | None = None
     knowledge_entity_asset_service: Any | None = None
@@ -350,7 +349,6 @@ class KnowledgeEntityProcessingOrchestrator:
                 progress=(
                     100 if total_count == 0 else completed_count * 100 // total_count
                 ),
-                extra_params=json_mapping(batch.get("extra_params")) or {},
                 created_at=batch["created_at"],
                 completed_at=batch.get("completed_at"),
                 page_num=request.page_num,
@@ -544,14 +542,11 @@ class KnowledgeEntityProcessingOrchestrator:
                     task_type=task_type.value,
                     scope=scope.value,
                     total_count=len(files),
-                    extra_params=request.extra_params,
                 )
             )
             if batch is None:
                 raise RuntimeError("failed to create semantic processing batch")
-            params = request.model_dump(
-                mode="json", by_alias=True, exclude={"extra_params"}
-            )
+            params = request.model_dump(mode="json", by_alias=True)
             for file_row in files:
                 file_id = self._row_id(file_row)
                 file_path = str(file_row["file_path"])
@@ -646,7 +641,6 @@ class KnowledgeEntityProcessingOrchestrator:
                         evaluation.method_version if evaluation is not None else None
                     ),
                     request_params=params,
-                    extra_params=request.extra_params,
                     result_payload=result_payload,
                 )
                 if created is None:
@@ -715,19 +709,15 @@ class KnowledgeEntityProcessingOrchestrator:
             (time.perf_counter() - acceptance_started_at) * 1000,
         )
         for task, terminal_batch, counts in terminal_callbacks:
-            await invoke_terminal_callbacks(
-                self.callback_invoker, task, terminal_batch, counts
+            await self.event_publisher_invoker.publish_all(
+                build_semantic_terminal_events(task, terminal_batch, counts)
             )
         if not files:
-            await self.callback_invoker.batch_completed(
-                BatchCompletedCallbackInput(
-                    batch_id=batch_id,
-                    task_type=task_type,
-                    knowledge_base_id=str(knowledge_base_id),
+            await self.event_publisher_invoker.publish(
+                build_semantic_empty_batch_event(
+                    batch=batch,
+                    task_type=task_type.value,
                     kb_code=request.kb_code,
-                    progress=build_batch_progress(batch, {}),
-                    extra_params=request.extra_params,
-                    completed_at=batch.get("completed_at"),
                 )
             )
         return ProcessingBatchAccepted(
@@ -1117,10 +1107,11 @@ class KnowledgeEntityProcessingOrchestrator:
             started_at=row.get("started_at"),
             finished_at=row.get("finished_at"),
             result=(
-                json_mapping(row.get("result_payload")) if include_details else None
+                normalize_json_mapping(row.get("result_payload"))
+                if include_details
+                else None
             ),
             error=error,
-            extra_params=json_mapping(row.get("extra_params")) or {},
         )
 
     def _task_summary(

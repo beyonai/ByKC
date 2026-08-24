@@ -126,16 +126,31 @@ async def _mock_llm_complete(
         entity_name = identity.group(1).strip()
         reference = source_reference.group(1)
         digest = hashlib.sha256(user_prompt.encode("utf-8")).hexdigest()[:12]
-        await asyncio.sleep(0.05)
-        markdown = (
-            f"# {entity_name}\n\n"
-            "## 实体定义与边界\n\n"
-            f"模拟证据摘要 {digest}。{reference}\n\n"
-            "## 核心事实\n\n"
-            f"已根据当前关联证据更新。{reference}\n\n"
-            "## 证据、冲突与不确定性\n\n"
-            f"未发现待解决冲突。{reference}\n"
+        existing = re.search(
+            r"Existing Markdown .*?:\n(.*?)\n\nSoft template guidance",
+            user_prompt,
+            flags=re.DOTALL,
         )
+        assert existing is not None, "enrichment mock did not receive existing Markdown"
+        existing_markdown = re.sub(
+            r"\A---[ \t]*\n.*?\n---[ \t]*(?:\n|\Z)",
+            "",
+            existing.group(1).strip(),
+            count=1,
+            flags=re.DOTALL,
+        ).strip()
+        update_section = (
+            f"## 集成测试更新\n\n已根据当前关联证据更新 {digest}。{reference}"
+        )
+        existing_markdown = re.sub(
+            r"(?ms)^## 集成测试更新\s*$.*?(?=^#{1,2}\s|\Z)",
+            "",
+            existing_markdown,
+        ).rstrip()
+        await asyncio.sleep(0.05)
+        markdown = f"{existing_markdown}\n\n{update_section}\n"
+        if not markdown.lstrip().startswith(f"# {entity_name}"):
+            markdown = f"# {entity_name}\n\n{markdown}"
         return json.dumps(
             {"markdown": markdown, "relations": [], "warnings": []},
             ensure_ascii=False,
@@ -1145,7 +1160,6 @@ stores stable entity names and aliases for knowledge-governance workflows.
             assert "templateCoverage" in enrich_tasks[0]["result"]
             assert "missingSections" in enrich_tasks[0]["result"]
             assert "warnings" in enrich_tasks[0]["result"]
-
             enriched_metadata = _metadata(
                 client,
                 kb_code=kb_code,
@@ -1825,21 +1839,17 @@ entity and links to its canonical file.
             # KE-T4: use the same application-scoped real service as an SDK
             # caller. The configured Protocol receives only committed file and
             # batch terminal events; status is then verified through HTTP.
-            file_events: list[Any] = []
-            batch_events: list[Any] = []
+            published_events: list[Any] = []
 
-            class CapturingCallback:
-                async def on_file_completed(self, event: Any) -> None:
-                    file_events.append(event)
+            class CapturingPublisher:
+                async def publish(self, event: Any) -> None:
+                    published_events.append(event)
 
-                async def on_batch_completed(self, event: Any) -> None:
-                    batch_events.append(event)
-
-            async def sdk_discovery(callback_provider) -> Any:
+            async def sdk_discovery(event_publisher) -> Any:
                 service = (
                     await main_module.resolve_knowledge_entity_processing_service()
                 )
-                service.callback_invoker.callback = callback_provider
+                service.event_publisher_invoker.publisher = event_publisher
                 return await service.discover_knowledge_entities(
                     EntityDiscoveryRequest(
                         knCode=kb_code,
@@ -1849,7 +1859,7 @@ entity and links to its canonical file.
                     ),
                 )
 
-            callback_batch = client.portal.call(sdk_discovery, CapturingCallback())
+            callback_batch = client.portal.call(sdk_discovery, CapturingPublisher())
             assert callback_batch.accepted_count == 1
             callback_task_id = callback_batch.tasks[0].task_id
             callback_tasks = _wait_for_batch(
@@ -1860,16 +1870,22 @@ entity and links to its canonical file.
             )
             assert callback_tasks[0]["status"] == "SUCCEEDED"
             callback_events = [
-                event for event in file_events if event.task_id == callback_task_id
+                event
+                for event in published_events
+                if event.event_type == "semantic.discovery.file.completed"
+                and event.payload.task_id == callback_task_id
             ]
             assert len(callback_events) == 1
-            assert callback_events[0].status.value == "SUCCEEDED"
-            assert callback_events[0].progress.completed_count == 1
+            assert callback_events[0].payload.status == "SUCCEEDED"
+            assert callback_events[0].payload.progress.completed_count == 1
             assert all(
-                event.batch_id == callback_batch.batch_id for event in callback_events
+                event.payload.batch_id == callback_batch.batch_id
+                for event in callback_events
             )
             assert any(
-                event.batch_id == callback_batch.batch_id for event in batch_events
+                event.event_type == "semantic.discovery.batch.completed"
+                and event.payload.batch_id == callback_batch.batch_id
+                for event in published_events
             )
 
             # KE-R2: force creates a new producer run but replaces the old
@@ -1897,17 +1913,13 @@ entity and links to its canonical file.
             assert after_force_relation["assertionCount"] == 2
 
             # KE-T5: callback failure is isolated from the task transaction.
-            class RaisingCallback:
-                async def on_file_completed(self, event: Any) -> None:
-                    del event
-                    raise RuntimeError("intentional integration callback failure")
-
-                async def on_batch_completed(self, event: Any) -> None:
+            class RaisingPublisher:
+                async def publish(self, event: Any) -> None:
                     del event
                     raise RuntimeError("intentional integration callback failure")
 
             failing_callback_batch = client.portal.call(
-                sdk_discovery, RaisingCallback()
+                sdk_discovery, RaisingPublisher()
             )
             failing_callback_tasks = _wait_for_batch(
                 client,
@@ -2402,6 +2414,9 @@ integration subject described by this current-KB source.
                 client, kb_code=kb_code, file_path=entity_path
             )
             assert first_markdown.strip()
+            assert (
+                f"{entity_name} is a stable integration-test entity." in first_markdown
+            )
             assert foreign_marker not in first_markdown
             first_timeline = _latest_timeline(kb_code=kb_code, file_path=entity_path)
             assert first_timeline is not None
@@ -2452,6 +2467,13 @@ integration subject described by this current-KB source.
             )
             second_task = second_tasks[0]
             assert second_task["taskId"] != first_task["taskId"]
+            second_markdown = _read_markdown(
+                client, kb_code=kb_code, file_path=entity_path
+            )
+            assert (
+                f"{entity_name} is a stable integration-test entity." in second_markdown
+            )
+            assert "## 集成测试更新" in second_markdown
             second_timeline = _latest_timeline(kb_code=kb_code, file_path=entity_path)
             assert second_timeline is not None
             assert int(second_timeline["kid"]) > int(first_timeline["kid"])

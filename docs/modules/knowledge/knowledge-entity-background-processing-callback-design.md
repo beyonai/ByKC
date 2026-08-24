@@ -1,5 +1,7 @@
 # KnowledgeEntity 后台处理与 Callback 简化设计
 
+> 状态说明：Discovery/Enrich 已一次性切换到 [文件与目录同步变更统一事件通知设计](./resource-mutation-background-callback-design.md) 定义的 `KnowledgeEventPublisher`。请求、状态响应和事件都不再包含 `extraParams`；现有数据库 `extra_params` 列仅作为历史表结构保留，新数据使用默认空值且运行时不读取。
+
 ## 1. 文档目标
 
 本文档定义 KnowledgeEntity Discovery 和 Enrich 的最小后台运行、批次进度和 Callback 方案。
@@ -10,9 +12,8 @@
 - 后台 runner 可以由多个进程或多个实例并发运行；
 - 以单个文件为任务粒度，单文件失败不影响同批其他文件；
 - 可以查询批次总体进度和每个文件的最终状态；
-- 每个文件进入终态时调用一次文件完成 Callback Protocol；
-- 批次全部文件进入终态时调用一次批次完成 Callback Protocol；
-- 发起方可以提供 `extraParams`，服务不解释其内容，原样透传到 Callback；
+- 每个文件进入终态时发布一次文件完成事件；
+- 批次全部文件进入终态时发布一次批次完成事件；
 - Discovery 和 Enrich 失败后不自动恢复、不自动重试；
 - 在满足上述需求的前提下尽量减少数据表和状态数量。
 
@@ -39,9 +40,9 @@ KnowledgeEntity 定义和业务处理方法仍以以下文档为准：
 
 每个批次中的每个候选文件都对应一条任务记录。需要处理的文件从 `pending` 开始，不需要处理的文件直接创建为 `skipped`。因此任务表本身同时承担文件进度明细，不再需要 BatchItem。
 
-### 2.2 核心只定义 Callback Protocol
+### 2.2 核心只定义统一 Publisher Protocol
 
-任务或批次终态事务提交后，处理进程调用注入的 Callback Protocol 实现。
+任务或批次终态事务提交后，处理进程调用注入的 `KnowledgeEventPublisher`。
 
 核心模块只规定：
 
@@ -105,7 +106,7 @@ LLM 客户端内部对单次无效输出所做的有界格式修正，属于一�
 - `request_params` 是 worker 的执行输入，不能直接等同于下游透传参数；
 - 当前一个活动任务可能被后续请求复用，但该任务只保存一个 `batch_id`，不适合文件级批次 Callback。
 
-目标设计将请求内调度替换为数据库抢占式 runner，并把临时 Python callable 收敛为可注入、类型明确的 Callback Protocol。
+目标设计将请求内调度替换为数据库抢占式 runner，并把临时 Python callable 收敛为可注入、类型明确的统一 Publisher Protocol。
 
 ## 4. 总体架构
 
@@ -119,7 +120,7 @@ flowchart LR
     Runner1 --> Worker["单文件 Worker"]
     Runner2 --> Worker
     Worker --> Storage["文档 / 关系 / 索引"]
-    Worker --> Invoker["Callback Protocol 调用器"]
+    Worker --> Invoker["统一 Event Publisher 调用器"]
     Reaper --> Invoker
     Invoker --> Impl["Callback 实现"]
     Impl --> Target["HTTP / MQ / 其他目标"]
@@ -133,11 +134,11 @@ flowchart LR
 - Background Runner：抢占 `pending` 任务并有界并发执行；
 - 单文件 Worker：执行 Discovery 或 Enrich；
 - Lease Reaper：将失去 worker 的 `running` 任务终止为 `failed`；
-- Callback Protocol 调用器：终态提交后调用注入实现，并隔离实现异常；
+- Event Publisher 调用器：终态提交后调用注入实现，并隔离实现异常；
 - Callback 实现：自行决定 HTTP、MQ、持久化、重试和认证等细节；
 - 状态查询：从数据库返回权威批次进度和文件结果。
 
-Runner、Reaper 和 Callback Protocol 调用器可以先随知识库服务进程启动，不要求第一版拆成独立部署单元。
+Runner、Reaper 和 Event Publisher 调用器可以随知识库服务进程启动，不要求拆成独立部署单元。
 
 ## 5. 简化后的数据模型
 
@@ -165,7 +166,7 @@ Runner、Reaper 和 Callback Protocol 调用器可以先随知识库服务进程
 | `total_count` | `integer` | NOT NULL | 本批次任务行总数，包括 `skipped` |
 | `completed_count` | `integer` | NOT NULL DEFAULT 0 | 已进入终态的任务数 |
 | `version` | `bigint` | NOT NULL DEFAULT 0 | 每个文件进入终态时递增，用于处理 Callback 乱序 |
-| `extra_params` | `jsonb` | NOT NULL DEFAULT '{}' | 批次 Callback 的发起方透传参数 |
+| `extra_params` | `jsonb` | NOT NULL DEFAULT '{}' | 历史保留列；新请求固定为空，不读取、不返回 |
 | `created_at` | `timestamptz` | NOT NULL | 创建时间 |
 | `completed_at` | `timestamptz` | NULL | 批次完成时间 |
 | `updated_at` | `timestamptz` | NOT NULL | 更新时间 |
@@ -203,7 +204,7 @@ status = completed => completed_count = total_count
 | `batch_id` | `varchar(64)` | FK NOT NULL | 一条任务只属于一个批次 |
 | `fs_entry_id` | `bigint` | FK NULL | 稳定文件身份；文件删除后保留任务记录 |
 | `file_path_snapshot` | `text` | NOT NULL | 接受请求时的文件路径快照 |
-| `extra_params` | `jsonb` | NOT NULL DEFAULT '{}' | 文件 Callback 的发起方透传参数 |
+| `extra_params` | `jsonb` | NOT NULL DEFAULT '{}' | 历史保留列；新任务固定为空，不读取、不返回 |
 | `worker_id` | `varchar(160)` | NULL | 当前 worker 实例 |
 | `lease_token` | `varchar(64)` | NULL | 本次领取的 fencing token |
 | `heartbeat_at` | `timestamptz` | NULL | 最近心跳 |
@@ -242,33 +243,9 @@ CREATE INDEX idx_knowledge_semantic_task_batch_status
     ON knowledge_semantic_processing_task (batch_id, status, kid);
 ```
 
-### 5.4 `request_params` 与 `extra_params`
+### 5.4 `request_params` 与历史 `extra_params`
 
-两个字段职责必须分开：
-
-| 字段 | 谁使用 | 内容 | 是否进入 Callback |
-| --- | --- | --- | --- |
-| `request_params` | worker | `maxEntities`、`topK`、`force` 等执行参数快照 | 否 |
-| `extra_params` | 下游业务服务 | `requestId`、`sourceSystem`、`tenantId` 等不透明关联参数 | 是，作为 `extraParams` 原样返回 |
-
-`extra_params` 规则：
-
-- API 字段名为 `extraParams`；
-- 必须是 JSON object，默认 `{}`；
-- 服务只校验可序列化性、大小和深度，不解释业务字段；
-- 不参与输入指纹和任务幂等判断；
-- 不允许通过它覆盖 Callback 输入模型中的 `task_id`、`batch_id`、任务状态或进度字段；
-- JSONB 保证 JSON 语义透传，不保证键顺序或数字的原始文本形式；
-- 建议序列化后最大 16 KiB、嵌套深度最大 8；
-- 不应放入密码、token、文档正文或其他敏感内容。
-
-请求级 `extraParams` 同时写入 batch 和本批次的每条 task。这一小份数据重复是有意的：
-
-- 文件 Callback 可以只依赖任务行生成；
-- 批次 Callback 可以只依赖批次行生成；
-- 零文件批次仍然可以向批次完成 Protocol 输入提供 `extraParams`。
-
-第一版请求是单文件或全库统一参数，因此同批每个任务使用相同 `extraParams`。如果未来支持 `files[]` 输入，可以用“批次参数与文件参数浅合并”的方式生成每条任务的最终 `extra_params`。
+`request_params` 继续保存 `maxEntities`、`topK`、`force` 等 worker 执行参数快照。API 不再定义 `extraParams`；新 batch/task 不传入该参数，状态响应和 Callback 事件也不包含该字段。表中现有 `extra_params` 列为避免本次引入破坏性 schema 迁移而保留，新行使用默认 `{}` 且业务运行时忽略。
 
 ### 5.5 Enrich 构建任务关联
 
@@ -287,7 +264,7 @@ Enrich 更新文档后会触发 Markdown 和索引构建。为防止 semantic wo
 一次 Discovery 或 Enrich 请求在一个数据库事务中：
 
 1. 生成 `batchId`；
-2. 创建 `processing` 批次，保存 `extra_params`；
+2. 创建 `processing` 批次；
 3. 获取请求范围内的候选文件；
 4. 按 `fs_entry_id` 升序锁定和处理候选文件；
 5. 每个候选文件都创建一条属于当前批次的 task；
@@ -465,7 +442,7 @@ Reaper 定期锁定过期的 `running` 任务，并调用与普通失败相同�
 - `outcome_uncertain=true`；
 - 批次 `completed_count` 和 `version` 递增；
 - 如果这是最后一个任务，批次置为 `completed`；
-- 提交后尝试调用文件和批次 Callback Protocol；
+- 提交后尝试发布文件和批次统一事件；
 - 不将任务恢复为 `pending`。
 
 多个 Reaper 使用 `FOR UPDATE SKIP LOCKED`，避免重复终止同一任务。
@@ -526,74 +503,14 @@ version = 已完成的文件终态事件数
 
 ### 11.1 Protocol 定义
 
-核心只提供以下概念接口。具体类名可以按代码风格调整，但字段语义不得改变。
+语义任务不再拥有专用双方法 Callback Protocol，而是构造统一事件信封后调用单方法 Publisher。
 
 ```python
-from collections.abc import Mapping
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, Protocol
-
-
-@dataclass(frozen=True)
-class BatchProgress:
-    version: int
-    total_count: int
-    completed_count: int
-    succeeded_count: int
-    failed_count: int
-    skipped_count: int
-
-
-@dataclass(frozen=True)
-class ProcessingError:
-    code: str
-    message: str
-    failure_kind: str | None
-    outcome_uncertain: bool
-
-
-@dataclass(frozen=True)
-class FileCompletedCallbackInput:
-    batch_id: str
-    task_id: str
-    task_type: str
-    status: str
-    knowledge_base_id: str
-    kb_code: str
-    file_id: str | None
-    file_path: str
-    progress: BatchProgress
-    result: Mapping[str, Any] | None
-    error: ProcessingError | None
-    extra_params: Mapping[str, Any]
-    completed_at: datetime
-
-
-@dataclass(frozen=True)
-class BatchCompletedCallbackInput:
-    batch_id: str
-    task_type: str
-    knowledge_base_id: str
-    kb_code: str
-    progress: BatchProgress
-    extra_params: Mapping[str, Any]
-    completed_at: datetime
-
-
-class KnowledgeEntityProcessingCallback(Protocol):
-    async def on_file_completed(
-        self,
-        event: FileCompletedCallbackInput,
-    ) -> None: ...
-
-    async def on_batch_completed(
-        self,
-        event: BatchCompletedCallbackInput,
-    ) -> None: ...
+class KnowledgeEventPublisher(Protocol):
+    async def publish(self, event: KnowledgeEvent) -> None: ...
 ```
 
-`task_type` 和 `status` 在正式代码中应复用现有枚举类型，而不是重复定义字符串枚举。这里使用 `str` 只是让 Protocol 示例独立可读。
+`KnowledgeEvent` 的通用字段为 `eventId/eventType/eventVersion/knCode/occurredAt/payload`。Discovery 和 Enrich 分别使用 `semantic.discovery.*` 和 `semantic.enrich.*` 事件类型。
 
 ### 11.2 输入语义
 
@@ -602,7 +519,6 @@ class KnowledgeEntityProcessingCallback(Protocol):
 - 只在 task 进入 `succeeded`、`failed` 或 `skipped` 后产生；
 - `result` 是安全的任务结果摘要；
 - `error` 只在失败时存在；
-- `extra_params` 来自 task 的 `extra_params`；
 - `progress` 是该文件终态事务提交时的批次进度快照；
 - 文件已被删除时 `file_id` 可以为空，`file_path` 仍使用接受时快照。
 
@@ -610,14 +526,11 @@ class KnowledgeEntityProcessingCallback(Protocol):
 
 - 只在 batch 第一次从 `processing` 转为 `completed` 后产生；
 - `progress.completed_count` 必须等于 `progress.total_count`；
-- 即使所有文件都失败，仍调用 `on_batch_completed`；
-- `extra_params` 来自 batch 的 `extra_params`。
-
-`extra_params` 是只读语义输入。核心不解释其中的键，Callback 实现也不应修改传入对象。
+- 即使所有文件都失败，仍发布 batch completed 事件；
 
 ### 11.3 输出与异常
 
-两个方法都返回 `None`：
+`publish` 返回 `None`：
 
 - 正常返回：表示本次 Protocol 调用已经由实现方处理；
 - 抛出异常：表示本次 Protocol 调用失败；
@@ -641,23 +554,23 @@ Callback 实现方可以自行选择：
 
 1. 提交 task 和 batch 的终态事务；
 2. 构造不可变 Protocol 输入；
-3. 调用 `on_file_completed`；
-4. 如果本次事务同时完成 batch，再调用 `on_batch_completed`。
+3. 发布 file completed `KnowledgeEvent`；
+4. 如果本次事务同时完成 batch，再发布 batch completed `KnowledgeEvent`。
 
 Protocol 调用不能持有数据库事务或文件锁。实现抛出的异常只能进入 Callback 日志和指标，不能向上传播导致 runner 退出。
 
-不同文件可能并发完成，因此实现方不能依赖文件 Callback 的调用顺序。`BatchProgress.version` 用于识别批次进度先后；最终状态仍以 batch 查询结果为准。
+不同文件可能并发完成，因此实现方不能依赖文件事件的调用顺序。`payload.progress.version` 用于识别批次进度先后；最终状态仍以 batch 查询结果为准。
 
 ### 11.5 实现注入
 
-核心通过依赖注入或 provider factory 获取 `KnowledgeEntityProcessingCallback`：
+核心通过依赖注入或 provider factory 获取 `KnowledgeEventPublisher`：
 
-- 未配置时使用 `NoopKnowledgeEntityProcessingCallback`；
+- 未配置时使用 `NoopKnowledgeEventPublisher`；
 - 配置实现时在应用启动阶段完成构造和协议校验；
 - Runner、Lease Reaper 和接受阶段的立即 `skipped` 任务复用同一个抽象；
 - 核心代码不得导入具体 HTTP、MQ 或业务服务实现。
 
-为兼容现有同步 callable，可以提供适配器，但目标 Protocol 保持异步。同步、异步以及传输选择由适配层或实现方处理。
+本次不提供旧双方法 Protocol 适配器或旧 provider 环境变量回退；部署方一次性切换到异步 `publish` 方法。
 
 ### 11.6 可靠性边界
 
@@ -676,11 +589,7 @@ Callback 实现一旦被调用，后续可靠性由实现方负责。例如实�
   "knCode": "demo-kb",
   "filePath": "/产品/安装指南.md",
   "maxEntities": 12,
-  "force": false,
-  "extraParams": {
-    "requestId": "req-20260818-001",
-    "sourceSystem": "content-center"
-  }
+  "force": false
 }
 ```
 
@@ -691,15 +600,11 @@ Callback 实现一旦被调用，后续可靠性由实现方负责。例如实�
   "knCode": "demo-kb",
   "filePath": "/KnowledgeEntity/产品A.md",
   "topK": 20,
-  "force": false,
-  "extraParams": {
-    "requestId": "req-20260818-002",
-    "sourceSystem": "content-center"
-  }
+  "force": false
 }
 ```
 
-`extraParams` 为可选 JSON object。未知的顶层字段仍拒绝，发起方自定义内容必须放入 `extraParams`。
+Discovery 和 Enrich 不接受 `extraParams`；由于请求模型使用 `extra="forbid"`，传入该字段会返回请求校验失败。
 
 ### 12.3 接受响应
 
@@ -732,8 +637,6 @@ processingBatchStatus(batchId, pageNum, pageSize)
 - 百分比；
 - 分页文件任务明细；
 - 每个任务的安全结果摘要或错误；
-- batch 的 `extraParams`；
-- task 明细中的 `extraParams`。
 
 状态查询是 Callback 丢失、乱序或下游停机时的对账入口。
 
@@ -774,7 +677,7 @@ Discovery 也可能在最终失败前创建部分实体、mentions 或关系，�
 ### 14.1 启动
 
 1. 完成 schema 迁移；
-2. 构造并校验 Callback Protocol 实现；
+2. 构造并校验 `KnowledgeEventPublisher` 实现；
 3. 启动 Background Runner；
 4. 启动 Lease Reaper；
 5. 开始接受请求。
@@ -823,9 +726,8 @@ Discovery 也可能在最终失败前创建部分实体、mentions 或关系，�
 | `KNOWLEDGE_ENTITY_REAPER_SECONDS` | `30` | 过期扫描周期 |
 | `KNOWLEDGE_ENTITY_WORKER_STATUS_LOG_SECONDS` | `60` | 每个 runner 输出存活状态日志的周期 |
 | `KNOWLEDGE_ENTITY_SHUTDOWN_GRACE_SECONDS` | `60` | 优雅关机宽限期 |
-| `KNOWLEDGE_ENTITY_CALLBACK_PROVIDER` | - | Callback Protocol provider；未配置时使用 Noop 实现 |
-
-`extraParams` v1 使用固定边界：最大 16384 UTF-8 字节、最大嵌套深度 8，不额外引入配置项。
+| `BY_QA_EVENT_PUBLISHER_PROVIDER` | - | 统一事件 Publisher provider；未配置时使用 Noop 实现 |
+| `BY_QA_EVENT_PUBLISH_TIMEOUT_SECONDS` | `5` | 单次统一事件发布超时 |
 
 校验规则：
 
@@ -840,13 +742,10 @@ Callback 实现自己的 URL、认证、超时、并发和重试配置不进入�
 
 - Callback 实现只能通过受信任的 provider 注入；
 - 具体实现负责其传输目标、认证凭据和网络安全；
-- 认证凭据不能进入 batch/task、`extraParams` 或核心日志；
-- `extraParams` 只作为 Protocol 模型的独立字段传入，不能覆盖系统字段；
-- 限制 `extraParams` 大小、深度和字符串长度；
+- 认证凭据不能进入 batch/task 或核心日志；
 - Callback 不包含文件正文、原始 prompt、完整 LLM 响应和内部堆栈；
 - `error.message` 必须截断并脱敏；
 - 文件结果只返回 ID、路径、数量、版本和安全摘要；
-- Callback 日志不能打印完整 `extraParams`，只记录大小或允许的关联键。
 
 ## 17. 可观测性
 
@@ -897,7 +796,6 @@ error_type
 - batch 保留期不得短于 task；
 - task 清理前先清理其关联关系断言或审计引用；
 - 删除顺序先 task、后 batch；
-- `extra_params` 跟随 batch/task 一起清理；
 - 不单独保存 Callback 负载副本；
 - 清理任务不得占用 Discovery/Enrich worker 执行槽位。
 
@@ -906,7 +804,7 @@ error_type
 ### 19.1 Schema
 
 1. 新增 `knowledge_semantic_processing_batch`；
-2. 给 task 增加 batch FK、路径快照、`extra_params`、租约和失败语义字段；
+2. 给 task 增加 batch FK、路径快照、租约和失败语义字段；
 3. 将 task 的文件外键由级联删除调整为删除文件后保留任务；
 4. 增加任务领取和批次状态索引；
 5. 可选增加 build task 的父 semantic task 字段；
@@ -936,17 +834,14 @@ error_type
 
 ## 20. 测试设计
 
-### 20.1 批次和透传参数
+### 20.1 批次和请求边界
 
 - 单文件请求创建一个 batch 和一个 task；
 - 全库请求为每个候选文件创建 task；
 - 不可处理文件创建为 `skipped`；
 - 零文件批次立即完成；
-- task 与 batch 都保存 `extra_params`；
-- 文件和批次 Protocol 输入完整包含 `extra_params`；
-- `extraParams` 不参与输入指纹；
-- 超大、过深或非 object 的 `extraParams` 被拒绝；
-- `extraParams` 无法覆盖系统 Callback 字段。
+- Discovery/Enrich 请求传入 `extraParams` 时校验失败；
+- batch/task 状态响应和 Callback 事件不包含 `extraParams`。
 
 ### 20.2 并发和隔离
 
@@ -968,13 +863,13 @@ error_type
 
 ### 20.4 Callback
 
-- 使用 mock Protocol 验证文件终态调用 `on_file_completed`；
-- 使用 mock Protocol 验证批次终态调用 `on_batch_completed`；
-- 两种输入都包含正确的 `extra_params` 和批次进度；
+- 使用 Recording Publisher 验证文件终态发布 file completed 事件；
+- 使用 Recording Publisher 验证批次终态发布 batch completed 事件；
+- 文件和批次事件都包含正确的批次进度，且不包含 `extraParams`；
 - Callback 实现抛出异常不改变任务和批次；
 - 不同文件并发完成时输入中的 `BatchProgress.version` 单调唯一；
 - 文件终态提交后立即 kill 时，验证 Protocol 调用允许丢失且状态接口可对账；
-- 全部失败的批次仍调用 `on_batch_completed`；
+- 全部失败的批次仍发布 batch completed 事件；
 - Noop 实现不影响正常任务处理；
 - 核心测试不绑定 HTTP、MQ、认证或重试实现。
 
@@ -997,10 +892,10 @@ error_type
 7. Discovery 和 Enrich 失败均不自动重试；
 8. 每个批次候选文件都有 task 行和文件终态；
 9. batch 不因文件失败而失败；
-10. task 和 batch 均保存发起方 `extra_params`；
-11. 文件和批次 Protocol 输入均包含 `extra_params`；
-12. 文件终态调用 `on_file_completed`，硬 kill 窗口允许调用丢失；
-13. 批次终态调用 `on_batch_completed`，硬 kill 窗口允许调用丢失；
+10. Discovery/Enrich 请求不接受 `extraParams`；
+11. 文件和批次事件不包含 `extraParams`；
+12. 文件终态发布 file completed 事件，硬 kill 窗口允许丢失；
+13. 批次终态发布 batch completed 事件，硬 kill 窗口允许丢失；
 14. Callback 实现异常不改变业务状态，也不触发业务任务重试；
 15. 状态查询可以返回权威批次进度和文件结果；
 16. 文档和接口明确说明硬 kill 窗口内 Callback 可能丢失。
@@ -1030,12 +925,11 @@ Callback 实现可以自行决定是否使用 HTTP、MQ、outbox 或其他机制
 - Callback 实现失败或服务硬 kill 不改变任务终态；
 - 状态查询是最终事实来源；
 - task 现有 `request_params` 保存执行参数；
-- 新增 `extra_params` 专门保存并透传发起方业务参数；
-- batch 同样保存 `extra_params`，用于批次 Callback 和零文件批次；
+- 历史 `extra_params` 列保留并使用默认空值，业务运行时不读取、不对外暴露；
 - 多进程使用 `FOR UPDATE SKIP LOCKED`；
 - `running` 使用心跳租约和 fencing；
 - 租约过期直接失败，不重新进入 `pending`；
 - Discovery 和 Enrich 都不自动恢复或重试；
 - 单文件失败不影响批次中其他文件；
 - batch 只有 `processing/completed`；
-- Callback Protocol 只定义文件完成和批次完成两个方法。
+- 统一 Publisher 只定义一个 `publish(KnowledgeEvent)` 方法，文件/批次语义由 eventType 和 payload 表达。

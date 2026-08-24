@@ -6,7 +6,7 @@ import mimetypes
 import zipfile
 from inspect import isawaitable
 from pathlib import PurePosixPath
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import quote
 
 from fastapi import BackgroundTasks, Body, File, Form, Request, Response, UploadFile
@@ -54,6 +54,11 @@ from by_qa.knowledge_base.api.schemas import (
     UpdateKnowledgeBaseRequest,
 )
 from by_qa.knowledge_base.dsl.errors import DslValidationError
+from by_qa.knowledge_base.events import (
+    KnowledgeEvent,
+    ResourceEventType,
+    build_resource_event,
+)
 from by_qa.knowledge_base.services.errors import (
     KnowledgeBaseConfigurationError,
     KnowledgeBaseValidationError,
@@ -229,6 +234,7 @@ def register_routes(
     get_file_metadata_query_service,
     get_file_metadata_update_service=None,
     get_knowledge_entity_processing_service=None,
+    get_knowledge_event_publisher_invoker=None,
 ):
     """Register knowledge base API routes on the FastAPI app."""
 
@@ -252,6 +258,22 @@ def register_routes(
                 "knowledge entity processing service is not configured"
             )
         return service
+
+    async def _try_schedule_event(
+        background_tasks: BackgroundTasks,
+        event_factory: Callable[[], KnowledgeEvent],
+    ) -> None:
+        if get_knowledge_event_publisher_invoker is None:
+            return
+        try:
+            event = event_factory()
+            invoker = await _resolve_maybe_async(get_knowledge_event_publisher_invoker)
+            background_tasks.add_task(invoker.publish, event)
+        except Exception as exc:
+            logger.warning(
+                "knowledge event scheduling failed: error_type=%s",
+                type(exc).__name__,
+            )
 
     @app.post("/api/v1/fileToMarkdown")
     async def file_to_markdown(
@@ -476,7 +498,10 @@ def register_routes(
         return _documented_success_response(result_object={})
 
     @app.post("/api/v1/directories/create")
-    async def create_directory(body: dict[str, Any] = Body(...)):
+    async def create_directory(
+        background_tasks: BackgroundTasks,
+        body: dict[str, Any] = Body(...),
+    ):
         try:
             request = CreateDirectoryRequest.model_validate(body)
         except ValidationError as exc:
@@ -521,10 +546,22 @@ def register_routes(
                 result_object={},
                 status_code=500,
             )
+        await _try_schedule_event(
+            background_tasks,
+            lambda: build_resource_event(
+                event_type=ResourceEventType.DIRECTORY_CREATED,
+                kb_code=request.kb_code,
+                source_path=None,
+                target_path=_ensure_leading_slash(request.directory_path),
+            ),
+        )
         return _documented_success_response(result_object={})
 
     @app.post("/api/v1/directories/delete")
-    async def delete_directory(body: dict[str, Any] = Body(...)):
+    async def delete_directory(
+        background_tasks: BackgroundTasks,
+        body: dict[str, Any] = Body(...),
+    ):
         try:
             request = DeleteDirectoryRequest.model_validate(body)
         except ValidationError as exc:
@@ -566,10 +603,22 @@ def register_routes(
                 result_object={},
                 status_code=500,
             )
+        await _try_schedule_event(
+            background_tasks,
+            lambda: build_resource_event(
+                event_type=ResourceEventType.DIRECTORY_DELETED,
+                kb_code=request.kb_code,
+                source_path=_ensure_leading_slash(request.directory_path),
+                target_path=None,
+            ),
+        )
         return _documented_success_response(result_object={})
 
     @app.post("/api/v1/directories/update")
-    async def update_directory(body: dict[str, Any] = Body(...)):
+    async def update_directory(
+        background_tasks: BackgroundTasks,
+        body: dict[str, Any] = Body(...),
+    ):
         try:
             request = UpdateDirectoryRequest.model_validate(body)
         except ValidationError as exc:
@@ -614,11 +663,28 @@ def register_routes(
                 result_object={},
                 status_code=500,
             )
+        source_path = _ensure_leading_slash(request.directory_path)
+        parent_path = str(PurePosixPath(source_path).parent)
+        target_path = (
+            f"/{request.directory_name}"
+            if parent_path == "/"
+            else f"{parent_path}/{request.directory_name}"
+        )
+        await _try_schedule_event(
+            background_tasks,
+            lambda: build_resource_event(
+                event_type=ResourceEventType.DIRECTORY_UPDATED,
+                kb_code=request.kb_code,
+                source_path=source_path,
+                target_path=target_path,
+            ),
+        )
         return _documented_success_response(result_object={})
 
     @app.post("/api/v1/knowledgeItems/import")
     @app.post("/api/v1/knowledge-items/import")
     async def upload_file(
+        background_tasks: BackgroundTasks,
         kn_code: str | None = Form(None, alias="knCode"),
         file_path: str | None = Form(None, alias="filePath"),
         file_description: str | None = Body(None, alias="fileDescription"),
@@ -641,10 +707,14 @@ def register_routes(
                     "skipIfDuplicate": skip_if_duplicate,
                 }
             )
-        except ValidationError as exc:
+        except (ValidationError, ValueError) as exc:
             return _documented_error_response(
                 result_msg="request validation failed",
-                result_object={"errors": json.loads(exc.json())},
+                result_object=(
+                    {"errors": json.loads(exc.json())}
+                    if isinstance(exc, ValidationError)
+                    else {"errors": [{"msg": str(exc)}]}
+                ),
                 status_code=422,
             )
         logger.info(
@@ -679,6 +749,29 @@ def register_routes(
                 }
                 if result.post_process_errors:
                     result_object["postProcessErrors"] = result.post_process_errors
+                if result.summary.succeeded > 0:
+                    await _try_schedule_event(
+                        background_tasks,
+                        lambda: build_resource_event(
+                            event_type=ResourceEventType.FILE_IMPORTED,
+                            kb_code=request.kb_code,
+                            source_path=None,
+                            target_path=_ensure_leading_slash(request.file_path),
+                            items=[
+                                {
+                                    "sourcePath": item.file_path,
+                                    "targetPath": (
+                                        item.file_path if item.success else None
+                                    ),
+                                    "resourceType": "file",
+                                    "success": item.success,
+                                    "error": item.error,
+                                }
+                                for item in result.data
+                            ],
+                            result=result.summary.model_dump(),
+                        ),
+                    )
                 return _documented_success_response(result_object=result_object)
             # single file
             file_path_norm = "/" + request.file_path.strip("/")
@@ -688,18 +781,27 @@ def register_routes(
                     result_msg="unsafe path", result_object={}, status_code=422
                 )
             await service.upload_file(request)
-            return _documented_success_response(
-                result_object={
-                    "data": [
-                        {
-                            "filePath": file_path_norm,
-                            "success": True,
-                            "error": None,
-                        }
-                    ],
-                    "summary": {"total": 1, "succeeded": 1, "failed": 0},
-                }
+            result_object = {
+                "data": [
+                    {
+                        "filePath": file_path_norm,
+                        "success": True,
+                        "error": None,
+                    }
+                ],
+                "summary": {"total": 1, "succeeded": 1, "failed": 0},
+            }
+            await _try_schedule_event(
+                background_tasks,
+                lambda: build_resource_event(
+                    event_type=ResourceEventType.FILE_IMPORTED,
+                    kb_code=request.kb_code,
+                    source_path=None,
+                    target_path=file_path_norm,
+                    result=result_object["summary"],
+                ),
             )
+            return _documented_success_response(result_object=result_object)
         except KnowledgeBaseConfigurationError as exc:
             return _documented_error_response(
                 result_msg=str(exc),
@@ -755,13 +857,16 @@ def register_routes(
 
         try:
             document_request = DocumentUpdateRequest.model_validate(request_data)
-        except ValidationError as exc:
+        except (ValidationError, ValueError) as exc:
             return _documented_error_response(
                 result_msg="request validation failed",
-                result_object={"errors": json.loads(exc.json())},
+                result_object=(
+                    {"errors": json.loads(exc.json())}
+                    if isinstance(exc, ValidationError)
+                    else {"errors": [{"msg": str(exc)}]}
+                ),
                 status_code=422,
             )
-
         filename = file_content.filename if file_content is not None else ""
         upload_suffix = PurePosixPath(filename or "").suffix.lower()
         target_suffix = PurePosixPath(document_request.file_path).suffix.lower()
@@ -827,22 +932,39 @@ def register_routes(
                 status_code=500,
             )
 
-        return _documented_success_response(
-            result_object={
-                "data": [
-                    {
-                        "knCode": document_request.kb_code,
-                        "filePath": document_request.file_path,
-                        "success": True,
-                        "error": None,
-                    }
-                ]
-            }
+        result_object = {
+            "data": [
+                {
+                    "knCode": document_request.kb_code,
+                    "filePath": document_request.file_path,
+                    "success": True,
+                    "error": None,
+                }
+            ]
+        }
+        event_file_path = (
+            update_result.file_path
+            if update_result is not None and update_result.file_path
+            else document_request.file_path
         )
+        await _try_schedule_event(
+            background_tasks,
+            lambda: build_resource_event(
+                event_type=ResourceEventType.FILE_UPDATED,
+                kb_code=document_request.kb_code,
+                source_path=event_file_path,
+                target_path=event_file_path,
+                result={"success": True},
+            ),
+        )
+        return _documented_success_response(result_object=result_object)
 
     @app.post("/api/v1/knowledgeItems/delete")
     @app.post("/api/v1/knowledge-items/delete")
-    async def delete_knowledge_item(body: dict[str, Any] = Body(...)):
+    async def delete_knowledge_item(
+        background_tasks: BackgroundTasks,
+        body: dict[str, Any] = Body(...),
+    ):
         try:
             request = DeleteKnowledgeItemRequest.model_validate(body)
         except ValidationError as exc:
@@ -883,11 +1005,23 @@ def register_routes(
                 result_object={},
                 status_code=500,
             )
+        await _try_schedule_event(
+            background_tasks,
+            lambda: build_resource_event(
+                event_type=ResourceEventType.FILE_DELETED,
+                kb_code=request.kb_code,
+                source_path=_ensure_leading_slash(request.file_path),
+                target_path=None,
+            ),
+        )
         return _documented_success_response(result_object={})
 
     @app.post("/api/v1/knowledgeItems/move")
     @app.post("/api/v1/knowledge-items/move")
-    async def move_knowledge_items(body: dict[str, Any] = Body(...)):
+    async def move_knowledge_items(
+        background_tasks: BackgroundTasks,
+        body: dict[str, Any] = Body(...),
+    ):
         try:
             request = MoveKnowledgeItemsRequest.model_validate(body)
         except ValidationError as exc:
@@ -933,6 +1067,29 @@ def register_routes(
             if hasattr(result, "model_dump")
             else result
         )
+        if result.summary.succeeded > 0:
+            successful_targets = [
+                item.target_path for item in result.data if item.success
+            ]
+            await _try_schedule_event(
+                background_tasks,
+                lambda: build_resource_event(
+                    event_type=ResourceEventType.RESOURCE_MOVED,
+                    kb_code=request.kb_code,
+                    source_path=(
+                        request.source_path[0]
+                        if len(request.source_path) == 1
+                        else None
+                    ),
+                    target_path=(
+                        successful_targets[0]
+                        if len(successful_targets) == 1
+                        else request.target_directory_path
+                    ),
+                    items=[item.model_dump(by_alias=True) for item in result.data],
+                    result=result.summary.model_dump(),
+                ),
+            )
         return _documented_success_response(result_object=result_object)
 
     @app.post("/api/v1/fileToMarkdownIndex")

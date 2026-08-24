@@ -79,8 +79,10 @@ async def test_knowledge_item_services_receive_model_config_provider(monkeypatch
     provider = object()
     recorded = {}
 
-    async def fake_build_ingestion(settings, provider=None):
-        recorded["ingestion"] = (settings, provider)
+    async def fake_build_ingestion(
+        settings, provider=None, *, event_publisher_invoker=None
+    ):
+        recorded["ingestion"] = (settings, provider, event_publisher_invoker)
         return "ingestion-service"
 
     async def fake_build_search(settings, provider=None):
@@ -117,7 +119,11 @@ async def test_knowledge_item_services_receive_model_config_provider(monkeypatch
 
     assert ingestion_service == "ingestion-service"
     assert search_service == "search-service"
-    assert recorded["ingestion"] == (main_module.settings, provider)
+    assert recorded["ingestion"] == (
+        main_module.settings,
+        provider,
+        main_module._get_or_build_knowledge_event_publisher_invoker(),
+    )
     assert recorded["search"] == (main_module.settings, provider)
     assert recorded["ensured"] == [provider, provider]
 
@@ -177,8 +183,22 @@ async def test_knowledge_entity_processing_service_is_built_and_cached(monkeypat
         events.append(("chunker", provider))
         return "chunker"
 
-    async def fake_builder(settings, active_provider, *, document_chunking_service):
-        events.append(("builder", settings, active_provider, document_chunking_service))
+    async def fake_builder(
+        settings,
+        active_provider,
+        *,
+        document_chunking_service,
+        event_publisher_invoker,
+    ):
+        events.append(
+            (
+                "builder",
+                settings,
+                active_provider,
+                document_chunking_service,
+                event_publisher_invoker,
+            )
+        )
         return object()
 
     monkeypatch.setattr(main_module, "_build_model_config_provider", lambda: provider)
@@ -200,7 +220,13 @@ async def test_knowledge_entity_processing_service_is_built_and_cached(monkeypat
     assert events == [
         ("schema", provider),
         ("chunker", provider),
-        ("builder", main_module.settings, provider, "chunker"),
+        (
+            "builder",
+            main_module.settings,
+            provider,
+            "chunker",
+            main_module._get_or_build_knowledge_event_publisher_invoker(),
+        ),
     ]
 
 
@@ -216,9 +242,20 @@ async def test_knowledge_entity_processing_service_is_request_bound(monkeypatch)
         recorded["chunker"].append(provider)
         return object()
 
-    async def fake_builder(settings, active_provider, *, document_chunking_service):
+    async def fake_builder(
+        settings,
+        active_provider,
+        *,
+        document_chunking_service,
+        event_publisher_invoker,
+    ):
         recorded["builder"].append(
-            (settings, active_provider, document_chunking_service)
+            (
+                settings,
+                active_provider,
+                document_chunking_service,
+                event_publisher_invoker,
+            )
         )
         return object()
 

@@ -902,7 +902,6 @@ async def test_accept_persists_pending_task_without_request_scheduler():
         EntityDiscoveryRequest(
             knCode="7",
             filePath="/docs/source.md",
-            extraParams={"requestId": "req-1"},
         ),
     )
     assert accepted.accepted_count == 1
@@ -910,13 +909,13 @@ async def test_accept_persists_pending_task_without_request_scheduler():
     assert scheduler.factories == []
     assert worker.contexts == []
     assert tasks.rows[0]["status"] == "pending"
-    assert tasks.rows[0]["extra_params"] == {"requestId": "req-1"}
+    assert "extra_params" not in tasks.rows[0]
     assert "extraParams" not in tasks.rows[0]["request_params"]
     assert connection.locked_ids == [10]
     assert connection.rollbacks == 0
 
 
-async def test_acceptance_logs_correlation_without_extra_params(monkeypatch):
+async def test_acceptance_logs_correlation(monkeypatch):
     captured = []
 
     def capture(level):
@@ -936,7 +935,6 @@ async def test_acceptance_logs_correlation_without_extra_params(monkeypatch):
         EntityDiscoveryRequest(
             knCode="7",
             filePath="/docs/source.md",
-            extraParams={"secret": "do-not-log"},
         ),
     )
 
@@ -947,7 +945,6 @@ async def test_acceptance_logs_correlation_without_extra_params(monkeypatch):
     assert "file_path=/docs/source.md" in rendered
     assert "task_type=ENTITY_DISCOVERY" in rendered
     assert "batch accepted" in rendered
-    assert "do-not-log" not in rendered
     assert "sha-source" not in rendered
 
 
@@ -1076,13 +1073,12 @@ async def test_status_filters_by_optional_file_and_hides_details():
     assert page.data[0].error is None
 
 
-async def test_batch_status_reports_per_file_progress_and_extra_params():
+async def test_batch_status_reports_per_file_progress_without_extra_params():
     service, _ = make_service([original()])
     accepted = await service.discover_knowledge_entities(
         EntityDiscoveryRequest(
             knCode="7",
             filePath="/docs/source.md",
-            extraParams={"requestId": "req-1"},
         )
     )
 
@@ -1094,8 +1090,8 @@ async def test_batch_status_reports_per_file_progress_and_extra_params():
     assert result.completed_count == 0
     assert result.pending_count == 1
     assert result.progress == 0
-    assert result.extra_params == {"requestId": "req-1"}
-    assert result.data[0].extra_params == {"requestId": "req-1"}
+    assert not hasattr(result, "extra_params")
+    assert not hasattr(result.data[0], "extra_params")
 
 
 async def test_both_relation_direction_merges_by_relation_id_before_paging():

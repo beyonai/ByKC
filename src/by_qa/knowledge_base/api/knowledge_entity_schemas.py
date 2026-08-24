@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Protocol
@@ -27,27 +26,6 @@ def _validate_file_path(value: str | None) -> str | None:
     if any(part == ".." for part in normalized.split("/")):
         raise ValueError("filePath must not contain '..'")
     return "/" + "/".join(part for part in normalized.split("/") if part)
-
-
-def _validate_extra_params(value: dict[str, Any]) -> dict[str, Any]:
-    def depth(item: Any, current: int = 0) -> int:
-        if isinstance(item, dict):
-            return max(
-                (depth(child, current + 1) for child in item.values()), default=current
-            )
-        if isinstance(item, list):
-            return max((depth(child, current + 1) for child in item), default=current)
-        return current
-
-    try:
-        encoded = json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
-    except (TypeError, ValueError) as exc:
-        raise ValueError("extraParams must contain JSON values") from exc
-    if len(encoded) > 16 * 1024:
-        raise ValueError("extraParams must not exceed 16384 UTF-8 bytes")
-    if depth(value) > 8:
-        raise ValueError("extraParams nesting depth must not exceed 8")
-    return value
 
 
 class ProcessingCapability(StrEnum):
@@ -131,14 +109,7 @@ class EntityDiscoveryRequest(_ApiModel):
         validation_alias=AliasChoices("maxEntities", "max_entities"),
     )
     force: bool = False
-    extra_params: dict[str, Any] = Field(
-        default_factory=dict,
-        validation_alias=AliasChoices("extraParams", "extra_params"),
-        serialization_alias="extraParams",
-    )
-
     _normalize_file_path = field_validator("file_path")(_validate_file_path)
-    _normalize_extra_params = field_validator("extra_params")(_validate_extra_params)
 
 
 class EntityEnrichRequest(_ApiModel):
@@ -159,14 +130,7 @@ class EntityEnrichRequest(_ApiModel):
         validation_alias=AliasChoices("topK", "top_k"),
     )
     force: bool = False
-    extra_params: dict[str, Any] = Field(
-        default_factory=dict,
-        validation_alias=AliasChoices("extraParams", "extra_params"),
-        serialization_alias="extraParams",
-    )
-
     _normalize_file_path = field_validator("file_path")(_validate_file_path)
-    _normalize_extra_params = field_validator("extra_params")(_validate_extra_params)
 
 
 class DeleteKnowledgeEntityRequest(_ApiModel):
@@ -367,9 +331,6 @@ class ProcessingTaskItem(_ApiModel):
     finished_at: datetime | None = Field(default=None, serialization_alias="finishedAt")
     result: dict[str, Any] | None = None
     error: dict[str, Any] | None = None
-    extra_params: dict[str, Any] = Field(
-        default_factory=dict, serialization_alias="extraParams"
-    )
 
 
 class ProcessingTaskPage(_ApiModel):
@@ -398,9 +359,6 @@ class ProcessingBatchStatusResult(_ApiModel):
     failed_count: int = Field(ge=0, serialization_alias="failedCount")
     skipped_count: int = Field(ge=0, serialization_alias="skippedCount")
     progress: int = Field(ge=0, le=100)
-    extra_params: dict[str, Any] = Field(
-        default_factory=dict, serialization_alias="extraParams"
-    )
     created_at: datetime = Field(serialization_alias="createdAt")
     completed_at: datetime | None = Field(
         default=None, serialization_alias="completedAt"

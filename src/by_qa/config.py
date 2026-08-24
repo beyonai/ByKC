@@ -168,6 +168,15 @@ class Settings(BaseSettings):
         gt=0,
         alias="KB_UPDATE_TIMELINE_LLM_TIMEOUT_SECONDS",
     )
+    event_publisher_provider: str = Field(
+        default="",
+        alias="BY_QA_EVENT_PUBLISHER_PROVIDER",
+    )
+    event_publish_timeout_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        alias="BY_QA_EVENT_PUBLISH_TIMEOUT_SECONDS",
+    )
     knowledge_entity_worker_enabled: bool = Field(
         default=True,
         alias="KNOWLEDGE_ENTITY_WORKER_ENABLED",

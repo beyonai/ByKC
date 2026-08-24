@@ -10,6 +10,10 @@ from uuid import uuid4
 from by_qa.config import Settings
 from by_qa.core import logger
 from by_qa.core.model_config import LLMModelProfile, ModelConfig, ModelConfigProvider
+from by_qa.knowledge_base.events import (
+    KnowledgeEventPublisherInvoker,
+    load_knowledge_event_publisher,
+)
 from by_qa.knowledge_base.infrastructure.database import build_connection_factory
 from by_qa.knowledge_base.infrastructure.object_storage import (
     KnowledgeBaseObjectStorage,
@@ -80,10 +84,6 @@ from by_qa.knowledge_base.services.file_metadata_update_service import (
 from by_qa.knowledge_base.services.knowledge_base_service import KnowledgeBaseService
 from by_qa.knowledge_base.services.knowledge_entity_background_runner import (
     KnowledgeEntityBackgroundRunner,
-)
-from by_qa.knowledge_base.services.knowledge_entity_callback import (
-    KnowledgeEntityCallbackInvoker,
-    load_knowledge_entity_processing_callback,
 )
 from by_qa.knowledge_base.services.knowledge_entity_discovery import (
     KnowledgeEntityDiscovery,
@@ -299,6 +299,8 @@ def build_knowledge_fetch_cache_cleanup_service(
 async def build_knowledge_item_ingestion_service(
     settings: Settings,
     provider: ModelConfigProvider | None = None,
+    *,
+    event_publisher_invoker: KnowledgeEventPublisherInvoker | None = None,
 ) -> KnowledgeItemIngestionService:
     """Build the document ingestion service."""
     if provider is not None:
@@ -329,6 +331,13 @@ async def build_knowledge_item_ingestion_service(
         file_metadata_value_repository=FileMetadataValueRepository(),
         knowledge_file_reference_repository=KnowledgeFileReferenceRepository(),
         markdown_reference_rewriter=MarkdownReferenceRewriter(),
+        event_publisher_invoker=event_publisher_invoker
+        or KnowledgeEventPublisherInvoker(
+            publisher=load_knowledge_event_publisher(
+                getattr(settings, "event_publisher_provider", "")
+            ),
+            timeout_seconds=getattr(settings, "event_publish_timeout_seconds", 5.0),
+        ),
     )
 
 
@@ -394,6 +403,7 @@ async def build_knowledge_entity_processing_service(
     provider: ModelConfigProvider | None = None,
     *,
     document_chunking_service: Any,
+    event_publisher_invoker: KnowledgeEventPublisherInvoker | None = None,
 ) -> KnowledgeEntityProcessingOrchestrator:
     """Build the real discovery/enrichment orchestration service.
 
@@ -428,8 +438,18 @@ async def build_knowledge_entity_processing_service(
     storage_provider = await build_storage_provider(
         settings, embedding_config=embedding_config
     )
+    active_event_publisher_invoker = event_publisher_invoker or (
+        KnowledgeEventPublisherInvoker(
+            publisher=load_knowledge_event_publisher(
+                getattr(settings, "event_publisher_provider", "")
+            ),
+            timeout_seconds=getattr(settings, "event_publish_timeout_seconds", 5.0),
+        )
+    )
     ingestion_service = await build_knowledge_item_ingestion_service(
-        settings, provider=provider
+        settings,
+        provider=provider,
+        event_publisher_invoker=active_event_publisher_invoker,
     )
     document_update_service = await build_document_update_service(
         settings, provider=provider
@@ -477,9 +497,6 @@ async def build_knowledge_entity_processing_service(
         knowledge_entity_enricher=KnowledgeEntityEnricher(enrichment_llm),
         knowledge_entity_asset_service=asset_service,
     )
-    callback_invoker = KnowledgeEntityCallbackInvoker(
-        callback=load_knowledge_entity_processing_callback()
-    )
     service = KnowledgeEntityProcessingOrchestrator(
         connection_factory=connection_factory,
         knowledge_base_repository=knowledge_base_repository,
@@ -490,7 +507,7 @@ async def build_knowledge_entity_processing_service(
         knowledge_semantic_processing_task_repository=semantic_processing_task_repository,
         knowledge_file_reference_repository=knowledge_file_reference_repository,
         worker=worker,
-        callback_invoker=callback_invoker,
+        event_publisher_invoker=active_event_publisher_invoker,
         knowledge_entity_asset_service=asset_service,
     )
     if getattr(settings, "knowledge_entity_worker_enabled", False):
@@ -502,7 +519,7 @@ async def build_knowledge_entity_processing_service(
             task_repository=semantic_processing_task_repository,
             batch_repository=semantic_processing_batch_repository,
             worker=worker,
-            callback_invoker=callback_invoker,
+            event_publisher_invoker=active_event_publisher_invoker,
             worker_id=worker_id,
             concurrency=settings.knowledge_entity_worker_concurrency,
             poll_seconds=settings.knowledge_entity_worker_poll_seconds,

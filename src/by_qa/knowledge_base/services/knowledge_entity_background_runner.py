@@ -10,10 +10,10 @@ from typing import Any
 from uuid import uuid4
 
 from by_qa.core import logger
-from by_qa.knowledge_base.services.knowledge_entity_callback import (
-    KnowledgeEntityCallbackInvoker,
-    invoke_terminal_callbacks,
-    json_mapping,
+from by_qa.knowledge_base.events import (
+    KnowledgeEventPublisherInvoker,
+    build_semantic_terminal_events,
+    normalize_json_mapping,
 )
 from by_qa.knowledge_base.services.knowledge_entity_task_worker import (
     KnowledgeEntityTaskContext,
@@ -26,7 +26,7 @@ class KnowledgeEntityBackgroundRunner:
     task_repository: Any
     batch_repository: Any
     worker: Any
-    callback_invoker: KnowledgeEntityCallbackInvoker
+    event_publisher_invoker: KnowledgeEventPublisherInvoker
     worker_id: str
     concurrency: int = 4
     poll_seconds: float = 3.0
@@ -152,7 +152,9 @@ class KnowledgeEntityBackgroundRunner:
             finally:
                 await connection.close()
             if terminal is not None:
-                await invoke_terminal_callbacks(self.callback_invoker, *terminal)
+                await self.event_publisher_invoker.publish_all(
+                    build_semantic_terminal_events(*terminal)
+                )
                 reaped += 1
         return reaped
 
@@ -389,7 +391,9 @@ class KnowledgeEntityBackgroundRunner:
         finally:
             await connection.close()
         if terminal is not None:
-            await invoke_terminal_callbacks(self.callback_invoker, *terminal)
+            await self.event_publisher_invoker.publish_all(
+                build_semantic_terminal_events(*terminal)
+            )
 
     def _task_context(self, row: Mapping[str, Any]) -> KnowledgeEntityTaskContext:
         if row.get("fs_entry_id") is None:
@@ -403,7 +407,7 @@ class KnowledgeEntityBackgroundRunner:
             file_path=str(row["file_path_snapshot"]),
             input_fingerprint=row.get("input_fingerprint"),
             input_checksum=row.get("input_checksum"),
-            request_params=json_mapping(row.get("request_params")) or {},
+            request_params=normalize_json_mapping(row.get("request_params")) or {},
             batch_id=str(row["batch_id"]),
         )
 

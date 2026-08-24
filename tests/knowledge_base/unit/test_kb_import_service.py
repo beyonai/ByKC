@@ -20,6 +20,7 @@ from by_qa.knowledge_base.api.schemas import (
     UpdateDirectoryRequest,
     UpdateKnowledgeBaseRequest,
 )
+from by_qa.knowledge_base.events import KnowledgeEventPublisherInvoker
 from by_qa.knowledge_base.infrastructure.storage import StorageLocation, StoredObject
 from by_qa.knowledge_base.services import (
     knowledge_item_ingestion_service as ingestion_service_module,
@@ -2699,8 +2700,19 @@ async def test_file_to_markdown_index_success():
         b"fake-pdf-bytes"
     )
     chunking_service = FakeDocumentChunkingService()
+    connection = FakeConnection()
+
+    class Publisher:
+        def __init__(self):
+            self.events = []
+
+        async def publish(self, event):
+            assert connection.committed is True
+            self.events.append(event)
+
+    publisher = Publisher()
     service = KnowledgeItemIngestionService(
-        connection_factory=lambda: _async_return(FakeConnection()),
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=kb_repo,
         knowledge_fs_entry_repository=fs_repo,
         knowledge_build_task_repository=build_task_repo,
@@ -2708,6 +2720,7 @@ async def test_file_to_markdown_index_success():
         retrieval_projection_repository=retrieval_repo,
         storage_provider=obj_storage,
         embedding_dimension=3,
+        event_publisher_invoker=KnowledgeEventPublisherInvoker(publisher),
     )
     request = FileToMarkdownIndexRequest.model_validate(
         {"knCode": "1", "filePath": "/制度/人事/请假制度.pdf"}
@@ -2779,6 +2792,7 @@ async def test_file_to_markdown_index_success():
             },
         ),
     ]
+    assert publisher.events == []
 
 
 async def test_execute_file_to_markdown_index_reads_and_writes_via_provider():
@@ -3189,8 +3203,19 @@ async def test_execute_build_task_marks_unsupported_for_unsupported_type():
         def extract_text_from_file(self, file_bytes, file_type):
             raise UnsupportedFileTypeError("unsupported file type: exe")
 
+    connection = FakeConnection()
+
+    class Publisher:
+        def __init__(self):
+            self.events = []
+
+        async def publish(self, event):
+            assert connection.committed is True
+            self.events.append(event)
+
+    publisher = Publisher()
     service = KnowledgeItemIngestionService(
-        connection_factory=lambda: _async_return(FakeConnection()),
+        connection_factory=lambda: _async_return(connection),
         knowledge_base_repository=kb_repo,
         knowledge_fs_entry_repository=fs_repo,
         knowledge_build_task_repository=build_task_repo,
@@ -3198,6 +3223,7 @@ async def test_execute_build_task_marks_unsupported_for_unsupported_type():
         retrieval_projection_repository=FakeRetrievalProjectionRepository(),
         storage_provider=obj_storage,
         embedding_dimension=3,
+        event_publisher_invoker=KnowledgeEventPublisherInvoker(publisher),
     )
     request = FileToMarkdownIndexRequest.model_validate(
         {"knCode": "1", "filePath": "/x.exe"}
@@ -3211,6 +3237,81 @@ async def test_execute_build_task_marks_unsupported_for_unsupported_type():
     statuses = [c[1]["status"] for c in update_calls]
     assert BUILD_STATUS_UNSUPPORTED in statuses
     assert "failed" not in statuses
+    assert len(publisher.events) == 1
+    event = publisher.events[0]
+    assert event.event_type == "build.file.completed"
+    assert event.payload.status == "unsupported"
+    assert event.payload.current_step == "markdown"
+    assert event.payload.result is None
+    assert event.payload.error.code == "UNSUPPORTED_FILE_TYPE"
+
+
+async def test_execute_build_task_publishes_failed_event_after_terminal_commit():
+    import pytest
+
+    kb_repo = FakeKnowledgeBaseRepository(
+        default_lookup_result={"kid": 7, "kb_code": "1"}
+    )
+    fs_repo = FakeKnowledgeFsEntryRepository()
+    fs_repo.file_entry_by_path = {
+        "x.pdf": {
+            "kid": 71,
+            "entry_type": "FILE",
+            "name": "x.pdf",
+            "file_bucket_name": "test-bucket",
+            "file_object_key": "kb/7/fs-entry/71/original.pdf",
+            "mime_type": "application/pdf",
+        }
+    }
+    build_task_repo = FakeKnowledgeBuildTaskRepository()
+    storage = FakeStorageProvider()
+    storage.object_payloads[("test-bucket", "kb/7/fs-entry/71/original.pdf")] = b"raw"
+    connection = FakeConnection()
+
+    class FailingChunking(FakeDocumentChunkingService):
+        def chunk_and_embed(self, file_bytes, *, filename):
+            del file_bytes, filename
+            raise RuntimeError("embedding unavailable")
+
+    class Publisher:
+        def __init__(self):
+            self.events = []
+
+        async def publish(self, event):
+            assert connection.committed is True
+            self.events.append(event)
+
+    publisher = Publisher()
+    service = KnowledgeItemIngestionService(
+        connection_factory=lambda: _async_return(connection),
+        knowledge_base_repository=kb_repo,
+        knowledge_fs_entry_repository=fs_repo,
+        knowledge_build_task_repository=build_task_repo,
+        knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        storage_provider=storage,
+        embedding_dimension=3,
+        event_publisher_invoker=KnowledgeEventPublisherInvoker(publisher),
+    )
+    request = FileToMarkdownIndexRequest.model_validate(
+        {"knCode": "1", "filePath": "/x.pdf"}
+    )
+
+    with pytest.raises(RuntimeError, match="embedding unavailable"):
+        await service.execute_file_to_markdown_index_task(
+            request,
+            document_chunking_service=FailingChunking(),
+            build_task_id=9901,
+        )
+
+    assert len(publisher.events) == 1
+    event = publisher.events[0]
+    assert event.event_type == "build.file.completed"
+    assert event.payload.status == "failed"
+    assert event.payload.current_step == "chunking"
+    assert event.payload.result is None
+    assert event.payload.error.code == "BUILD_FAILED"
+    assert event.payload.error.message == "embedding unavailable"
 
 
 async def test_file_exists_true_and_false():

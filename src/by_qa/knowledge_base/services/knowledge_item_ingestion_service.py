@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import mimetypes
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Any, Callable
 
@@ -23,6 +23,10 @@ from by_qa.knowledge_base.build_status import (
     BUILD_STEP_COMPLETE,
     BUILD_STEP_MARKDOWN,
     BUILD_STEP_VECTORIZING,
+)
+from by_qa.knowledge_base.events import (
+    KnowledgeEventPublisherInvoker,
+    build_file_completed_event,
 )
 from by_qa.knowledge_base.infrastructure.storage import StorageLocation
 from by_qa.knowledge_base.metadata_types import prepare_front_matter_metadata_value
@@ -134,6 +138,9 @@ class KnowledgeItemIngestionService:
     file_metadata_value_repository: Any | None = None
     knowledge_file_reference_repository: Any | None = None
     markdown_reference_rewriter: Any | None = None
+    event_publisher_invoker: KnowledgeEventPublisherInvoker = field(
+        default_factory=KnowledgeEventPublisherInvoker
+    )
 
     async def convert_uploaded_file_to_markdown(
         self,
@@ -562,12 +569,13 @@ class KnowledgeItemIngestionService:
     async def file_to_markdown_index(
         self, request: FileToMarkdownIndexRequest, *, document_chunking_service: Any
     ) -> None:
-        """Synchronously create and execute one build task."""
+        """Synchronously build for an internal caller without an API event."""
         build_task_id = await self.create_file_to_markdown_index_task(request)
         await self.execute_file_to_markdown_index_task(
             request,
             document_chunking_service=document_chunking_service,
             build_task_id=build_task_id,
+            publish_event=False,
         )
 
     async def create_file_to_markdown_index_task(
@@ -660,8 +668,9 @@ class KnowledgeItemIngestionService:
         *,
         document_chunking_service: Any,
         build_task_id: int,
+        publish_event: bool = True,
     ) -> None:
-        """Download uploaded file, parse to markdown, chunk, embed, and persist."""
+        """Execute a build and optionally publish its committed terminal state."""
         logger.info(
             "knowledge_item_ingestion_service.execute_file_to_markdown_index_task started: kb_code=%s, file_path=%s, build_task_id=%s",
             request.kb_code,
@@ -674,6 +683,7 @@ class KnowledgeItemIngestionService:
 
         connection = await self.connection_factory()
         markdown_location: StorageLocation | None = None
+        current_step = BUILD_STEP_MARKDOWN
         try:
             cursor = connection.cursor()
 
@@ -739,6 +749,18 @@ class KnowledgeItemIngestionService:
                     finished=True,
                 )
                 await connection.commit()
+                if publish_event:
+                    await self.event_publisher_invoker.publish(
+                        build_file_completed_event(
+                            kb_code=request.kb_code,
+                            task_id=build_task_id,
+                            file_path=normalized_file_path,
+                            status=BUILD_STATUS_UNSUPPORTED,
+                            current_step=BUILD_STEP_MARKDOWN,
+                            error_code="UNSUPPORTED_FILE_TYPE",
+                            error_message=str(exc) or "unsupported file type",
+                        )
+                    )
                 return
             logger.info(
                 "file_to_markdown_index stage completed: build_task_id=%s, stage=extract_text, md_length=%s",
@@ -751,6 +773,7 @@ class KnowledgeItemIngestionService:
                 status=BUILD_STATUS_RUNNING,
                 current_step=BUILD_STEP_CHUNKING,
             )
+            current_step = BUILD_STEP_CHUNKING
 
             markdown_bytes = markdown_content.encode("utf-8")
             chunk_filename = PurePosixPath(original_name).stem + ".md"
@@ -775,6 +798,7 @@ class KnowledgeItemIngestionService:
                 status=BUILD_STATUS_RUNNING,
                 current_step=BUILD_STEP_VECTORIZING,
             )
+            current_step = BUILD_STEP_VECTORIZING
 
             self._validate_chunk_embedding_dimensions(chunks)
 
@@ -833,6 +857,18 @@ class KnowledgeItemIngestionService:
             )
 
             await connection.commit()
+            if publish_event:
+                await self.event_publisher_invoker.publish(
+                    build_file_completed_event(
+                        kb_code=request.kb_code,
+                        task_id=build_task_id,
+                        file_path=normalized_file_path,
+                        status=BUILD_STATUS_COMPLETE,
+                        current_step=BUILD_STEP_COMPLETE,
+                        chunk_count=len(chunks),
+                        line_count=line_count,
+                    )
+                )
 
             logger.info(
                 "knowledge_item_ingestion_service.file_to_markdown_index finished: kb_code=%s, file_path=%s, chunk_count=%s",
@@ -854,6 +890,18 @@ class KnowledgeItemIngestionService:
                     finished=True,
                 )
                 await connection.commit()
+                if publish_event:
+                    await self.event_publisher_invoker.publish(
+                        build_file_completed_event(
+                            kb_code=request.kb_code,
+                            task_id=build_task_id,
+                            file_path=normalized_file_path,
+                            status=BUILD_STATUS_FAILED,
+                            current_step=current_step,
+                            error_code="BUILD_FAILED",
+                            error_message=str(exc) or "internal error",
+                        )
+                    )
             raise
         finally:
             await connection.close()

@@ -34,6 +34,7 @@ _metadata_search_service: Any | None = None
 _file_metadata_query_service: Any | None = None
 _file_metadata_update_service: Any | None = None
 _knowledge_entity_processing_service: Any | None = None
+_knowledge_event_publisher_invoker: Any | None = None
 _knowledge_base_schema_initialized = False
 _knowledge_base_schema_lock = asyncio.Lock()
 
@@ -68,6 +69,9 @@ API_MODULES = (
             "get_file_metadata_update_service": resolve_file_metadata_update_service,
             "get_knowledge_entity_processing_service": (
                 resolve_knowledge_entity_processing_service
+            ),
+            "get_knowledge_event_publisher_invoker": (
+                resolve_knowledge_event_publisher_invoker
             ),
         },
     ),
@@ -288,7 +292,9 @@ async def _get_or_build_knowledge_item_ingestion_service(provider: Any | None = 
 
         await _ensure_knowledge_base_schema_initialized(provider=request_provider)
         return await build_knowledge_item_ingestion_service(
-            settings, provider=request_provider
+            settings,
+            provider=request_provider,
+            event_publisher_invoker=_get_or_build_knowledge_event_publisher_invoker(),
         )
 
     if _knowledge_item_ingestion_service is None:
@@ -300,7 +306,11 @@ async def _get_or_build_knowledge_item_ingestion_service(provider: Any | None = 
         await _ensure_knowledge_base_schema_initialized(provider=active_provider)
         _knowledge_item_ingestion_service = (
             await build_knowledge_item_ingestion_service(
-                settings, provider=active_provider
+                settings,
+                provider=active_provider,
+                event_publisher_invoker=(
+                    _get_or_build_knowledge_event_publisher_invoker()
+                ),
             )
         )
     return _knowledge_item_ingestion_service
@@ -441,6 +451,29 @@ async def resolve_document_chunking_service():
     return await _get_or_build_document_chunking_service()
 
 
+def _get_or_build_knowledge_event_publisher_invoker():
+    """Get the single event publisher shared by every knowledge event source."""
+    global _knowledge_event_publisher_invoker
+    if _knowledge_event_publisher_invoker is None:
+        from by_qa.knowledge_base.events import (
+            KnowledgeEventPublisherInvoker,
+            load_knowledge_event_publisher,
+        )
+
+        _knowledge_event_publisher_invoker = KnowledgeEventPublisherInvoker(
+            publisher=load_knowledge_event_publisher(
+                getattr(settings, "event_publisher_provider", "")
+            ),
+            timeout_seconds=getattr(settings, "event_publish_timeout_seconds", 5.0),
+        )
+    return _knowledge_event_publisher_invoker
+
+
+async def resolve_knowledge_event_publisher_invoker():
+    """Resolve the application-level knowledge event publisher invoker."""
+    return _get_or_build_knowledge_event_publisher_invoker()
+
+
 async def _get_or_build_knowledge_entity_processing_service(
     provider: Any | None = None,
 ):
@@ -464,6 +497,7 @@ async def _get_or_build_knowledge_entity_processing_service(
             settings,
             active_provider,
             document_chunking_service=chunker,
+            event_publisher_invoker=_get_or_build_knowledge_event_publisher_invoker(),
         )
 
     if _knowledge_entity_processing_service is None:
@@ -484,6 +518,9 @@ async def _get_or_build_knowledge_entity_processing_service(
                 settings,
                 active_provider,
                 document_chunking_service=chunker,
+                event_publisher_invoker=(
+                    _get_or_build_knowledge_event_publisher_invoker()
+                ),
             )
         )
     else:

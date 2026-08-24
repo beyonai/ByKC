@@ -32,6 +32,7 @@ class DocumentUpdateResult:
 
     timeline_id: int
     is_markdown: bool
+    file_path: str | None = None
     old_markdown_context: str | None = None
     new_markdown_context: str | None = None
 
@@ -308,6 +309,7 @@ class DocumentUpdateService:
             return DocumentUpdateResult(
                 timeline_id=timeline_id,
                 is_markdown=is_markdown,
+                file_path="/" + normalized_path,
                 old_markdown_context=self._bounded_context(old_markdown),
                 new_markdown_context=self._bounded_context(new_markdown),
             )

@@ -6,12 +6,10 @@ from unittest.mock import Mock
 
 import pytest
 
+from by_qa.knowledge_base.events import KnowledgeEventPublisherInvoker
 from by_qa.knowledge_base.services import knowledge_entity_background_runner
 from by_qa.knowledge_base.services.knowledge_entity_background_runner import (
     KnowledgeEntityBackgroundRunner,
-)
-from by_qa.knowledge_base.services.knowledge_entity_callback import (
-    KnowledgeEntityCallbackInvoker,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -157,16 +155,22 @@ class BlockingWorker:
             self.cancelled = True
 
 
-class Callback:
+class Publisher:
     def __init__(self):
-        self.files = []
-        self.batches = []
+        self.events = []
 
-    async def on_file_completed(self, event):
-        self.files.append(event)
+    async def publish(self, event):
+        self.events.append(event)
 
-    async def on_batch_completed(self, event):
-        self.batches.append(event)
+    @property
+    def files(self):
+        return [event for event in self.events if ".file.completed" in event.event_type]
+
+    @property
+    def batches(self):
+        return [
+            event for event in self.events if ".batch.completed" in event.event_type
+        ]
 
 
 def task(task_id):
@@ -181,7 +185,6 @@ def task(task_id):
         "input_fingerprint": f"fp-{task_id}",
         "input_checksum": f"sha-{task_id}",
         "request_params": {},
-        "extra_params": {"requestId": "req-1"},
     }
 
 
@@ -198,20 +201,19 @@ def make_runner(rows, *, failing_ids=()):
                 "total_count": len(rows),
                 "completed_count": 0,
                 "version": 0,
-                "extra_params": {"requestId": "req-1"},
                 "completed_at": None,
             }
         },
         tasks,
     )
-    callback = Callback()
+    callback = Publisher()
     worker = Worker(failing_ids)
     runner = KnowledgeEntityBackgroundRunner(
         connection_factory=connections,
         task_repository=tasks,
         batch_repository=batches,
         worker=worker,
-        callback_invoker=KnowledgeEntityCallbackInvoker(callback),
+        event_publisher_invoker=KnowledgeEventPublisherInvoker(callback),
         worker_id="worker-1",
         concurrency=2,
         lease_seconds=10,

@@ -16,6 +16,7 @@ from psycopg import sql
 
 from by_qa.config import get_settings
 from by_qa.knowledge_base.api.routes import register_routes
+from by_qa.knowledge_base.events import KnowledgeEventPublisherInvoker
 from by_qa.knowledge_base.infrastructure.database import build_connection_factory
 from by_qa.knowledge_base.infrastructure.storage_s3 import build_s3_storage_provider
 from by_qa.knowledge_base.repositories.knowledge_base_repository import (
@@ -45,9 +46,6 @@ from by_qa.knowledge_base.services.bootstrap_service import (
 from by_qa.knowledge_base.services.knowledge_entity_background_runner import (
     KnowledgeEntityBackgroundRunner,
 )
-from by_qa.knowledge_base.services.knowledge_entity_callback import (
-    KnowledgeEntityCallbackInvoker,
-)
 from by_qa.knowledge_base.services.knowledge_entity_processing_service import (
     KnowledgeEntityProcessingOrchestrator,
 )
@@ -66,15 +64,21 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 
 @dataclass
-class RecordingCallback:
-    files: list = field(default_factory=list)
-    batches: list = field(default_factory=list)
+class RecordingPublisher:
+    events: list = field(default_factory=list)
 
-    async def on_file_completed(self, event):
-        self.files.append(event)
+    async def publish(self, event):
+        self.events.append(event)
 
-    async def on_batch_completed(self, event):
-        self.batches.append(event)
+    @property
+    def files(self):
+        return [event for event in self.events if ".file.completed" in event.event_type]
+
+    @property
+    def batches(self):
+        return [
+            event for event in self.events if ".batch.completed" in event.event_type
+        ]
 
 
 class StorageReadingModelWorker:
@@ -203,6 +207,7 @@ async def seed_files(
     count: int,
     create_batch: bool = True,
     extra_params: dict | None = None,
+    task_type: str = "ENTITY_DISCOVERY",
 ):
     connection = await environment.connection_factory()
     try:
@@ -241,13 +246,13 @@ async def seed_files(
             )
             file_id = int((await cursor.fetchone())["kid"])
             files.append((file_id, file_path))
-        batch_id = f"ed-{uuid4().hex}"
+        batch_id = f"{'ee' if task_type == 'DOCUMENT_ENRICH' else 'ed'}-{uuid4().hex}"
         if create_batch:
             await environment.batch_repository.create_batch(
                 cursor,
                 batch_id=batch_id,
                 knowledge_base_id=knowledge_base_id,
-                task_type="ENTITY_DISCOVERY",
+                task_type=task_type,
                 scope="WHOLE_KB",
                 total_count=count,
                 extra_params=extra_params,
@@ -257,12 +262,16 @@ async def seed_files(
                     cursor,
                     knowledge_base_id=knowledge_base_id,
                     fs_entry_id=file_id,
-                    task_type="ENTITY_DISCOVERY",
+                    task_type=task_type,
                     batch_id=batch_id,
                     file_path_snapshot=file_path,
                     input_fingerprint=f"fp-{file_id}",
                     input_checksum=f"sha-{file_id}",
-                    request_params={"maxEntities": 12},
+                    request_params=(
+                        {"topK": 20}
+                        if task_type == "DOCUMENT_ENRICH"
+                        else {"maxEntities": 12}
+                    ),
                     extra_params=extra_params,
                 )
         await connection.commit()
@@ -312,7 +321,7 @@ def build_runner(
     *,
     worker_id: str,
     worker,
-    callback_invoker,
+    event_publisher_invoker,
     concurrency: int = 4,
     lease_seconds: int = 10,
 ):
@@ -321,7 +330,7 @@ def build_runner(
         task_repository=environment.task_repository,
         batch_repository=environment.batch_repository,
         worker=worker,
-        callback_invoker=callback_invoker,
+        event_publisher_invoker=event_publisher_invoker,
         worker_id=worker_id,
         concurrency=concurrency,
         poll_seconds=0.05,
@@ -333,24 +342,22 @@ def build_runner(
 
 
 async def test_two_independent_runners_claim_each_file_exactly_once(real_environment):
-    knowledge_base_id, batch_id, files = await seed_files(
-        real_environment, count=12, extra_params={"requestId": "race-it"}
-    )
+    knowledge_base_id, batch_id, files = await seed_files(real_environment, count=12)
     calls = []
-    callback = RecordingCallback()
-    invoker = KnowledgeEntityCallbackInvoker(callback)
+    callback = RecordingPublisher()
+    invoker = KnowledgeEventPublisherInvoker(callback)
     first = build_runner(
         real_environment,
         worker_id="runner-a",
         worker=StorageReadingModelWorker(real_environment.storage, calls),
-        callback_invoker=invoker,
+        event_publisher_invoker=invoker,
         concurrency=12,
     )
     second = build_runner(
         real_environment,
         worker_id="runner-b",
         worker=StorageReadingModelWorker(real_environment.storage, calls),
-        callback_invoker=invoker,
+        event_publisher_invoker=invoker,
         concurrency=12,
     )
 
@@ -382,24 +389,53 @@ async def test_two_independent_runners_claim_each_file_exactly_once(real_environ
     assert len(callback.batches) == 1
 
 
+async def test_enrich_runner_publishes_only_enrich_terminal_events(real_environment):
+    _, _, files = await seed_files(
+        real_environment,
+        count=1,
+        task_type="DOCUMENT_ENRICH",
+    )
+    calls = []
+    publisher = RecordingPublisher()
+    runner = build_runner(
+        real_environment,
+        worker_id="enrich-runner",
+        worker=StorageReadingModelWorker(real_environment.storage, calls),
+        event_publisher_invoker=KnowledgeEventPublisherInvoker(publisher),
+    )
+
+    assert await runner.run_claim_cycle() == 1
+    await asyncio.gather(*tuple(runner._active_tasks))
+
+    assert calls == [files[0][0]]
+    assert [event.event_type for event in publisher.events] == [
+        "semantic.enrich.file.completed",
+        "semantic.enrich.batch.completed",
+    ]
+    assert publisher.files[0].payload.status == "SUCCEEDED"
+    assert not any(
+        event.event_type == "build.file.completed" for event in publisher.events
+    )
+
+
 async def test_expired_claim_is_failed_and_stale_worker_cannot_overwrite_result(
     real_environment,
 ):
     knowledge_base_id, batch_id, _ = await seed_files(real_environment, count=1)
-    callback = RecordingCallback()
-    invoker = KnowledgeEntityCallbackInvoker(callback)
+    callback = RecordingPublisher()
+    invoker = KnowledgeEventPublisherInvoker(callback)
     abandoned = build_runner(
         real_environment,
         worker_id="killed-runner",
         worker=object(),
-        callback_invoker=invoker,
+        event_publisher_invoker=invoker,
         lease_seconds=1,
     )
     reaper = build_runner(
         real_environment,
         worker_id="replacement-runner",
         worker=object(),
-        callback_invoker=invoker,
+        event_publisher_invoker=invoker,
         lease_seconds=1,
     )
 
@@ -443,14 +479,14 @@ async def test_http_acceptance_runs_in_background_and_reports_batch_progress(
         real_environment, count=1, create_batch=False
     )
     calls = []
-    callback = RecordingCallback()
-    invoker = KnowledgeEntityCallbackInvoker(callback)
+    callback = RecordingPublisher()
+    invoker = KnowledgeEventPublisherInvoker(callback)
     worker = StorageReadingModelWorker(real_environment.storage, calls)
     runner = build_runner(
         real_environment,
         worker_id="http-runner",
         worker=worker,
-        callback_invoker=invoker,
+        event_publisher_invoker=invoker,
         concurrency=2,
     )
     service = KnowledgeEntityProcessingOrchestrator(
@@ -465,7 +501,7 @@ async def test_http_acceptance_runs_in_background_and_reports_batch_progress(
         ),
         knowledge_file_reference_repository=KnowledgeFileReferenceRepository(),
         worker=worker,
-        callback_invoker=invoker,
+        event_publisher_invoker=invoker,
         background_runner=runner,
     )
     app = FastAPI()
@@ -497,7 +533,6 @@ async def test_http_acceptance_runs_in_background_and_reports_batch_progress(
                 json={
                     "knCode": str(knowledge_base_id),
                     "filePath": files[0][1],
-                    "extraParams": {"requestId": "http-it"},
                 },
             )
             accepted = accepted_response.json()
@@ -525,11 +560,9 @@ async def test_http_acceptance_runs_in_background_and_reports_batch_progress(
     assert result["succeededCount"] == 1
     assert result["completedCount"] == 1
     assert result["progress"] == 100
-    assert result["extraParams"] == {"requestId": "http-it"}
-    assert result["data"][0]["extraParams"] == {"requestId": "http-it"}
     assert calls == [files[0][0]]
-    assert callback.files[0].extra_params == {"requestId": "http-it"}
-    assert callback.batches[0].progress.completed_count == 1
+    assert "extraParams" not in callback.files[0].model_dump(by_alias=True)
+    assert callback.batches[0].payload.progress.completed_count == 1
 
 
 async def test_real_enrich_worker_model_failure_keeps_minio_and_db_unchanged(

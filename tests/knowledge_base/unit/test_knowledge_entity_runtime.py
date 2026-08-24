@@ -46,8 +46,8 @@ async def test_build_knowledge_entity_processing_service_composes_real_worker(
         calls.append(("storage", value, embedding_config))
         return storage
 
-    async def fake_ingestion(value, provider=None):
-        calls.append(("ingestion", value, provider))
+    async def fake_ingestion(value, provider=None, *, event_publisher_invoker=None):
+        calls.append(("ingestion", value, provider, event_publisher_invoker))
         return ingestion
 
     async def fake_update(value, provider=None):
@@ -85,10 +85,13 @@ async def test_build_knowledge_entity_processing_service_composes_real_worker(
     assert service.worker._enricher._llm._provider is provider
     assert service.worker._discovery._llm._temperature == 0.0
     assert service.worker._enricher._llm._temperature is None
-    assert calls == [
+    assert calls[:2] == [
         ("get_config", LLMModelProfile.EMBEDDING),
         ("storage", settings, embedding_config),
-        ("ingestion", settings, provider),
+    ]
+    assert calls[2][:3] == ("ingestion", settings, provider)
+    assert calls[2][3] is service.event_publisher_invoker
+    assert calls[3:] == [
         ("update", settings, provider),
         ("search", settings, provider),
     ]

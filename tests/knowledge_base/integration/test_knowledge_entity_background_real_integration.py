@@ -16,6 +16,7 @@ import redis.asyncio as redis
 from psycopg import sql
 
 from by_qa.config import get_settings
+from by_qa.knowledge_base.events import KnowledgeEventPublisherInvoker
 from by_qa.knowledge_base.infrastructure.database import build_connection_factory
 from by_qa.knowledge_base.infrastructure.storage_s3 import build_s3_storage_provider
 from by_qa.knowledge_base.repositories.knowledge_semantic_processing_batch_repository import (
@@ -29,9 +30,6 @@ from by_qa.knowledge_base.services.bootstrap_service import (
 )
 from by_qa.knowledge_base.services.knowledge_entity_background_runner import (
     KnowledgeEntityBackgroundRunner,
-)
-from by_qa.knowledge_base.services.knowledge_entity_callback import (
-    KnowledgeEntityCallbackInvoker,
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -61,16 +59,22 @@ class DeterministicModelWorker:
         }
 
 
-class Callback:
+class Publisher:
     def __init__(self):
-        self.files = []
-        self.batches = []
+        self.events = []
 
-    async def on_file_completed(self, event):
-        self.files.append(event)
+    async def publish(self, event):
+        self.events.append(event)
 
-    async def on_batch_completed(self, event):
-        self.batches.append(event)
+    @property
+    def files(self):
+        return [event for event in self.events if ".file.completed" in event.event_type]
+
+    @property
+    def batches(self):
+        return [
+            event for event in self.events if ".batch.completed" in event.event_type
+        ]
 
 
 async def test_real_services_support_claim_failure_progress_and_lease_reaping():
@@ -85,7 +89,7 @@ async def test_real_services_support_claim_failure_progress_and_lease_reaping():
     task_repository = KnowledgeSemanticProcessingTaskRepository()
     batch_repository = KnowledgeSemanticProcessingBatchRepository()
     storage = build_s3_storage_provider(settings)
-    callback = Callback()
+    callback = Publisher()
     object_locations = []
 
     redis_client = redis.Redis(
@@ -149,7 +153,6 @@ async def test_real_services_support_claim_failure_progress_and_lease_reaping():
                 task_type="ENTITY_DISCOVERY",
                 scope="WHOLE_KB",
                 total_count=2,
-                extra_params={"requestId": "real-it"},
             )
             for index, file_id in enumerate(file_ids, start=1):
                 await task_repository.create_processing_task(
@@ -161,7 +164,6 @@ async def test_real_services_support_claim_failure_progress_and_lease_reaping():
                     file_path_snapshot=f"/doc-{index}.md",
                     input_fingerprint=f"fp-{index}",
                     request_params={"maxEntities": 12},
-                    extra_params={"requestId": "real-it"},
                 )
             await connection.commit()
         finally:
@@ -187,7 +189,7 @@ async def test_real_services_support_claim_failure_progress_and_lease_reaping():
             task_repository=task_repository,
             batch_repository=batch_repository,
             worker=worker,
-            callback_invoker=KnowledgeEntityCallbackInvoker(callback),
+            event_publisher_invoker=KnowledgeEventPublisherInvoker(callback),
             worker_id="real-it-worker",
             concurrency=2,
             lease_seconds=10,

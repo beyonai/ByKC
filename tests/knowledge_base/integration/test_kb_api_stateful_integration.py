@@ -14,6 +14,10 @@ import by_qa.main as main_module
 from by_qa.config import Settings
 from by_qa.core.model_config import ModelConfig
 from by_qa.knowledge_base.api.schemas import FileToMarkdownIndexRequest
+from by_qa.knowledge_base.events import (
+    KnowledgeEventPublisherInvoker,
+    serialize_knowledge_event,
+)
 from by_qa.knowledge_base.infrastructure.database import build_connection_factory
 from by_qa.knowledge_base.infrastructure.runtime import (
     build_knowledge_item_search_service,
@@ -218,6 +222,7 @@ def _reset_runtime(monkeypatch: pytest.MonkeyPatch, settings: Settings) -> None:
     monkeypatch.setattr(main_module, "_document_chunking_service", None)
     monkeypatch.setattr(main_module, "_file_metadata_query_service", None)
     monkeypatch.setattr(main_module, "_file_metadata_update_service", None)
+    monkeypatch.setattr(main_module, "_knowledge_event_publisher_invoker", None)
     monkeypatch.setattr(main_module, "_knowledge_base_schema_initialized", False)
     monkeypatch.setattr(main_module, "_knowledge_base_schema_lock", asyncio.Lock())
 
@@ -489,6 +494,393 @@ def _update_file(
             )
         },
     )
+
+
+@pytest.mark.integration
+def test_resource_mutation_events_cover_sync_file_and_directory_lifecycle(
+    monkeypatch, tmp_path
+):
+    """Every committed synchronous tree mutation publishes one detached event."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    connection_factory = build_connection_factory(settings)
+
+    class CommitObservingPublisher:
+        def __init__(self):
+            self.events = []
+            self.committed_observations = []
+
+        async def publish(self, event):
+            payload = event.payload.model_dump(by_alias=True)
+            path = payload.get("targetPath") or payload.get("sourcePath")
+            connection = await connection_factory()
+            try:
+                cursor = connection.cursor()
+                await cursor.execute(
+                    """
+                    SELECT is_deleted
+                    FROM knowledge_fs_entry
+                    WHERE knowledge_base_id = %(knowledge_base_id)s
+                      AND virtual_path = %(virtual_path)s
+                    ORDER BY kid DESC
+                    LIMIT 1
+                    """,
+                    {
+                        "knowledge_base_id": int(event.kb_code),
+                        "virtual_path": path,
+                    },
+                )
+                row = await cursor.fetchone()
+            finally:
+                await connection.close()
+            expected_deleted = event.event_type.endswith(".deleted")
+            self.committed_observations.append(
+                row is not None and bool(row["is_deleted"]) is expected_deleted
+            )
+            self.events.append(event)
+
+    publisher = CommitObservingPublisher()
+    main_module._knowledge_event_publisher_invoker = KnowledgeEventPublisherInvoker(
+        publisher
+    )
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Event KB {uuid4().hex[:12]}")
+
+        create_directory = client.post(
+            "/api/v1/directories/create",
+            json={
+                "knCode": kb_code,
+                "directoryPath": "/docs",
+            },
+        )
+        assert create_directory.json()["resultCode"] == "0"
+
+        client.post(
+            "/api/v1/directories/update",
+            json={
+                "knCode": kb_code,
+                "directoryPath": "/docs",
+                "directoryName": "renamed",
+            },
+        )
+        client.post(
+            "/api/v1/knowledgeItems/import",
+            data={
+                "knCode": kb_code,
+                "filePath": "/renamed/a.md",
+            },
+            files={"fileContent": ("a.md", b"# Before\n", "text/markdown")},
+        )
+        client.post(
+            "/api/v1/knowledgeItems/update",
+            data={
+                "knCode": kb_code,
+                "filePath": "/renamed/a.md",
+            },
+            files={"fileContent": ("a.md", b"# After\n", "text/markdown")},
+        )
+        client.post(
+            "/api/v1/directories/create",
+            json={"knCode": kb_code, "directoryPath": "/archive"},
+        )
+        client.post(
+            "/api/v1/knowledgeItems/move",
+            json={
+                "knCode": kb_code,
+                "sourcePath": ["/renamed/a.md"],
+                "targetDirectoryPath": "/archive",
+            },
+        )
+        client.post(
+            "/api/v1/knowledgeItems/delete",
+            json={
+                "knCode": kb_code,
+                "filePath": "/archive/a.md",
+            },
+        )
+        client.post(
+            "/api/v1/directories/delete",
+            json={
+                "knCode": kb_code,
+                "directoryPath": "/renamed",
+            },
+        )
+
+    assert [event.event_type for event in publisher.events] == [
+        "resource.directory.created",
+        "resource.directory.updated",
+        "resource.file.imported",
+        "resource.file.updated",
+        "resource.directory.created",
+        "resource.moved",
+        "resource.file.deleted",
+        "resource.directory.deleted",
+    ]
+    assert all(publisher.committed_observations)
+    assert all(
+        "extraParams" not in event.model_dump(by_alias=True)
+        for event in publisher.events
+    )
+    assert all(
+        "resourceId" not in event.payload.model_dump(by_alias=True)
+        for event in publisher.events
+    )
+
+
+@pytest.mark.integration
+def test_async_file_build_publishes_strict_event_after_terminal_commit(
+    monkeypatch, tmp_path
+):
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch,
+        FakeDocumentChunkingService(markdown_text="# Built\n"),
+    )
+    connection_factory = build_connection_factory(settings)
+
+    class CommitObservingPublisher:
+        def __init__(self):
+            self.events = []
+            self.serialized_events = []
+            self.persisted_statuses = []
+
+        async def publish(self, event):
+            self.events.append(event)
+            self.serialized_events.append(serialize_knowledge_event(event))
+            if event.event_type != "build.file.completed":
+                return
+            connection = await connection_factory()
+            try:
+                cursor = connection.cursor()
+                await cursor.execute(
+                    "SELECT status FROM knowledge_build_task WHERE kid = %(task_id)s",
+                    {"task_id": int(event.payload.task_id)},
+                )
+                row = await cursor.fetchone()
+            finally:
+                await connection.close()
+            self.persisted_statuses.append(row["status"] if row else None)
+
+    publisher = CommitObservingPublisher()
+    main_module._knowledge_event_publisher_invoker = KnowledgeEventPublisherInvoker(
+        publisher
+    )
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Build Event KB {uuid4().hex[:12]}")
+        _create_directory(client, kb_code=kb_code, directory_path="/docs")
+        _upload_and_build_file(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/a.md",
+            file_content=b"# Source\n",
+        )
+
+    build_events = [
+        event
+        for event in publisher.events
+        if event.event_type == "build.file.completed"
+    ]
+    assert len(build_events) == 1
+    event = build_events[0]
+    assert event.kb_code == kb_code
+    assert event.payload.status == "complete"
+    assert event.payload.file_path == "docs/a.md"
+    assert event.payload.current_step == "complete"
+    assert event.payload.result.chunk_count == 1
+    assert event.payload.error is None
+    assert publisher.persisted_statuses == ["complete"]
+    serialized = next(
+        item
+        for item in publisher.serialized_events
+        if item["eventType"] == "build.file.completed"
+    )
+    assert set(serialized) == {
+        "eventId",
+        "eventVersion",
+        "eventType",
+        "knCode",
+        "occurredAt",
+        "payload",
+    }
+    assert serialized["payload"] == {
+        "taskId": event.payload.task_id,
+        "status": "complete",
+        "filePath": "docs/a.md",
+        "currentStep": "complete",
+        "result": {"chunkCount": 1, "lineCount": 2},
+        "error": None,
+    }
+    assert "extraParams" not in event.model_dump(by_alias=True)
+    assert "resourceId" not in event.payload.model_dump(by_alias=True)
+
+
+@pytest.mark.integration
+def test_async_file_build_publishes_unsupported_terminal_event(monkeypatch, tmp_path):
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch,
+        _UnsupportedPngChunking(markdown_text="unused"),
+    )
+
+    class RecordingPublisher:
+        def __init__(self):
+            self.events = []
+
+        async def publish(self, event):
+            self.events.append(event)
+
+    publisher = RecordingPublisher()
+    main_module._knowledge_event_publisher_invoker = KnowledgeEventPublisherInvoker(
+        publisher
+    )
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Unsupported Build KB {uuid4().hex[:12]}")
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/images/a.png",
+            file_content=b"\x89PNG fake",
+            content_type="image/png",
+        )
+        response = client.post(
+            "/api/v1/fileToMarkdownIndex",
+            json={"knCode": kb_code, "filePath": "/images/a.png"},
+        )
+        status = _file_build_status(
+            client,
+            kb_code=kb_code,
+            file_path="/images/a.png",
+        )
+
+    assert response.json()["resultCode"] == "0"
+    assert status.json()["resultObject"]["status"] == "unsupported"
+    build_events = [
+        event
+        for event in publisher.events
+        if event.event_type == "build.file.completed"
+    ]
+    assert len(build_events) == 1
+    event = build_events[0]
+    assert event.payload.status == "unsupported"
+    assert event.payload.current_step == "markdown"
+    assert event.payload.result is None
+    assert event.payload.error.code == "UNSUPPORTED_FILE_TYPE"
+    assert event.payload.error.message == "unsupported file type: png"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("publisher_mode", ["raise", "timeout"])
+def test_async_build_publisher_failure_does_not_change_committed_status(
+    monkeypatch, tmp_path, publisher_mode
+):
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch,
+        FakeDocumentChunkingService(markdown_text="# Built\n"),
+    )
+
+    class UnavailablePublisher:
+        async def publish(self, event):
+            del event
+            if publisher_mode == "timeout":
+                await asyncio.sleep(0.05)
+            raise RuntimeError("publisher unavailable")
+
+    main_module._knowledge_event_publisher_invoker = KnowledgeEventPublisherInvoker(
+        UnavailablePublisher(), timeout_seconds=0.001
+    )
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Publisher Failure KB {uuid4().hex[:12]}")
+        _upload_and_build_file(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/a.md",
+            file_content=b"# Source\n",
+        )
+        status = _file_build_status(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/a.md",
+        )
+
+    assert status.json()["resultObject"]["status"] == "complete"
+    assert status.json()["resultObject"]["currentStep"] == "complete"
+
+
+@pytest.mark.integration
+def test_partial_move_publishes_results_and_all_failure_publishes_nothing(
+    monkeypatch, tmp_path
+):
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+
+    class RecordingPublisher:
+        def __init__(self):
+            self.events = []
+
+        async def publish(self, event):
+            self.events.append(event)
+
+    publisher = RecordingPublisher()
+    main_module._knowledge_event_publisher_invoker = KnowledgeEventPublisherInvoker(
+        publisher
+    )
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Partial Move KB {uuid4().hex[:12]}")
+        _create_directory(client, kb_code=kb_code, directory_path="/archive")
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/a.md",
+            file_content=b"# A\n",
+        )
+        publisher.events.clear()
+
+        partial = client.post(
+            "/api/v1/knowledgeItems/move",
+            json={
+                "knCode": kb_code,
+                "sourcePath": ["/a.md", "/missing.md"],
+                "targetDirectoryPath": "/archive",
+            },
+        )
+        event_count_after_partial = len(publisher.events)
+        all_failed = client.post(
+            "/api/v1/knowledgeItems/move",
+            json={
+                "knCode": kb_code,
+                "sourcePath": ["/still-missing.md"],
+                "targetDirectoryPath": "/archive",
+            },
+        )
+
+    partial_result = partial.json()["resultObject"]
+    assert partial_result["summary"] == {"total": 2, "succeeded": 1, "failed": 1}
+    move_events = [
+        event for event in publisher.events if event.event_type == "resource.moved"
+    ]
+    assert len(move_events) == 1
+    assert move_events[0].payload.result.model_dump() == {
+        "total": 2,
+        "succeeded": 1,
+        "failed": 1,
+    }
+    assert [item.success for item in move_events[0].payload.items] == [True, False]
+    assert event_count_after_partial == 1
+    assert len(publisher.events) == event_count_after_partial
+    assert all_failed.json()["resultObject"]["summary"] == {
+        "total": 1,
+        "succeeded": 0,
+        "failed": 1,
+    }
 
 
 @pytest.mark.integration
@@ -1584,6 +1976,18 @@ def test_file_to_markdown_index_rejects_duplicate_request_while_running(
     settings = _kb_settings(agent_data_path=tmp_path)
     _reset_runtime(monkeypatch, settings)
 
+    class RecordingPublisher:
+        def __init__(self):
+            self.events = []
+
+        async def publish(self, event):
+            self.events.append(event)
+
+    publisher = RecordingPublisher()
+    main_module._knowledge_event_publisher_invoker = KnowledgeEventPublisherInvoker(
+        publisher
+    )
+
     kb_name = f"Integration KB {uuid4().hex[:12]}"
     file_path = "/Policies/manual.md"
 
@@ -1625,6 +2029,9 @@ def test_file_to_markdown_index_rejects_duplicate_request_while_running(
     duplicate_payload = duplicate_response.json()
     assert duplicate_payload["resultCode"] == "-1"
     assert "build task already exists" in duplicate_payload["resultMsg"]
+    assert not any(
+        event.event_type == "build.file.completed" for event in publisher.events
+    )
 
 
 @pytest.mark.integration
@@ -1635,6 +2042,18 @@ def test_failed_build_status_can_be_retried_to_complete(monkeypatch, tmp_path):
     _set_document_chunking_service(
         monkeypatch,
         FailingOnceDocumentChunkingService(markdown_text="retry\nworks\n"),
+    )
+
+    class RecordingPublisher:
+        def __init__(self):
+            self.events = []
+
+        async def publish(self, event):
+            self.events.append(event)
+
+    publisher = RecordingPublisher()
+    main_module._knowledge_event_publisher_invoker = KnowledgeEventPublisherInvoker(
+        publisher
     )
 
     kb_name = f"Integration KB {uuid4().hex[:12]}"
@@ -1679,6 +2098,16 @@ def test_failed_build_status_can_be_retried_to_complete(monkeypatch, tmp_path):
     assert second_build.json()["resultCode"] == "0"
     assert complete_status.json()["resultObject"]["status"] == "complete"
     assert complete_status.json()["resultObject"]["currentStep"] == "complete"
+    build_events = [
+        event
+        for event in publisher.events
+        if event.event_type == "build.file.completed"
+    ]
+    assert [event.payload.status for event in build_events] == ["failed", "complete"]
+    assert build_events[0].payload.error.code == "BUILD_FAILED"
+    assert build_events[0].payload.result is None
+    assert build_events[1].payload.error is None
+    assert build_events[1].payload.result.chunk_count == 1
 
 
 @pytest.mark.integration

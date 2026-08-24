@@ -86,7 +86,6 @@ class FakeKnowledgeEntityService:
             "failedCount": 0,
             "skippedCount": 0,
             "progress": 50,
-            "extraParams": {"requestId": "req-1"},
             "createdAt": "2026-08-18T00:00:00Z",
             "completedAt": None,
             "pageNum": request.page_num,
@@ -148,29 +147,24 @@ def make_client(service: FakeKnowledgeEntityService | None) -> TestClient:
 
 
 def test_discovery_and_enrich_requests_support_whole_kb_scope():
-    discovery = EntityDiscoveryRequest.model_validate(
-        {"knCode": "1", "extraParams": {"requestId": "req-1"}}
-    )
+    discovery = EntityDiscoveryRequest.model_validate({"knCode": "1"})
     enrich = EntityEnrichRequest.model_validate({"knCode": "1"})
 
     assert discovery.file_path is None
     assert discovery.max_entities == 12
-    assert discovery.extra_params == {"requestId": "req-1"}
     assert enrich.file_path is None
     assert enrich.top_k == 20
 
 
-def test_extra_params_rejects_oversized_or_deep_payloads():
-    with pytest.raises(ValidationError, match="16384"):
+def test_discovery_and_enrich_reject_removed_extra_params():
+    with pytest.raises(ValidationError, match="extra_forbidden"):
         EntityDiscoveryRequest.model_validate(
-            {"knCode": "1", "extraParams": {"value": "x" * 17000}}
+            {"knCode": "1", "extraParams": {"requestId": "req-1"}}
         )
-
-    nested = "leaf"
-    for _ in range(9):
-        nested = {"value": nested}
-    with pytest.raises(ValidationError, match="depth"):
-        EntityEnrichRequest.model_validate({"knCode": "1", "extraParams": nested})
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        EntityEnrichRequest.model_validate(
+            {"knCode": "1", "extraParams": {"requestId": "req-1"}}
+        )
 
 
 @pytest.mark.parametrize(
@@ -316,7 +310,7 @@ def test_status_route_queries_by_kb_and_optional_path():
     assert request.task_type.value == "ENTITY_DISCOVERY"
 
 
-def test_batch_status_route_returns_progress_and_extra_params():
+def test_batch_status_route_returns_progress_without_extra_params():
     service = FakeKnowledgeEntityService()
     response = make_client(service).post(
         "/api/v1/knowledgeItems/processingBatchStatus",
@@ -326,7 +320,7 @@ def test_batch_status_route_returns_progress_and_extra_params():
     result = response.json()["resultObject"]
     assert result["completedCount"] == 1
     assert result["progress"] == 50
-    assert result["extraParams"] == {"requestId": "req-1"}
+    assert "extraParams" not in result
     assert service.calls[0][0] == "batch_status"
 
 

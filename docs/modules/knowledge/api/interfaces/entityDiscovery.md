@@ -30,9 +30,9 @@
 | `filePath` | string | 否 | - | 原始文档路径；不传表示处理该知识库下全部符合条件的原始文档 |
 | `maxEntities` | integer | 否 | `12` | 每个源文档的最大抽取实体数，不得超过 12 |
 | `force` | boolean | 否 | `false` | 是否跳过 freshness 判断；不跳过资格和权限校验 |
-| `extraParams` | object | 否 | `{}` | 发起方透传参数；保存到 batch/task 并传入 Callback |
+| `extParams` | object | 否 | `null` | **已弃用**，仅为历史请求兼容而接收；服务端不修改其内容，也不使用、持久化或传入 Callback |
 
-HTTP 请求中不包含 `callback` 字段。
+HTTP 请求中不包含 `callback` 字段。历史客户端也可使用别名 `ext_params`；新接入不应再传入该字段。`extraParams` 不是受支持的字段，传入时请求校验失败。
 
 ## 请求示例
 
@@ -44,6 +44,18 @@ HTTP 请求中不包含 `callback` 字段。
   "force": false
 }
 ```
+
+兼容旧请求时可以携带 `extParams`，但它不影响任务语义：
+
+```json
+{
+  "knCode": "1",
+  "filePath": "/原始文档/AI时代的组织革命.md",
+  "extParams": {"legacyRequestId": "req-1001"}
+}
+```
+
+上述对象仅在请求模型中原样接收，不进入 batch/task 执行参数、状态响应或 Callback 事件。
 
 全库触发时不传 `filePath`：
 

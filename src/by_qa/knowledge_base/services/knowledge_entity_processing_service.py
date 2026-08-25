@@ -546,7 +546,11 @@ class KnowledgeEntityProcessingOrchestrator:
             )
             if batch is None:
                 raise RuntimeError("failed to create semantic processing batch")
-            params = request.model_dump(mode="json", by_alias=True)
+            params = request.model_dump(
+                mode="json",
+                by_alias=True,
+                exclude={"ext_params"},
+            )
             for file_row in files:
                 file_id = self._row_id(file_row)
                 file_path = str(file_row["file_path"])

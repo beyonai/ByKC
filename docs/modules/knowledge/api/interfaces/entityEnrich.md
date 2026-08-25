@@ -30,9 +30,9 @@
 | `filePath` | string | 否 | - | KnowledgeEntity 文档路径；不传表示处理本库 `/KnowledgeEntity` 下全部符合条件的实体文档 |
 | `topK` | integer | 否 | `20` | 语义证据候选上限，建议最大 100 |
 | `force` | boolean | 否 | `false` | 是否跳过 freshness 判断 |
-| `extraParams` | object | 否 | `{}` | 发起方透传参数；保存到 batch/task 并传入 Callback |
+| `extParams` | object | 否 | `null` | **已弃用**，仅为历史请求兼容而接收；服务端不修改其内容，也不使用、持久化或传入 Callback |
 
-HTTP 请求中不包含 `callback` 或模板正文。Enrich 只在当前知识库内收集证据，更新策略随服务代码发布。
+HTTP 请求中不包含 `callback` 或模板正文。历史客户端也可使用别名 `ext_params`；新接入不应再传入该字段。`extraParams` 不是受支持的字段，传入时请求校验失败。Enrich 只在当前知识库内收集证据，更新策略随服务代码发布。
 
 ## 请求示例
 
@@ -44,6 +44,18 @@ HTTP 请求中不包含 `callback` 或模板正文。Enrich 只在当前知识�
   "force": false
 }
 ```
+
+兼容旧请求时可以携带 `extParams`，但它不影响任务语义：
+
+```json
+{
+  "knCode": "1",
+  "filePath": "/KnowledgeEntity/OSOT.md",
+  "extParams": {"legacyRequestId": "req-1001"}
+}
+```
+
+上述对象仅在请求模型中原样接收，不进入 batch/task 执行参数、状态响应或 Callback 事件。
 
 全库触发时不传 `filePath`。
 

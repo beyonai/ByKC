@@ -1,6 +1,6 @@
 # KnowledgeEntity 后台处理与 Callback 简化设计
 
-> 状态说明：Discovery/Enrich 已一次性切换到 [文件与目录同步变更统一事件通知设计](./resource-mutation-background-callback-design.md) 定义的 `KnowledgeEventPublisher`。请求、状态响应和事件都不再包含 `extraParams`；现有数据库 `extra_params` 列仅作为历史表结构保留，新数据使用默认空值且运行时不读取。
+> 状态说明：Discovery/Enrich 已一次性切换到 [文件与目录同步变更统一事件通知设计](./resource-mutation-background-callback-design.md) 定义的 `KnowledgeEventPublisher`。请求为历史兼容保留已弃用的 `extParams`/`ext_params`，仅接收且忽略；状态响应和事件不包含该字段。`extraParams` 仍不受支持；现有数据库 `extra_params` 列仅作为历史表结构保留，新数据使用默认空值且运行时不读取。
 
 ## 1. 文档目标
 
@@ -245,7 +245,7 @@ CREATE INDEX idx_knowledge_semantic_task_batch_status
 
 ### 5.4 `request_params` 与历史 `extra_params`
 
-`request_params` 继续保存 `maxEntities`、`topK`、`force` 等 worker 执行参数快照。API 不再定义 `extraParams`；新 batch/task 不传入该参数，状态响应和 Callback 事件也不包含该字段。表中现有 `extra_params` 列为避免本次引入破坏性 schema 迁移而保留，新行使用默认 `{}` 且业务运行时忽略。
+`request_params` 继续保存 `maxEntities`、`topK`、`force` 等 worker 执行参数快照。API 不再定义 `extraParams`。历史兼容字段 `extParams`/`ext_params` 是可选且已弃用的请求字段：输入值不做规范化，但在进入 `request_params`、batch/task、状态响应和 Callback 事件前丢弃。表中现有 `extra_params` 列为避免本次引入破坏性 schema 迁移而保留，新行使用默认 `{}` 且业务运行时忽略。
 
 ### 5.5 Enrich 构建任务关联
 
@@ -604,7 +604,7 @@ Callback 实现一旦被调用，后续可靠性由实现方负责。例如实�
 }
 ```
 
-Discovery 和 Enrich 不接受 `extraParams`；由于请求模型使用 `extra="forbid"`，传入该字段会返回请求校验失败。
+Discovery 和 Enrich 不接受 `extraParams`；由于请求模型使用 `extra="forbid"`，传入该字段会返回请求校验失败。为历史兼容，仅 `extParams`/`ext_params` 作为已弃用的可选字段保留，服务不使用也不向下游传递。
 
 ### 12.3 接受响应
 
@@ -840,7 +840,7 @@ error_type
 - 全库请求为每个候选文件创建 task；
 - 不可处理文件创建为 `skipped`；
 - 零文件批次立即完成；
-- Discovery/Enrich 请求传入 `extraParams` 时校验失败；
+- Discovery/Enrich 请求传入 `extraParams` 时校验失败；传入已弃用的 `extParams`/`ext_params` 时可正常接收但不持久、不进入事件；
 - batch/task 状态响应和 Callback 事件不包含 `extraParams`。
 
 ### 20.2 并发和隔离
@@ -892,7 +892,7 @@ error_type
 7. Discovery 和 Enrich 失败均不自动重试；
 8. 每个批次候选文件都有 task 行和文件终态；
 9. batch 不因文件失败而失败；
-10. Discovery/Enrich 请求不接受 `extraParams`；
+10. Discovery/Enrich 请求不接受 `extraParams`；仅兼容已弃用且被忽略的 `extParams`/`ext_params`；
 11. 文件和批次事件不包含 `extraParams`；
 12. 文件终态发布 file completed 事件，硬 kill 窗口允许丢失；
 13. 批次终态发布 batch completed 事件，硬 kill 窗口允许丢失；

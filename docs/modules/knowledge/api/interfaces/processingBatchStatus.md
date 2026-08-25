@@ -25,7 +25,7 @@
 - `status`：`PROCESSING` 或 `COMPLETED`；
 - `version`、`totalCount`、`completedCount` 和 0–100 的 `progress`；
 - `pendingCount`、`runningCount`、`succeededCount`、`failedCount`、`skippedCount`；
-- batch 的 `extraParams` 和分页 task 明细。
+- 分页 task 明细。请求中已弃用的 `extParams` 不进入 batch/task，也不在状态响应中返回。
 
 单文件失败只增加 `failedCount`，batch 仍在所有文件进入终态后成为 `COMPLETED`。
 
@@ -73,7 +73,6 @@
     "failedCount": 1,
     "skippedCount": 0,
     "progress": 100,
-    "extraParams": {"requestId": "req-1001"},
     "createdAt": "2026-08-17T10:00:00+08:00",
     "completedAt": "2026-08-17T10:02:30+08:00",
     "pageNum": 1,
@@ -92,8 +91,7 @@
         "createdAt": "2026-08-17T10:00:00+08:00",
         "startedAt": "2026-08-17T10:00:01+08:00",
         "finishedAt": "2026-08-17T10:00:08+08:00",
-        "result": {"createdCount": 1},
-        "extraParams": {"requestId": "req-1001"}
+        "result": {"createdCount": 1}
       },
       {
         "taskId": "9002",
@@ -110,8 +108,7 @@
         "error": {
           "errorCode": "PROCESSING_FAILED",
           "message": "model failed"
-        },
-        "extraParams": {"requestId": "req-1001"}
+        }
       }
     ]
   }

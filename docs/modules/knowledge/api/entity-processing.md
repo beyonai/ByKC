@@ -5,7 +5,7 @@
 - 一次 `entityDiscovery` 或 `entityEnrich` 请求形成一个 `batchId`。
 - 每个实际处理的文件形成一个 `taskId`。
 - 单文件失败不会阻止同批次其他文件。
-- `extraParams` 保存在 batch/task 中，并原样传递给 Callback。
+- Discovery/Enrich 仅为历史兼容接收已弃用的 `extParams`/`ext_params`；服务端不修改它，也不使用、持久化或写入状态与 Callback 事件。`extraParams` 不受支持。
 
 Discovery 和 Enrich 共用同一套持久化 batch/task 调度，但任务类型、资格检查和文件副作用相互独立。受理接口不在 HTTP 请求内执行模型推理。
 
@@ -58,14 +58,12 @@ batch 不使用 `FAILED` 表示“包含失败文件”。当所有文件进入�
 
 ## Callback
 
-Callback 由 `KnowledgeEntityProcessingCallback` Protocol 定义：
+Discovery/Enrich 与其他知识库变更共用 `KnowledgeEventPublisher`。语义处理发布严格结构的文件终态事件和批次终态事件：
 
-- `on_file_completed`：每个文件进入终态后调用。
-- `on_batch_completed`：整个批次完成后调用。
+- Discovery：`semantic.discovery.file.completed` 和 `semantic.discovery.batch.completed`；
+- Enrich：`semantic.enrich.file.completed` 和 `semantic.enrich.batch.completed`。
 
-Callback 失败不改变已提交的任务状态。当前不保证重试或必达。
-
-Callback 在任务终态事务提交后调用，因此实现方不能依赖“抛异常回滚任务”。当前 Callback 未设置独立超时；实现方应自行使用有界 HTTP/队列超时，避免长时间占用 Worker 并发槽位。
+事件在相应任务或批次终态事务提交后发布。Publisher 失败不改变已提交的状态，当前不保证重试或必达；事件也不包含 `extParams`、`extraParams`、`resourceId` 或请求 ID。具体事件模型和 Publisher 配置见 [统一事件通知设计](../resource-mutation-background-callback-design.md)。
 
 ## 常见任务错误
 

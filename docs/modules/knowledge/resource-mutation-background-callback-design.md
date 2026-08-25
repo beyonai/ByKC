@@ -323,7 +323,7 @@ Invoker 统一负责有界超时、异常隔离和结构化日志。第一版不
 
 ## 6. 请求参数边界
 
-资源变更、异步文件构建、Discovery 和 Enrich 请求都不定义 `extraParams`/`extra_params`。Callback 事件也不包含该字段。核心项目只发布自身拥有的严格领域事实，不承载调用方自定义关联数据。
+资源变更、异步文件构建、Discovery 和 Enrich 请求都不定义 `extraParams`/`extra_params`。Discovery/Enrich 仅为历史兼容接受已弃用的 `extParams`/`ext_params`，该值不规范化、不持久、不传入任务且不进入 Callback 事件。核心项目只发布自身拥有的严格领域事实，不承载调用方自定义关联数据。
 
 核心同样不定义 `requestId` 或 `X-Request-Id` 协议。`eventId` 是通知的唯一标识。
 

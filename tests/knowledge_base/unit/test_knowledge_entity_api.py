@@ -156,8 +156,8 @@ def test_discovery_and_enrich_requests_support_whole_kb_scope():
     assert enrich.top_k == 20
 
 
-@pytest.mark.parametrize("field_name", ["extParams", "ext_params"])
-def test_discovery_and_enrich_accept_deprecated_ext_params_unchanged(field_name):
+@pytest.mark.parametrize("field_name", ["extraParams", "extra_params"])
+def test_discovery_and_enrich_accept_deprecated_extra_params_unchanged(field_name):
     value = {"requestId": "req-1", "nested": {"values": [1, "two", None]}}
 
     discovery = EntityDiscoveryRequest.model_validate(
@@ -165,14 +165,14 @@ def test_discovery_and_enrich_accept_deprecated_ext_params_unchanged(field_name)
     )
     enrich = EntityEnrichRequest.model_validate({"knCode": "1", field_name: value})
 
-    assert discovery.model_dump()["ext_params"] == value
-    assert enrich.model_dump()["ext_params"] == value
+    assert discovery.model_dump()["extra_params"] == value
+    assert enrich.model_dump()["extra_params"] == value
 
 
 @pytest.mark.parametrize("request_type", [EntityDiscoveryRequest, EntityEnrichRequest])
-def test_discovery_and_enrich_mark_ext_params_deprecated(request_type):
+def test_discovery_and_enrich_mark_extra_params_deprecated(request_type):
     field_schema = request_type.model_json_schema(by_alias=True)["properties"][
-        "extParams"
+        "extraParams"
     ]
 
     assert field_schema["deprecated"] is True
@@ -180,10 +180,10 @@ def test_discovery_and_enrich_mark_ext_params_deprecated(request_type):
 
 
 @pytest.mark.parametrize("request_type", [EntityDiscoveryRequest, EntityEnrichRequest])
-def test_discovery_and_enrich_still_reject_extra_params(request_type):
+def test_discovery_and_enrich_reject_incorrect_ext_params(request_type):
     with pytest.raises(ValidationError, match="extra_forbidden"):
         request_type.model_validate(
-            {"knCode": "1", "extraParams": {"requestId": "req-1"}}
+            {"knCode": "1", "extParams": {"requestId": "req-1"}}
         )
 
 
@@ -259,7 +259,7 @@ def test_discovery_route_uses_provider_and_never_accepts_http_callback():
 
     response = client.post(
         "/api/v1/knowledgeItems/entityDiscovery",
-        json={"knCode": "1", "extParams": {"legacy": {"keep": True}}},
+        json={"knCode": "1", "extraParams": {"legacy": {"keep": True}}},
     )
 
     assert response.status_code == 200
@@ -268,7 +268,7 @@ def test_discovery_route_uses_provider_and_never_accepts_http_callback():
     operation, request, callback = service.calls[0]
     assert operation == "discovery"
     assert request.file_path is None
-    assert request.model_dump()["ext_params"] == {"legacy": {"keep": True}}
+    assert request.model_dump()["extra_params"] == {"legacy": {"keep": True}}
     assert callback is None
 
     removed_field_response = client.post(
@@ -289,14 +289,14 @@ def test_enrich_route_supports_whole_kb_and_passes_no_callback():
     service = FakeKnowledgeEntityService()
     response = make_client(service).post(
         "/api/v1/knowledgeItems/entityEnrich",
-        json={"knCode": "1", "extParams": {"legacy": [1, "two"]}},
+        json={"knCode": "1", "extraParams": {"legacy": [1, "two"]}},
     )
 
     assert response.json()["resultMsg"] == "accepted"
     operation, request, callback = service.calls[0]
     assert operation == "enrich"
     assert request.file_path is None
-    assert request.model_dump()["ext_params"] == {"legacy": [1, "two"]}
+    assert request.model_dump()["extra_params"] == {"legacy": [1, "two"]}
     assert callback is None
 
     removed_field = make_client(service).post(

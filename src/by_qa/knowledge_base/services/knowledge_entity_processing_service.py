@@ -549,7 +549,7 @@ class KnowledgeEntityProcessingOrchestrator:
             params = request.model_dump(
                 mode="json",
                 by_alias=True,
-                exclude={"ext_params"},
+                exclude={"extra_params"},
             )
             for file_row in files:
                 file_id = self._row_id(file_row)

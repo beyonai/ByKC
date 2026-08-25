@@ -30,9 +30,9 @@
 | `filePath` | string | 否 | - | 原始文档路径；不传表示处理该知识库下全部符合条件的原始文档 |
 | `maxEntities` | integer | 否 | `12` | 每个源文档的最大抽取实体数，不得超过 12 |
 | `force` | boolean | 否 | `false` | 是否跳过 freshness 判断；不跳过资格和权限校验 |
-| `extParams` | object | 否 | `null` | **已弃用**，仅为历史请求兼容而接收；服务端不修改其内容，也不使用、持久化或传入 Callback |
+| `extraParams` | object | 否 | `null` | **已弃用**，仅为历史请求兼容而接收；服务端不修改其内容，也不使用、持久化或传入 Callback |
 
-HTTP 请求中不包含 `callback` 字段。历史客户端也可使用别名 `ext_params`；新接入不应再传入该字段。`extraParams` 不是受支持的字段，传入时请求校验失败。
+HTTP 请求中不包含 `callback` 字段。历史客户端也可使用别名 `extra_params`；新接入不应再传入该字段。`extParams` 不是受支持的字段，传入时请求校验失败。
 
 ## 请求示例
 
@@ -45,13 +45,13 @@ HTTP 请求中不包含 `callback` 字段。历史客户端也可使用别名 `e
 }
 ```
 
-兼容旧请求时可以携带 `extParams`，但它不影响任务语义：
+兼容旧请求时可以携带 `extraParams`，但它不影响任务语义：
 
 ```json
 {
   "knCode": "1",
   "filePath": "/原始文档/AI时代的组织革命.md",
-  "extParams": {"legacyRequestId": "req-1001"}
+  "extraParams": {"legacyRequestId": "req-1001"}
 }
 ```
 

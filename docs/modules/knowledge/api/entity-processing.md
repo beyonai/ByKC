@@ -5,7 +5,7 @@
 - 一次 `entityDiscovery` 或 `entityEnrich` 请求形成一个 `batchId`。
 - 每个实际处理的文件形成一个 `taskId`。
 - 单文件失败不会阻止同批次其他文件。
-- Discovery/Enrich 仅为历史兼容接收已弃用的 `extParams`/`ext_params`；服务端不修改它，也不使用、持久化或写入状态与 Callback 事件。`extraParams` 不受支持。
+- Discovery/Enrich 仅为历史兼容接收已弃用的 `extraParams`/`extra_params`；服务端不修改它，也不使用、持久化或写入状态与 Callback 事件。`extParams` 不受支持。
 
 Discovery 和 Enrich 共用同一套持久化 batch/task 调度，但任务类型、资格检查和文件副作用相互独立。受理接口不在 HTTP 请求内执行模型推理。
 
@@ -63,7 +63,7 @@ Discovery/Enrich 与其他知识库变更共用 `KnowledgeEventPublisher`。语�
 - Discovery：`semantic.discovery.file.completed` 和 `semantic.discovery.batch.completed`；
 - Enrich：`semantic.enrich.file.completed` 和 `semantic.enrich.batch.completed`。
 
-事件在相应任务或批次终态事务提交后发布。Publisher 失败不改变已提交的状态，当前不保证重试或必达；事件也不包含 `extParams`、`extraParams`、`resourceId` 或请求 ID。具体事件模型和 Publisher 配置见 [统一事件通知设计](../resource-mutation-background-callback-design.md)。
+事件在相应任务或批次终态事务提交后发布。Publisher 失败不改变已提交的状态，当前不保证重试或必达；事件也不包含 `extraParams`、`resourceId` 或请求 ID。具体事件模型和 Publisher 配置见 [统一事件通知设计](../resource-mutation-background-callback-design.md)。
 
 ## 常见任务错误
 

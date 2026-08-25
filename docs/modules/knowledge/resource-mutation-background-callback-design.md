@@ -323,7 +323,7 @@ Invoker 统一负责有界超时、异常隔离和结构化日志。第一版不
 
 ## 6. 请求参数边界
 
-资源变更、异步文件构建、Discovery 和 Enrich 请求都不定义 `extraParams`/`extra_params`。Discovery/Enrich 仅为历史兼容接受已弃用的 `extParams`/`ext_params`，该值不规范化、不持久、不传入任务且不进入 Callback 事件。核心项目只发布自身拥有的严格领域事实，不承载调用方自定义关联数据。
+资源变更和异步文件构建请求不定义 `extraParams`/`extra_params`。Discovery/Enrich 仅为历史兼容接受已弃用的 `extraParams`/`extra_params`，该值不规范化、不持久、不传入任务且不进入 Callback 事件。核心项目只发布自身拥有的严格领域事实，不承载调用方自定义关联数据。
 
 核心同样不定义 `requestId` 或 `X-Request-Id` 协议。`eventId` 是通知的唯一标识。
 
@@ -597,7 +597,7 @@ Publisher 异常不得修改响应、回滚主业务、改变资源状态、改�
 - 主业务成功时注册并执行一次 Background Publish；
 - 校验、业务和未预期异常时不调用；
 - Publisher 异常时 API 仍保持原成功响应；
-- 请求和事件均不包含 extraParams；
+- 资源变更请求不包含 `extraParams`，所有事件均不包含该字段；
 - 事件不含 requestId、resourceId 或内部数据库主键；
 - 事件不包含文件二进制；
 - Publisher 执行时查询资源可见已提交的新状态。
@@ -662,7 +662,7 @@ Publisher 异常不得修改响应、回滚主业务、改变资源状态、改�
 4. HTTP 响应不等待 Publisher 结果。
 5. Publisher 超时、异常或目标不可用不影响主业务和语义任务终态。
 6. 事件不包含文件内容、请求对象或数据库连接。
-7. 请求与事件不包含 extraParams；资源接口不落通知表，语义任务沿用现有持久化。
+7. 资源变更请求不包含 `extraParams`；Discovery/Enrich 仅兼容接收但忽略该字段；事件不包含该字段。资源接口不落通知表，语义任务沿用现有持久化。
 8. 未配置 provider 时使用 Noop，现有 API 行为不变。
 9. 旧 KnowledgeEntity Callback Protocol 和 provider 不再存在，只有一套统一发布协议。
 10. 进程崩溃、重启和目标不可用导致通知丢失符合预期，不做补偿。

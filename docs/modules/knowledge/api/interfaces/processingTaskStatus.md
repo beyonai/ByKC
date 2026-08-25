@@ -116,7 +116,7 @@
 }
 ```
 
-`includeDetails=false` 时省略 `result` 和 `error`。失败任务仍使用正常成功信封，任务项的 `status=FAILED`，并在启用明细时返回 `errorCode` 和 `message`。Discovery/Enrich 请求中已弃用的 `extParams` 不会出现在任务状态中。
+`includeDetails=false` 时省略 `result` 和 `error`。失败任务仍使用正常成功信封，任务项的 `status=FAILED`，并在启用明细时返回 `errorCode` 和 `message`。Discovery/Enrich 请求中已弃用的 `extraParams` 不会出现在任务状态中。
 
 一次全库触发不额外创建“父任务”记录：所有文件任务共用 `batchId`。因此可按知识库查看整体任务面，也可叠加 `filePath` 或 `batchId` 精确收窄范围。
 
@@ -138,7 +138,7 @@
 
 - 查询无匹配任务时返回 `total=0` 和空 `data`，不是任务错误。
 - `includeDetails=false` 时省略可能较大的 `result/error`。
-- 响应不包含 `extParams`、`ext_params` 或 `extraParams`。
+- 响应不包含 `extraParams` 或 `extra_params`。
 - 失败是 task 的正常业务终态，HTTP 仍返回成功信封。
 
 ## 路径与定位规则

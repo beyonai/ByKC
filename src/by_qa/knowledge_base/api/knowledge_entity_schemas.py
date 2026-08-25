@@ -109,10 +109,10 @@ class EntityDiscoveryRequest(_ApiModel):
         validation_alias=AliasChoices("maxEntities", "max_entities"),
     )
     force: bool = False
-    ext_params: dict[str, Any] | None = Field(
+    extra_params: dict[str, Any] | None = Field(
         default=None,
-        validation_alias=AliasChoices("extParams", "ext_params"),
-        serialization_alias="extParams",
+        validation_alias=AliasChoices("extraParams", "extra_params"),
+        serialization_alias="extraParams",
         deprecated=True,
         description="Deprecated compatibility field; accepted but ignored.",
     )
@@ -137,10 +137,10 @@ class EntityEnrichRequest(_ApiModel):
         validation_alias=AliasChoices("topK", "top_k"),
     )
     force: bool = False
-    ext_params: dict[str, Any] | None = Field(
+    extra_params: dict[str, Any] | None = Field(
         default=None,
-        validation_alias=AliasChoices("extParams", "ext_params"),
-        serialization_alias="extParams",
+        validation_alias=AliasChoices("extraParams", "extra_params"),
+        serialization_alias="extraParams",
         deprecated=True,
         description="Deprecated compatibility field; accepted but ignored.",
     )

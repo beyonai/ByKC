@@ -687,7 +687,7 @@ async def test_whole_kb_enrich_schedules_only_markdown_entities():
     accepted = await service.enrich_knowledge_entities(
         EntityEnrichRequest(
             knCode="7",
-            extParams={"requestId": "legacy-enrich"},
+            extraParams={"requestId": "legacy-enrich"},
         )
     )
 
@@ -704,7 +704,7 @@ async def test_whole_kb_enrich_schedules_only_markdown_entities():
         for row in service.knowledge_semantic_processing_task_repository.rows
     ].count("skipped") == 1
     assert all(
-        "extParams" not in row["request_params"]
+        "extraParams" not in row["request_params"]
         for row in service.knowledge_semantic_processing_task_repository.rows
     )
 
@@ -911,7 +911,7 @@ async def test_accept_persists_pending_task_without_request_scheduler():
         EntityDiscoveryRequest(
             knCode="7",
             filePath="/docs/source.md",
-            extParams={"requestId": "legacy-1", "nested": {"keep": True}},
+            extraParams={"requestId": "legacy-1", "nested": {"keep": True}},
         ),
     )
     assert accepted.accepted_count == 1
@@ -920,7 +920,7 @@ async def test_accept_persists_pending_task_without_request_scheduler():
     assert worker.contexts == []
     assert tasks.rows[0]["status"] == "pending"
     assert "extra_params" not in tasks.rows[0]
-    assert "ext_params" not in tasks.rows[0]
+    assert "extra_params" not in tasks.rows[0]["request_params"]
     assert "extParams" not in tasks.rows[0]["request_params"]
     assert "extraParams" not in tasks.rows[0]["request_params"]
     assert connection.locked_ids == [10]

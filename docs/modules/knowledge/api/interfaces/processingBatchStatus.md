@@ -25,7 +25,7 @@
 - `status`：`PROCESSING` 或 `COMPLETED`；
 - `version`、`totalCount`、`completedCount` 和 0–100 的 `progress`；
 - `pendingCount`、`runningCount`、`succeededCount`、`failedCount`、`skippedCount`；
-- 分页 task 明细。请求中已弃用的 `extParams` 不进入 batch/task，也不在状态响应中返回。
+- 分页 task 明细。请求中已弃用的 `extraParams` 不进入 batch/task，也不在状态响应中返回。
 
 单文件失败只增加 `failedCount`，batch 仍在所有文件进入终态后成为 `COMPLETED`。
 

@@ -324,6 +324,7 @@ async def test_eligibility_uses_content_fingerprint_and_reports_fresh_task():
             "status": "succeeded",
             "input_fingerprint": fingerprint,
             "method_version": processing_module.DISCOVERY_METHOD_VERSION,
+            "protocol_version": processing_module.DISCOVERY_PROTOCOL_VERSION,
             "finished_at": datetime.now(timezone.utc),
         }
     )
@@ -336,8 +337,22 @@ async def test_eligibility_uses_content_fingerprint_and_reports_fresh_task():
     assert fresh.last_successful_task_id == "80"
 
 
-async def test_discovery_reports_method_version_change_from_task_method() -> None:
+async def test_discovery_versions_are_audit_only_and_do_not_make_input_stale(
+    monkeypatch,
+) -> None:
     file_row = original()
+    service, _ = make_service([file_row])
+    fingerprint = service._fingerprint(
+        file_row, ProcessingCapability.ENTITY_DISCOVERY, []
+    )
+    monkeypatch.setattr(processing_module, "DISCOVERY_METHOD_VERSION", "discovery/9.9")
+    monkeypatch.setattr(
+        processing_module, "DISCOVERY_PROTOCOL_VERSION", "entity-topic/9.9"
+    )
+    assert (
+        service._fingerprint(file_row, ProcessingCapability.ENTITY_DISCOVERY, [])
+        == fingerprint
+    )
     tasks = Tasks(
         [
             {
@@ -347,8 +362,9 @@ async def test_discovery_reports_method_version_change_from_task_method() -> Non
                 "file_path": file_row["file_path"],
                 "task_type": "ENTITY_DISCOVERY",
                 "status": "succeeded",
-                "input_fingerprint": "old-method-fingerprint",
+                "input_fingerprint": fingerprint,
                 "method_version": "discovery/1.2",
+                "protocol_version": "entity-topic/1.0",
                 "finished_at": datetime.now(timezone.utc),
             }
         ]
@@ -363,8 +379,8 @@ async def test_discovery_reports_method_version_change_from_task_method() -> Non
         )
     )
 
-    assert result.eligibility == ProcessingEligibility.ELIGIBLE_AND_STALE
-    assert result.reason_code == "METHOD_VERSION_CHANGED"
+    assert result.eligibility == ProcessingEligibility.ELIGIBLE_BUT_FRESH
+    assert result.reason_code == "INPUT_UNCHANGED"
 
 
 async def test_enrich_fingerprint_canonicalizes_latest_relation_timestamp():
@@ -975,7 +991,8 @@ async def test_same_fingerprint_succeeded_task_is_reused_without_scheduling():
             "task_type": "ENTITY_DISCOVERY",
             "status": "succeeded",
             "input_fingerprint": fingerprint,
-            "method_version": processing_module.DISCOVERY_METHOD_VERSION,
+            "method_version": "discovery/1.0",
+            "protocol_version": "entity-topic/1.0",
             "finished_at": datetime.now(timezone.utc),
         }
     )
@@ -991,6 +1008,8 @@ async def test_same_fingerprint_succeeded_task_is_reused_without_scheduling():
         "reasonCode": "INPUT_UNCHANGED",
         "reusedTaskId": "81",
     }
+    assert created["method_version"] == processing_module.DISCOVERY_METHOD_VERSION
+    assert created["protocol_version"] == processing_module.DISCOVERY_PROTOCOL_VERSION
 
 
 async def test_pending_same_fingerprint_is_reused_under_file_lock():
@@ -1009,6 +1028,7 @@ async def test_pending_same_fingerprint_is_reused_under_file_lock():
             "status": "pending",
             "input_fingerprint": fingerprint,
             "method_version": processing_module.DISCOVERY_METHOD_VERSION,
+            "protocol_version": processing_module.DISCOVERY_PROTOCOL_VERSION,
             "finished_at": None,
         }
     )

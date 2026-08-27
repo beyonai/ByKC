@@ -50,6 +50,7 @@ class _Embedding:
 class _SameAdjudicator:
     async def adjudicate(self, *, mention, candidates, **_kwargs):
         assert mention == "ByKC-基础问答引擎"
+        assert candidates[0]["description"] == "ByKC base QA engine."
         return SynonymAdjudication(
             decision=SynonymDecision.SAME,
             selected_candidate_id=int(candidates[0]["resolved_entity_id"]),
@@ -142,21 +143,21 @@ async def test_synonym_resolution_file_lifecycle_and_delete_apis() -> None:
         canonical = await service.resolve_candidate(
             knowledge_base_id=kb_id,
             entity_name="ByKC-BaseQAEngine",
-            local_name="BaseQAEngine",
             aliases=(),
             subject_entity_id=None,
             subject_name=None,
             entity_type="engine",
+            description="ByKC base QA engine.",
             evidence="ByKC uses BaseQAEngine.",
         )
         resolved = await service.resolve_candidate(
             knowledge_base_id=kb_id,
             entity_name="ByKC-基础问答引擎",
-            local_name="基础问答引擎",
             aliases=(),
             subject_entity_id=None,
             subject_name=None,
             entity_type="engine",
+            description="ByKC 的基础问答引擎。",
             evidence="ByKC 的基础问答引擎负责回答。",
         )
         assert resolved.entity_id == canonical.entity_id
@@ -166,11 +167,11 @@ async def test_synonym_resolution_file_lifecycle_and_delete_apis() -> None:
         exact = await service.resolve_candidate(
             knowledge_base_id=kb_id,
             entity_name="ByKC-基础问答引擎",
-            local_name="基础问答引擎",
             aliases=(),
             subject_entity_id=None,
             subject_name=None,
             entity_type="engine",
+            description="ByKC 的基础问答引擎。",
             evidence="再次提及。",
         )
         assert exact.entity_id == canonical.entity_id
@@ -188,11 +189,11 @@ async def test_synonym_resolution_file_lifecycle_and_delete_apis() -> None:
         isolated_resolution = await service.resolve_candidate(
             knowledge_base_id=int(isolated_kb["kid"]),
             entity_name="ByKC-基础问答引擎",
-            local_name="基础问答引擎",
             aliases=(),
             subject_entity_id=None,
             subject_name=None,
             entity_type="engine",
+            description="另一个知识库的基础问答引擎。",
             evidence="另一个知识库独立使用该名称。",
         )
         assert isolated_resolution.method.value == "CREATED_NEW"
@@ -255,7 +256,7 @@ async def test_synonym_resolution_file_lifecycle_and_delete_apis() -> None:
             await _vector_count(
                 cursor, bootstrap.entity_embedding_table_name, canonical.entity_id
             )
-            == 2
+            == 1
         )
         await connection.close()
 
@@ -280,21 +281,21 @@ async def test_synonym_resolution_file_lifecycle_and_delete_apis() -> None:
             parent = await service.resolve_candidate(
                 knowledge_base_id=kb_id,
                 entity_name="ByKC",
-                local_name="ByKC",
                 aliases=(),
                 subject_entity_id=None,
                 subject_name=None,
                 entity_type="system",
+                description="ByKC is a system.",
                 evidence="ByKC is the system.",
             )
             child = await service.resolve_candidate(
                 knowledge_base_id=kb_id,
                 entity_name="ByKC-Worker",
-                local_name="Worker",
                 aliases=(),
                 subject_entity_id=parent.entity_id,
                 subject_name="ByKC",
                 entity_type="component",
+                description="ByKC-Worker is a ByKC component.",
                 evidence="Worker belongs to ByKC.",
             )
             blocked = await client.post(
@@ -386,11 +387,11 @@ async def test_synonym_resolution_file_lifecycle_and_delete_apis() -> None:
         await service.resolve_candidate(
             knowledge_base_id=second_kb_id,
             entity_name="PostgreSQL",
-            local_name="PostgreSQL",
             aliases=("PG",),
             subject_entity_id=None,
             subject_name=None,
             entity_type="database",
+            description="PostgreSQL is a relational database.",
             evidence="PG is used as the database.",
         )
         kb_service = KnowledgeBaseService(

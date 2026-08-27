@@ -50,10 +50,13 @@ from by_qa.knowledge_base.events import (
     normalize_json_mapping,
 )
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
+from by_qa.knowledge_base.services.knowledge_entity_discovery import (
+    DISCOVERY_PROMPT_HASH,
+    DISCOVERY_PROTOCOL_VERSION,
+)
 
-DISCOVERY_METHOD_VERSION = "discovery/1.3"
+DISCOVERY_METHOD_VERSION = f"discovery/2.0+{DISCOVERY_PROMPT_HASH[:12]}"
 ENRICH_METHOD_VERSION = "enrich/1.0"
-PROCESSING_POLICY_VERSION = "entity-policy/1.3"
 MAX_RECENT_RELATION_EVIDENCE = 3
 
 _TEXT_DOCUMENT_SUFFIXES = frozenset(
@@ -644,6 +647,9 @@ class KnowledgeEntityProcessingOrchestrator:
                     method_version=(
                         evaluation.method_version if evaluation is not None else None
                     ),
+                    protocol_version=(
+                        evaluation.protocol_version if evaluation is not None else None
+                    ),
                     request_params=params,
                     result_payload=result_payload,
                 )
@@ -831,11 +837,7 @@ class KnowledgeEntityProcessingOrchestrator:
                 reason = "INPUT_UNCHANGED"
             else:
                 eligibility = ProcessingEligibility.ELIGIBLE_AND_STALE
-                reason = (
-                    "METHOD_VERSION_CHANGED"
-                    if latest.get("method_version") != method_version
-                    else "INPUT_CHANGED"
-                )
+                reason = "INPUT_CHANGED"
         else:
             latest_relation_at = max(
                 (row["created_at"] for row in evidence_rows), default=None
@@ -866,6 +868,11 @@ class KnowledgeEntityProcessingOrchestrator:
             result=result,
             input_fingerprint=fingerprint,
             method_version=method_version,
+            protocol_version=(
+                DISCOVERY_PROTOCOL_VERSION
+                if capability == ProcessingCapability.ENTITY_DISCOVERY
+                else None
+            ),
         )
 
     async def _latest_successful(
@@ -925,7 +932,8 @@ class KnowledgeEntityProcessingOrchestrator:
             offset=0,
         )
         return next(
-            (row for row in rows if row.get("input_fingerprint") == fingerprint), None
+            (row for row in rows if row.get("input_fingerprint") == fingerprint),
+            None,
         )
 
     async def _relation_prefix(
@@ -993,11 +1001,7 @@ class KnowledgeEntityProcessingOrchestrator:
         evidence_rows: list[dict[str, Any]],
     ) -> str:
         if capability == ProcessingCapability.ENTITY_DISCOVERY:
-            value = {
-                "sourceFileChecksum": file_row.get("checksum"),
-                "discoveryMethodVersion": DISCOVERY_METHOD_VERSION,
-                "processingPolicyVersion": PROCESSING_POLICY_VERSION,
-            }
+            value = {"sourceFileChecksum": file_row.get("checksum")}
         else:
             latest_relation = evidence_rows[0] if evidence_rows else None
             value = {
@@ -1199,3 +1203,4 @@ class _Evaluation:
     result: ProcessingEligibilityResult
     input_fingerprint: str
     method_version: str
+    protocol_version: str | None

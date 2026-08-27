@@ -32,6 +32,7 @@ class KnowledgeSemanticProcessingTaskRepository:
         input_fingerprint: str | None = None,
         input_checksum: str | None = None,
         method_version: str | None = None,
+        protocol_version: str | None = None,
         index_version: str | None = None,
         request_params: dict[str, Any] | None = None,
         extra_params: Mapping[str, Any] | None = None,
@@ -63,6 +64,7 @@ class KnowledgeSemanticProcessingTaskRepository:
                 input_fingerprint,
                 input_checksum,
                 method_version,
+                protocol_version,
                 index_version,
                 request_params,
                 extra_params,
@@ -88,6 +90,7 @@ class KnowledgeSemanticProcessingTaskRepository:
                 %(input_fingerprint)s,
                 %(input_checksum)s,
                 %(method_version)s,
+                %(protocol_version)s,
                 %(index_version)s,
                 %(request_params)s::jsonb,
                 %(extra_params)s::jsonb,
@@ -127,6 +130,7 @@ class KnowledgeSemanticProcessingTaskRepository:
                 "input_fingerprint": input_fingerprint,
                 "input_checksum": input_checksum,
                 "method_version": method_version,
+                "protocol_version": protocol_version,
                 "index_version": index_version,
                 "request_params": self._json_value(request_params or {}),
                 "extra_params": self._json_value(extra_params or {}),
@@ -291,6 +295,7 @@ class KnowledgeSemanticProcessingTaskRepository:
                 input_fingerprint,
                 input_checksum,
                 method_version,
+                protocol_version,
                 index_version,
                 request_params,
                 extra_params,
@@ -410,7 +415,7 @@ class KnowledgeSemanticProcessingTaskRepository:
                     + (%(lease_seconds)s * INTERVAL '1 second'),
                 started_at = COALESCE(started_at, NOW()),
                 updated_at = NOW()
-            WHERE kid IN (
+            WHERE kid = (
                 SELECT kid
                 FROM knowledge_semantic_processing_task
                 WHERE status = 'pending'

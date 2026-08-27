@@ -145,7 +145,7 @@ Discovery 成功任务结果示例见任务状态接口。
 - 同库规范路径已存在时直接锚定该文件，不创建副本：文件必须是 KnowledgeEntity，`entityName` 与候选相同或缺失，subject 身份一致；明显的元数据或文档类型冲突使任务失败；
 - LLM 先从正文抽取最多 12 个显著候选；worker 不加载全库实体、不把全量词表放入 Prompt，也不按任务构建 AC；
 - 抽取后先在当前知识库做规范名/alias 精确匹配；唯一兼容命中不调用额外 LLM；
-- 精确未命中时按当前知识库、Subject 和类型过滤，并使用 `full`、`local_name` 双视角 embedding 召回 Top 3；向量候选必须经过 `SAME/DIFFERENT/UNCERTAIN` 裁决，只有 `SAME` 才回写 alias；
+- 精确未命中时按当前知识库的 `full` embedding 召回 Top 3；向量候选必须经过 `SAME/DIFFERENT/UNCERTAIN` 裁决，只有 `SAME` 才回写 alias；
 - 名称、alias 和 embedding 候选查询都严格限定在当前知识库；本库没有兼容结果时直接在本库创建实体，不读取其他知识库的实体资产；
 - 同一词面命中多个规范实体时记录 `AMBIGUOUS_SURFACE` 并保守新建，不按查询顺序选择；
 - 新实体正文中的来源路径以普通文本展示，不生成指向原始文档的 Markdown 链接；只持久化原始文档到实体的单向 `MENTIONS`，反向视图由查询层派生；

@@ -19,7 +19,7 @@ from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
     normalize_surface,
 )
 
-ENTITY_EMBEDDING_REPRESENTATION_VERSION = "entity-embedding/1"
+ENTITY_EMBEDDING_REPRESENTATION_VERSION = "entity-embedding/3"
 
 
 class SynonymDecision(StrEnum):
@@ -48,7 +48,6 @@ class SynonymAdjudication:
 class EntityResolution:
     entity_id: int
     canonical_name: str
-    local_name: str
     fs_entry_id: int | None
     method: ResolutionMethod
     alias_added: str | None = None
@@ -61,7 +60,7 @@ class KnowledgeEntitySynonymAdjudicator:
     """Ask an LLM to decide identity only within an already bounded top-K."""
 
     _SYSTEM_PROMPT = """\
-你是知识实体同义词裁决器。候选召回只是近似信号，你必须结合提及、原文证据、Subject、类型、规范名和别名判断是否为同一稳定实体。
+你是知识实体同义词裁决器。候选召回只是近似信号，你必须结合提及、当前提及描述与原文证据、Subject、类型、规范名、别名和候选 description 判断是否为同一稳定实体。description 是候选的稳定身份描述，不是同一性保证；所属、组成、产品、平台、模块或其他关联关系不等于别名关系。
 
 只输出 JSON 对象：decision 只能是 SAME、DIFFERENT、UNCERTAIN；SAME 时 selectedCandidateId 必须来自给定候选，canonicalName 必须与候选完全一致，aliasToAdd 必须是输入提及；其余情况 selectedCandidateId、canonicalName、aliasToAdd 为 null。reasonCode 使用简短大写下划线枚举。
 """.strip()
@@ -73,6 +72,7 @@ class KnowledgeEntitySynonymAdjudicator:
         self,
         *,
         mention: str,
+        mention_description: str,
         evidence: str,
         subject_name: str | None,
         entity_type: str | None,
@@ -82,6 +82,7 @@ class KnowledgeEntitySynonymAdjudicator:
             return SynonymAdjudication(SynonymDecision.DIFFERENT)
         payload = {
             "mention": mention,
+            "mentionDescription": mention_description,
             "evidence": evidence,
             "subject": subject_name,
             "entityType": entity_type,
@@ -90,8 +91,8 @@ class KnowledgeEntitySynonymAdjudicator:
                     "candidateId": int(item["resolved_entity_id"]),
                     "canonicalName": item["canonical_entity_name"],
                     "aliases": list(item.get("aliases") or ()),
-                    "localName": item.get("local_name"),
                     "entityType": item.get("entity_type"),
+                    "description": item.get("description"),
                     "score": float(item.get("score") or 0.0),
                 }
                 for item in candidates
@@ -183,11 +184,11 @@ class KnowledgeEntityAssetService:
         *,
         knowledge_base_id: int,
         entity_name: str,
-        local_name: str,
         aliases: Sequence[str],
         subject_entity_id: int | None,
         subject_name: str | None,
         entity_type: str | None,
+        description: str,
         evidence: str,
     ) -> EntityResolution:
         normalized_name = normalize_surface(entity_name)
@@ -224,7 +225,6 @@ class KnowledgeEntityAssetService:
             return EntityResolution(
                 entity_id=int(selected["resolved_entity_id"]),
                 canonical_name=str(selected["canonical_entity_name"]),
-                local_name=str(selected.get("local_name") or local_name),
                 fs_entry_id=self._optional_int(selected.get("fs_entry_id")),
                 method=(
                     ResolutionMethod.EXACT_ALIAS
@@ -239,10 +239,10 @@ class KnowledgeEntityAssetService:
             return await self._create_new(
                 knowledge_base_id=knowledge_base_id,
                 entity_name=entity_name,
-                local_name=local_name,
                 aliases=aliases,
                 subject_entity_id=subject_entity_id,
                 entity_type=entity_type,
+                description=description,
                 method=ResolutionMethod.AMBIGUOUS_UNMERGED,
                 warnings=warnings,
             )
@@ -255,12 +255,9 @@ class KnowledgeEntityAssetService:
                     aliases=aliases,
                     subject_name=subject_name,
                     entity_type=entity_type,
-                    evidence=evidence,
+                    description=description,
                 )
                 full_embedding = await self._embedding.embed_query(full_query)
-                local_embedding = await self._embedding.embed_query(
-                    self._local_embedding_text(local_name)
-                )
                 connection = await self._connection_factory()
                 try:
                     cursor = connection.cursor()
@@ -268,7 +265,6 @@ class KnowledgeEntityAssetService:
                         cursor,
                         knowledge_base_id=knowledge_base_id,
                         full_embedding=full_embedding,
-                        local_embedding=local_embedding,
                         subject_entity_id=subject_entity_id,
                         entity_type=entity_type,
                         limit=self._top_k,
@@ -281,6 +277,7 @@ class KnowledgeEntityAssetService:
             try:
                 adjudication = await self._adjudicator.adjudicate(
                     mention=entity_name,
+                    mention_description=description,
                     evidence=evidence,
                     subject_name=subject_name,
                     entity_type=entity_type,
@@ -319,7 +316,6 @@ class KnowledgeEntityAssetService:
                 return EntityResolution(
                     entity_id=adjudication.selected_candidate_id,
                     canonical_name=str(selected["canonical_entity_name"]),
-                    local_name=str(selected.get("local_name") or local_name),
                     fs_entry_id=self._optional_int(selected.get("fs_entry_id")),
                     method=ResolutionMethod.SYNONYM_ADJUDICATED,
                     alias_added=entity_name if alias_added else None,
@@ -330,23 +326,63 @@ class KnowledgeEntityAssetService:
         return await self._create_new(
             knowledge_base_id=knowledge_base_id,
             entity_name=entity_name,
-            local_name=local_name,
             aliases=aliases,
             subject_entity_id=subject_entity_id,
             entity_type=entity_type,
+            description=description,
             method=ResolutionMethod.CREATED_NEW,
             warnings=warnings,
         )
+
+    async def upsert_topics(
+        self,
+        *,
+        knowledge_base_id: int,
+        topics: Sequence[Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Add or reuse canonical Topics without a separate evidence registry."""
+
+        connection = await self._connection_factory()
+        actions: list[dict[str, Any]] = []
+        try:
+            cursor = connection.cursor()
+            for item in topics:
+                name = str(item["name"]).strip()
+                normalized_name = normalize_surface(name)
+                if not normalized_name:
+                    continue
+                topic = await self._repository.upsert_topic(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    owner_entity_id=int(item["owner_entity_id"]),
+                    name=name,
+                    normalized_name=normalized_name,
+                )
+                actions.append(
+                    {
+                        "action": "TOPIC_ANCHORED",
+                        "topicEntityId": int(topic["kid"]),
+                        "ownerEntityId": int(item["owner_entity_id"]),
+                        "topicName": name,
+                    }
+                )
+            await connection.commit()
+            return actions
+        except Exception:
+            await connection.rollback()
+            raise
+        finally:
+            await connection.close()
 
     async def _create_new(
         self,
         *,
         knowledge_base_id: int,
         entity_name: str,
-        local_name: str,
         aliases: Sequence[str],
         subject_entity_id: int | None,
         entity_type: str | None,
+        description: str,
         method: ResolutionMethod,
         warnings: Sequence[str],
     ) -> EntityResolution:
@@ -389,7 +425,6 @@ class KnowledgeEntityAssetService:
                 return EntityResolution(
                     entity_id=int(selected["resolved_entity_id"]),
                     canonical_name=str(selected["canonical_entity_name"]),
-                    local_name=str(selected.get("local_name") or local_name),
                     fs_entry_id=self._optional_int(selected.get("fs_entry_id")),
                     method=ResolutionMethod.EXACT_CANONICAL,
                     created=False,
@@ -399,10 +434,9 @@ class KnowledgeEntityAssetService:
                 knowledge_base_id=knowledge_base_id,
                 entity_name=entity_name.strip(),
                 normalized_entity_name=normalized_name,
-                local_name=local_name.strip() or entity_name.strip(),
-                normalized_local_name=normalize_surface(local_name or entity_name),
                 subject_entity_id=subject_entity_id,
                 entity_type=entity_type.strip() if entity_type else None,
+                description=description.strip() or None,
             )
             entity_id = int(created["kid"])
             for alias in dict.fromkeys(str(item).strip() for item in aliases):
@@ -436,7 +470,6 @@ class KnowledgeEntityAssetService:
         return EntityResolution(
             entity_id=entity_id,
             canonical_name=entity_name.strip(),
-            local_name=local_name.strip() or entity_name.strip(),
             fs_entry_id=None,
             method=method,
             created=True,
@@ -580,44 +613,34 @@ class KnowledgeEntityAssetService:
                 aliases=entity.get("aliases") or (),
                 subject_name=subject_name,
                 entity_type=entity.get("entity_type"),
-                evidence="",
+                description=str(entity.get("description") or ""),
             )
-            local_text = self._local_embedding_text(str(entity["local_name"]))
-            expected = {
-                "full": hashlib.sha256(full_text.encode("utf-8")).hexdigest(),
-                "local_name": hashlib.sha256(local_text.encode("utf-8")).hexdigest(),
-            }
+            expected = hashlib.sha256(full_text.encode("utf-8")).hexdigest()
             existing = await self._repository.get_embedding_hashes(
                 cursor, entity_id=entity_id
             )
         finally:
             await connection.close()
-        vectors: dict[str, Sequence[float]] = {}
-        if existing.get("full") != expected["full"]:
-            vectors["full"] = await self._embedding.embed_query(full_text)
-        if existing.get("local_name") != expected["local_name"]:
-            vectors["local_name"] = await self._embedding.embed_query(local_text)
-        if not vectors:
+        if existing.get("full") == expected:
             return
+        embedding = await self._embedding.embed_query(full_text)
         connection = await self._connection_factory()
         try:
             cursor = connection.cursor()
-            for representation, embedding in vectors.items():
-                await self._repository.upsert_embedding(
-                    cursor,
-                    entity_id=entity_id,
-                    representation=representation,
-                    source_content_hash=expected[representation],
-                    embedding=embedding,
-                )
-                logger.info(
-                    "knowledge entity embedding refreshed: table=%s "
-                    "entity_id=%s representation=%s source_content_hash=%s",
-                    self._repository.entity_embedding_table_name,
-                    entity_id,
-                    representation,
-                    expected[representation],
-                )
+            await self._repository.upsert_embedding(
+                cursor,
+                entity_id=entity_id,
+                representation="full",
+                source_content_hash=expected,
+                embedding=embedding,
+            )
+            logger.info(
+                "knowledge entity embedding refreshed: table=%s "
+                "entity_id=%s representation=full source_content_hash=%s",
+                self._repository.entity_embedding_table_name,
+                entity_id,
+                expected,
+            )
             await connection.commit()
         except Exception:
             await connection.rollback()
@@ -774,7 +797,7 @@ class KnowledgeEntityAssetService:
         aliases: Sequence[str],
         subject_name: str | None,
         entity_type: str | None,
-        evidence: str,
+        description: str,
     ) -> str:
         return "\n".join(
             value
@@ -785,19 +808,9 @@ class KnowledgeEntityAssetService:
                 *(str(alias).strip() for alias in sorted(set(aliases))),
                 (subject_name or "").strip(),
                 (entity_type or "").strip(),
-                evidence.strip(),
+                description.strip(),
             )
             if value
-        )
-
-    @staticmethod
-    def _local_embedding_text(local_name: str) -> str:
-        return "\n".join(
-            (
-                f"representationVersion={ENTITY_EMBEDDING_REPRESENTATION_VERSION}",
-                "representation=local_name",
-                normalize_surface(local_name),
-            )
         )
 
     @staticmethod

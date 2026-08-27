@@ -97,20 +97,24 @@ async def _mock_llm_complete(
             ensure_ascii=False,
         )
 
-    if "核心对象实体发现器" in system_prompt:
+    if "文档级 Entity/Topic 发现器" in system_prompt:
         entity_name, evidence = _mock_entity_name(user_prompt)
         return json.dumps(
-            [
-                {
-                    "entityName": entity_name,
-                    "subjectEntityName": "",
-                    "localName": entity_name,
-                    "identityScope": "global",
-                    "isEvent": False,
-                    "evidence": evidence,
-                    "aliases": [],
-                }
-            ],
+            {
+                "entities": [
+                    {
+                        "entityRef": "entity-1",
+                        "name": entity_name,
+                        "aliases": [],
+                        "entityDescription": (
+                            f"{entity_name} is a stable knowledge object described "
+                            "by the source."
+                        ),
+                        "evidenceSummary": evidence,
+                    }
+                ],
+                "topics": [],
+            },
             ensure_ascii=False,
         )
 

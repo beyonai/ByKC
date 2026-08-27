@@ -108,6 +108,12 @@ class EntityDiscoveryRequest(_ApiModel):
         le=12,
         validation_alias=AliasChoices("maxEntities", "max_entities"),
     )
+    max_topics: int = Field(
+        default=12,
+        ge=1,
+        le=24,
+        validation_alias=AliasChoices("maxTopics", "max_topics"),
+    )
     force: bool = False
     extra_params: dict[str, Any] | None = Field(
         default=None,

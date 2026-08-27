@@ -6,7 +6,7 @@
 - 目标版本：KnowledgeEntity Discovery v2
 - 范围：已知别名复用、新同义词识别、消除 worker 每任务全量加载
 - 前置文档：[KnowledgeEntity 发现、身份治理与文档富化方法论设计](./knowledge-entity-discovery-enrichment-design.md)
-- 实验报告：[KnowledgeEntity 异名同义候选实验报告](./knowledge-entity-synonym-resolution-experiment-report.md)
+- 实验资产：保存在不纳管的 `大厂文章/discovery-evaluation/` 下
 
 本文档只解决异名同义和直接相关的性能问题。同名异义的完整语境消歧留待后续设计。
 
@@ -117,24 +117,20 @@ CREATE TABLE IF NOT EXISTS knowledge_entity (
         CHECK (name_role IN ('canonical', 'alias')),
     entity_name text NOT NULL,
     normalized_entity_name text NOT NULL,
-    local_name text NULL,
-    normalized_local_name text NULL,
     subject_entity_id bigint NULL
-        REFERENCES knowledge_entity(kid) ON DELETE SET NULL,
+        REFERENCES knowledge_entity(kid) ON DELETE CASCADE,
     entity_type varchar(64) NULL,
+    object_kind varchar(16) NOT NULL DEFAULT 'ENTITY',
+    description text NULL,
     created_at timestamptz NOT NULL DEFAULT NOW(),
     updated_at timestamptz NOT NULL DEFAULT NOW(),
     CHECK (
         (name_role = 'canonical'
-            AND canonical_entity_id IS NULL
-            AND local_name IS NOT NULL
-            AND normalized_local_name IS NOT NULL)
+            AND canonical_entity_id IS NULL)
         OR
         (name_role = 'alias'
             AND canonical_entity_id IS NOT NULL
             AND fs_entry_id IS NULL
-            AND local_name IS NULL
-            AND normalized_local_name IS NULL
             AND subject_entity_id IS NULL
             AND entity_type IS NULL)
     ),
@@ -241,7 +237,7 @@ POST /api/v1/knowledgeEntities/aliases/delete
 2. 只删除 alias 行，不删除 canonical 实体或文件；
 3. 更新 canonical 的 `updated_at`；
 4. 提交事务时删除当前活动模型表中 canonical 的 `full` 行，避免已删除 alias 继续参与召回；
-5. 提交后尽力立即重算 `full` embedding，`local_name` embedding 保持不变；重算失败不回滚已完成的 alias 删除，缺失向量由后续刷新任务补齐；
+5. 提交后尽力立即重算 `full` embedding；重算失败不回滚已完成的 alias 删除，缺失向量由后续刷新任务补齐；
 6. 非活动模型表的旧向量不参与查询；该模型再次启用时必须先根据 `source_content_hash` 重建不匹配的行。
 
 ### 6.4 动态实体向量表
@@ -260,7 +256,7 @@ CREATE TABLE IF NOT EXISTS {{ entity_embedding_table_name }} (
     entity_id bigint NOT NULL
         REFERENCES knowledge_entity(kid) ON DELETE CASCADE,
     representation varchar(16) NOT NULL
-        CHECK (representation IN ('full', 'local_name')),
+        CHECK (representation = 'full'),
     source_content_hash char(64) NOT NULL,
     embedding vector({{ embedding_dimension }}) NOT NULL,
     created_at timestamptz NOT NULL DEFAULT NOW(),
@@ -276,11 +272,10 @@ CREATE INDEX IF NOT EXISTS {{ entity_embedding_table_name }}_entity_id_idx
 
 向量表中的 `entity_id` 只允许引用 `name_role=canonical` 的记录。alias 记录不单独生成向量，也不作为 Subject；它只参与精确词面查询和规范实体 `full` representation 的内容构建。
 
-每个实体在一个模型表中最多有两条记录：
+每个实体在一个模型表中最多有一条记录：
 
 ```text
 representation=full
-representation=local_name
 ```
 
 表名已经区分模型，`source_content_hash` 区分具体输入内容。模型切换时动态创建新表，旧表不覆盖。
@@ -290,12 +285,11 @@ representation=local_name
 | 变更 | 失效向量 |
 | --- | --- |
 | canonical 名称或 aliases | 当前实体 `full` |
-| `local_name` | 当前实体 `full` 和 `local_name` |
 | `entity_type` | 当前实体 `full` |
 | Subject 的 canonical 名称 | 直接子实体的 `full` |
 | `subject_entity_id` | 当前实体 `full` |
 
-`full` 的 `source_content_hash` 必须覆盖 canonical 名称、排序后的 aliases、Subject canonical 名称和 `entity_type`；`local_name` 的 hash 只覆盖规范化后的 localName 和表示版本。
+`full` 的 `source_content_hash` 必须覆盖 canonical 名称、排序后的 aliases、Subject canonical 名称、`entity_type` 和表示版本。
 
 ### 6.5 动态创建机制
 
@@ -397,27 +391,24 @@ Subject、identity scope 和 `entityType` 先作为硬过滤条件。词法信�
 - 英文或组织名称缩写；
 - 候选 `aliases` 交集；
 
-Demo 在 17 条人工挑战集上得到：词法 Top-3 Recall 为 41.67%，双视角 embedding Top-3 Recall 为 100%。目录从 160 扩展到 1160 个实体后，人工挑战集的 Top-3 Recall 仍为 100%，但 Top-1 从 91.67% 降至 66.67%。`ByKC-基础问答引擎` 的正确实体在词法 Top-3 中缺失，在 embedding 中排名第 1。因此默认回退路径使用 embedding Top-3，禁止仅凭向量 Top-1 自动合并。
+本地挑战集评测资产不进入生产分支。默认回退路径使用 embedding Top-3，禁止仅凭向量 Top-1 自动合并。
 
-每个候选保存两个可重建向量：
+每个候选保存一个可重建向量：
 
 ```text
 full_embedding  = embed(canonical_name + subject + aliases)
-local_embedding = embed(local_name)
 ```
 
-查询也使用两个视角：
+查询使用同一 `full` 视角：
 
 ```text
 full_query  = embed(mention + subject + evidence)
-local_query = embed(remove_subject_prefix(mention))
-score       = max(cos(full_query, full_embedding),
-                  cos(local_query, local_embedding))
+score       = cos(full_query, full_embedding)
 ```
 
 Subject 和实体类型只做冲突硬过滤，不固定加分。该设计避免 `Palantir-对象时间线` 中的品牌词压过局部概念；压力测试中 `object timeline` 从 Top-3 外提升到第 1。
 
-两个向量持久化到当前模型对应的动态表，按 `entity_id + representation` 幂等更新。`source_content_hash` 未变化时不调用外部 embedding 服务。worker 只提交查询向量并读取数据库 Top-K，不加载或重新向量化全库实体。
+`full` 向量持久化到当前模型对应的动态表，按 `entity_id + representation` 幂等更新。`source_content_hash` 未变化时不调用外部 embedding 服务。worker 只提交查询向量并读取数据库 Top-K，不加载或重新向量化全库实体。
 
 ### 7.4 同义裁决
 

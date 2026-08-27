@@ -93,6 +93,7 @@ from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
 )
 from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
     OpenAICompatibleKnowledgeEntityLLM,
+    build_discovery_llm,
 )
 from by_qa.knowledge_base.services.knowledge_entity_processing_service import (
     KnowledgeEntityProcessingOrchestrator,
@@ -458,11 +459,9 @@ async def build_knowledge_entity_processing_service(
         settings, provider=provider
     )
 
-    # Entity extraction is an information-selection task.  Keep sampling
-    # deterministic instead of inheriting the creative standard-model default.
-    discovery_llm = OpenAICompatibleKnowledgeEntityLLM(
-        provider=provider, temperature=0.0
-    )
+    # Discovery is an information-selection task. Its production model settings
+    # are intentionally fixed and do not inherit a higher reasoning effort.
+    discovery_llm = build_discovery_llm(provider=provider)
     enrichment_llm = OpenAICompatibleKnowledgeEntityLLM(provider=provider)
     asset_service = KnowledgeEntityAssetService(
         connection_factory=connection_factory,

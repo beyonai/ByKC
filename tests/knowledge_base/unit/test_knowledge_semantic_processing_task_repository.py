@@ -189,6 +189,30 @@ async def test_count_processing_tasks_uses_same_grouping_and_filters():
     assert params["latest_only"] is False
 
 
+async def test_claim_next_task_uses_scalar_subquery_for_opengauss() -> None:
+    cursor = FakeCursor(fetchone_results=[{"kid": 91, "status": "running"}])
+    repo = KnowledgeSemanticProcessingTaskRepository()
+
+    result = await repo.claim_next_task(
+        cursor,
+        worker_id="worker-1",
+        lease_token="lease-1",
+        lease_seconds=180,
+    )
+
+    assert result == {"kid": 91, "status": "running"}
+    sql, params = cursor.executed[0]
+    assert "WHERE kid = (" in sql
+    assert "WHERE kid IN (" not in sql
+    assert "LIMIT 1" in sql
+    assert "FOR UPDATE SKIP LOCKED" in sql
+    assert params == {
+        "worker_id": "worker-1",
+        "lease_token": "lease-1",
+        "lease_seconds": 180,
+    }
+
+
 @pytest.mark.parametrize("task_type", ["FILE_BUILD", "UNKNOWN"])
 async def test_processing_task_methods_reject_non_semantic_types(task_type):
     repo = KnowledgeSemanticProcessingTaskRepository()

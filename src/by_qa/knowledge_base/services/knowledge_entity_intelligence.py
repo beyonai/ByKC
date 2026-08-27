@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import unicodedata
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -270,12 +271,14 @@ class OpenAICompatibleKnowledgeEntityLLM:
         temperature: float | None = None,
         timeout: float = 300.0,
         client_factory: Callable[..., Any] | None = None,
+        request_extra_body: Mapping[str, Any] | None = None,
     ) -> None:
         self._provider = provider or load_model_config_provider()
         self._profile = profile
         self._temperature = temperature
         self._timeout = timeout
         self._client_factory = client_factory or httpx.AsyncClient
+        self._request_extra_body = dict(request_extra_body or {})
 
     async def cache_identity(self) -> str:
         """Return a non-secret identity for content-addressed result isolation."""
@@ -291,7 +294,7 @@ class OpenAICompatibleKnowledgeEntityLLM:
                 "baseUrl": config.base_url.rstrip("/"),
                 "model": config.model_name,
                 "temperature": temperature,
-                "extraBody": config.extra_body,
+                "extraBody": {**config.extra_body, **self._request_extra_body},
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -313,6 +316,7 @@ class OpenAICompatibleKnowledgeEntityLLM:
             headers["Authorization"] = f"Bearer {config.api_key}"
         payload: dict[str, Any] = {
             **config.extra_body,
+            **self._request_extra_body,
             "model": config.model_name,
             "temperature": (
                 self._temperature
@@ -323,15 +327,16 @@ class OpenAICompatibleKnowledgeEntityLLM:
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
+        started_at = time.perf_counter()
         try:
             async with self._client_factory(timeout=self._timeout) as client:
                 logger.debug(
                     "knowledge entity llm request prompt: model=%s, "
-                    "json_mode=%s, message_count=%d, messages=%s",
+                    "json_mode=%s, message_count=%d, message_chars=%s",
                     config.model_name,
                     json_mode,
                     len(payload["messages"]),
-                    json.dumps(payload["messages"], ensure_ascii=False),
+                    [len(str(message.get("content") or "")) for message in messages],
                 )
                 response = await client.post(
                     f"{base_url}/chat/completions", headers=headers, json=payload
@@ -343,14 +348,74 @@ class OpenAICompatibleKnowledgeEntityLLM:
                 f"OpenAI-compatible LLM request failed: {exc}"
             ) from exc
         try:
-            content = response_payload["choices"][0]["message"]["content"]
+            choice = response_payload["choices"][0]
+            message = choice["message"]
+            content = message["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise KnowledgeEntityLLMError(
                 "LLM response did not include choices[0].message.content"
             ) from exc
+        usage = response_payload.get("usage")
+        usage = usage if isinstance(usage, Mapping) else {}
+        completion_details = usage.get("completion_tokens_details")
+        completion_details = (
+            completion_details if isinstance(completion_details, Mapping) else {}
+        )
+        reasoning_content = message.get("reasoning_content")
+        logger.debug(
+            "knowledge entity llm response metadata: model=%s status=%s "
+            "elapsed_ms=%.2f finish_reason=%s content_type=%s content_chars=%s "
+            "reasoning_chars=%s prompt_tokens=%s completion_tokens=%s "
+            "reasoning_tokens=%s",
+            config.model_name,
+            getattr(response, "status_code", None),
+            (time.perf_counter() - started_at) * 1000,
+            choice.get("finish_reason"),
+            type(content).__name__,
+            len(content) if isinstance(content, str) else 0,
+            len(reasoning_content) if isinstance(reasoning_content, str) else 0,
+            usage.get("prompt_tokens"),
+            usage.get("completion_tokens"),
+            completion_details.get("reasoning_tokens"),
+        )
         if not isinstance(content, str) or not content.strip():
+            logger.warning(
+                "knowledge entity llm returned empty content: model=%s status=%s "
+                "elapsed_ms=%.2f finish_reason=%s content_type=%s "
+                "reasoning_chars=%s prompt_tokens=%s completion_tokens=%s "
+                "reasoning_tokens=%s",
+                config.model_name,
+                getattr(response, "status_code", None),
+                (time.perf_counter() - started_at) * 1000,
+                choice.get("finish_reason"),
+                type(content).__name__,
+                len(reasoning_content) if isinstance(reasoning_content, str) else 0,
+                usage.get("prompt_tokens"),
+                usage.get("completion_tokens"),
+                completion_details.get("reasoning_tokens"),
+            )
             raise KnowledgeEntityLLMError("LLM response content must be non-empty text")
         return content
+
+
+def build_discovery_llm(
+    *,
+    provider: ModelConfigProvider | None = None,
+    timeout: float = 300.0,
+    client_factory: Callable[..., Any] | None = None,
+) -> OpenAICompatibleKnowledgeEntityLLM:
+    """Build the production Discovery client with deterministic low reasoning."""
+
+    return OpenAICompatibleKnowledgeEntityLLM(
+        provider=provider,
+        temperature=0.0,
+        timeout=timeout,
+        client_factory=client_factory,
+        request_extra_body={
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": "low",
+        },
+    )
 
 
 async def _complete_strict_json(
@@ -490,6 +555,7 @@ __all__ = [
     "NormalizedText",
     "OpenAICompatibleKnowledgeEntityLLM",
     "RelationCode",
+    "build_discovery_llm",
     "normalize_surface",
     "normalize_text_with_offsets",
 ]

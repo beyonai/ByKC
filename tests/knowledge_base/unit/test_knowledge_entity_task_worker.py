@@ -6,9 +6,11 @@ import pytest
 
 from by_qa.knowledge_base.services import knowledge_entity_task_worker as worker_module
 from by_qa.knowledge_base.services.knowledge_entity_discovery import (
+    DiscoveredEntity,
+    DiscoveredTopic,
     DiscoveryDocumentContext,
-    EntityCandidate,
-    EntityDiscoveryResult,
+    DiscoveryResult,
+    SourceReference,
 )
 from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
     EnrichmentResult,
@@ -17,7 +19,6 @@ from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
     organize_evidence,
 )
 from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
-    IdentityScope,
     KnowledgeEntityOutputError,
     RelationCode,
 )
@@ -33,6 +34,22 @@ from by_qa.knowledge_common.markdown_reference import (
     detect_reference_spans,
     detect_reference_token_spans,
 )
+
+
+def discovered_entity(
+    name: str,
+    evidence_summary: str,
+    *,
+    aliases: tuple[str, ...] = (),
+    entity_ref: str = "e1",
+) -> DiscoveredEntity:
+    return DiscoveredEntity(
+        entity_ref=entity_ref,
+        name=name,
+        aliases=aliases,
+        evidence_summary=evidence_summary,
+        description=f"{name} 的稳定身份描述。",
+    )
 
 
 class FakeCursor:
@@ -266,19 +283,30 @@ class FakeReferenceRepository:
 
 
 class FakeDiscovery:
-    def __init__(self, candidates: tuple[EntityCandidate, ...]) -> None:
+    def __init__(
+        self,
+        candidates: tuple[DiscoveredEntity, ...],
+        topics: tuple[DiscoveredTopic, ...] = (),
+    ) -> None:
         self.candidates = candidates
+        self.topics = topics
         self.log_context = None
 
-    async def discover(self, markdown, *, max_entities, log_context=None):
+    async def discover(self, markdown, *, max_entities, max_topics, log_context=None):
         assert markdown
         assert max_entities == 12
+        assert max_topics == 24
         self.log_context = log_context
-        return EntityDiscoveryResult(
-            candidates=self.candidates,
+        return DiscoveryResult(
+            entities=self.candidates,
+            topics=self.topics,
             warnings=(),
             attempts=1,
-            context=DiscoveryDocumentContext(markdown, (), False),
+            context=DiscoveryDocumentContext(
+                markdown,
+                (SourceReference("s1", markdown, 0, len(markdown)),),
+                False,
+            ),
         )
 
 
@@ -305,12 +333,12 @@ class FakeSearch:
 class FakeCreatedAssetService:
     def __init__(self) -> None:
         self.attachments: list[dict] = []
+        self.topic_upserts: list[dict] = []
 
     async def resolve_candidate(self, **kwargs):
         return SimpleNamespace(
             entity_id=100,
             canonical_name=kwargs["entity_name"],
-            local_name=kwargs["local_name"],
             fs_entry_id=None,
             method=SimpleNamespace(value="CREATED_NEW"),
             alias_added=None,
@@ -321,6 +349,10 @@ class FakeCreatedAssetService:
 
     async def attach_file(self, **kwargs):
         self.attachments.append(kwargs)
+
+    async def upsert_topics(self, **kwargs):
+        self.topic_upserts.append(kwargs)
+        return []
 
 
 class FakeEnricher:
@@ -421,20 +453,17 @@ async def test_discovery_never_loads_or_builds_the_full_surface_vocabulary():
         document_kind="knowledgeEntity",
         entity_name="ByKC-BaseQAEngine",
     )
-    candidate = EntityCandidate(
-        entity_name="ByKC-基础问答引擎",
-        local_name="基础问答引擎",
-        identity_scope=IdentityScope.GLOBAL,
-        evidence="ByKC 的基础问答引擎负责回答。",
+    candidate = discovered_entity(
+        "ByKC-基础问答引擎",
+        "ByKC 的基础问答引擎负责回答。",
     )
 
     class AssetService:
         async def resolve_candidate(self, **kwargs):
-            assert kwargs["entity_name"] == candidate.entity_name
+            assert kwargs["entity_name"] == candidate.name
             return SimpleNamespace(
                 entity_id=100,
                 canonical_name="ByKC-BaseQAEngine",
-                local_name="BaseQAEngine",
                 fs_entry_id=20,
                 method=SimpleNamespace(value="EXACT_ALIAS"),
                 alias_added=None,
@@ -445,6 +474,9 @@ async def test_discovery_never_loads_or_builds_the_full_surface_vocabulary():
 
         async def attach_file(self, **kwargs):
             raise AssertionError(f"existing file must not be reattached: {kwargs}")
+
+        async def upsert_topics(self, **_kwargs):
+            return []
 
     deps = make_worker(
         rows=[source, entity],
@@ -472,6 +504,54 @@ async def test_discovery_never_loads_or_builds_the_full_surface_vocabulary():
     assert result.index_version is None
     assert result.result_payload["actions"][0]["canonicalEntityId"] == 100
     assert result.result_payload["actions"][0]["resolutionMethod"] == "EXACT_ALIAS"
+
+
+@pytest.mark.asyncio
+async def test_discovery_persists_topics_after_entity_owner_resolution_without_files():
+    source = file_row(10, "/docs/source.md", content_key="source")
+    candidate = discovered_entity(
+        "OpenClaw",
+        "OpenClaw 是本文的核心研究对象。",
+    )
+    asset_service = FakeCreatedAssetService()
+    deps = make_worker(
+        rows=[source],
+        objects={
+            ("original", "source"): (
+                "OpenClaw 是本文的核心研究对象，上下文管理是其特化方向。"
+            ).encode(),
+        },
+        discovery=FakeDiscovery(
+            (candidate,),
+            (
+                DiscoveredTopic(
+                    "e1",
+                    "上下文管理",
+                    "该方向附属于 OpenClaw 且具有持续检索价值。",
+                ),
+            ),
+        ),
+        asset_service=asset_service,
+    )
+
+    result = await deps.worker.run_task(
+        KnowledgeEntityTaskContext(
+            task_id=503,
+            task_type="ENTITY_DISCOVERY",
+            kb_code="1",
+            knowledge_base_id=1,
+            source_file_id=10,
+            file_path="/docs/source.md",
+            input_checksum="checksum-1",
+        )
+    )
+
+    assert len(deps.ingestion.uploads) == 1
+    assert deps.ingestion.uploads[0].file_path == "/KnowledgeEntity/OpenClaw.md"
+    upsert = asset_service.topic_upserts[0]
+    assert upsert["topics"] == [{"owner_entity_id": 100, "name": "上下文管理"}]
+    assert result.result_payload["topicCount"] == 1
+    assert result.result_payload["protocolVersion"] == "entity-topic/2.2"
 
 
 @pytest.mark.parametrize(
@@ -516,14 +596,7 @@ async def test_discovery_anchors_readable_path_when_entity_name_metadata_is_miss
             ("markdown", "occupied-md"): b"# Alpha/Beta",
         },
         discovery=FakeDiscovery(
-            (
-                EntityCandidate(
-                    entity_name="Alpha/Beta",
-                    local_name="Alpha/Beta",
-                    identity_scope=IdentityScope.GLOBAL,
-                    evidence="Alpha Beta is a stable component.",
-                ),
-            )
+            (discovered_entity("Alpha/Beta", "Alpha Beta is a stable component."),)
         ),
         asset_service=asset_service,
     )
@@ -542,6 +615,7 @@ async def test_discovery_anchors_readable_path_when_entity_name_metadata_is_miss
     assert deps.ingestion.uploads == []
     assert result.target_file_ids == (11,)
     assert result.result_payload["actions"][0] == {
+        "entityRef": "e1",
         "action": "CREATED",
         "inputEntityName": "Alpha/Beta",
         "entityName": "Alpha/Beta",
@@ -577,14 +651,7 @@ async def test_discovery_rejects_conflicting_metadata_at_readable_path():
             ("original", "conflicting"): b"# Different Entity",
         },
         discovery=FakeDiscovery(
-            (
-                EntityCandidate(
-                    entity_name="Alpha/Beta",
-                    local_name="Alpha/Beta",
-                    identity_scope=IdentityScope.GLOBAL,
-                    evidence="Alpha Beta is a stable component.",
-                ),
-            )
+            (discovered_entity("Alpha/Beta", "Alpha Beta is a stable component."),)
         ),
         asset_service=FakeCreatedAssetService(),
     )

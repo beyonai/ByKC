@@ -33,10 +33,12 @@ class KnowledgeEntityAssetRepository:
                        FROM knowledge_entity a
                        WHERE a.canonical_entity_id = e.kid
                          AND a.name_role = 'alias'
+                         AND a.object_kind = 'ENTITY'
                    ), ARRAY[]::text[]) AS aliases
             FROM knowledge_entity e
             WHERE e.knowledge_base_id = %(knowledge_base_id)s
               AND e.kid = %(entity_id)s
+              AND e.object_kind = 'ENTITY'
             {"FOR UPDATE" if for_update else ""}
             """,
             {
@@ -61,6 +63,7 @@ class KnowledgeEntityAssetRepository:
             WHERE knowledge_base_id = %(knowledge_base_id)s
               AND fs_entry_id = %(fs_entry_id)s
               AND name_role = 'canonical'
+              AND object_kind = 'ENTITY'
             """,
             {
                 "knowledge_base_id": knowledge_base_id,
@@ -86,10 +89,9 @@ class KnowledgeEntityAssetRepository:
                 canonical.knowledge_base_id,
                 canonical.fs_entry_id,
                 canonical.entity_name AS canonical_entity_name,
-                canonical.local_name,
-                canonical.normalized_local_name,
                 canonical.subject_entity_id,
                 canonical.entity_type,
+                canonical.description,
                 matched.normalized_entity_name AS matched_normalized_surface,
                 matched.name_role AS matched_name_role,
                 matched.entity_name AS matched_surface,
@@ -98,13 +100,16 @@ class KnowledgeEntityAssetRepository:
                     FROM knowledge_entity a
                     WHERE a.canonical_entity_id = canonical.kid
                       AND a.name_role = 'alias'
+                      AND a.object_kind = 'ENTITY'
                 ), ARRAY[]::text[]) AS aliases
             FROM knowledge_entity matched
             JOIN knowledge_entity canonical
               ON canonical.kid = COALESCE(matched.canonical_entity_id, matched.kid)
              AND canonical.knowledge_base_id = matched.knowledge_base_id
              AND canonical.name_role = 'canonical'
+             AND canonical.object_kind = 'ENTITY'
             WHERE matched.knowledge_base_id = %(knowledge_base_id)s
+              AND matched.object_kind = 'ENTITY'
               AND matched.normalized_entity_name = ANY(%(normalized_surfaces)s)
             ORDER BY matched.normalized_entity_name, canonical.kid, matched.kid
             """,
@@ -122,10 +127,9 @@ class KnowledgeEntityAssetRepository:
         knowledge_base_id: int,
         entity_name: str,
         normalized_entity_name: str,
-        local_name: str,
-        normalized_local_name: str,
         subject_entity_id: int | None,
         entity_type: str | None,
+        description: str | None,
         fs_entry_id: int | None = None,
     ) -> dict[str, Any]:
         await cursor.execute(
@@ -137,10 +141,10 @@ class KnowledgeEntityAssetRepository:
                 name_role,
                 entity_name,
                 normalized_entity_name,
-                local_name,
-                normalized_local_name,
                 subject_entity_id,
-                entity_type
+                entity_type,
+                description,
+                object_kind
             )
             VALUES (
                 %(knowledge_base_id)s,
@@ -149,10 +153,10 @@ class KnowledgeEntityAssetRepository:
                 'canonical',
                 %(entity_name)s,
                 %(normalized_entity_name)s,
-                %(local_name)s,
-                %(normalized_local_name)s,
                 %(subject_entity_id)s,
-                %(entity_type)s
+                %(entity_type)s,
+                %(description)s,
+                'ENTITY'
             )
             RETURNING *
             """,
@@ -161,10 +165,9 @@ class KnowledgeEntityAssetRepository:
                 "fs_entry_id": fs_entry_id,
                 "entity_name": entity_name,
                 "normalized_entity_name": normalized_entity_name,
-                "local_name": local_name,
-                "normalized_local_name": normalized_local_name,
                 "subject_entity_id": subject_entity_id,
                 "entity_type": entity_type,
+                "description": description,
             },
         )
         return dict(await cursor.fetchone())
@@ -186,6 +189,7 @@ class KnowledgeEntityAssetRepository:
              WHERE canonical_entity_id = %(canonical_entity_id)s
                AND normalized_entity_name = %(normalized_alias)s
                AND name_role = 'alias'
+               AND object_kind = 'ENTITY'
             RETURNING *
             """,
             {
@@ -200,17 +204,19 @@ class KnowledgeEntityAssetRepository:
                 """
                 INSERT INTO knowledge_entity (
                     knowledge_base_id,
-                    canonical_entity_id,
-                    name_role,
-                    entity_name,
-                    normalized_entity_name
+                canonical_entity_id,
+                name_role,
+                entity_name,
+                normalized_entity_name,
+                object_kind
                 )
                 VALUES (
                     %(knowledge_base_id)s,
                     %(canonical_entity_id)s,
                     'alias',
                     %(alias)s,
-                    %(normalized_alias)s
+                    %(normalized_alias)s,
+                    'ENTITY'
                 )
                 RETURNING *
                 """,
@@ -228,6 +234,7 @@ class KnowledgeEntityAssetRepository:
             UPDATE knowledge_entity
                SET updated_at = NOW()
              WHERE kid = %(canonical_entity_id)s
+               AND object_kind = 'ENTITY'
             """,
             {"canonical_entity_id": canonical_entity_id},
         )
@@ -248,6 +255,7 @@ class KnowledgeEntityAssetRepository:
              WHERE kid = %(entity_id)s
                AND knowledge_base_id = %(knowledge_base_id)s
                AND name_role = 'canonical'
+               AND object_kind = 'ENTITY'
             """,
             {
                 "entity_id": entity_id,
@@ -291,6 +299,95 @@ class KnowledgeEntityAssetRepository:
         )
         return int(cursor.rowcount or 0)
 
+    async def upsert_topic(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        owner_entity_id: int,
+        name: str,
+        normalized_name: str,
+    ) -> dict[str, Any]:
+        """Reuse an exactly equal local Topic name inside one Entity owner."""
+
+        await cursor.execute(
+            """
+            SELECT kid
+            FROM knowledge_entity
+            WHERE kid = %(owner_entity_id)s
+              AND knowledge_base_id = %(knowledge_base_id)s
+              AND object_kind = 'ENTITY'
+              AND name_role = 'canonical'
+            FOR UPDATE
+            """,
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "owner_entity_id": owner_entity_id,
+            },
+        )
+        if await cursor.fetchone() is None:
+            raise ValueError("Topic owner must be a canonical Entity in the same KB")
+        await cursor.execute(
+            """
+            SELECT kid, entity_name, subject_entity_id
+            FROM knowledge_entity
+            WHERE knowledge_base_id = %(knowledge_base_id)s
+              AND object_kind = 'TOPIC'
+              AND subject_entity_id = %(owner_entity_id)s
+              AND normalized_entity_name = %(normalized_name)s
+            FOR UPDATE
+            """,
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "owner_entity_id": owner_entity_id,
+                "normalized_name": normalized_name,
+            },
+        )
+        existing = await cursor.fetchone()
+        if existing is not None:
+            return dict(existing)
+        await cursor.execute(
+            """
+            INSERT INTO knowledge_entity (
+                knowledge_base_id,
+                fs_entry_id,
+                canonical_entity_id,
+                name_role,
+                entity_name,
+                normalized_entity_name,
+                subject_entity_id,
+                entity_type,
+                object_kind
+            )
+            SELECT
+                %(knowledge_base_id)s,
+                NULL,
+                NULL,
+                'canonical',
+                %(name)s,
+                %(normalized_name)s,
+                owner.kid,
+                NULL,
+                'TOPIC'
+            FROM knowledge_entity owner
+            WHERE owner.kid = %(owner_entity_id)s
+              AND owner.knowledge_base_id = %(knowledge_base_id)s
+              AND owner.object_kind = 'ENTITY'
+              AND owner.name_role = 'canonical'
+            RETURNING kid, entity_name, subject_entity_id
+            """,
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "owner_entity_id": owner_entity_id,
+                "name": name,
+                "normalized_name": normalized_name,
+            },
+        )
+        created = await cursor.fetchone()
+        if created is None:
+            raise ValueError("Topic owner must be a canonical Entity in the same KB")
+        return dict(created)
+
     async def list_direct_children(
         self, cursor: Any, *, knowledge_base_id: int, subject_entity_id: int
     ) -> list[dict[str, Any]]:
@@ -301,6 +398,7 @@ class KnowledgeEntityAssetRepository:
             WHERE knowledge_base_id = %(knowledge_base_id)s
               AND subject_entity_id = %(subject_entity_id)s
               AND name_role = 'canonical'
+              AND object_kind = 'ENTITY'
             ORDER BY kid
             """,
             {
@@ -312,7 +410,11 @@ class KnowledgeEntityAssetRepository:
 
     async def delete_entity(self, cursor: Any, *, entity_id: int) -> int:
         await cursor.execute(
-            "DELETE FROM knowledge_entity WHERE kid = %(entity_id)s",
+            """
+            DELETE FROM knowledge_entity
+            WHERE kid = %(entity_id)s
+              AND object_kind = 'ENTITY'
+            """,
             {"entity_id": entity_id},
         )
         return int(cursor.rowcount or 0)
@@ -332,6 +434,7 @@ class KnowledgeEntityAssetRepository:
               AND knowledge_base_id = %(knowledge_base_id)s
               AND canonical_entity_id = %(canonical_entity_id)s
               AND name_role = 'alias'
+              AND object_kind = 'ENTITY'
             """,
             {
                 "knowledge_base_id": knowledge_base_id,
@@ -346,6 +449,7 @@ class KnowledgeEntityAssetRepository:
                 UPDATE knowledge_entity
                    SET updated_at = NOW()
                  WHERE kid = %(canonical_entity_id)s
+                   AND object_kind = 'ENTITY'
                 """,
                 {"canonical_entity_id": canonical_entity_id},
             )
@@ -402,6 +506,8 @@ class KnowledgeEntityAssetRepository:
             FROM knowledge_entity
             WHERE kid = %(entity_id)s
               AND name_role = 'canonical'
+              AND object_kind = 'ENTITY'
+              AND object_kind = 'ENTITY'
             """,
             {"entity_id": entity_id},
         )
@@ -477,13 +583,11 @@ class KnowledgeEntityAssetRepository:
         *,
         knowledge_base_id: int,
         full_embedding: Sequence[float],
-        local_embedding: Sequence[float],
         subject_entity_id: int | None,
         entity_type: str | None,
         limit: int,
     ) -> list[dict[str, Any]]:
         full_literal = "[" + ",".join(str(value) for value in full_embedding) + "]"
-        local_literal = "[" + ",".join(str(value) for value in local_embedding) + "]"
         await cursor.execute(
             f"""
             WITH scoped_entities AS MATERIALIZED (
@@ -491,6 +595,7 @@ class KnowledgeEntityAssetRepository:
                 FROM knowledge_entity e
                 WHERE e.knowledge_base_id = %(knowledge_base_id)s
                   AND e.name_role = 'canonical'
+                  AND e.object_kind = 'ENTITY'
                   AND e.subject_entity_id IS NOT DISTINCT FROM %(subject_entity_id)s
                   AND (
                         %(entity_type)s::text IS NULL
@@ -499,26 +604,17 @@ class KnowledgeEntityAssetRepository:
                       )
             ), scored AS (
                 SELECT v.entity_id,
-                       MAX(
-                           CASE v.representation
-                               WHEN 'full' THEN 1 - (
-                                   v.embedding <=> %(full_embedding)s
-                               )
-                               WHEN 'local_name' THEN 1 - (
-                                   v.embedding <=> %(local_embedding)s
-                               )
-                           END
-                       ) AS score
+                       1 - (v.embedding <=> %(full_embedding)s) AS score
                 FROM scoped_entities scoped
                 JOIN {self.entity_embedding_table_name} v
                   ON v.entity_id = scoped.kid
-                GROUP BY v.entity_id
+                 AND v.representation = 'full'
             )
             SELECT e.kid AS resolved_entity_id,
                    e.entity_name AS canonical_entity_name,
-                   e.local_name,
                    e.subject_entity_id,
                    e.entity_type,
+                   e.description,
                    e.fs_entry_id,
                    scored.score,
                    COALESCE((
@@ -526,6 +622,7 @@ class KnowledgeEntityAssetRepository:
                        FROM knowledge_entity a
                        WHERE a.canonical_entity_id = e.kid
                          AND a.name_role = 'alias'
+                         AND a.object_kind = 'ENTITY'
                    ), ARRAY[]::text[]) AS aliases
             FROM scored
             JOIN knowledge_entity e ON e.kid = scored.entity_id
@@ -537,7 +634,6 @@ class KnowledgeEntityAssetRepository:
                 "subject_entity_id": subject_entity_id,
                 "entity_type": entity_type,
                 "full_embedding": full_literal,
-                "local_embedding": local_literal,
                 "limit": limit,
             },
         )

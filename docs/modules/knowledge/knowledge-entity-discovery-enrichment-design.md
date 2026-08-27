@@ -213,7 +213,7 @@ canEnrich = knowledgeEntity
 
 ```text
 needsDiscovery = canDiscover
-                 + 文档 checksum、discoveryMethodVersion 或 processingPolicyVersion 已变化
+                 + 尚未成功 Discovery，或文档 checksum 已变化
 
 needsEnrich = canEnrich
               + 尚未成功 Enrich，或存在 createdAt 晚于实体 updatedAt 的入边断言
@@ -770,7 +770,7 @@ ByDC 在 2026-08-08 曾进入 `develop` 的实现是：
 
 ### 16.1 方法版本
 
-Discovery 的 prompt、归一化、global/subject 规则、数量上限和显著性规则随代码发布，由服务端内部 `discoveryMethodVersion` 标记。该版本参与输入指纹，调用方不能指定。持久化策略由 `processingPolicyVersion` 标记，索引继续使用独立 `indexVersion`。
+Discovery 的 prompt、归一化、数量上限和显著性规则随代码发布，由服务端内部 `discoveryMethodVersion` 标记；输出 Schema 由 `protocolVersion` 标记。两者只作任务审计，不参与输入指纹或自动重跑判定；索引继续使用独立 `indexVersion`。
 
 KnowledgeEntity 文档和关系不保存 `definitionVersion`。实体身份由 `fileId`、`entityName` 和可选 `subjectFileId` 决定；任务记录保留实际方法版本和索引版本用于审计。
 
@@ -825,7 +825,7 @@ KnowledgeEntity 文档和关系不保存 `definitionVersion`。实体身份由 `
 - 候选 `evidence` 必须 `100%` 可在输入上下文中定位为连续原文；
 - 金标文档的必要核心实体召回率不低于 `0.75`，事件、日期、标题等禁止实体命中数为 `0`。
 
-仓库使用 `scripts/knowledge_base/evaluate_entity_discovery.py` 对 `Document/docs/*.md` 执行三轮评测（首次、同输入重复、首次结果进入词表后），金标约束保存在 `scripts/knowledge_base/entity_discovery_benchmark.json`。
+评测语料、benchmark、运行报告和本地评测工具属于开发资产，统一放在不纳管的 `大厂文章/discovery-evaluation/` 下，不作为生产包的运行时依赖。
 
 ### 17.2 AC 词表
 

@@ -45,7 +45,7 @@ def test_build_schema_statements_include_current_chunk_and_projection_tables():
     assert "chunk_embedding_bge_m3" in ddl
     assert "create table if not exists knowledge_entity" in ddl.lower()
     assert "knowledge_entity_embedding_bge_m3" in ddl
-    assert "representation in ('full', 'local_name')" in ddl.lower()
+    assert "check (representation = 'full')" in ddl.lower()
     assert "vector(1024)" in ddl
 
 

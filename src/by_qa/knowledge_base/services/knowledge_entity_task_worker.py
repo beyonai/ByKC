@@ -33,7 +33,8 @@ from by_qa.knowledge_base.services.document_update_service import (
     GeneratedOutgoingAssertion,
 )
 from by_qa.knowledge_base.services.knowledge_entity_discovery import (
-    EntityCandidate,
+    DISCOVERY_PROTOCOL_VERSION,
+    DiscoveredEntity,
     KnowledgeEntityDiscovery,
 )
 from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
@@ -45,7 +46,6 @@ from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
 )
 from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
     ALLOWED_RELATION_CODES,
-    IdentityScope,
     normalize_surface,
 )
 
@@ -193,68 +193,44 @@ class KnowledgeEntityTaskWorker:
                     "maxEntities", request_params.get("max_entities", 12)
                 )
             ),
+            max_topics=int(
+                request_params.get("maxTopics", request_params.get("max_topics", 24))
+            ),
             log_context=self._intelligence_log_context(context),
         )
         warnings = list(discovery.warnings)
         actions: list[dict[str, Any]] = []
         target_ids: set[int] = set()
         projections: list[dict[str, Any]] = []
-        resolved_by_name: dict[str, tuple[Any, dict[str, Any]]] = {}
-        ordered_candidates = sorted(
-            enumerate(discovery.candidates),
-            key=lambda item: (
-                item[1].identity_scope is IdentityScope.SUBJECT,
-                item[0],
-            ),
-        )
-        for _, candidate in ordered_candidates:
-            subject_entity_id = None
-            subject_file_id = None
-            subject_name = candidate.subject_entity_name
-            if candidate.identity_scope is IdentityScope.SUBJECT:
-                subject_key = normalize_surface(subject_name or "")
-                owner = resolved_by_name.get(subject_key)
-                if owner is None:
-                    warnings.append(
-                        f"candidate discarded: unresolved same-KB subject for "
-                        f"{candidate.entity_name}"
-                    )
-                    actions.append(
-                        {"action": "DROPPED", "entityName": candidate.entity_name}
-                    )
-                    continue
-                subject_entity_id = int(owner[0].entity_id)
-                subject_file_id = self._optional_int(owner[1].get("kid"))
-
+        resolved_by_ref: dict[str, tuple[Any, dict[str, Any]]] = {}
+        for candidate in discovery.entities:
             resolution = await self._asset_service.resolve_candidate(
                 knowledge_base_id=int(context.knowledge_base_id),
-                entity_name=candidate.entity_name,
-                local_name=candidate.local_name,
+                entity_name=candidate.name,
                 aliases=candidate.aliases,
-                subject_entity_id=subject_entity_id,
-                subject_name=subject_name,
-                entity_type=candidate.entity_type,
-                evidence=candidate.evidence,
+                subject_entity_id=None,
+                subject_name=None,
+                entity_type=None,
+                description=candidate.description,
+                evidence=candidate.evidence_summary,
             )
             warnings.extend(resolution.warnings)
             canonical_candidate = replace(
                 candidate,
-                entity_name=resolution.canonical_name,
-                local_name=resolution.local_name,
+                name=resolution.canonical_name,
                 aliases=tuple(
                     dict.fromkeys(
                         (
                             *candidate.aliases,
                             *(
-                                (candidate.entity_name,)
-                                if normalize_surface(candidate.entity_name)
+                                (candidate.name,)
+                                if normalize_surface(candidate.name)
                                 != normalize_surface(resolution.canonical_name)
                                 else ()
                             ),
                         )
                     )
                 ),
-                subject_file_id=subject_file_id,
             )
             projection = None
             if resolution.fs_entry_id is not None:
@@ -265,7 +241,6 @@ class KnowledgeEntityTaskWorker:
                 _, projection, _ = await self._create_or_reuse_entity(
                     context,
                     candidate=canonical_candidate,
-                    subject_file_id=subject_file_id,
                 )
                 await self._asset_service.attach_file(
                     knowledge_base_id=int(context.knowledge_base_id),
@@ -277,11 +252,7 @@ class KnowledgeEntityTaskWorker:
             projection = dict(projection)
             projection["entity_name"] = resolution.canonical_name
             projections.append(projection)
-            resolved_by_name[normalize_surface(candidate.entity_name)] = (
-                resolution,
-                projection,
-            )
-            resolved_by_name[normalize_surface(resolution.canonical_name)] = (
+            resolved_by_ref[candidate.entity_ref] = (
                 resolution,
                 projection,
             )
@@ -291,7 +262,8 @@ class KnowledgeEntityTaskWorker:
             actions.append(
                 {
                     "action": "CREATED" if resolution.created else "ANCHORED",
-                    "inputEntityName": candidate.entity_name,
+                    "entityRef": candidate.entity_ref,
+                    "inputEntityName": candidate.name,
                     "entityName": resolution.canonical_name,
                     "canonicalEntityId": resolution.entity_id,
                     "entityFileId": file_id,
@@ -301,6 +273,26 @@ class KnowledgeEntityTaskWorker:
                     "candidateCount": resolution.candidate_count,
                 }
             )
+
+        topic_inputs: list[dict[str, Any]] = []
+        for topic in discovery.topics:
+            owner = resolved_by_ref.get(topic.owner_entity_ref)
+            if owner is None:
+                warnings.append(
+                    f"topic discarded: unresolved owner {topic.owner_entity_ref}"
+                )
+                continue
+            topic_inputs.append(
+                {
+                    "owner_entity_id": int(owner[0].entity_id),
+                    "name": topic.name,
+                }
+            )
+        topic_actions = await self._asset_service.upsert_topics(
+            knowledge_base_id=int(context.knowledge_base_id),
+            topics=topic_inputs,
+        )
+        actions.extend(topic_actions)
 
         await self._persist_mentions(
             context,
@@ -315,7 +307,16 @@ class KnowledgeEntityTaskWorker:
                     action.get("resolutionMethod") in {"EXACT_CANONICAL", "EXACT_ALIAS"}
                     for action in actions
                 ),
-                "candidateCount": len(discovery.candidates),
+                "candidateCount": len(discovery.entities),
+                "topicCount": len(discovery.topics),
+                "protocolVersion": DISCOVERY_PROTOCOL_VERSION,
+                "rawDiscovery": dict(discovery.raw_json),
+                "sourceChecksum": str(
+                    context.input_checksum or source.get("checksum") or ""
+                ),
+                "contextTruncated": bool(
+                    discovery.context and discovery.context.truncated
+                ),
                 "actions": actions,
                 "warnings": list(dict.fromkeys(warnings)),
                 "attempts": discovery.attempts,
@@ -560,30 +561,28 @@ class KnowledgeEntityTaskWorker:
         self,
         context: KnowledgeEntityTaskContext | Any,
         *,
-        candidate: EntityCandidate,
-        subject_file_id: int | None,
+        candidate: DiscoveredEntity,
     ) -> tuple[int, dict[str, Any], bool]:
         aliases = self._candidate_aliases(candidate)
         content = self._render_entity_markdown(
-            entity_name=candidate.entity_name,
+            entity_name=candidate.name,
             body=(
-                f"# {candidate.entity_name}\n\n"
+                f"# {candidate.name}\n\n"
                 "## 实体定义与边界\n\n"
-                f"{candidate.evidence} "
+                f"{candidate.description} "
                 f"{format_source_reference(context.file_path)}\n\n"
             ),
             aliases=aliases,
-            subject_file_id=subject_file_id,
-            entity_type=candidate.entity_type,
+            subject_file_id=None,
+            entity_type=None,
             entity_enriched=False,
         )
-        path = self._entity_path(candidate.entity_name)
+        path = self._entity_path(candidate.name)
         occupied = await self._get_entity_by_path(context, path)
         if occupied is not None:
             anchored = self._validate_readable_path_identity(
                 occupied,
                 candidate=candidate,
-                subject_file_id=subject_file_id,
             )
             await self._ensure_indexed(context, anchored)
             return int(anchored["kid"]), anchored, False
@@ -603,7 +602,6 @@ class KnowledgeEntityTaskWorker:
                 anchored = self._validate_readable_path_identity(
                     occupied,
                     candidate=candidate,
-                    subject_file_id=subject_file_id,
                 )
                 await self._ensure_indexed(context, anchored)
                 return int(anchored["kid"]), anchored, False
@@ -619,9 +617,9 @@ class KnowledgeEntityTaskWorker:
                 "kid": int(uploaded["fs_entry_id"]),
                 "knowledge_base_id": int(context.knowledge_base_id),
                 "file_path": path,
-                "entity_name": candidate.entity_name,
+                "entity_name": candidate.name,
                 "aliases": list(aliases),
-                "subject_file_id": subject_file_id,
+                "subject_file_id": None,
             }
         return int(created["kid"]), created, True
 
@@ -629,8 +627,7 @@ class KnowledgeEntityTaskWorker:
     def _validate_readable_path_identity(
         row: Mapping[str, Any],
         *,
-        candidate: EntityCandidate,
-        subject_file_id: int | None,
+        candidate: DiscoveredEntity,
     ) -> dict[str, Any]:
         path = str(row.get("file_path") or "")
         if row.get("document_kind") != "knowledgeEntity":
@@ -640,7 +637,7 @@ class KnowledgeEntityTaskWorker:
             )
         existing_name = str(row.get("entity_name") or "").strip()
         if existing_name and normalize_surface(existing_name) != normalize_surface(
-            candidate.entity_name
+            candidate.name
         ):
             raise ValueError(
                 "KnowledgeEntity readable path has conflicting entityName metadata: "
@@ -650,7 +647,7 @@ class KnowledgeEntityTaskWorker:
         normalized_existing_subject = (
             int(existing_subject) if existing_subject is not None else None
         )
-        if normalized_existing_subject != subject_file_id:
+        if normalized_existing_subject is not None:
             raise ValueError(
                 "KnowledgeEntity readable path has conflicting subject identity: "
                 f"{path}"
@@ -659,7 +656,7 @@ class KnowledgeEntityTaskWorker:
         # Missing identity metadata is not silently rewritten during discovery.
         # The candidate values only complete the in-memory surface used by this
         # task; explicit metadata repair remains a separate document operation.
-        anchored["entity_name"] = existing_name or candidate.entity_name
+        anchored["entity_name"] = existing_name or candidate.name
         anchored["aliases"] = list(row.get("aliases") or ())
         return anchored
 
@@ -1051,16 +1048,9 @@ class KnowledgeEntityTaskWorker:
         return "\n\n".join(matches)
 
     @staticmethod
-    def _candidate_aliases(candidate: EntityCandidate) -> tuple[str, ...]:
+    def _candidate_aliases(candidate: DiscoveredEntity) -> tuple[str, ...]:
         values = [*candidate.aliases]
-        if (
-            candidate.identity_scope is IdentityScope.SUBJECT
-            and candidate.local_name
-            and normalize_surface(candidate.local_name)
-            != normalize_surface(candidate.entity_name)
-        ):
-            values.append(candidate.local_name)
-        seen = {normalize_surface(candidate.entity_name)}
+        seen = {normalize_surface(candidate.name)}
         aliases: list[str] = []
         for value in values:
             key = normalize_surface(value)

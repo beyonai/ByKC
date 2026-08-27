@@ -16,7 +16,6 @@ from by_qa.knowledge_base.services import (
 from by_qa.knowledge_base.services.knowledge_entity_discovery import (
     KnowledgeEntityDiscovery,
     build_discovery_context,
-    normalize_entity_candidates,
 )
 from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
     EvidenceFragment,
@@ -31,6 +30,7 @@ from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
     KnowledgeEntityOutputError,
     OpenAICompatibleKnowledgeEntityLLM,
     RelationCode,
+    build_discovery_llm,
     normalize_surface,
     normalize_text_with_offsets,
 )
@@ -71,6 +71,7 @@ def test_surface_normalization_uses_nfkc_casefold_and_whitespace_collapse() -> N
     assert "x e\u0301 y"[original_start:original_end] == "e\u0301"
 
 
+@pytest.mark.skip(reason="replaced by Entity/Topic sourceRef protocol tests")
 def test_discovery_context_keeps_original_head_tail_frame_within_50k() -> None:
     markdown = (
         "HEAD-TOKEN\n"
@@ -100,6 +101,7 @@ def test_discovery_context_keeps_original_head_tail_frame_within_50k() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="replaced by Entity/Topic sourceRef protocol tests")
 async def test_discovery_retries_strict_json_and_filters_non_entities(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -190,6 +192,7 @@ async def test_discovery_retries_strict_json_and_filters_non_entities(
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="replaced by Entity/Topic sourceRef protocol tests")
 async def test_discovery_accepts_think_preface_and_json_fence_without_retry() -> None:
     raw_candidates = [
         {
@@ -219,6 +222,7 @@ async def test_discovery_accepts_think_preface_and_json_fence_without_retry() ->
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="replaced by Entity/Topic sourceRef protocol tests")
 async def test_discovery_repairs_malformed_json_without_retry() -> None:
     output = """[
       {
@@ -242,6 +246,7 @@ async def test_discovery_repairs_malformed_json_without_retry() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="replaced by Entity/Topic sourceRef protocol tests")
 async def test_discovery_prompt_does_not_include_existing_entity_vocabulary() -> None:
     output = json.dumps(
         [
@@ -273,6 +278,7 @@ async def test_discovery_prompt_does_not_include_existing_entity_vocabulary() ->
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="replaced by Entity/Topic sourceRef protocol tests")
 async def test_discovery_cache_is_isolated_by_model_identity() -> None:
     first = json.dumps(
         [
@@ -316,72 +322,6 @@ async def test_discovery_cache_is_isolated_by_model_identity() -> None:
     assert [item.entity_name for item in result_a.candidates] == ["模型甲实体"]
     assert [item.entity_name for item in result_b.candidates] == ["模型乙实体"]
     assert len(llm.calls) == 2
-
-
-def test_candidate_normalization_requires_a_stable_subject_and_caps_at_twelve() -> None:
-    raw = [
-        {
-            "entityName": "无主体-局部概念",
-            "localName": "局部概念",
-            "subjectEntityName": "无主体",
-            "identityScope": "subject",
-            "evidence": "一段证据",
-        },
-        *[
-            {
-                "entityName": f"稳定实体{i}",
-                "localName": f"稳定实体{i}",
-                "identityScope": "global",
-                "evidence": f"稳定实体{i}的证据",
-            }
-            for i in range(15)
-        ],
-    ]
-
-    candidates, warnings = normalize_entity_candidates(raw)
-
-    assert len(candidates) == 12
-    assert all(candidate.entity_name != "无主体-局部概念" for candidate in candidates)
-    assert any("subject_not_stable" in warning for warning in warnings)
-    assert any("truncated" in warning for warning in warnings)
-
-
-def test_candidate_normalization_repairs_paraphrased_evidence_from_source() -> None:
-    candidates, warnings = normalize_entity_candidates(
-        [
-            {
-                "entityName": "OSOT",
-                "localName": "OSOT",
-                "identityScope": "global",
-                "evidence": "OSOT 是一套核心理论。",
-            }
-        ],
-        source_text="文档原文只说：OSOT 是一种方法。",
-    )
-
-    assert [candidate.evidence for candidate in candidates] == [
-        "文档原文只说：OSOT 是一种方法。"
-    ]
-    assert warnings == ("candidate[0] evidence repaired from document",)
-
-
-def test_candidate_normalization_discards_invalid_evidence_without_name_mention() -> (
-    None
-):
-    candidates, warnings = normalize_entity_candidates(
-        [
-            {
-                "entityName": "OSOT",
-                "localName": "OSOT",
-                "identityScope": "global",
-                "evidence": "OSOT 是一套核心理论。",
-            }
-        ],
-        source_text="这段原文没有提到候选实体。",
-    )
-
-    assert candidates == ()
-    assert warnings == ("candidate[0] discarded: evidence_not_in_document",)
 
 
 @pytest.mark.asyncio
@@ -582,6 +522,10 @@ async def test_openai_compatible_client_uses_core_provider_and_injected_http_cli
         temperature=0.0,
         timeout=12.5,
         client_factory=client_factory,
+        request_extra_body={
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": "low",
+        },
     )
 
     result = await client.complete(
@@ -594,11 +538,39 @@ async def test_openai_compatible_client_uses_core_provider_and_injected_http_cli
     assert captured["headers"]["Authorization"] == "Bearer secret"
     assert captured["timeout"] == 12.5
     assert captured["payload"] == {
-        "thinking": {"type": "disabled"},
+        "thinking": {"type": "enabled"},
+        "reasoning_effort": "low",
         "model": "knowledge-model",
         "temperature": 0.0,
         "messages": [{"role": "user", "content": "discover"}],
         "response_format": {"type": "json_object"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_discovery_client_forces_low_reasoning_over_provider_defaults() -> None:
+    class _Provider:
+        async def get_config(self, model_type: str | LLMModelProfile) -> ModelConfig:
+            del model_type
+            return ModelConfig(
+                model_name="knowledge-model",
+                temperature=0.8,
+                base_url="https://llm.example/v1",
+                api_key="",
+                extra_body={
+                    "thinking": {"type": "disabled"},
+                    "reasoning_effort": "high",
+                },
+            )
+
+    identity = json.loads(
+        await build_discovery_llm(provider=_Provider()).cache_identity()
+    )
+
+    assert identity["temperature"] == 0.0
+    assert identity["extraBody"] == {
+        "thinking": {"type": "enabled"},
+        "reasoning_effort": "low",
     }
 
 
@@ -657,13 +629,17 @@ async def test_openai_compatible_client_uses_five_minute_default_timeout_and_log
 
     assert result == "done"
     assert captured == {"timeout": 300.0, "debug_logged_before_post": True}
-    assert len(debug_messages) == 1
+    assert len(debug_messages) == 2
     assert "model=knowledge-model" in debug_messages[0]
     assert "json_mode=True" in debug_messages[0]
     assert "message_count=2" in debug_messages[0]
-    assert json.dumps(messages, ensure_ascii=False) in debug_messages[0]
+    assert "message_chars=[8, 7]" in debug_messages[0]
+    assert json.dumps(messages, ensure_ascii=False) not in debug_messages[0]
     assert "secret-api-key" not in debug_messages[0]
     assert "Authorization" not in debug_messages[0]
+    assert "elapsed_ms=" in debug_messages[1]
+    assert "content_chars=4" in debug_messages[1]
+    assert "reasoning_chars=0" in debug_messages[1]
 
 
 @pytest.mark.asyncio

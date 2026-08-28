@@ -640,6 +640,30 @@ def test_quality_audit_requires_original_source_in_references_not_body() -> None
     assert audit.hard_original_reference_count == 1
 
 
+def test_quality_audit_accepts_natural_chinese_reference_heading_variant() -> None:
+    evidence = organize_evidence(
+        [
+            EvidenceFragment(
+                7,
+                "/authorized.md",
+                "Beta 通过检索恢复记忆。",
+                direct_mention=True,
+                matched_topics=("记忆检索",),
+            )
+        ]
+    )
+
+    audit = audit_enriched_markdown(
+        "# Beta\n\n## 记忆检索\n\nBeta 通过检索恢复记忆。\n\n"
+        "## 资料参考\n\n- [authorized](/authorized.md)",
+        claim_groups=build_evidence_claim_groups(evidence),
+    )
+
+    assert audit.untraceable_source_group_ids == ()
+    assert audit.invalid_source_traceability_count == 0
+    assert audit.hard_original_reference_count == 0
+
+
 @pytest.mark.asyncio
 async def test_enrich_uses_soft_template_pins_identity_and_discards_bad_relations() -> (
     None

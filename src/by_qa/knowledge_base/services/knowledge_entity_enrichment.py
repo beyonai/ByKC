@@ -810,7 +810,7 @@ def audit_enriched_markdown(
 
     required = tuple(group.claim_group_id for group in claim_groups if group.required)
     reference_heading = re.search(
-        r"(?m)^\s{0,3}##\s+(?:参考资料|参考文献|references|sources)\s*$",
+        r"(?m)^\s{0,3}##\s+(?:参考资料|资料参考|参考文献|references|sources)\s*$",
         markdown,
         re.IGNORECASE,
     )

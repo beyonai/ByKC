@@ -58,9 +58,11 @@ DISCOVERY_RELATION_SOURCE = "ENTITY_DISCOVERY"
 MAX_RECENT_RELATIONS = 50
 MAX_RELATION_DOCUMENTS = 3
 MAX_RELATION_FRAGMENT_CHARS = 2_000
+MAX_RELATION_EVIDENCE_CHARS_PER_DOCUMENT = 8_000
 MAX_SEARCH_QUERY_CHARS = 1_000
 MAX_TOPICS_PER_SEARCH_QUERY = 6
-MAX_SEMANTIC_FRAGMENTS_PER_DOCUMENT = 25
+MAX_SEMANTIC_FRAGMENTS_PER_TOPIC_SOURCE = 3
+MAX_SEMANTIC_SOURCE_DOCUMENTS_PER_TOPIC = 2
 MIN_SEMANTIC_SCORE_RATIO = 0.7
 ENTITY_ENRICHED_PROPERTY = "entityEnriched"
 _SAFE_SLUG_RE = re.compile(r"[^\w-]+", re.UNICODE)
@@ -929,7 +931,10 @@ class KnowledgeEntityTaskWorker:
         ):
             file_id = int(relation["source_fs_entry_id"])
             relation_code = str(relation.get("relation_code") or "MENTIONS")
-            for selected_fragment in self._split_relation_evidence(content):
+            relation_fragments = self._select_relation_evidence(
+                self._split_relation_evidence(content)
+            )
+            for selected_fragment in relation_fragments:
                 fragments.append(
                     EvidenceFragment(
                         document_file_id=file_id,
@@ -1004,12 +1009,51 @@ class KnowledgeEntityTaskWorker:
                 semantic_candidates.append((group_index, topic, hit, row))
 
             best_scores: dict[int, float] = {}
+            source_scores: dict[tuple[int, int], float] = {}
             for group_index, _, hit, _ in semantic_candidates:
+                score = float(self._value(hit, "score") or 0.0)
                 best_scores[group_index] = max(
                     best_scores.get(group_index, 0.0),
+                    score,
+                )
+            for group_index, _, hit, row in semantic_candidates:
+                source_key = (group_index, int(row["kid"]))
+                source_scores[source_key] = max(
+                    source_scores.get(source_key, 0.0),
                     float(self._value(hit, "score") or 0.0),
                 )
-            document_counts: dict[int, int] = {}
+            allowed_sources_by_group: dict[int, set[int]] = {}
+            for group_index in best_scores:
+                ranked_source_ids = [
+                    file_id
+                    for (_, file_id), _ in sorted(
+                        (
+                            (key, score)
+                            for key, score in source_scores.items()
+                            if key[0] == group_index
+                        ),
+                        key=lambda item: (-item[1], item[0][1]),
+                    )
+                ]
+                relation_source_ids = {
+                    file_id
+                    for file_id in ranked_source_ids
+                    if file_id in selected_source_ids
+                }
+                remaining_slots = max(
+                    0,
+                    MAX_SEMANTIC_SOURCE_DOCUMENTS_PER_TOPIC - len(relation_source_ids),
+                )
+                supplemental_source_ids = [
+                    file_id
+                    for file_id in ranked_source_ids
+                    if file_id not in relation_source_ids
+                ][:remaining_slots]
+                allowed_sources_by_group[group_index] = {
+                    *relation_source_ids,
+                    *supplemental_source_ids,
+                }
+            topic_source_counts: dict[tuple[int, int], int] = {}
             semantic_by_content: dict[tuple[int, str], int] = {}
             for group_index, topic, hit, row in semantic_candidates:
                 content = str(self._value(hit, "chunk_text", "chunkText")).strip()
@@ -1020,6 +1064,8 @@ class KnowledgeEntityTaskWorker:
                 if not content or (
                     best_score > 0 and score < best_score * MIN_SEMANTIC_SCORE_RATIO
                 ):
+                    continue
+                if file_id not in allowed_sources_by_group.get(group_index, set()):
                     continue
                 content_key = (file_id, normalized_content)
                 existing_index = semantic_by_content.get(content_key)
@@ -1038,12 +1084,15 @@ class KnowledgeEntityTaskWorker:
                         ),
                     )
                     continue
+                topic_source_key = (group_index, file_id)
                 if (
-                    document_counts.get(file_id, 0)
-                    >= MAX_SEMANTIC_FRAGMENTS_PER_DOCUMENT
+                    topic_source_counts.get(topic_source_key, 0)
+                    >= MAX_SEMANTIC_FRAGMENTS_PER_TOPIC_SOURCE
                 ):
                     continue
-                document_counts[file_id] = document_counts.get(file_id, 0) + 1
+                topic_source_counts[topic_source_key] = (
+                    topic_source_counts.get(topic_source_key, 0) + 1
+                )
                 fragments.append(
                     EvidenceFragment(
                         document_file_id=file_id,
@@ -1164,6 +1213,41 @@ class KnowledgeEntityTaskWorker:
         if current:
             fragments.append(current)
         return tuple(fragments)
+
+    @staticmethod
+    def _select_relation_evidence(
+        fragments: Sequence[str],
+        *,
+        max_total_chars: int = MAX_RELATION_EVIDENCE_CHARS_PER_DOCUMENT,
+    ) -> tuple[str, ...]:
+        """Bound relation fallback across the whole source without semantic rules."""
+
+        if max_total_chars < 1:
+            raise ValueError("relation evidence limit must be positive")
+        source = tuple(fragment for fragment in fragments if fragment)
+        if sum(map(len, source)) <= max_total_chars:
+            return source
+        sample_count = min(
+            len(source),
+            max(1, max_total_chars // MAX_RELATION_FRAGMENT_CHARS),
+        )
+        if sample_count == 1:
+            indexes = (0,)
+        else:
+            indexes = tuple(
+                round(index * (len(source) - 1) / (sample_count - 1))
+                for index in range(sample_count)
+            )
+        selected: list[str] = []
+        remaining = max_total_chars
+        for index in dict.fromkeys(indexes):
+            if remaining <= 0:
+                break
+            fragment = source[index][:remaining]
+            if fragment:
+                selected.append(fragment)
+                remaining -= len(fragment)
+        return tuple(selected)
 
     @staticmethod
     def _candidate_aliases(candidate: DiscoveredEntity) -> tuple[str, ...]:

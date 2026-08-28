@@ -1097,6 +1097,119 @@ async def test_topic_queries_apply_score_thresholds_independently():
 
 
 @pytest.mark.asyncio
+async def test_topic_semantic_sources_are_bounded_by_score_per_topic():
+    entity = file_row(
+        30,
+        "/KnowledgeEntity/target.md",
+        content_key="entity",
+        markdown_key="entity-md",
+        document_kind="knowledgeEntity",
+        entity_name="Target",
+    )
+    sources = [
+        file_row(file_id, f"/docs/{file_id}.md", content_key=str(file_id))
+        for file_id in (10, 11, 12)
+    ]
+    deps = make_worker(
+        rows=[entity, *sources],
+        objects={
+            ("original", "entity"): b"# Target",
+            ("markdown", "entity-md"): b"# Target",
+            **{
+                ("original", str(file_id)): f"source {file_id}".encode()
+                for file_id in (10, 11, 12)
+            },
+        },
+        search_hits=[
+            SimpleNamespace(
+                kb_code="1",
+                file_path=f"/docs/{file_id}.md",
+                chunk_text=f"evidence {file_id}",
+                score=score,
+            )
+            for file_id, score in ((10, 0.91), (11, 0.99), (12, 0.95))
+        ],
+        asset_service=FakeCreatedAssetService(("Topic",)),
+    )
+
+    evidence = await deps.worker._collect_evidence(
+        KnowledgeEntityTaskContext(
+            task_id=607,
+            task_type="DOCUMENT_ENRICH",
+            kb_code="1",
+            knowledge_base_id=1,
+            source_file_id=30,
+            file_path="/KnowledgeEntity/target.md",
+        ),
+        identity=KnowledgeEntityIdentity(30, 1, "Target"),
+        existing_markdown="# Target",
+        topics=("Topic",),
+    )
+
+    assert {item.document_file_id for item in evidence} == {11, 12}
+
+
+@pytest.mark.asyncio
+async def test_relation_source_is_exempt_from_topic_semantic_source_cap():
+    entity = file_row(
+        30,
+        "/KnowledgeEntity/target.md",
+        content_key="entity",
+        markdown_key="entity-md",
+        document_kind="knowledgeEntity",
+        entity_name="Target",
+    )
+    sources = [
+        file_row(file_id, f"/docs/{file_id}.md", content_key=str(file_id))
+        for file_id in (10, 11, 12)
+    ]
+    deps = make_worker(
+        rows=[entity, *sources],
+        objects={
+            ("original", "entity"): b"# Target",
+            ("markdown", "entity-md"): b"# Target",
+            **{
+                ("original", str(file_id)): f"source {file_id}".encode()
+                for file_id in (10, 11, 12)
+            },
+        },
+        search_hits=[
+            SimpleNamespace(
+                kb_code="1",
+                file_path=f"/docs/{file_id}.md",
+                chunk_text=f"semantic evidence {file_id}",
+                score=score,
+            )
+            for file_id, score in ((10, 0.80), (11, 0.99), (12, 0.95))
+        ],
+        asset_service=FakeCreatedAssetService(("Topic",)),
+    )
+    deps.references.incoming_relations = [
+        {
+            "source_fs_entry_id": 10,
+            "relation_code": "MENTIONS",
+            "created_at": datetime.now(UTC),
+        }
+    ]
+
+    evidence = await deps.worker._collect_evidence(
+        KnowledgeEntityTaskContext(
+            task_id=608,
+            task_type="DOCUMENT_ENRICH",
+            kb_code="1",
+            knowledge_base_id=1,
+            source_file_id=30,
+            file_path="/KnowledgeEntity/target.md",
+        ),
+        identity=KnowledgeEntityIdentity(30, 1, "Target"),
+        existing_markdown="# Target",
+        topics=("Topic",),
+    )
+
+    assert {item.document_file_id for item in evidence} == {10, 11}
+
+
+@pytest.mark.asyncio
 async def test_same_semantic_chunk_accumulates_topics_without_duplicate_evidence():
     entity = file_row(
         30,
@@ -1140,6 +1253,63 @@ async def test_same_semantic_chunk_accumulates_topics_without_duplicate_evidence
 
     assert len(evidence) == 1
     assert evidence[0].matched_topics == ("记忆搜索", "上下文工程")
+
+
+@pytest.mark.asyncio
+async def test_late_topic_keeps_its_own_semantic_fragment_quota():
+    entity = file_row(
+        30,
+        "/KnowledgeEntity/target.md",
+        content_key="entity",
+        markdown_key="entity-md",
+        document_kind="knowledgeEntity",
+        entity_name="Target",
+    )
+    source = file_row(10, "/docs/source.md", content_key="source")
+    topics = tuple(f"Topic {index}" for index in range(10))
+    deps = make_worker(
+        rows=[entity, source],
+        objects={
+            ("original", "entity"): b"# Target",
+            ("markdown", "entity-md"): b"# Target",
+            ("original", "source"): b"source",
+        },
+        asset_service=FakeCreatedAssetService(topics),
+    )
+
+    class PerTopicSearch(FakeSearch):
+        async def search(self, request):
+            self.requests.append(request)
+            topic_index = len(self.requests) - 1
+            return [
+                SimpleNamespace(
+                    kb_code="1",
+                    file_path="/docs/source.md",
+                    chunk_text=f"topic {topic_index} fragment {fragment_index}",
+                    score=1.0 - fragment_index / 100,
+                )
+                for fragment_index in range(4)
+            ]
+
+    deps.search = PerTopicSearch()
+    deps.worker._search = deps.search
+
+    evidence = await deps.worker._collect_evidence(
+        KnowledgeEntityTaskContext(
+            task_id=609,
+            task_type="DOCUMENT_ENRICH",
+            kb_code="1",
+            knowledge_base_id=1,
+            source_file_id=30,
+            file_path="/KnowledgeEntity/target.md",
+        ),
+        identity=KnowledgeEntityIdentity(30, 1, "Target"),
+        existing_markdown="# Target",
+        topics=topics,
+    )
+
+    assert len(evidence) == 30
+    assert any(item.matched_topics == (topics[-1],) for item in evidence)
 
 
 def test_topic_search_query_scopes_each_topic_with_entity_name():

@@ -24,6 +24,7 @@ from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
     RelationTarget,
     audit_enriched_markdown,
     build_evidence_claim_groups,
+    build_existing_claim_anchors,
     build_incremental_edit_hints,
     format_source_reference,
     normalize_generated_references,
@@ -561,6 +562,48 @@ def test_claim_groups_preserve_topic_source_and_supported_subthemes() -> None:
     assert groups[0].required is True
 
 
+def test_claim_groups_aggregate_sources_by_topic_without_changing_evidence() -> None:
+    bundle = organize_evidence(
+        [
+            EvidenceFragment(
+                7,
+                "/first.md",
+                "OpenClaw 通过检索恢复记忆。",
+                direct_mention=True,
+                matched_topics=("记忆搜索",),
+            ),
+            EvidenceFragment(
+                8,
+                "/second.md",
+                "OpenClaw 的时间衰减会影响排序。",
+                semantic_score=0.9,
+                matched_topics=("记忆搜索",),
+            ),
+        ]
+    )
+
+    groups = build_evidence_claim_groups(bundle)
+
+    assert len(groups) == 1
+    assert groups[0].source_ids == ("S1", "S2")
+    assert groups[0].source_paths == ("/first.md", "/second.md")
+    assert groups[0].evidence_ids == ("F1", "F2")
+
+
+def test_old_claim_anchors_prioritize_numbers_and_identifiers() -> None:
+    anchors = build_existing_claim_anchors(
+        "# OpenClaw\n\n## 记忆机制\n\n"
+        "OpenClaw 使用双源记忆。\n\n"
+        "`buildSessionEntry` 会写入 JSONL，Hook 读取最近 15 条消息。"
+        "[source](/source.md)"
+    )
+
+    assert anchors
+    assert any("buildSessionEntry" in anchor.key_terms for anchor in anchors)
+    assert any("15" in anchor.key_terms for anchor in anchors)
+    assert all(anchor.source_targets == ("/source.md",) for anchor in anchors)
+
+
 def test_incremental_edit_hint_keeps_identical_old_claim_in_its_section() -> None:
     evidence = organize_evidence(
         [
@@ -628,6 +671,38 @@ def test_quality_audit_rejects_claim_source_not_linked_in_target_section() -> No
     assert audit.uncovered_claim_group_ids == ("CG1",)
     assert audit.invalid_claim_coverage_count == 1
     assert audit.invalid_edit_plan_count == 1
+
+
+def test_quality_audit_rejects_silent_loss_of_old_claim_details() -> None:
+    existing = (
+        "# Beta\n\n## 记忆机制\n\n"
+        "`buildSessionEntry` 会写入 JSONL，Hook 每次读取最近 15 条消息。"
+    )
+    anchors = build_existing_claim_anchors(existing)
+    audit = audit_enriched_markdown(
+        "# Beta\n\n## 记忆机制\n\nBeta 会保留会话历史。",
+        payload={
+            "claimCoverage": [],
+            "citationPlan": [],
+            "editPlan": [],
+            "oldClaimRetention": [
+                {
+                    "anchorId": anchors[0].anchor_id,
+                    "status": "KEEP",
+                    "targetSection": "记忆机制",
+                    "anchor": "Beta 会保留会话历史",
+                    "sourceIds": [],
+                }
+            ],
+        },
+        claim_groups=(),
+        existing_claim_anchors=anchors,
+        incremental=True,
+    )
+
+    assert audit.missing_old_claim_anchor_ids
+    assert audit.invalid_old_claim_retention_count == 1
+    assert audit.needs_repair is True
 
 
 @pytest.mark.asyncio

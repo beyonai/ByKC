@@ -327,6 +327,9 @@ def enrichment_protocol_report(result: Any) -> dict[str, Any]:
         "repairPerformed": result.repair_performed,
         "claimGroups": [asdict(item) for item in result.claim_groups],
         "editHints": [asdict(item) for item in result.edit_hints],
+        "existingClaimAnchors": [
+            asdict(item) for item in result.existing_claim_anchors
+        ],
         "qualityAudit": asdict(result.quality_audit),
     }
 

@@ -9,6 +9,7 @@ import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from difflib import SequenceMatcher
 from typing import Any
 from urllib.parse import quote, unquote
 
@@ -77,13 +78,31 @@ class EvidenceClaimGroup:
 
     claim_group_id: str
     topic: str
-    source_id: str
-    source_file_id: int
-    source_path: str
+    source_ids: tuple[str, ...]
+    source_file_ids: tuple[int, ...]
+    source_paths: tuple[str, ...]
     evidence_ids: tuple[str, ...]
     supported_aspects: tuple[str, ...]
     section_hint: str
     required: bool
+
+    @property
+    def source_id(self) -> str:
+        """Compatibility accessor for single-source groups."""
+
+        return self.source_ids[0]
+
+    @property
+    def source_file_id(self) -> int:
+        """Compatibility accessor for single-source groups."""
+
+        return self.source_file_ids[0]
+
+    @property
+    def source_path(self) -> str:
+        """Compatibility accessor for single-source groups."""
+
+        return self.source_paths[0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +114,17 @@ class IncrementalEditHint:
     action: str
     target_section: str
     reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class ExistingClaimAnchor:
+    """A high-information old claim that incremental editing must account for."""
+
+    anchor_id: str
+    section: str
+    text: str
+    key_terms: tuple[str, ...]
+    source_targets: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +142,10 @@ class EnrichmentQualityAudit:
     trailing_citation_ratio: float = 0.0
     repeated_paragraph_count: int = 0
     ambiguous_section_subject_count: int = 0
+    required_old_claim_anchor_ids: tuple[str, ...] = ()
+    retained_old_claim_anchor_ids: tuple[str, ...] = ()
+    missing_old_claim_anchor_ids: tuple[str, ...] = ()
+    invalid_old_claim_retention_count: int = 0
 
     @property
     def needs_repair(self) -> bool:
@@ -124,6 +158,8 @@ class EnrichmentQualityAudit:
             or self.trailing_citation_ratio > 0.6
             or self.repeated_paragraph_count
             or self.ambiguous_section_subject_count
+            or self.missing_old_claim_anchor_ids
+            or self.invalid_old_claim_retention_count
         )
 
 
@@ -511,7 +547,7 @@ def build_evidence_claim_groups(
     """Build stable Topic/source writing obligations from selected evidence."""
 
     source_ids: dict[tuple[int, str], str] = {}
-    grouped: dict[tuple[str, str, int], list[tuple[str, EvidenceFragment]]] = {}
+    grouped: dict[str, list[tuple[str, str, EvidenceFragment]]] = {}
     topic_labels: dict[str, str] = {}
     for index, item in enumerate(evidence.fragments, start=1):
         source_key = (item.document_file_id, item.document_path)
@@ -521,25 +557,28 @@ def build_evidence_claim_groups(
             topic_label = str(topic).strip() or "实体总览"
             topic_key = normalize_surface(topic_label)
             topic_labels.setdefault(topic_key, topic_label)
-            grouped.setdefault(
-                (topic_key, source_id, item.document_file_id), []
-            ).append((f"F{index}", item))
+            grouped.setdefault(topic_key, []).append((f"F{index}", source_id, item))
 
     groups: list[EvidenceClaimGroup] = []
-    for group_index, ((topic_key, source_id, file_id), items) in enumerate(
-        grouped.items(), start=1
-    ):
+    for group_index, (topic_key, items) in enumerate(grouped.items(), start=1):
         aspects: list[str] = []
-        for _, item in items:
+        for _, _, item in items:
             aspects.extend(_supported_aspects(item.content))
+        unique_sources: dict[str, EvidenceFragment] = {}
+        for _, source_id, item in items:
+            unique_sources.setdefault(source_id, item)
         groups.append(
             EvidenceClaimGroup(
                 claim_group_id=f"CG{group_index}",
                 topic=topic_labels[topic_key],
-                source_id=source_id,
-                source_file_id=file_id,
-                source_path=items[0][1].document_path,
-                evidence_ids=tuple(evidence_id for evidence_id, _ in items),
+                source_ids=tuple(unique_sources),
+                source_file_ids=tuple(
+                    item.document_file_id for item in unique_sources.values()
+                ),
+                source_paths=tuple(
+                    item.document_path for item in unique_sources.values()
+                ),
+                evidence_ids=tuple(evidence_id for evidence_id, _, _ in items),
                 supported_aspects=tuple(dict.fromkeys(aspects)),
                 section_hint=(
                     "实体定义与边界"
@@ -550,7 +589,7 @@ def build_evidence_claim_groups(
                     item.direct_mention
                     or item.explicit_reference
                     or item.semantic_score >= 0.5
-                    for _, item in items
+                    for _, _, item in items
                 ),
             )
         )
@@ -578,6 +617,84 @@ def _markdown_sections(markdown: str) -> tuple[_MarkdownSection, ...]:
             )
         )
     return tuple(sections)
+
+
+_RETENTION_TERM_RE = re.compile(
+    r"`([^`\n]{2,80})`|"
+    r"(?<![\w])((?:[A-Za-z][A-Za-z0-9]*(?:[-_./:][A-Za-z0-9]+)+|"
+    r"[A-Za-z]+[A-Z][A-Za-z0-9]*|[A-Z]{2,}[A-Z0-9]*|"
+    r"\d+(?:\.\d+)?(?:%|ms|s|h|KB|MB|GB|个|次|条|行|小时|天)?))(?![\w])"
+)
+_REFERENCE_SECTION_HEADINGS = frozenset(
+    {"参考资料", "参考文献", "references", "sources"}
+)
+MAX_OLD_CLAIM_ANCHORS = 32
+MAX_OLD_CLAIM_ANCHORS_PER_SECTION = 3
+
+
+def build_existing_claim_anchors(
+    existing_markdown: str,
+) -> tuple[ExistingClaimAnchor, ...]:
+    """Extract bounded old claims whose silent loss would be a regression."""
+
+    anchors: list[ExistingClaimAnchor] = []
+    for section in _markdown_sections(existing_markdown):
+        if normalize_surface(section.heading) in _REFERENCE_SECTION_HEADINGS:
+            continue
+        source_targets = tuple(
+            dict.fromkeys(
+                _canonical_link_target(match.group(2))
+                for match in _MARKDOWN_LINK_RE.finditer(section.content)
+            )
+        )
+        candidates: list[tuple[int, int, str, tuple[str, ...]]] = []
+        ordinal = 0
+        for block in re.split(r"\n\s*\n", section.content):
+            if not block.strip() or block.lstrip().startswith("#"):
+                continue
+            for raw_sentence in re.split(r"(?<=[。！？.!?])\s+|\n+", block):
+                sentence = re.sub(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)", "", raw_sentence)
+                sentence = _MARKDOWN_LINK_RE.sub(r"\1", sentence)
+                sentence = re.sub(r"[*_~]", "", sentence).strip()
+                if len(normalize_surface(sentence)) < 18:
+                    continue
+                terms = tuple(
+                    dict.fromkeys(
+                        value.strip()
+                        for match in _RETENTION_TERM_RE.finditer(raw_sentence)
+                        for value in (match.group(1) or match.group(2),)
+                        if value and value.strip()
+                    )
+                )
+                score = (4 if terms else 0) + min(len(sentence) // 80, 2)
+                candidates.append((score, -ordinal, sentence[:500], terms[:8]))
+                ordinal += 1
+        if not candidates:
+            continue
+        # Always retain the first substantive claim, then prefer claims with
+        # numbers or technical identifiers. This keeps the contract bounded
+        # while protecting the details most often lost during summarization.
+        first = max(candidates, key=lambda item: item[1])
+        selected = [first]
+        for candidate in sorted(candidates, reverse=True):
+            if candidate == first:
+                continue
+            selected.append(candidate)
+            if len(selected) >= MAX_OLD_CLAIM_ANCHORS_PER_SECTION:
+                break
+        for _, _, text, terms in selected:
+            anchors.append(
+                ExistingClaimAnchor(
+                    anchor_id=f"OA{len(anchors) + 1}",
+                    section=section.heading,
+                    text=text,
+                    key_terms=terms,
+                    source_targets=source_targets,
+                )
+            )
+            if len(anchors) >= MAX_OLD_CLAIM_ANCHORS:
+                return tuple(anchors)
+    return tuple(anchors)
 
 
 _CONFLICT_RE = re.compile(
@@ -677,7 +794,10 @@ Markdown 必须以精确给定的 Entity 名称作为唯一 H1 标题，不得�
 不是必须逐项生成的目录。将重叠 Topic 合并为少量自然章节；若授权证据不支持某个 Topic，
 可以不写。当证据支持机制、边界、取舍或其他主要 Topic 时，不得退化为只有一句定义的卡片。
 即使只有一个 Topic，也要按证据实际支持的定义、架构、机制、场景、指标、限制与比较组织
-子主题，而不是反复改写 Topic 名称。证据提到多个实体时，每个事实必须明确主语；不得把另一
+子主题，而不是反复改写 Topic 名称。写作前先把多个 EvidenceFragment 中的同一事实合并，
+不得按 F1、F2 或原文顺序逐段改写。每个事实只在最合适的一个章节完整说明一次；
+其他章节如需承接，用简短指代或内部链接，不要重复定义、机制和局限。
+证据提到多个实体时，每个事实必须明确主语；不得把另一
 实体仅因 Topic 相似而召回的事实归给当前 Entity，也不得在跨段落或跨标题处用“它”“该系统”
 等含混代词承接。分析性推论必须明确标记为推论，并与来源直接陈述的事实分开。
 
@@ -699,13 +819,17 @@ Markdown 必须以精确给定的 Entity 名称作为唯一 H1 标题，不得�
 使用该 ClaimGroup 授权的来源。增量模式必须返回 editPlan；先判断 NEW、ALREADY_COVERED、
 CORRECTION 或 CONFLICT，再决定 merge、keep、correct 或 compare。citationPlan 以主张组而非
 段落为单位，同一来源支持的连续内容只规划一次自然引用。
+增量模式还必须逐项处理 ExistingClaimAnchor：KEEP 要在最终段落中保留其事实和
+关键数字/标识符；CORRECTION 或 CONFLICT 必须给出支持新说法的 sourceIds。
 
 只返回一个严格 JSON 对象，不得输出任何其他内容：
 {"qualityPlanVersion":1,"markdown":"...","claimCoverage":[{"claimGroupId":"CG1",
 "targetSection":"...","anchor":"最终正文中的短原文","sourceIds":["S1"]}],
 "editPlan":[{"claimGroupId":"CG1","status":"NEW","action":"merge",
 "targetSection":"..."}],"citationPlan":[{"claimGroupId":"CG1","sourceIds":["S1"],
-"placement":"..."}],"relations":[{"relationCode":"PART_OF","targetFileId":1,
+"placement":"..."}],"oldClaimRetention":[{"anchorId":"OA1","status":"KEEP",
+"targetSection":"...","anchor":"最终正文中保留该事实的短原文","sourceIds":[]}],
+"relations":[{"relationCode":"PART_OF","targetFileId":1,
 "targetEntityName":"...","confidence":0.9}],"warnings":[]}
 """.strip()
 
@@ -738,6 +862,7 @@ class EnrichmentResult:
     attempts: int
     claim_groups: tuple[EvidenceClaimGroup, ...] = ()
     edit_hints: tuple[IncrementalEditHint, ...] = ()
+    existing_claim_anchors: tuple[ExistingClaimAnchor, ...] = ()
     quality_audit: EnrichmentQualityAudit = EnrichmentQualityAudit()
     repair_performed: bool = False
 
@@ -803,6 +928,9 @@ class KnowledgeEntityEnricher:
             len(existing_markdown),
             _safe_log_context(log_context),
         )
+        existing_claim_anchors = (
+            build_existing_claim_anchors(existing_markdown) if incremental else ()
+        )
         messages = _build_enrichment_messages(
             identity=identity,
             evidence=bundle,
@@ -842,6 +970,7 @@ class KnowledgeEntityEnricher:
             markdown,
             payload=payload,
             claim_groups=claim_groups,
+            existing_claim_anchors=existing_claim_anchors,
             incremental=incremental,
         )
         repair_performed = False
@@ -858,6 +987,7 @@ class KnowledgeEntityEnricher:
                     markdown=markdown,
                     audit=quality_audit,
                     claim_groups=claim_groups,
+                    existing_claim_anchors=existing_claim_anchors,
                     existing_markdown=existing_markdown,
                 ),
                 expected_type=dict,
@@ -890,6 +1020,7 @@ class KnowledgeEntityEnricher:
                 markdown,
                 payload=payload,
                 claim_groups=claim_groups,
+                existing_claim_anchors=existing_claim_anchors,
                 incremental=incremental,
             )
         relations, relation_warnings, discarded = normalize_relations(
@@ -944,6 +1075,16 @@ class KnowledgeEntityEnricher:
                 "ambiguous section-opening subjects: "
                 f"{quality_audit.ambiguous_section_subject_count}"
             )
+        if quality_audit.missing_old_claim_anchor_ids:
+            warnings.append(
+                "old claims not retained: "
+                + ", ".join(quality_audit.missing_old_claim_anchor_ids)
+            )
+        if quality_audit.invalid_old_claim_retention_count:
+            warnings.append(
+                "invalid old claim retention plans: "
+                f"{quality_audit.invalid_old_claim_retention_count}"
+            )
         if preserved_reference_count:
             warnings.append(
                 f"existing source references restored: {preserved_reference_count}"
@@ -978,6 +1119,7 @@ class KnowledgeEntityEnricher:
             attempts=attempts,
             claim_groups=claim_groups,
             edit_hints=edit_hints,
+            existing_claim_anchors=existing_claim_anchors,
             quality_audit=quality_audit,
             repair_performed=repair_performed,
         )
@@ -1031,6 +1173,7 @@ def audit_enriched_markdown(
     *,
     payload: Mapping[str, Any],
     claim_groups: Sequence[EvidenceClaimGroup],
+    existing_claim_anchors: Sequence[ExistingClaimAnchor] = (),
     incremental: bool = False,
 ) -> EnrichmentQualityAudit:
     """Validate claim-plan traceability, section citations, and repetition."""
@@ -1064,13 +1207,18 @@ def audit_enriched_markdown(
         source_ids = {
             str(value).strip() for value in raw_source_ids if str(value).strip()
         }
-        expected_target = ""
+        expected_targets: dict[str, str] = {}
         if group is not None:
-            reference_match = _MARKDOWN_LINK_RE.search(
-                format_source_reference(group.source_path)
-            )
-            if reference_match:
-                expected_target = _canonical_link_target(reference_match.group(2))
+            for source_id, source_path in zip(
+                group.source_ids, group.source_paths, strict=True
+            ):
+                reference_match = _MARKDOWN_LINK_RE.search(
+                    format_source_reference(source_path)
+                )
+                if reference_match:
+                    expected_targets[source_id] = _canonical_link_target(
+                        reference_match.group(2)
+                    )
         section_targets = {
             _canonical_link_target(match.group(2))
             for match in _MARKDOWN_LINK_RE.finditer(section.content if section else "")
@@ -1081,8 +1229,11 @@ def audit_enriched_markdown(
             or not anchor
             or normalize_surface(anchor) not in normalize_surface(section.content)
             or not source_ids
-            or not source_ids <= {group.source_id}
-            or expected_target not in section_targets
+            or not source_ids <= set(group.source_ids)
+            or not all(
+                expected_targets.get(source_id) in section_targets
+                for source_id in source_ids
+            )
         ):
             invalid_coverage += 1
             continue
@@ -1111,7 +1262,8 @@ def audit_enriched_markdown(
         )
         if (
             group is None
-            or source_ids != {group.source_id}
+            or not source_ids
+            or not source_ids <= set(group.source_ids)
             or not _text(item, "placement")
         ):
             invalid_citation_plan_count += 1
@@ -1122,6 +1274,7 @@ def audit_enriched_markdown(
     )
 
     invalid_edit_plan_count = 0
+    edit_plan_statuses: dict[str, str] = {}
     if incremental:
         valid_edit_plan_ids: set[str] = set()
         raw_edit_plan = payload.get("editPlan", ())
@@ -1147,9 +1300,80 @@ def audit_enriched_markdown(
                 invalid_edit_plan_count += 1
                 continue
             valid_edit_plan_ids.add(claim_group_id)
+            edit_plan_statuses[claim_group_id] = _text(item, "status").upper()
         invalid_edit_plan_count += sum(
             group_id not in valid_edit_plan_ids for group_id in required
         )
+
+    required_old_anchor_ids = tuple(
+        anchor.anchor_id for anchor in existing_claim_anchors
+    )
+    retained_old_anchor_ids: list[str] = []
+    invalid_old_claim_retention_count = 0
+    anchors_by_id = {anchor.anchor_id: anchor for anchor in existing_claim_anchors}
+    raw_old_retention = payload.get("oldClaimRetention", ())
+    if existing_claim_anchors and (
+        not isinstance(raw_old_retention, Sequence)
+        or isinstance(raw_old_retention, (str, bytes))
+    ):
+        raw_old_retention = ()
+        invalid_old_claim_retention_count += 1
+    if not isinstance(raw_old_retention, Sequence) or isinstance(
+        raw_old_retention, (str, bytes)
+    ):
+        raw_old_retention = ()
+    authorized_source_ids = {
+        source_id for group in claim_groups for source_id in group.source_ids
+    }
+    for item in raw_old_retention:
+        if not isinstance(item, Mapping):
+            invalid_old_claim_retention_count += 1
+            continue
+        anchor_id = _text(item, "anchorId", "anchor_id")
+        old_anchor = anchors_by_id.get(anchor_id)
+        status = _text(item, "status").upper()
+        target_section = _text(item, "targetSection", "target_section")
+        final_anchor = _text(item, "anchor")
+        section = sections_by_heading.get(normalize_surface(target_section))
+        raw_source_ids = item.get("sourceIds", item.get("source_ids", ()))
+        source_ids = (
+            {str(value).strip() for value in raw_source_ids if str(value).strip()}
+            if isinstance(raw_source_ids, Sequence)
+            and not isinstance(raw_source_ids, (str, bytes))
+            else set()
+        )
+        if (
+            old_anchor is None
+            or status not in {"KEEP", "CORRECTION", "CONFLICT"}
+            or section is None
+            or not final_anchor
+            or normalize_surface(final_anchor) not in normalize_surface(section.content)
+        ):
+            invalid_old_claim_retention_count += 1
+            continue
+        if status == "KEEP":
+            section_key = normalize_surface(section.content)
+            terms_retained = bool(old_anchor.key_terms) and all(
+                normalize_surface(term) in section_key for term in old_anchor.key_terms
+            )
+            old_key = normalize_surface(old_anchor.text)
+            final_key = normalize_surface(final_anchor)
+            text_retained = bool(old_key and final_key) and (
+                old_key in final_key
+                or final_key in old_key
+                or SequenceMatcher(None, old_key, final_key).ratio() >= 0.45
+            )
+            if not (terms_retained or text_retained):
+                invalid_old_claim_retention_count += 1
+                continue
+        elif (
+            not source_ids
+            or not source_ids <= authorized_source_ids
+            or status not in set(edit_plan_statuses.values())
+        ):
+            invalid_old_claim_retention_count += 1
+            continue
+        retained_old_anchor_ids.append(anchor_id)
 
     uncited_sections = tuple(
         section.heading
@@ -1190,9 +1414,24 @@ def audit_enriched_markdown(
         for paragraph in paragraphs
         if len(normalize_surface(paragraph)) >= 60
     ]
-    repeated_paragraph_count = sum(
+    exact_repeats = sum(
         count - 1 for count in Counter(paragraph_keys).values() if count > 1
     )
+    near_repeats = sum(
+        1
+        for index, left in enumerate(paragraph_keys)
+        for right in paragraph_keys[index + 1 :]
+        if left != right
+        and min(len(left), len(right)) >= 60
+        and (
+            (
+                min(len(left), len(right)) / max(len(left), len(right)) >= 0.7
+                and (left in right or right in left)
+            )
+            or SequenceMatcher(None, left, right).ratio() >= 0.82
+        )
+    )
+    repeated_paragraph_count = exact_repeats + near_repeats
     ambiguous_section_subject_count = sum(
         bool(
             re.match(
@@ -1219,6 +1458,14 @@ def audit_enriched_markdown(
         trailing_citation_ratio=trailing_cited / max(1, len(paragraphs)),
         repeated_paragraph_count=repeated_paragraph_count,
         ambiguous_section_subject_count=ambiguous_section_subject_count,
+        required_old_claim_anchor_ids=required_old_anchor_ids,
+        retained_old_claim_anchor_ids=tuple(dict.fromkeys(retained_old_anchor_ids)),
+        missing_old_claim_anchor_ids=tuple(
+            anchor_id
+            for anchor_id in required_old_anchor_ids
+            if anchor_id not in set(retained_old_anchor_ids)
+        ),
+        invalid_old_claim_retention_count=invalid_old_claim_retention_count,
     )
 
 
@@ -1229,6 +1476,7 @@ def _build_quality_repair_messages(
     markdown: str,
     audit: EnrichmentQualityAudit,
     claim_groups: Sequence[EvidenceClaimGroup],
+    existing_claim_anchors: Sequence[ExistingClaimAnchor],
     existing_markdown: str,
 ) -> list[dict[str, str]]:
     missing = set(audit.uncovered_claim_group_ids)
@@ -1236,14 +1484,26 @@ def _build_quality_repair_messages(
         {
             "claimGroupId": group.claim_group_id,
             "topic": group.topic,
-            "sourceId": group.source_id,
-            "sourcePath": group.source_path,
+            "sourceIds": list(group.source_ids),
+            "sourcePaths": list(group.source_paths),
             "evidenceIds": list(group.evidence_ids),
             "supportedAspects": list(group.supported_aspects),
             "sectionHint": group.section_hint,
         }
         for group in claim_groups
         if group.claim_group_id in missing
+    ]
+    missing_old_anchor_ids = set(audit.missing_old_claim_anchor_ids)
+    missing_old_anchors = [
+        {
+            "anchorId": anchor.anchor_id,
+            "section": anchor.section,
+            "text": anchor.text,
+            "keyTerms": list(anchor.key_terms),
+            "sourceTargets": list(anchor.source_targets),
+        }
+        for anchor in existing_claim_anchors
+        if anchor.anchor_id in missing_old_anchor_ids
     ]
     current_payload = dict(payload)
     current_payload["markdown"] = markdown
@@ -1256,6 +1516,8 @@ def _build_quality_repair_messages(
         "trailingCitationRatio": round(audit.trailing_citation_ratio, 3),
         "repeatedParagraphCount": audit.repeated_paragraph_count,
         "ambiguousSectionSubjectCount": audit.ambiguous_section_subject_count,
+        "missingOldClaimAnchors": missing_old_anchors,
+        "invalidOldClaimRetentionCount": audit.invalid_old_claim_retention_count,
     }
     return [
         *[dict(message) for message in messages],
@@ -1272,7 +1534,8 @@ def _build_quality_repair_messages(
                 "事实、限制和引用；把跨标题后含混的代词改成明确实体主语。旧文档仍是完整基线（字符数="
                 f"{len(existing_markdown)}）。修复项："
                 f"{json.dumps(repair_instruction, ensure_ascii=False)}。"
-                "重新返回完整严格 JSON 对象，并更新 claimCoverage、editPlan 和 citationPlan。"
+                "重新返回完整严格 JSON 对象，并更新 claimCoverage、editPlan、"
+                "citationPlan 和 oldClaimRetention。"
             ),
         },
     ]
@@ -1400,6 +1663,9 @@ def _build_enrichment_messages(
 ) -> list[dict[str, str]]:
     claim_groups = build_evidence_claim_groups(evidence)
     edit_hints = build_incremental_edit_hints(claim_groups, evidence, existing_markdown)
+    existing_claim_anchors = (
+        build_existing_claim_anchors(existing_markdown) if incremental else ()
+    )
     grouped: dict[tuple[int, str], list[tuple[int, EvidenceFragment]]] = {}
     for index, item in enumerate(evidence.fragments, start=1):
         grouped.setdefault((item.document_file_id, item.document_path), []).append(
@@ -1444,9 +1710,9 @@ def _build_enrichment_messages(
         {
             "claimGroupId": group.claim_group_id,
             "topic": group.topic,
-            "sourceId": group.source_id,
-            "sourceFileId": group.source_file_id,
-            "sourcePath": group.source_path,
+            "sourceIds": list(group.source_ids),
+            "sourceFileIds": list(group.source_file_ids),
+            "sourcePaths": list(group.source_paths),
             "evidenceIds": list(group.evidence_ids),
             "supportedAspects": list(group.supported_aspects),
             "sectionHint": group.section_hint,
@@ -1463,6 +1729,16 @@ def _build_enrichment_messages(
             "reason": hint.reason,
         }
         for hint in edit_hints
+    ]
+    old_anchor_payload = [
+        {
+            "anchorId": anchor.anchor_id,
+            "section": anchor.section,
+            "text": anchor.text,
+            "keyTerms": list(anchor.key_terms),
+            "sourceTargets": list(anchor.source_targets),
+        }
+        for anchor in existing_claim_anchors
     ]
     mode_instruction = (
         "新证据只是本轮增量，不是完整替代语料。写作前必须逐节审计旧 Markdown；"
@@ -1497,6 +1773,10 @@ EvidenceClaimGroup（确定性生成的覆盖义务；同一 Topic 内仍要覆�
 
 旧文档增量编辑提示（这是初始判断；你必须结合完整旧文档复核并在 editPlan 返回最终判断）：
 {json.dumps(edit_hint_payload, ensure_ascii=False, indent=2)}
+
+旧文档事实保留锚点（增量模式必须逐项在 oldClaimRetention 中说明去向；
+KEEP 不要求原句照抄，但不得丢失事实、数字、标识符和限定条件）：
+{json.dumps(old_anchor_payload, ensure_ascii=False, indent=2)}
 
 允许的现有关系目标：
 {targets}
@@ -1666,6 +1946,7 @@ __all__ = [
     "EvidenceBundle",
     "EvidenceClaimGroup",
     "EvidenceFragment",
+    "ExistingClaimAnchor",
     "IncrementalEditHint",
     "KnowledgeEntityEnricher",
     "KnowledgeEntityIdentity",
@@ -1674,6 +1955,7 @@ __all__ = [
     "normalize_enriched_markdown",
     "audit_enriched_markdown",
     "build_evidence_claim_groups",
+    "build_existing_claim_anchors",
     "build_incremental_edit_hints",
     "format_source_reference",
     "preserve_existing_references",

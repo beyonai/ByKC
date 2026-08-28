@@ -944,6 +944,11 @@ class KnowledgeEntityTaskWorker:
                 )
                 if not selected_content:
                     continue
+                selected_content = self._scope_evidence_to_entity(
+                    selected_content,
+                    names=(identity.entity_name, *identity.aliases),
+                    preserve_without_mention=True,
+                )
                 for selected_fragment in self._split_relation_evidence(
                     selected_content
                 ):
@@ -1060,6 +1065,14 @@ class KnowledgeEntityTaskWorker:
                     )
                 ):
                     continue
+                content = self._scope_evidence_to_entity(
+                    content,
+                    names=(identity.entity_name, *identity.aliases),
+                    preserve_without_mention=False,
+                )
+                if not content:
+                    continue
+                normalized_content = normalize_surface(content)
                 content_key = (file_id, normalized_content)
                 existing_index = semantic_by_content.get(content_key)
                 if existing_index is not None:
@@ -1331,6 +1344,75 @@ class KnowledgeEntityTaskWorker:
         end = min(len(content), start + limit)
         start = max(0, end - limit)
         return content[start:end]
+
+    @staticmethod
+    def _scope_evidence_to_entity(
+        content: str,
+        *,
+        names: Sequence[str],
+        preserve_without_mention: bool,
+    ) -> str:
+        """Remove sibling-entity prose from a mixed recall fragment.
+
+        Search chunks and topic-selected source sections often contain several
+        product profiles. A literal Entity match authorizes only the block that
+        contains it, not adjacent profiles that happen to discuss the same Topic.
+        Explicit relation evidence retains its previous fallback when the source
+        contains no literal name at all.
+        """
+
+        normalized_names = tuple(
+            normalize_surface(name) for name in names if normalize_surface(name)
+        )
+        if not content.strip() or not normalized_names:
+            return content.strip() if preserve_without_mention else ""
+        blocks = [
+            block.strip() for block in re.split(r"\n\s*\n", content) if block.strip()
+        ]
+        target_indexes = [
+            index
+            for index, block in enumerate(blocks)
+            if any(name in normalize_surface(block) for name in normalized_names)
+        ]
+        if not target_indexes:
+            return content.strip() if preserve_without_mention else ""
+
+        selected_indexes: set[int] = set()
+        for index in target_indexes:
+            block = blocks[index]
+            selected_indexes.add(index)
+            first_line = block.splitlines()[0].strip()
+            normalized_first_line = normalize_surface(
+                re.sub(r"^#{1,6}\s*", "", first_line)
+            )
+            is_entity_heading = len(first_line) <= 200 and any(
+                normalized_first_line.startswith(name) for name in normalized_names
+            )
+            if is_entity_heading and index + 1 < len(blocks):
+                following = blocks[index + 1]
+                following_first = following.splitlines()[0].strip()
+                looks_like_next_profile = bool(
+                    re.match(r"^#{1,6}\s+", following_first)
+                    or (
+                        len(following_first) <= 160
+                        and re.search(r"[：:]", following_first)
+                        and not any(
+                            name in normalize_surface(following_first)
+                            for name in normalized_names
+                        )
+                    )
+                )
+                if not looks_like_next_profile:
+                    selected_indexes.add(index + 1)
+            if index > 0:
+                previous = blocks[index - 1]
+                if re.match(r"^#{1,6}\s+", previous.splitlines()[0].strip()):
+                    selected_indexes.add(index - 1)
+
+        scoped = "\n\n".join(
+            block for index, block in enumerate(blocks) if index in selected_indexes
+        ).strip()
+        return scoped[:MAX_RELATION_DOCUMENT_CHARS]
 
     @staticmethod
     def _split_relation_evidence(content: str) -> tuple[str, ...]:

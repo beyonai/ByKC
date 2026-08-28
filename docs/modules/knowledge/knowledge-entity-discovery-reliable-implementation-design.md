@@ -995,7 +995,7 @@ Topic 语义同义归一、Entity 身份性能重构和 Enrich 必须在本轮 `
 
 ### 23.1 当前唯一运行入口
 
-生产 Discovery 使用专用 LLM 构建器，固定 `temperature=0.0`、`thinking.type=enabled` 和 `reasoning_effort=low`。这三项不继承 standard profile 中的更高推理强度，也不开放给单次 Discover 请求覆盖。Enrichment 仍使用原模型配置，不受此约束影响。
+生产 Discovery 使用 lightweight profile。模型、温度和额外请求参数分别由 `LLM_LIGHTWEIGHT_MODEL`、`LLM_LIGHTWEIGHT_TEMP` 和 `LLM_LIGHTWEIGHT_EXTRA_BODY` 配置；构建器不再硬编码或覆盖 thinking/reasoning 参数。Enrichment 使用对应的 standard profile。
 
 实现完成后的 Prompt 迭代使用 `大厂文章/discovery-evaluation/` 下不纳管的只读评测资产。根据本地评测器实际参数选择 development/regression/holdout 数据和显式报告路径。评测器 MUST NOT 写数据库、MinIO、KnowledgeEntity 文档、Topic 或关系，生产代码也不得导入这些本地资产。
 

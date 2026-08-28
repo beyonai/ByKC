@@ -406,7 +406,7 @@ Enricher 警告增加 `existing source references restored: N`，用于监测模
 | 跨标题引用归属 | 已实现 | 每个有证据主张的实质章节至少自然引用一次 |
 | 引用标签可读性 | 已实现 | `article.md`/`index.md` 使用父目录文章标题 |
 | 生成引用白名单 | 已实现 | 修正单来源内部路径，多来源歧义时移除虚构链接并告警 |
-| Enrich 低温、低推理生成 | 已实现 | 温度固定为 `0.0`，`reasoning_effort=low`，不继承对话模型默认值 |
+| Enrich 模型参数配置 | 已实现 | 使用 standard profile，温度和额外请求参数由 `LLM_STANDARD_TEMP`、`LLM_STANDARD_EXTRA_BODY` 配置，构建器不再覆盖 |
 | 增量模式显式编辑协议 | 已实现 | 明确 delta 不是完整替代语料，逐节保留旧事实、限定词与不确定性 |
 | 方法版本与结果字段 | 已实现 | `enrich/2.0` |
 | 核心单元测试 | 已实现 | 覆盖增量过滤、Topic 分批、引用恢复和无变化跳过 |
@@ -564,7 +564,7 @@ LLM 评审使用与实体名称无关的固定量表，对 groundedness、covera
 
 ### 11.9 Low reasoning 耗时回归
 
-2026-08-28 将 enrich 与 discover 统一为 `temperature=0.0`、`thinking.type=enabled`、`reasoning_effort=low`。使用同一 GBrain 输入做非持久化对比：
+2026-08-28 曾将 enrich 与 discover 统一为 `temperature=0.0`、`thinking.type=enabled`、`reasoning_effort=low`。使用同一 GBrain 输入做非持久化对比：
 
 | 项目 | 调整前 | Low reasoning |
 | --- | ---: | ---: |
@@ -575,6 +575,8 @@ LLM 评审使用与实体名称无关的固定量表，对 groundedness、covera
 | 无变化重跑 | 通过 | 通过 |
 
 Low reasoning 将该样本的 enrich 耗时降低约 84.3%，reasoning tokens 降低约 88.4%，未使质量门禁退化。报告保存在 `eval/reports/entity-enrich-quality/20260828T021112974491Z/35-GBrain/`。
+
+该硬编码策略随后因不同 OpenAI-compatible provider 的 thinking 参数协议不兼容而移除。当前 Discovery 使用 lightweight profile，Enrichment 使用 standard profile；是否启用推理及其强度完全由各 profile 的环境变量配置决定。
 
 ### 11.10 OpenClaw 两时点真实回放
 

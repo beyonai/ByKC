@@ -1115,10 +1115,6 @@ async def test_openai_compatible_client_uses_core_provider_and_injected_http_cli
         temperature=0.0,
         timeout=12.5,
         client_factory=client_factory,
-        request_extra_body={
-            "thinking": {"type": "enabled"},
-            "reasoning_effort": "low",
-        },
     )
 
     result = await client.complete(
@@ -1131,8 +1127,7 @@ async def test_openai_compatible_client_uses_core_provider_and_injected_http_cli
     assert captured["headers"]["Authorization"] == "Bearer secret"
     assert captured["timeout"] == 12.5
     assert captured["payload"] == {
-        "thinking": {"type": "enabled"},
-        "reasoning_effort": "low",
+        "thinking": {"type": "disabled"},
         "model": "knowledge-model",
         "temperature": 0.0,
         "messages": [{"role": "user", "content": "discover"}],
@@ -1141,10 +1136,12 @@ async def test_openai_compatible_client_uses_core_provider_and_injected_http_cli
 
 
 @pytest.mark.asyncio
-async def test_discovery_client_forces_low_reasoning_over_provider_defaults() -> None:
+async def test_discovery_client_uses_lightweight_provider_config() -> None:
+    captured: dict[str, Any] = {}
+
     class _Provider:
         async def get_config(self, model_type: str | LLMModelProfile) -> ModelConfig:
-            del model_type
+            captured["profile"] = model_type
             return ModelConfig(
                 model_name="knowledge-model",
                 temperature=0.8,
@@ -1160,18 +1157,21 @@ async def test_discovery_client_forces_low_reasoning_over_provider_defaults() ->
         await build_discovery_llm(provider=_Provider()).cache_identity()
     )
 
-    assert identity["temperature"] == 0.0
+    assert captured["profile"] is LLMModelProfile.LIGHTWEIGHT
+    assert identity["temperature"] == 0.8
     assert identity["extraBody"] == {
-        "thinking": {"type": "enabled"},
-        "reasoning_effort": "low",
+        "thinking": {"type": "disabled"},
+        "reasoning_effort": "high",
     }
 
 
 @pytest.mark.asyncio
-async def test_enrichment_client_forces_low_reasoning_over_provider_defaults() -> None:
+async def test_enrichment_client_uses_standard_provider_config() -> None:
+    captured: dict[str, Any] = {}
+
     class _Provider:
         async def get_config(self, model_type: str | LLMModelProfile) -> ModelConfig:
-            del model_type
+            captured["profile"] = model_type
             return ModelConfig(
                 model_name="knowledge-model",
                 temperature=0.8,
@@ -1187,10 +1187,11 @@ async def test_enrichment_client_forces_low_reasoning_over_provider_defaults() -
         await build_enrichment_llm(provider=_Provider()).cache_identity()
     )
 
-    assert identity["temperature"] == 0.0
+    assert captured["profile"] is LLMModelProfile.STANDARD
+    assert identity["temperature"] == 0.8
     assert identity["extraBody"] == {
-        "thinking": {"type": "enabled"},
-        "reasoning_effort": "low",
+        "thinking": {"type": "disabled"},
+        "reasoning_effort": "high",
     }
 
 

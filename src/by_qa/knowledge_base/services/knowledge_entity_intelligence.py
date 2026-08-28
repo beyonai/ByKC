@@ -271,14 +271,12 @@ class OpenAICompatibleKnowledgeEntityLLM:
         temperature: float | None = None,
         timeout: float = 300.0,
         client_factory: Callable[..., Any] | None = None,
-        request_extra_body: Mapping[str, Any] | None = None,
     ) -> None:
         self._provider = provider or load_model_config_provider()
         self._profile = profile
         self._temperature = temperature
         self._timeout = timeout
         self._client_factory = client_factory or httpx.AsyncClient
-        self._request_extra_body = dict(request_extra_body or {})
 
     async def cache_identity(self) -> str:
         """Return a non-secret identity for content-addressed result isolation."""
@@ -294,7 +292,7 @@ class OpenAICompatibleKnowledgeEntityLLM:
                 "baseUrl": config.base_url.rstrip("/"),
                 "model": config.model_name,
                 "temperature": temperature,
-                "extraBody": {**config.extra_body, **self._request_extra_body},
+                "extraBody": config.extra_body,
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -316,7 +314,6 @@ class OpenAICompatibleKnowledgeEntityLLM:
             headers["Authorization"] = f"Bearer {config.api_key}"
         payload: dict[str, Any] = {
             **config.extra_body,
-            **self._request_extra_body,
             "model": config.model_name,
             "temperature": (
                 self._temperature
@@ -404,17 +401,13 @@ def build_discovery_llm(
     timeout: float = 300.0,
     client_factory: Callable[..., Any] | None = None,
 ) -> OpenAICompatibleKnowledgeEntityLLM:
-    """Build the production Discovery client with deterministic low reasoning."""
+    """Build Discovery from the environment-backed lightweight profile."""
 
     return OpenAICompatibleKnowledgeEntityLLM(
         provider=provider,
-        temperature=0.0,
+        profile=LLMModelProfile.LIGHTWEIGHT,
         timeout=timeout,
         client_factory=client_factory,
-        request_extra_body={
-            "thinking": {"type": "enabled"},
-            "reasoning_effort": "low",
-        },
     )
 
 
@@ -424,17 +417,13 @@ def build_enrichment_llm(
     timeout: float = 300.0,
     client_factory: Callable[..., Any] | None = None,
 ) -> OpenAICompatibleKnowledgeEntityLLM:
-    """Build the production Enrich client with deterministic low reasoning."""
+    """Build Enrichment from the environment-backed standard profile."""
 
     return OpenAICompatibleKnowledgeEntityLLM(
         provider=provider,
-        temperature=0.0,
+        profile=LLMModelProfile.STANDARD,
         timeout=timeout,
         client_factory=client_factory,
-        request_extra_body={
-            "thinking": {"type": "enabled"},
-            "reasoning_effort": "low",
-        },
     )
 
 

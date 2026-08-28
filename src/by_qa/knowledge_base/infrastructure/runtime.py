@@ -459,11 +459,10 @@ async def build_knowledge_entity_processing_service(
         settings, provider=provider
     )
 
-    # Discovery is an information-selection task. Its production model settings
-    # are intentionally fixed and do not inherit a higher reasoning effort.
+    # Discovery uses the lightweight model profile, including its environment-
+    # configured temperature and extra request body.
     discovery_llm = build_discovery_llm(provider=provider)
-    # Entity pages are durable editorial artifacts. Keep generation deterministic
-    # and bounded to low reasoning instead of inheriting conversational defaults.
+    # Enrichment uses the standard model profile and its environment configuration.
     enrichment_llm = build_enrichment_llm(provider=provider)
     asset_service = KnowledgeEntityAssetService(
         connection_factory=connection_factory,

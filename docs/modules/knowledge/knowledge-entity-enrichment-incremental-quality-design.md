@@ -730,3 +730,29 @@ ClaimGroup、无引用章节、重复引用和含混主语，只允许局部融�
 
 这些字段同时写入首次 enrich、普通增量回放和 OpenClaw 两时点真实回放，最终全量报告可直接
 解释每个 Entity 为什么通过或失败，而不只给出一个总分。
+
+## 14. 2026-08-28 全量验证结果
+
+实现完成后运行 knowledge base 全量单元测试，结果为 `843 passed, 6 skipped`；变更文件通过
+pre-commit 的 isort、ruff、ruff-format、pylint、pyink 和通用文本检查。
+
+最终全量评测主批次归档在
+`eval/reports/entity-enrich-quality/20260828T053603016916Z`：4 并发运行 14 个实体，墙钟时间
+746.318 秒；13 个正常完成实体平均 161.695 秒。Hermes Agent 首次运行因 LLM 修复响应顶层
+返回数组中断，单独补跑归档在 `eval/reports/entity-enrich-quality/20260828T054954321802Z`，耗时
+165.586 秒。合并 14 个最终有效结果后，平均约 161.973 秒/实体。评测前后持久化指纹一致，
+没有把候选文档写回数据库。
+
+最终结果：
+
+- 14/14 通过引用授权、实体边界、结构和旧内容安全等确定性门禁；
+- 首次成文 10/14 通过 LLM 内容质量评审；
+- 具备增量重放的 8/8 全部通过，旧内容保留和新旧融合没有失败；
+- OpenClaw 两时点真实导入场景的两个阶段均通过，第二阶段 retention 和 integration 均通过；
+- 首次未通过内容评审的实体为 GBrain、小红书写作规范、OpenAI Frontier 和 Hermes Agent。
+
+剩余问题已收敛为两类。GBrain、小红书写作规范和 Hermes Agent 属于“单来源、多 Topic、证据
+高度重合”，现有 Topic 级 ClaimGroup 仍可能驱动模型分节复述同一事实；OpenAI Frontier 属于
+证据极少时仍套用完整结构，正文相对原材料过度膨胀。下一步应在 ClaimGroup 前增加跨 Topic 的
+FactCluster，并增加低证据密度短文路由。逐实体原因和优化方向见该批次内的
+`QUALITY-ANALYSIS.md`。

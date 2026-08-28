@@ -745,9 +745,10 @@ pre-commit 的 isort、ruff、ruff-format、pylint、pyink 和通用文本检查
 
 最终结果：
 
-- 14/14 通过引用授权、实体边界、结构和旧内容安全等确定性门禁；
+- 14/14 通过结构、授权引用、旧引用集合、篇幅和机械脚注等基础确定性门禁；
 - 首次成文 10/14 通过 LLM 内容质量评审；
-- 具备增量重放的 8/8 全部通过，旧内容保留和新旧融合没有失败；
+- 具备增量重放的 8/8 全部通过 LLM retention/integration 评审；
+- 14/14 无变化重放都正确返回 0 Topic、0 Evidence；
 - OpenClaw 两时点真实导入场景的两个阶段均通过，第二阶段 retention 和 integration 均通过；
 - 首次未通过内容评审的实体为 GBrain、小红书写作规范、OpenAI Frontier 和 Hermes Agent。
 
@@ -756,3 +757,10 @@ pre-commit 的 isort、ruff、ruff-format、pylint、pyink 和通用文本检查
 证据极少时仍套用完整结构，正文相对原材料过度膨胀。下一步应在 ClaimGroup 前增加跨 Topic 的
 FactCluster，并增加低证据密度短文路由。逐实体原因和优化方向见该批次内的
 `QUALITY-ANALYSIS.md`。
+
+需要注意，`analysis.passed` 当前不包含 `qualityAudit`。例如 OpenClaw 增量正文被 judge 评为
+retention/integration 5/5，但协议审计仍报告大量旧锚点和 editPlan 未匹配；正文复核表明多数是
+改写或换节造成的词面匹配假阴性。因此不能把基础确定性门禁通过表述成所有旧语义事实的硬保证。
+后续需要把结构、协议和语义三层门禁明确组合，并将旧锚点校验升级为“关键事实 + 数字/标识符
++ 来源”的语义比对。Fabric IQ 的通用行业案例归属也说明实体隔离还需从段落级继续下沉到句子级
+主语归属。

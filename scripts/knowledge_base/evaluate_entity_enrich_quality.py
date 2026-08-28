@@ -64,7 +64,10 @@ QUALITY_JUDGE_PROMPT = """\
 - groundedness：事实、数字、机制、评价与不确定性是否有证据，是否存在臆造；
 - coverage：是否覆盖证据充分的主要方向，证据丰富时是否退化成定义卡片；
 - synthesis：是否真正综合材料，结构自然，避免证据清单和重复段落；
-- citationQuality：引用是否靠近所支持的主张、自然且不过度重复，是否有来源错配；
+- citationQuality：引用策略是否符合来源类型。originalDocument 是原始材料，正文可以自然吸收，
+  默认只需在“参考资料”中完整列出一次，不得因为缺少逐段行内引用而扣分；knowledgeEntity 只有在
+  表达真实启发、比较、依赖或继承关系时才应在对应事实句中自然链接，不能作为段末脚注；同时检查
+  是否重复引用、来源错配或遗漏实际使用的来源；
 - maintainability：是否适合作为持续更新的实体页，边界、冲突和不确定性是否清楚。
 
 若 mode=incremental，还要评估：
@@ -252,6 +255,7 @@ def analyze_context(
     messages: list[dict[str, str]],
 ) -> dict[str, Any]:
     counts = Counter(item.document_file_id for item in evidence)
+    prompt_text = "\n".join(message["content"] for message in messages)
     claim_groups = build_evidence_claim_groups(
         EvidenceBundle(
             fragments=tuple(evidence),
@@ -309,10 +313,17 @@ def analyze_context(
         "evidenceFragmentCount": len(evidence),
         "evidenceChars": sum(len(item.content) for item in evidence),
         "sourceCount": len(counts),
+        "sourceKindCounts": dict(
+            sorted(Counter(item.document_kind for item in evidence).items())
+        ),
         "fragmentsPerSource": dict(sorted(counts.items())),
         "directMentionCount": sum(item.direct_mention for item in evidence),
         "explicitReferenceCount": sum(item.explicit_reference for item in evidence),
         "promptChars": sum(len(message["content"]) for message in messages),
+        "claimGroupMetadataInPrompt": any(
+            marker in prompt_text
+            for marker in ("EvidenceClaimGroup", "claimGroupId", "claimCoverage")
+        ),
         "withinEvidenceBudget": len(evidence) <= 50
         and sum(len(item.content) for item in evidence) <= 50_000,
         "allAuthorized": all(item.authorized for item in evidence),
@@ -487,6 +498,9 @@ def _source_evidence(
                 relation_code="MENTIONS",
                 authorized=True,
                 matched_topics=matched_topics,
+                document_kind=str(
+                    source_row.get("document_kind") or "originalDocument"
+                ),
             )
             for fragment in worker._split_relation_evidence(selected)  # noqa: SLF001
             if fragment.strip()
@@ -505,7 +519,12 @@ async def judge_document(
     candidate_markdown: str,
 ) -> dict[str, Any]:
     evidence_payload = [
-        {"source": item.document_path, "content": item.content} for item in evidence
+        {
+            "source": item.document_path,
+            "sourceType": item.document_kind,
+            "content": item.content,
+        }
+        for item in evidence
     ]
     payload = {
         "mode": mode,

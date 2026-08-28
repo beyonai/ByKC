@@ -963,6 +963,9 @@ class KnowledgeEntityTaskWorker:
                                 relation.get("relation_code") or "MENTIONS"
                             ),
                             matched_topics=matched_topics,
+                            document_kind=str(
+                                row.get("document_kind") or "originalDocument"
+                            ),
                         )
                     )
 
@@ -1108,6 +1111,9 @@ class KnowledgeEntityTaskWorker:
                         semantic_score=score,
                         authorized=True,
                         matched_topics=(topic,) if topic else (),
+                        document_kind=str(
+                            row.get("document_kind") or "originalDocument"
+                        ),
                     )
                 )
                 semantic_by_content[content_key] = len(fragments) - 1

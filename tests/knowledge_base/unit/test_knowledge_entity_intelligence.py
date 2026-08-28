@@ -590,6 +590,37 @@ def test_claim_groups_aggregate_sources_by_topic_without_changing_evidence() -> 
     assert groups[0].evidence_ids == ("F1", "F2")
 
 
+def test_quality_audit_requires_every_original_source_in_references() -> None:
+    bundle = organize_evidence(
+        [
+            EvidenceFragment(
+                7,
+                "/first.md",
+                "OpenClaw 通过检索恢复记忆。",
+                direct_mention=True,
+                matched_topics=("记忆搜索",),
+            ),
+            EvidenceFragment(
+                8,
+                "/second.md",
+                "OpenClaw 的时间衰减会影响排序。",
+                semantic_score=0.9,
+                matched_topics=("记忆搜索",),
+            ),
+        ]
+    )
+
+    audit = audit_enriched_markdown(
+        "# OpenClaw\n\n## 核心事实\n\nOpenClaw 支持记忆检索和排序。\n\n"
+        "## 参考资料\n\n- [first.md](/first.md)",
+        payload={},
+        claim_groups=build_evidence_claim_groups(bundle),
+    )
+
+    assert audit.uncovered_claim_group_ids == ("CG1",)
+    assert audit.needs_repair is True
+
+
 def test_old_claim_anchors_prioritize_numbers_and_identifiers() -> None:
     anchors = build_existing_claim_anchors(
         "# OpenClaw\n\n## 记忆机制\n\n"
@@ -629,7 +660,7 @@ def test_incremental_edit_hint_keeps_identical_old_claim_in_its_section() -> Non
     assert hints[0].target_section == "记忆检索"
 
 
-def test_quality_audit_rejects_claim_source_not_linked_in_target_section() -> None:
+def test_quality_audit_requires_original_source_in_references_not_body() -> None:
     evidence = organize_evidence(
         [
             EvidenceFragment(
@@ -642,35 +673,16 @@ def test_quality_audit_rejects_claim_source_not_linked_in_target_section() -> No
         ]
     )
     groups = build_evidence_claim_groups(evidence)
-    payload = {
-        "claimCoverage": [
-            {
-                "claimGroupId": "CG1",
-                "targetSection": "记忆检索",
-                "anchor": "Beta 通过检索恢复记忆",
-                "sourceIds": ["S1"],
-            }
-        ],
-        "citationPlan": [
-            {
-                "claimGroupId": "CG1",
-                "sourceIds": ["S1"],
-                "placement": "章节开头",
-            }
-        ],
-        "editPlan": [],
-    }
-
     audit = audit_enriched_markdown(
-        "# Beta\n\n## 记忆检索\n\nBeta 通过检索恢复记忆。[错误来源](/wrong.md)",
-        payload=payload,
+        "# Beta\n\n## 记忆检索\n\nBeta 通过检索恢复记忆。[authorized](/authorized.md)",
+        payload={},
         claim_groups=groups,
-        incremental=True,
     )
 
     assert audit.uncovered_claim_group_ids == ("CG1",)
     assert audit.invalid_claim_coverage_count == 1
-    assert audit.invalid_edit_plan_count == 1
+    assert audit.invalid_edit_plan_count == 0
+    assert audit.hard_original_reference_count == 1
 
 
 def test_quality_audit_rejects_silent_loss_of_old_claim_details() -> None:
@@ -697,7 +709,6 @@ def test_quality_audit_rejects_silent_loss_of_old_claim_details() -> None:
         },
         claim_groups=(),
         existing_claim_anchors=anchors,
-        incremental=True,
     )
 
     assert audit.missing_old_claim_anchor_ids
@@ -867,7 +878,10 @@ async def test_enrich_prompt_uses_topics_as_clustered_coverage_guidance():
     llm = _FakeLLM(
         json.dumps(
             {
-                "markdown": "# Beta\n\n## 核心事实\n\nSupported fact.",
+                "markdown": (
+                    "# Beta\n\n## 核心事实\n\nSupported fact.\n\n"
+                    "## 参考资料\n\n- [source.md](/source.md)"
+                ),
                 "relations": [],
                 "warnings": [],
             }
@@ -887,49 +901,67 @@ async def test_enrich_prompt_uses_topics_as_clustered_coverage_guidance():
     assert "连续段落或列表项末尾" in normalized_prompt
     assert "应合并重叠 Topic" in user_prompt
     assert "- Architecture\n- Retrieval\n- Deployment" in user_prompt
+    assert "EvidenceClaimGroup" not in user_prompt
+    assert "claimGroupId" not in user_prompt
+    assert "claimCoverage" not in system_prompt
+    assert "citationPlan" not in system_prompt
+    assert "sourceType=originalDocument" in user_prompt
 
 
 @pytest.mark.asyncio
-async def test_enrich_repairs_missing_claim_coverage_and_mechanical_citations():
+async def test_knowledge_entity_source_is_linked_naturally_in_body():
+    llm = _FakeLLM(
+        json.dumps(
+            {
+                "qualityPlanVersion": 2,
+                "markdown": (
+                    "# Beta\n\n## 设计来源\n\n"
+                    "Beta 的记忆编排受到了 [GBrain](/KnowledgeEntity/GBrain.md) "
+                    "分层思路的启发，并针对自身任务边界进行了调整。"
+                ),
+                "relations": [],
+                "warnings": [],
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    result = await KnowledgeEntityEnricher(llm).enrich(
+        KnowledgeEntityIdentity(1, 1, "Beta"),
+        [
+            EvidenceFragment(
+                2,
+                "/KnowledgeEntity/GBrain.md",
+                "GBrain 使用分层记忆编排。",
+                direct_mention=True,
+                document_kind="knowledgeEntity",
+            )
+        ],
+    )
+
+    user_prompt = llm.calls[0][0][1]["content"]
+    assert "sourceType=knowledgeEntity" in user_prompt
+    assert "[GBrain](/KnowledgeEntity/GBrain.md)" in user_prompt
+    assert "EvidenceClaimGroup" not in user_prompt
+    assert result.quality_audit.uncovered_claim_group_ids == ()
+    assert result.quality_audit.hard_original_reference_count == 0
+
+
+@pytest.mark.asyncio
+async def test_enrich_repairs_original_source_into_references_without_hard_citation():
     first = {
-        "qualityPlanVersion": 1,
+        "qualityPlanVersion": 2,
         "markdown": "# Beta\n\n## 核心事实\n\nBeta 是一个系统。",
-        "claimCoverage": [],
-        "editPlan": [],
-        "citationPlan": [],
         "relations": [],
         "warnings": [],
     }
     repaired = {
-        "qualityPlanVersion": 1,
+        "qualityPlanVersion": 2,
         "markdown": (
             "# Beta\n\n## 核心事实\n\n"
-            "根据 [source.md](/source.md) 的说明，Beta 通过流水线处理请求，"
-            "适用于批量任务，但限制是延迟可能增加。"
+            "Beta 通过流水线处理请求，适用于批量任务，但限制是延迟可能增加。\n\n"
+            "## 参考资料\n\n- [source.md](/source.md)"
         ),
-        "claimCoverage": [
-            {
-                "claimGroupId": "CG1",
-                "targetSection": "核心事实",
-                "anchor": "Beta 通过流水线处理请求",
-                "sourceIds": ["S1"],
-            }
-        ],
-        "editPlan": [
-            {
-                "claimGroupId": "CG1",
-                "status": "NEW",
-                "action": "merge",
-                "targetSection": "核心事实",
-            }
-        ],
-        "citationPlan": [
-            {
-                "claimGroupId": "CG1",
-                "sourceIds": ["S1"],
-                "placement": "核心事实的完整主张组开头",
-            }
-        ],
         "relations": [],
         "warnings": [],
     }
@@ -956,11 +988,15 @@ async def test_enrich_repairs_missing_claim_coverage_and_mechanical_citations():
     assert result.attempts == 2
     assert result.quality_audit.uncovered_claim_group_ids == ()
     assert result.quality_audit.uncited_sections == ()
-    assert "根据 [source.md](/source.md) 的说明" in result.markdown
+    assert result.quality_audit.hard_original_reference_count == 0
+    assert "根据 [source.md](/source.md)" not in result.markdown
+    assert "## 参考资料\n\n- [source.md](/source.md)" in result.markdown
     assert len(llm.calls) == 2
     repair_prompt = llm.calls[1][0][-1]["content"]
     assert "只做定向修复" in repair_prompt
-    assert "CG1" in repair_prompt
+    assert "CG1" not in repair_prompt
+    assert "EvidenceClaimGroup" not in repair_prompt
+    assert "missingSourceTraceability" in repair_prompt
 
 
 @pytest.mark.asyncio

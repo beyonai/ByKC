@@ -383,6 +383,100 @@ def test_default_enrichment_evidence_budget_is_50k() -> None:
     assert len(bundle.fragments) == 25
 
 
+def test_semantic_overlap_is_merged_into_same_source_mention() -> None:
+    shared = "OpenClaw 使用 memory_search 检索相关记忆。"
+    bundle = organize_evidence(
+        [
+            EvidenceFragment(
+                7,
+                "/openclaw.md",
+                f"## 记忆检索\n\n{shared}",
+                direct_mention=True,
+                explicit_reference=True,
+                matched_topics=("记忆搜索",),
+            ),
+            EvidenceFragment(
+                7,
+                "/openclaw.md",
+                shared,
+                semantic_score=0.96,
+                matched_topics=("记忆搜索",),
+            ),
+            EvidenceFragment(
+                7,
+                "/openclaw.md",
+                shared,
+                semantic_score=0.91,
+                matched_topics=("上下文工程",),
+            ),
+        ]
+    )
+
+    assert len(bundle.fragments) == 1
+    assert bundle.fragments[0].direct_mention is True
+    assert bundle.fragments[0].semantic_score == 0.96
+    assert bundle.fragments[0].matched_topics == ("记忆搜索", "上下文工程")
+    assert bundle.fragments[0].content.count("memory_search") == 1
+
+
+def test_same_source_mention_and_semantic_have_separate_minimum_quotas() -> None:
+    bundle = organize_evidence(
+        [
+            EvidenceFragment(
+                7,
+                "/openclaw.md",
+                "M" * 20,
+                direct_mention=True,
+                matched_topics=("上下文工程",),
+            ),
+            EvidenceFragment(
+                7,
+                "/openclaw.md",
+                "S" * 20,
+                semantic_score=0.9,
+                matched_topics=("上下文工程",),
+            ),
+        ],
+        max_total_chars=30,
+        max_fragment_chars=20,
+        min_topic_source_chars=10,
+    )
+
+    assert len(bundle.fragments) == 2
+    assert bundle.total_chars == 30
+    assert any(item.direct_mention for item in bundle.fragments)
+    assert any(item.semantic_score > 0 for item in bundle.fragments)
+
+
+def test_topic_source_quota_prevents_early_topic_from_consuming_budget() -> None:
+    bundle = organize_evidence(
+        [
+            EvidenceFragment(
+                7,
+                "/openclaw.md",
+                "A" * 20,
+                semantic_score=1.0,
+                matched_topics=("Prompt Engineering",),
+            ),
+            EvidenceFragment(
+                7,
+                "/openclaw.md",
+                "B" * 20,
+                semantic_score=0.8,
+                matched_topics=("Harness Engineering",),
+            ),
+        ],
+        max_total_chars=30,
+        max_fragment_chars=20,
+        min_topic_source_chars=10,
+    )
+
+    assert {item.matched_topics for item in bundle.fragments} == {
+        ("Prompt Engineering",),
+        ("Harness Engineering",),
+    }
+
+
 @pytest.mark.asyncio
 async def test_enrich_uses_soft_template_pins_identity_and_discards_bad_relations() -> (
     None

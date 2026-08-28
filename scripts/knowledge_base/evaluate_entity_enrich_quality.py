@@ -12,7 +12,6 @@ import argparse
 import asyncio
 import hashlib
 import json
-import math
 import re
 from collections import Counter
 from collections.abc import Awaitable, Callable
@@ -46,7 +45,6 @@ from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
     normalize_surface,
 )
 from by_qa.knowledge_base.services.knowledge_entity_task_worker import (
-    MAX_TOPICS_PER_SEARCH_QUERY,
     KnowledgeEntityTaskContext,
 )
 
@@ -252,9 +250,41 @@ def analyze_context(
     messages: list[dict[str, str]],
 ) -> dict[str, Any]:
     counts = Counter(item.document_file_id for item in evidence)
+    topic_source_groups = sorted(
+        {
+            (
+                topic,
+                item.document_file_id,
+                kind,
+            )
+            for item in evidence
+            for topic in (item.matched_topics or ("[entity]",))
+            for kind in (
+                *(
+                    ("mention",)
+                    if item.direct_mention or item.explicit_reference
+                    else ()
+                ),
+                *(("semantic",) if item.semantic_score > 0 else ()),
+            )
+        }
+    )
     return {
         "topicCount": len(topics),
-        "queryBatchCount": max(1, math.ceil(len(topics) / MAX_TOPICS_PER_SEARCH_QUERY)),
+        "semanticSearchQueryCount": max(1, len(topics)),
+        "topicSourceQuotaGroupCount": len(topic_source_groups),
+        "topicSourceQuotaGroups": [
+            {"topic": topic, "sourceFileId": file_id, "kind": kind}
+            for topic, file_id, kind in topic_source_groups
+        ],
+        "mentionFragmentCount": sum(
+            item.direct_mention or item.explicit_reference for item in evidence
+        ),
+        "semanticFragmentCount": sum(item.semantic_score > 0 for item in evidence),
+        "mergedMentionSemanticCount": sum(
+            (item.direct_mention or item.explicit_reference) and item.semantic_score > 0
+            for item in evidence
+        ),
         "evidenceFragmentCount": len(evidence),
         "evidenceChars": sum(len(item.content) for item in evidence),
         "sourceCount": len(counts),
@@ -400,22 +430,32 @@ def _source_evidence(
     names: tuple[str, ...],
     topics: tuple[str, ...],
 ) -> list[EvidenceFragment]:
-    selected = worker._select_entity_sections(  # noqa: SLF001
-        markdown, names=names, topics=topics
-    )
-    return [
-        EvidenceFragment(
-            document_file_id=int(source_row["kid"]),
-            document_path=str(source_row["file_path"]),
-            content=fragment,
-            direct_mention=True,
-            explicit_reference=True,
-            relation_code="MENTIONS",
-            authorized=True,
+    evidence: list[EvidenceFragment] = []
+    scopes = [((), False, False)]
+    scopes.extend(((topic,), True, True) for topic in topics)
+    for matched_topics, prefer_topics, require_topic_match in scopes:
+        selected = worker._select_entity_sections(  # noqa: SLF001
+            markdown,
+            names=names,
+            topics=matched_topics,
+            prefer_topics=prefer_topics,
+            require_topic_match=require_topic_match,
         )
-        for fragment in worker._split_relation_evidence(selected)  # noqa: SLF001
-        if fragment.strip()
-    ]
+        evidence.extend(
+            EvidenceFragment(
+                document_file_id=int(source_row["kid"]),
+                document_path=str(source_row["file_path"]),
+                content=fragment,
+                direct_mention=True,
+                explicit_reference=True,
+                relation_code="MENTIONS",
+                authorized=True,
+                matched_topics=matched_topics,
+            )
+            for fragment in worker._split_relation_evidence(selected)  # noqa: SLF001
+            if fragment.strip()
+        )
+    return evidence
 
 
 async def judge_document(

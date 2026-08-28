@@ -1005,7 +1005,7 @@ async def test_reenrich_uses_topics_and_only_evidence_newer_than_previous_run():
             "updated_after": watermark,
         }
     ]
-    assert len(deps.search.requests) == 3
+    assert len(deps.search.requests) == 13
     assert all(
         len(
             [
@@ -1014,7 +1014,7 @@ async def test_reenrich_uses_topics_and_only_evidence_newer_than_previous_run():
                 if line.startswith("Beta Topic ")
             ]
         )
-        <= 6
+        == 1
         for request in deps.search.requests
     )
     assert all(
@@ -1029,7 +1029,7 @@ async def test_reenrich_uses_topics_and_only_evidence_newer_than_previous_run():
 
 
 @pytest.mark.asyncio
-async def test_topic_query_batches_apply_score_thresholds_independently():
+async def test_topic_queries_apply_score_thresholds_independently():
     entity = file_row(
         30,
         "/KnowledgeEntity/beta.md",
@@ -1049,9 +1049,7 @@ async def test_topic_query_batches_apply_score_thresholds_independently():
             ("original", "first"): b"First evidence.",
             ("original", "second"): b"Second evidence.",
         },
-        asset_service=FakeCreatedAssetService(
-            tuple(f"Topic {index}" for index in range(7))
-        ),
+        asset_service=FakeCreatedAssetService(("Topic 0", "Topic 1")),
     )
 
     class PerBatchSearch(FakeSearch):
@@ -1096,6 +1094,52 @@ async def test_topic_query_batches_apply_score_thresholds_independently():
     )
 
     assert {item.document_file_id for item in deps.enricher.evidence} == {10, 11}
+
+
+@pytest.mark.asyncio
+async def test_same_semantic_chunk_accumulates_topics_without_duplicate_evidence():
+    entity = file_row(
+        30,
+        "/KnowledgeEntity/OpenClaw.md",
+        content_key="entity",
+        markdown_key="entity-md",
+        document_kind="knowledgeEntity",
+        entity_name="OpenClaw",
+    )
+    source = file_row(10, "/docs/openclaw-analysis.md", content_key="source")
+    hit = SimpleNamespace(
+        kb_code="1",
+        file_path="/docs/openclaw-analysis.md",
+        chunk_text="OpenClaw 通过记忆召回控制上下文。",
+        score=0.95,
+    )
+    deps = make_worker(
+        rows=[entity, source],
+        objects={
+            ("original", "entity"): b"# OpenClaw",
+            ("markdown", "entity-md"): b"# OpenClaw",
+            ("original", "source"): b"OpenClaw source",
+        },
+        search_hits=[hit],
+        asset_service=FakeCreatedAssetService(("记忆搜索", "上下文工程")),
+    )
+
+    evidence = await deps.worker._collect_evidence(
+        KnowledgeEntityTaskContext(
+            task_id=606,
+            task_type="DOCUMENT_ENRICH",
+            kb_code="1",
+            knowledge_base_id=1,
+            source_file_id=30,
+            file_path="/KnowledgeEntity/OpenClaw.md",
+        ),
+        identity=KnowledgeEntityIdentity(30, 1, "OpenClaw"),
+        existing_markdown="# OpenClaw",
+        topics=("记忆搜索", "上下文工程"),
+    )
+
+    assert len(evidence) == 1
+    assert evidence[0].matched_topics == ("记忆搜索", "上下文工程")
 
 
 def test_topic_search_query_scopes_each_topic_with_entity_name():
@@ -1178,6 +1222,48 @@ def test_relation_source_context_has_fallback_and_preserves_late_entity_mention(
     fragments = KnowledgeEntityTaskWorker._split_relation_evidence(matched)
     assert all(len(fragment) <= 2_000 for fragment in fragments)
     assert "OpenClaw 的关键机制" in "".join(fragments)
+
+
+def test_relation_source_can_select_topic_section_before_early_entity_section():
+    content = (
+        "# OpenClaw\n\nOpenClaw 是一个个人助手，也使用 Harness Engineering。\n\n"
+        "## Prompt Engineering\n\nPrompt 使用动态模块组装。\n\n"
+        "## Harness Engineering\n\nHarness 包含 Hook、Guardrail 与沙箱。"
+    )
+
+    selected = KnowledgeEntityTaskWorker._select_entity_sections(
+        content,
+        names=("OpenClaw",),
+        topics=("Harness Engineering",),
+        prefer_topics=True,
+        require_topic_match=True,
+    )
+
+    assert "Hook、Guardrail 与沙箱" in selected
+    assert "个人助手" not in selected
+
+
+def test_relation_source_centers_plain_text_topic_heading_in_long_document():
+    content = (
+        "# OpenClaw\n\nOpenClaw 的 Harness Engineering 值得关注。\n\n"
+        + "早期 Prompt 与 Context 内容。" * 1_000
+        + "\n\nHarness Engineering：可控的运行环境\n\n"
+        + "Hook 负责生命周期扩展，Guardrail 和沙箱共同限制权限边界。\n\n"
+        + "后续深入材料。" * 1_000
+    )
+
+    selected = KnowledgeEntityTaskWorker._select_entity_sections(
+        content,
+        names=("OpenClaw",),
+        topics=("Harness Engineering",),
+        prefer_topics=True,
+        require_topic_match=True,
+    )
+
+    assert "Hook 负责生命周期扩展" in selected
+    assert "OpenClaw 的 Harness Engineering 值得关注" not in selected
+    first_fragment = KnowledgeEntityTaskWorker._split_relation_evidence(selected)[0]
+    assert "Harness Engineering：可控的运行环境" in first_fragment
 
 
 @pytest.mark.asyncio

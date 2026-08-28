@@ -932,39 +932,46 @@ class KnowledgeEntityTaskWorker:
             strict=True,
         ):
             file_id = int(relation["source_fs_entry_id"])
-            selected_content = self._select_entity_sections(
-                content,
-                names=(identity.entity_name, *identity.aliases),
-                topics=topics,
-            )
-            if not selected_content:
-                continue
-            for selected_fragment in self._split_relation_evidence(selected_content):
-                fragments.append(
-                    EvidenceFragment(
-                        document_file_id=file_id,
-                        document_path=str(row["file_path"]),
-                        content=selected_fragment,
-                        direct_mention=True,
-                        explicit_reference=True,
-                        relation_code=str(relation.get("relation_code") or "MENTIONS"),
-                    )
+            mention_scopes = [("", ())]
+            mention_scopes.extend((topic, (topic,)) for topic in topics)
+            for topic, matched_topics in mention_scopes:
+                selected_content = self._select_entity_sections(
+                    content,
+                    names=(identity.entity_name, *identity.aliases),
+                    topics=matched_topics,
+                    prefer_topics=bool(topic),
+                    require_topic_match=bool(topic),
                 )
+                if not selected_content:
+                    continue
+                for selected_fragment in self._split_relation_evidence(
+                    selected_content
+                ):
+                    fragments.append(
+                        EvidenceFragment(
+                            document_file_id=file_id,
+                            document_path=str(row["file_path"]),
+                            content=selected_fragment,
+                            direct_mention=True,
+                            explicit_reference=True,
+                            relation_code=str(
+                                relation.get("relation_code") or "MENTIONS"
+                            ),
+                            matched_topics=matched_topics,
+                        )
+                    )
 
         params = context.request_params or {}
         names = (identity.entity_name, *identity.aliases)
-        topic_batches = [
-            topics[index : index + MAX_TOPICS_PER_SEARCH_QUERY]
-            for index in range(0, len(topics), MAX_TOPICS_PER_SEARCH_QUERY)
-        ] or [()]
-        grouped_hits: list[tuple[int, Any]] = []
-        for group_index, topic_batch in enumerate(topic_batches):
+        topic_queries = [(topic, (topic,)) for topic in topics] or [("", ())]
+        grouped_hits: list[tuple[int, str, Any]] = []
+        for group_index, (topic, query_topics) in enumerate(topic_queries):
             batch_hits = await self._search.search(
                 SearchRequest(
                     query=self._build_enrichment_search_query(
                         existing_markdown,
                         names=names,
-                        topics=topic_batch,
+                        topics=query_topics,
                     ),
                     kb_code_list=[context.kb_code],
                     top_k=int(params.get("topK", params.get("top_k", 20))),
@@ -974,23 +981,28 @@ class KnowledgeEntityTaskWorker:
                     ),
                 )
             )
-            grouped_hits.extend((group_index, hit) for hit in batch_hits)
+            grouped_hits.extend((group_index, topic, hit) for hit in batch_hits)
         search_connection = await self._connection_factory()
         try:
             cursor = search_connection.cursor()
-            semantic_candidates: list[tuple[int, Any, Mapping[str, Any]]] = []
-            for group_index, hit in grouped_hits:
+            semantic_candidates: list[tuple[int, str, Any, Mapping[str, Any]]] = []
+            rows_by_path: dict[str, Mapping[str, Any] | None] = {}
+            for group_index, topic, hit in grouped_hits:
                 kb_code = str(self._value(hit, "kb_code", "knCode"))
                 file_path = str(self._value(hit, "file_path", "filePath"))
                 if kb_code != str(context.kb_code) or file_path == str(
                     context.file_path
                 ):
                     continue
-                row = await self._entity_repository.get_file_with_metadata(
-                    cursor,
-                    knowledge_base_id=identity.knowledge_base_id,
-                    file_path=file_path,
-                )
+                if file_path not in rows_by_path:
+                    rows_by_path[
+                        file_path
+                    ] = await self._entity_repository.get_file_with_metadata(
+                        cursor,
+                        knowledge_base_id=identity.knowledge_base_id,
+                        file_path=file_path,
+                    )
+                row = rows_by_path[file_path]
                 if row is None:
                     continue
                 if int(row["kid"]) == identity.file_id:
@@ -1006,17 +1018,17 @@ class KnowledgeEntityTaskWorker:
                     and row.get("entity_enriched") is not True
                 ):
                     continue
-                semantic_candidates.append((group_index, hit, row))
+                semantic_candidates.append((group_index, topic, hit, row))
 
             best_scores: dict[int, float] = {}
-            for group_index, hit, _ in semantic_candidates:
+            for group_index, _, hit, _ in semantic_candidates:
                 best_scores[group_index] = max(
                     best_scores.get(group_index, 0.0),
                     float(self._value(hit, "score") or 0.0),
                 )
             document_counts: dict[int, int] = {}
-            seen_content: set[str] = set()
-            for group_index, hit, row in semantic_candidates:
+            semantic_by_content: dict[tuple[int, str], int] = {}
+            for group_index, topic, hit, row in semantic_candidates:
                 content = str(self._value(hit, "chunk_text", "chunkText")).strip()
                 score = float(self._value(hit, "score") or 0.0)
                 best_score = best_scores.get(group_index, 0.0)
@@ -1034,9 +1046,6 @@ class KnowledgeEntityTaskWorker:
                 normalized_content = normalize_surface(content)
                 if (
                     not content
-                    or normalized_content in seen_content
-                    or document_counts.get(file_id, 0)
-                    >= MAX_SEMANTIC_FRAGMENTS_PER_DOCUMENT
                     or (
                         best_score > 0 and score < best_score * MIN_SEMANTIC_SCORE_RATIO
                     )
@@ -1051,7 +1060,28 @@ class KnowledgeEntityTaskWorker:
                     )
                 ):
                     continue
-                seen_content.add(normalized_content)
+                content_key = (file_id, normalized_content)
+                existing_index = semantic_by_content.get(content_key)
+                if existing_index is not None:
+                    existing = fragments[existing_index]
+                    fragments[existing_index] = replace(
+                        existing,
+                        semantic_score=max(existing.semantic_score, score),
+                        matched_topics=tuple(
+                            dict.fromkeys(
+                                (
+                                    *existing.matched_topics,
+                                    *((topic,) if topic else ()),
+                                )
+                            )
+                        ),
+                    )
+                    continue
+                if (
+                    document_counts.get(file_id, 0)
+                    >= MAX_SEMANTIC_FRAGMENTS_PER_DOCUMENT
+                ):
+                    continue
                 document_counts[file_id] = document_counts.get(file_id, 0) + 1
                 fragments.append(
                     EvidenceFragment(
@@ -1064,8 +1094,10 @@ class KnowledgeEntityTaskWorker:
                         end=self._optional_int(self._value(hit, "end_line", "endLine")),
                         semantic_score=score,
                         authorized=True,
+                        matched_topics=(topic,) if topic else (),
                     )
                 )
+                semantic_by_content[content_key] = len(fragments) - 1
         finally:
             await search_connection.close()
         return fragments
@@ -1167,6 +1199,8 @@ class KnowledgeEntityTaskWorker:
         *,
         names: Sequence[str],
         topics: Sequence[str] = (),
+        prefer_topics: bool = False,
+        require_topic_match: bool = False,
     ) -> str:
         """Keep Entity-scoped source context, with a deterministic fallback."""
 
@@ -1189,14 +1223,38 @@ class KnowledgeEntityTaskWorker:
             normalize_surface(topic) for topic in topics if normalize_surface(topic)
         )
 
-        def matching_sections(terms: Sequence[str]) -> list[str]:
-            return [
+        def matching_sections(
+            terms: Sequence[str], *, prefer_heading_match: bool = False
+        ) -> list[str]:
+            matches = [
                 section
                 for section in sections
                 if any(term in normalize_surface(section) for term in terms)
             ]
+            if not prefer_heading_match:
+                return matches
 
-        candidate_sections = matching_sections(normalized_names)
+            def heading_matches(section: str) -> bool:
+                heading = section.splitlines()[0] if section else ""
+                normalized_heading = normalize_surface(
+                    re.sub(r"^#{1,6}\s*", "", heading)
+                )
+                return any(term in normalized_heading for term in terms)
+
+            heading_matched = [
+                section for section in matches if heading_matches(section)
+            ]
+            return heading_matched or matches
+
+        candidate_sections = (
+            matching_sections(normalized_topics, prefer_heading_match=True)
+            if prefer_topics
+            else []
+        )
+        if require_topic_match and not candidate_sections:
+            return ""
+        if not candidate_sections:
+            candidate_sections = matching_sections(normalized_names)
         if not candidate_sections:
             candidate_sections = matching_sections(normalized_topics)
         if not candidate_sections:
@@ -1213,7 +1271,7 @@ class KnowledgeEntityTaskWorker:
                 break
             selected = KnowledgeEntityTaskWorker._bounded_context_around_terms(
                 section,
-                terms=(*names, *topics),
+                terms=topics if prefer_topics else (*names, *topics),
                 limit=remaining,
             )
             matches.append(selected)
@@ -1231,15 +1289,45 @@ class KnowledgeEntityTaskWorker:
         if len(content) <= limit:
             return content
         folded = content.casefold()
-        positions = [
-            position
-            for term in terms
-            if term.strip() and (position := folded.find(term.strip().casefold())) >= 0
-        ]
-        if not positions:
-            return content[:limit]
-        mention = min(positions)
-        start = max(0, mention - limit // 4)
+        heading_positions: list[tuple[bool, int, int]] = []
+        line_start = 0
+        normalized_terms = tuple(
+            (term.casefold(), normalize_surface(term)) for term in terms if term.strip()
+        )
+        for line in content.splitlines(keepends=True):
+            stripped = line.strip()
+            folded_line = stripped.casefold()
+            normalized_line = normalize_surface(
+                re.sub(r"^(?:#{1,6}\s*|\*\*|__)", "", stripped)
+            )
+            if len(stripped) <= 200 and any(
+                folded_term in folded_line for folded_term, _ in normalized_terms
+            ):
+                starts_with_term = any(
+                    normalized_line.startswith(normalized_term)
+                    for _, normalized_term in normalized_terms
+                )
+                heading_positions.append(
+                    (not starts_with_term, len(stripped), line_start)
+                )
+            line_start += len(line)
+        if heading_positions:
+            mention = min(heading_positions)[2]
+        else:
+            positions = [
+                position
+                for term in terms
+                if term.strip()
+                and (position := folded.find(term.strip().casefold())) >= 0
+            ]
+            if not positions:
+                return content[:limit]
+            mention = min(positions)
+        # Keep the matched Topic in the first evidence fragment. Topic × Source
+        # quota allocation may only have room for that fragment, so placing the
+        # anchor several fragments later would satisfy the quota with background
+        # text instead of the Topic's substantive section.
+        start = max(0, mention - min(limit // 4, MAX_RELATION_FRAGMENT_CHARS // 4))
         end = min(len(content), start + limit)
         start = max(0, end - limit)
         return content[start:end]

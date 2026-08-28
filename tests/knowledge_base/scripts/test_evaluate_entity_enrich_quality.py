@@ -218,6 +218,6 @@ def test_context_analysis_reports_topic_batches_and_budget() -> None:
         messages=[{"role": "user", "content": "prompt"}],
     )
 
-    assert result["queryBatchCount"] == 3
+    assert result["semanticSearchQueryCount"] == 13
     assert result["withinEvidenceBudget"] is True
     assert result["allAuthorized"] is True

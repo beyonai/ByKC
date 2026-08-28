@@ -8,7 +8,7 @@ import re
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import quote, unquote
 
@@ -58,6 +58,7 @@ class EvidenceFragment:
     semantic_score: float = 0.0
     relation_code: str | None = None
     authorized: bool = True
+    matched_topics: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,8 +79,9 @@ def organize_evidence(
     max_fragments: int = DEFAULT_EVIDENCE_FRAGMENTS,
     max_fragment_chars: int = DEFAULT_FRAGMENT_CHARS,
     max_fragments_per_document: int = 25,
+    min_topic_source_chars: int = 1_200,
 ) -> EvidenceBundle:
-    """Filter, deduplicate, prioritize, and bound enrichment evidence."""
+    """Merge overlaps, reserve Topic/source/kind quotas, then fill by priority."""
 
     if (
         min(
@@ -87,14 +89,16 @@ def organize_evidence(
             max_fragments,
             max_fragment_chars,
             max_fragments_per_document,
+            min_topic_source_chars,
         )
         < 1
     ):
         raise ValueError("evidence limits must all be positive")
     source = list(fragments)
+    merged_source = _merge_semantic_into_mentions(source)
     eligible: list[EvidenceFragment] = []
-    seen: set[tuple[int, int | None, int | None, str]] = set()
-    for item in source:
+    seen: dict[tuple[int, int | None, int | None, str], int] = {}
+    for item in merged_source:
         content = item.content.strip()
         if (
             not item.authorized
@@ -109,8 +113,22 @@ def organize_evidence(
             normalize_surface(content),
         )
         if key in seen:
+            existing_index = seen[key]
+            existing = eligible[existing_index]
+            eligible[existing_index] = replace(
+                existing,
+                direct_mention=existing.direct_mention or item.direct_mention,
+                explicit_reference=(
+                    existing.explicit_reference or item.explicit_reference
+                ),
+                semantic_score=max(existing.semantic_score, item.semantic_score),
+                relation_code=existing.relation_code or item.relation_code,
+                matched_topics=tuple(
+                    dict.fromkeys((*existing.matched_topics, *item.matched_topics))
+                ),
+            )
             continue
-        seen.add(key)
+        seen[key] = len(eligible)
         eligible.append(item)
     eligible.sort(
         key=lambda item: (
@@ -123,32 +141,74 @@ def organize_evidence(
     )
 
     selected: list[EvidenceFragment] = []
+    selected_keys: set[tuple[int, int | None, int | None, str]] = set()
     document_counts: Counter[int] = Counter()
     remaining = max_total_chars
+
+    def item_key(item: EvidenceFragment) -> tuple[int, int | None, int | None, str]:
+        return (
+            item.document_file_id,
+            item.start,
+            item.end,
+            normalize_surface(item.content),
+        )
+
+    def add(item: EvidenceFragment) -> bool:
+        nonlocal remaining
+        key = item_key(item)
+        if key in selected_keys:
+            return False
+        if len(selected) >= max_fragments or remaining <= 0:
+            return False
+        if document_counts[item.document_file_id] >= max_fragments_per_document:
+            return False
+        content = item.content.strip()[: min(max_fragment_chars, remaining)]
+        if not content:
+            return False
+        selected.append(replace(item, content=content, authorized=True))
+        selected_keys.add(key)
+        document_counts[item.document_file_id] += 1
+        remaining -= len(content)
+        return True
+
+    quota_groups: dict[tuple[str, int, str], list[EvidenceFragment]] = {}
+    for item in eligible:
+        topics = item.matched_topics or ("",)
+        kinds: list[str] = []
+        if item.direct_mention or item.explicit_reference:
+            kinds.append("mention")
+        if item.semantic_score > 0 or not kinds:
+            kinds.append("semantic")
+        for topic in topics:
+            for kind in kinds:
+                quota_groups.setdefault(
+                    (normalize_surface(topic), item.document_file_id, kind), []
+                ).append(item)
+
+    effective_quota = min(
+        min_topic_source_chars,
+        max(1, max_total_chars // max(1, len(quota_groups))),
+    )
+    for group in sorted(
+        quota_groups,
+        key=lambda value: (value[2] != "mention", value[0], value[1]),
+    ):
+        candidates = quota_groups[group]
+        covered = sum(
+            min(len(item.content), max_fragment_chars)
+            for item in candidates
+            if item_key(item) in selected_keys
+        )
+        for item in candidates:
+            if covered >= effective_quota:
+                break
+            if add(item):
+                covered += len(selected[-1].content)
+
     for item in eligible:
         if len(selected) >= max_fragments or remaining <= 0:
             break
-        if document_counts[item.document_file_id] >= max_fragments_per_document:
-            continue
-        content = item.content.strip()[: min(max_fragment_chars, remaining)]
-        if not content:
-            continue
-        selected.append(
-            EvidenceFragment(
-                document_file_id=item.document_file_id,
-                document_path=item.document_path,
-                content=content,
-                start=item.start,
-                end=item.end,
-                direct_mention=item.direct_mention,
-                explicit_reference=item.explicit_reference,
-                semantic_score=item.semantic_score,
-                relation_code=item.relation_code,
-                authorized=True,
-            )
-        )
-        document_counts[item.document_file_id] += 1
-        remaining -= len(content)
+        add(item)
     discarded = len(source) - len(selected)
     warnings = (
         (f"evidence bounded: kept={len(selected)} discarded={discarded}",)
@@ -161,6 +221,100 @@ def organize_evidence(
         discarded_count=discarded,
         warnings=warnings,
     )
+
+
+def _merge_semantic_into_mentions(
+    fragments: Sequence[EvidenceFragment],
+) -> list[EvidenceFragment]:
+    """Merge same-document semantic overlap into mention evidence once."""
+
+    mentions = [
+        item for item in fragments if item.direct_mention or item.explicit_reference
+    ]
+    semantic_only = [
+        item
+        for item in fragments
+        if not item.direct_mention and not item.explicit_reference
+    ]
+    result = list(mentions)
+    for semantic in semantic_only:
+        match_index = next(
+            (
+                index
+                for index, mention in enumerate(result)
+                if mention.document_file_id == semantic.document_file_id
+                and _evidence_content_overlaps(mention.content, semantic.content)
+            ),
+            None,
+        )
+        if match_index is None:
+            result.append(semantic)
+            continue
+        mention = result[match_index]
+        result[match_index] = replace(
+            mention,
+            content=_merge_evidence_content(mention.content, semantic.content),
+            start=_min_optional(mention.start, semantic.start),
+            end=_max_optional(mention.end, semantic.end),
+            semantic_score=max(mention.semantic_score, semantic.semantic_score),
+            matched_topics=tuple(
+                dict.fromkeys((*mention.matched_topics, *semantic.matched_topics))
+            ),
+        )
+    return result
+
+
+def _evidence_content_overlaps(left: str, right: str) -> bool:
+    left_key = normalize_surface(left)
+    right_key = normalize_surface(right)
+    if not left_key or not right_key:
+        return False
+    if left_key in right_key or right_key in left_key:
+        return True
+    left_blocks = {
+        normalize_surface(block)
+        for block in re.split(r"\n\s*\n", left)
+        if len(normalize_surface(block)) >= 24
+    }
+    right_blocks = {
+        normalize_surface(block)
+        for block in re.split(r"\n\s*\n", right)
+        if len(normalize_surface(block)) >= 24
+    }
+    return bool(left_blocks & right_blocks)
+
+
+def _merge_evidence_content(mention: str, semantic: str) -> str:
+    mention_key = normalize_surface(mention)
+    semantic_key = normalize_surface(semantic)
+    if semantic_key in mention_key:
+        return mention.strip()
+    if mention_key in semantic_key:
+        return semantic.strip()
+    blocks = [
+        block.strip()
+        for block in re.split(r"\n\s*\n", f"{mention}\n\n{semantic}")
+        if block.strip()
+    ]
+    unique: list[str] = []
+    seen: set[str] = set()
+    for block in blocks:
+        key = normalize_surface(block)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(block)
+    return "\n\n".join(unique)
+
+
+def _min_optional(left: int | None, right: int | None) -> int | None:
+    values = [value for value in (left, right) if value is not None]
+    return min(values) if values else None
+
+
+def _max_optional(left: int | None, right: int | None) -> int | None:
+    values = [value for value in (left, right) if value is not None]
+    return max(values) if values else None
 
 
 DEFAULT_SOFT_TEMPLATE = """\
@@ -646,7 +800,7 @@ def normalize_generated_references(
     corrected = 0
     discarded = 0
 
-    def replace(match: re.Match[str]) -> str:
+    def replace_link(match: re.Match[str]) -> str:
         nonlocal corrected, discarded
         label = match.group(1)
         raw_target = match.group(2).strip()
@@ -659,7 +813,7 @@ def normalize_generated_references(
         discarded += 1
         return label
 
-    return _MARKDOWN_LINK_RE.sub(replace, generated_markdown), corrected, discarded
+    return _MARKDOWN_LINK_RE.sub(replace_link, generated_markdown), corrected, discarded
 
 
 def preserve_existing_references(

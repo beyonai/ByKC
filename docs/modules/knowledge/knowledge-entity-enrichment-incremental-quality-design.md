@@ -611,3 +611,34 @@ Low reasoning 将该样本的 enrich 耗时降低约 84.3%，reasoning tokens �
 | LLM 质量门 | 不通过 | 不通过 |
 
 T1 的主要缺陷是未充分展开已发现的“记忆信息的检索与调用” Topic，coverage=3。T2 的 retention=5，证明完整旧稿与旧引用保留约束生效；但新内容以新章节直接追加，没有与原有记忆架构融合，synthesis=3、integration=2。因此该场景真实暴露了下一步需要优化的通用问题：首次生成的 Topic 覆盖约束，以及增量生成的原结构就地编辑约束。
+
+## 12. Topic × Source 证据配额与跨召回合并
+
+不再将全部关系原文从文章开头顺序拼接到统一字符上限。对每个 Topic 分别执行语义查询，关系原文也分别选取实体总览和 Topic 匹配章节。每个 Evidence fragment 携带 `matched_topics`，最终预算组为：
+
+```text
+(normalized Topic, sourceFileId, mention | semantic)
+```
+
+选择分两轮：
+
+1. 按预算组稳定顺序选取，每组保留最低字符配额；
+2. 所有已出现组获得保底后，再按 mention、显式关系、语义分数和稳定来源顺序填充剩余总预算。
+
+默认每组目标最低配额为 1,200 字符。当组数过多时，实际配额自动降为 `totalBudget / groupCount`，确保不突破 50k 总预算。mention 和 semantic 即使来自同一文档，也是独立预算组，避免大段 mention 证据吃完该来源的全部配额。
+
+在计算配额前，先按来源合并 mention 与 semantic 交集：
+
+- 文本相同、一方包含另一方，或共享实质段落时，语义片段合并进 mention fragment；
+- 合并结果保留 `direct_mention=true`，同时保留最高 `semantic_score` 和所有 Topic 归属；
+- 该 fragment 可同时满足 mention 与 semantic 两个保底组，但在总字符预算中只计一次；
+- 同一语义 chunk 同时命中多个 Topic 时，只保留一份内容，`matched_topics` 取并集。
+
+评测输入存档增加 `semanticSearchQueryCount`、`topicSourceQuotaGroups`、mention/semantic fragment 数和交集合并数，便于检查每个 Topic 和来源是否真正获得证据。
+
+Topic 原文定位同时兼容标准 Markdown 标题和微信转 Markdown 后丢失 `#` 的普通文本标题：
+
+- 有 Markdown 标题命中时，优先专题标题章节，不使用前言中偶然出现 Topic 的章节；
+- 长章节中优先以 Topic 开头的短独立行作为专题锚点；
+- Topic 模式只用 Topic 定位，不让高频 Entity 名称抢占窗口锚点；
+- 锚点必须位于拆分后的首个 evidence fragment，避免保底配额只拿到专题前的背景文本。

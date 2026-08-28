@@ -6,15 +6,19 @@ from datetime import UTC, datetime
 
 import pytest
 
+from by_qa.knowledge_base.repositories.knowledge_entity_asset_repository import (
+    KnowledgeEntityAssetRepository,
+)
 from by_qa.knowledge_base.repositories.knowledge_entity_repository import (
     KnowledgeEntityRepository,
 )
 
 
 class FakeCursor:
-    def __init__(self, *, fetchall_results=None):
+    def __init__(self, *, fetchall_results=None, fetchone_results=None):
         self.executed: list[tuple[str, dict | None]] = []
         self._fetchall_results = list(fetchall_results or [])
+        self._fetchone_results = list(fetchone_results or [])
 
     async def execute(self, sql, params=None):
         self.executed.append((sql, params))
@@ -23,6 +27,41 @@ class FakeCursor:
         if self._fetchall_results:
             return self._fetchall_results.pop(0)
         return []
+
+    async def fetchone(self):
+        if self._fetchone_results:
+            return self._fetchone_results.pop(0)
+        return None
+
+
+async def test_list_topics_can_filter_by_incremental_watermark():
+    watermark = datetime(2026, 8, 27, 10, 0, tzinfo=UTC)
+    cursor = FakeCursor(
+        fetchall_results=[
+            [
+                {
+                    "kid": 41,
+                    "entity_name": "New topic",
+                    "normalized_entity_name": "new topic",
+                    "created_at": watermark,
+                    "updated_at": watermark,
+                }
+            ]
+        ]
+    )
+    repository = KnowledgeEntityAssetRepository("knowledge_entity_embedding_test")
+
+    rows = await repository.list_topics_for_entity_file(
+        cursor,
+        knowledge_base_id=1,
+        fs_entry_id=30,
+        updated_after=watermark,
+    )
+
+    sql, params = cursor.executed[0]
+    assert "topic.updated_at > %(updated_after)s" in sql
+    assert params["updated_after"] == watermark
+    assert rows[0]["entity_name"] == "New topic"
 
 
 def file_row(
@@ -359,6 +398,29 @@ async def test_get_files_by_ids_batches_metadata_and_empty_ids_skip_sql():
     assert "fe.kid = ANY(%(fs_entry_ids)s)" in sql
     assert params["fs_entry_ids"] == [20, 10]
     assert "ORDER BY fe.kid ASC" in sql
+
+
+async def test_latest_successful_enrich_watermark_is_scoped_before_current_task():
+    finished_at = datetime(2026, 8, 27, 10, 0, tzinfo=UTC)
+    cursor = FakeCursor(fetchone_results=[{"finished_at": finished_at}])
+
+    result = await KnowledgeEntityRepository().get_latest_successful_enrich_finished_at(
+        cursor,
+        knowledge_base_id=7,
+        fs_entry_id=20,
+        before_task_id=99,
+    )
+
+    assert result == finished_at
+    sql, params = cursor.executed[0]
+    assert "task_type = 'DOCUMENT_ENRICH'" in sql
+    assert "status = 'succeeded'" in sql
+    assert "kid < %(before_task_id)s" in sql
+    assert params == {
+        "knowledge_base_id": 7,
+        "fs_entry_id": 20,
+        "before_task_id": 99,
+    }
 
 
 @pytest.mark.parametrize("path", ["", "   "])

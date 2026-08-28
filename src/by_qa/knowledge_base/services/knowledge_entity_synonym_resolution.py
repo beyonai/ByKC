@@ -7,6 +7,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
@@ -371,6 +372,31 @@ class KnowledgeEntityAssetService:
         except Exception:
             await connection.rollback()
             raise
+        finally:
+            await connection.close()
+
+    async def list_topics_for_entity_file(
+        self,
+        *,
+        knowledge_base_id: int,
+        fs_entry_id: int,
+        updated_after: datetime | None = None,
+    ) -> tuple[str, ...]:
+        """Return Topic names in the requested enrichment time window."""
+
+        connection = await self._connection_factory()
+        try:
+            rows = await self._repository.list_topics_for_entity_file(
+                connection.cursor(),
+                knowledge_base_id=knowledge_base_id,
+                fs_entry_id=fs_entry_id,
+                updated_after=updated_after,
+            )
+            return tuple(
+                str(row["entity_name"]).strip()
+                for row in rows
+                if str(row.get("entity_name") or "").strip()
+            )
         finally:
             await connection.close()
 

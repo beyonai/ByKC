@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 
 _SAFE_TABLE_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -387,6 +388,53 @@ class KnowledgeEntityAssetRepository:
         if created is None:
             raise ValueError("Topic owner must be a canonical Entity in the same KB")
         return dict(created)
+
+    async def list_topics_for_entity_file(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        fs_entry_id: int,
+        updated_after: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        """List an Entity's Topics in stable discovery order.
+
+        ``updated_after`` limits incremental enrichment to Topics created or
+        materially updated after the previous successful enrichment watermark.
+        """
+
+        topic_time_filter = ""
+        params: dict[str, Any] = {
+            "knowledge_base_id": knowledge_base_id,
+            "fs_entry_id": fs_entry_id,
+        }
+        if updated_after is not None:
+            topic_time_filter = "AND topic.updated_at > %(updated_after)s"
+            params["updated_after"] = updated_after
+
+        await cursor.execute(
+            f"""
+            SELECT topic.kid,
+                   topic.entity_name,
+                   topic.normalized_entity_name,
+                   topic.created_at,
+                   topic.updated_at
+            FROM knowledge_entity owner
+            JOIN knowledge_entity topic
+              ON topic.subject_entity_id = owner.kid
+             AND topic.knowledge_base_id = owner.knowledge_base_id
+             AND topic.object_kind = 'TOPIC'
+             AND topic.name_role = 'canonical'
+            WHERE owner.knowledge_base_id = %(knowledge_base_id)s
+              AND owner.fs_entry_id = %(fs_entry_id)s
+              AND owner.object_kind = 'ENTITY'
+              AND owner.name_role = 'canonical'
+              {topic_time_filter}
+            ORDER BY topic.kid
+            """,
+            params,
+        )
+        return [dict(row) for row in await cursor.fetchall()]
 
     async def list_direct_children(
         self, cursor: Any, *, knowledge_base_id: int, subject_entity_id: int

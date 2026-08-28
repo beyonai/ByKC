@@ -22,7 +22,10 @@ from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
     KnowledgeEntityEnricher,
     KnowledgeEntityIdentity,
     RelationTarget,
+    format_source_reference,
+    normalize_generated_references,
     organize_evidence,
+    preserve_existing_references,
 )
 from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
     IdentityScope,
@@ -31,6 +34,7 @@ from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
     OpenAICompatibleKnowledgeEntityLLM,
     RelationCode,
     build_discovery_llm,
+    build_enrichment_llm,
     normalize_surface,
     normalize_text_with_offsets,
 )
@@ -450,10 +454,167 @@ async def test_enrich_uses_soft_template_pins_identity_and_discards_bad_relation
         "soft template section missing" in warning for warning in result.warnings
     )
     assert llm.calls[0][1] is True
-    assert "template is writing guidance" in llm.calls[0][0][0]["content"]
+    assert "模板是写作建议" in llm.calls[0][0][0]["content"]
     assert "sourceFileId=100" in llm.calls[0][0][1]["content"]
     assert "[osot.md](/papers/osot.md)" in llm.calls[0][0][1]["content"]
-    assert "exact Markdown source reference" in llm.calls[0][0][0]["content"]
+    assert "必须原样使用以下 Markdown" in llm.calls[0][0][1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_enrich_prompt_groups_fragments_by_source_with_one_reference() -> None:
+    llm = _FakeLLM(
+        json.dumps(
+            {
+                "markdown": "# Beta\n\n## 核心事实\n\nSupported fact.",
+                "relations": [],
+                "warnings": [],
+            }
+        )
+    )
+
+    await KnowledgeEntityEnricher(llm).enrich(
+        KnowledgeEntityIdentity(1, 1, "Beta"),
+        [
+            EvidenceFragment(2, "/same.md", "First fragment."),
+            EvidenceFragment(2, "/same.md", "Second fragment."),
+            EvidenceFragment(3, "/other.md", "Third fragment."),
+        ],
+    )
+
+    user_prompt = llm.calls[0][0][1]["content"]
+    assert user_prompt.count("[same.md](/same.md)") == 1
+    assert user_prompt.count("[other.md](/other.md)") == 1
+    assert "[S1] sourceFileId=2" in user_prompt
+    assert "[F1]" in user_prompt
+    assert "[F2]" in user_prompt
+
+
+def test_preserve_existing_references_moves_omitted_links_to_reference_section():
+    existing = (
+        "# Beta\n\nOld claim [source A](/docs/a.md).\n\n"
+        "Another claim [source B](/docs/b.md)."
+    )
+    generated = "# Beta\n\nUpdated claim [source A](/docs/a.md).\n"
+
+    merged, restored = preserve_existing_references(existing, generated)
+
+    assert restored == 1
+    assert merged.count("/docs/a.md") == 1
+    assert "## 参考资料\n\n- [source B](/docs/b.md)" in merged
+
+
+def test_preserve_existing_references_treats_encoded_path_as_same_link():
+    existing = "# Beta\n\nOld claim [source](/大厂文章/来源.md)."
+    generated = "# Beta\n\nUpdated claim [source](/%E5%A4%A7%E5%8E%82%E6%96%87%E7%AB%A0/%E6%9D%A5%E6%BA%90.md).\n"
+
+    merged, restored = preserve_existing_references(existing, generated)
+
+    assert restored == 0
+    assert merged == generated
+
+
+def test_format_source_reference_uses_parent_title_for_generic_article_name():
+    reference = format_source_reference("/大厂文章/有意义的文章标题/article.md")
+
+    assert reference.startswith("[有意义的文章标题](")
+    assert reference.endswith("/article.md)")
+
+
+def test_generated_references_repair_single_source_and_remove_unknown_external():
+    generated = (
+        "# Entity\n\n[wrong](/invented/path.md) "
+        "[external](https://invented.example/path)"
+    )
+
+    normalized, corrected, discarded = normalize_generated_references(
+        generated,
+        existing_markdown="# Entity",
+        evidence=[EvidenceFragment(2, "/docs/source.md", "Supported fact.")],
+    )
+
+    assert corrected == 1
+    assert discarded == 1
+    assert "[wrong](/docs/source.md)" in normalized
+    assert "[external]" not in normalized
+    assert "external" in normalized
+    assert "invented.example" not in normalized
+
+
+@pytest.mark.asyncio
+async def test_enrich_prompt_uses_topics_as_clustered_coverage_guidance():
+    llm = _FakeLLM(
+        json.dumps(
+            {
+                "markdown": "# Beta\n\n## 核心事实\n\nSupported fact.",
+                "relations": [],
+                "warnings": [],
+            }
+        )
+    )
+
+    await KnowledgeEntityEnricher(llm).enrich(
+        KnowledgeEntityIdentity(1, 1, "Beta"),
+        [EvidenceFragment(2, "/source.md", "Supported fact.")],
+        topics=("Architecture", "Retrieval", "Deployment"),
+    )
+
+    system_prompt = llm.calls[0][0][0]["content"]
+    user_prompt = llm.calls[0][0][1]["content"]
+    normalized_prompt = " ".join(system_prompt.split())
+    assert "可追溯不等于每段都要添加引用" in normalized_prompt
+    assert "连续段落或列表项末尾" in normalized_prompt
+    assert "应合并重叠 Topic" in user_prompt
+    assert "- Architecture\n- Retrieval\n- Deployment" in user_prompt
+
+
+@pytest.mark.asyncio
+async def test_incremental_prompt_treats_new_evidence_as_non_exhaustive_delta():
+    llm = _FakeLLM(
+        json.dumps(
+            {
+                "markdown": "# Beta\n\n## 核心事实\n\nOld and new facts.",
+                "relations": [],
+                "warnings": [],
+            }
+        )
+    )
+
+    await KnowledgeEntityEnricher(llm).enrich(
+        KnowledgeEntityIdentity(1, 1, "Beta"),
+        [EvidenceFragment(2, "/new.md", "New fact.")],
+        existing_markdown="# Beta\n\n## 核心事实\n\nOld fact [old](/old.md).",
+        incremental=True,
+    )
+
+    user_prompt = " ".join(llm.calls[0][0][1]["content"].split())
+    assert "更新模式：incremental（增量）" in user_prompt
+    assert "新证据只是本轮增量，不是完整替代语料" in user_prompt
+    assert "绝不是删除它的理由" in user_prompt
+
+
+@pytest.mark.asyncio
+async def test_enrich_prompt_keeps_complete_existing_markdown_without_truncation():
+    llm = _FakeLLM(
+        json.dumps(
+            {
+                "markdown": "# Beta\n\n## 核心事实\n\nUpdated.",
+                "relations": [],
+                "warnings": [],
+            }
+        )
+    )
+    final_marker = "OLD-DOCUMENT-FINAL-MARKER"
+    existing = f"# Beta\n\n{'old fact. ' * 8_000}\n\n{final_marker}"
+
+    await KnowledgeEntityEnricher(llm).enrich(
+        KnowledgeEntityIdentity(1, 1, "Beta"),
+        [EvidenceFragment(2, "/new.md", "New fact.")],
+        existing_markdown=existing,
+    )
+
+    user_prompt = llm.calls[0][0][1]["content"]
+    assert existing in user_prompt
+    assert final_marker in user_prompt
 
 
 @pytest.mark.asyncio
@@ -565,6 +726,33 @@ async def test_discovery_client_forces_low_reasoning_over_provider_defaults() ->
 
     identity = json.loads(
         await build_discovery_llm(provider=_Provider()).cache_identity()
+    )
+
+    assert identity["temperature"] == 0.0
+    assert identity["extraBody"] == {
+        "thinking": {"type": "enabled"},
+        "reasoning_effort": "low",
+    }
+
+
+@pytest.mark.asyncio
+async def test_enrichment_client_forces_low_reasoning_over_provider_defaults() -> None:
+    class _Provider:
+        async def get_config(self, model_type: str | LLMModelProfile) -> ModelConfig:
+            del model_type
+            return ModelConfig(
+                model_name="knowledge-model",
+                temperature=0.8,
+                base_url="https://llm.example/v1",
+                api_key="",
+                extra_body={
+                    "thinking": {"type": "disabled"},
+                    "reasoning_effort": "high",
+                },
+            )
+
+    identity = json.loads(
+        await build_enrichment_llm(provider=_Provider()).cache_identity()
     )
 
     assert identity["temperature"] == 0.0

@@ -14,6 +14,7 @@ import time
 import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from typing import Any
 
 import yaml
@@ -36,6 +37,7 @@ from by_qa.knowledge_base.services.knowledge_entity_discovery import (
     DISCOVERY_PROTOCOL_VERSION,
     DiscoveredEntity,
     KnowledgeEntityDiscovery,
+    build_discovery_context,
 )
 from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
     EvidenceFragment,
@@ -58,7 +60,9 @@ MAX_RECENT_RELATIONS = 50
 MAX_RELATION_DOCUMENTS = 3
 MAX_MATCHED_SECTIONS_PER_DOCUMENT = 6
 MAX_RELATION_DOCUMENT_CHARS = 5_000
+MAX_RELATION_FRAGMENT_CHARS = 2_000
 MAX_SEARCH_QUERY_CHARS = 1_000
+MAX_TOPICS_PER_SEARCH_QUERY = 6
 MAX_SEMANTIC_FRAGMENTS_PER_DOCUMENT = 25
 MIN_SEMANTIC_SCORE_RATIO = 0.7
 STRONG_SEMANTIC_SCORE_RATIO = 0.97
@@ -369,6 +373,14 @@ class KnowledgeEntityTaskWorker:
         identity = self._validate_entity_identity(
             entity, context, current_surfaces=current_surfaces
         )
+        previous_enrich_at = await self._load_previous_enrich_at(context, identity)
+        incremental = (
+            entity.get("entity_enriched") is True and previous_enrich_at is not None
+        )
+        topics = await self._load_entity_topics(
+            identity,
+            updated_after=previous_enrich_at if incremental else None,
+        )
         existing_markdown = await self._read_markdown(entity)
         existing_markdown = (
             await self._search.resolve_markdown_texts(
@@ -380,7 +392,38 @@ class KnowledgeEntityTaskWorker:
             context,
             identity=identity,
             existing_markdown=existing_markdown,
+            topics=topics,
+            updated_after=previous_enrich_at if incremental else None,
         )
+        if incremental and not evidence:
+            logger.info(
+                "knowledge_entity_enrich skipped: reason=no_new_evidence "
+                "batch_id=%s task_id=%s kb=%s source_file_id=%s file_path=%s "
+                "task_type=%s previous_enrich_at=%s topic_count=%s",
+                *self._context_log_args(context),
+                previous_enrich_at.isoformat(),
+                len(topics),
+            )
+            return KnowledgeEntityTaskExecutionResult(
+                result_payload={
+                    "taskType": "DOCUMENT_ENRICH",
+                    "sourceFileId": identity.file_id,
+                    "actions": [
+                        {
+                            "action": "SKIPPED_NO_NEW_EVIDENCE",
+                            "filePath": context.file_path,
+                            "relationCount": 0,
+                        }
+                    ],
+                    "incremental": True,
+                    "previousEnrichAt": previous_enrich_at.isoformat(),
+                    "topicCount": len(topics),
+                    "evidenceFragmentCount": 0,
+                    "warnings": [],
+                },
+                target_file_ids=(),
+                index_version=None,
+            )
         relation_targets = tuple(
             RelationTarget(
                 file_id=int(item["kid"]), entity_name=str(item["entity_name"])
@@ -403,6 +446,8 @@ class KnowledgeEntityTaskWorker:
             evidence,
             existing_markdown=existing_markdown,
             relation_targets=relation_targets,
+            topics=topics,
+            incremental=incremental,
             log_context=self._intelligence_log_context(context),
         )
         allowed_target_ids = {target.file_id for target in relation_targets}
@@ -502,6 +547,11 @@ class KnowledgeEntityTaskWorker:
                 "placeholderCount": enriched.placeholder_count,
                 "discardedRelationCount": enriched.discarded_relation_count,
                 "evidenceFragmentCount": len(enriched.evidence.fragments),
+                "topicCount": len(topics),
+                "incremental": incremental,
+                "previousEnrichAt": (
+                    previous_enrich_at.isoformat() if previous_enrich_at else None
+                ),
                 "attempts": enriched.attempts,
             },
             target_file_ids=target_ids,
@@ -529,6 +579,52 @@ class KnowledgeEntityTaskWorker:
             return dict(entity), [dict(item) for item in surfaces]
         finally:
             await connection.close()
+
+    async def _load_entity_topics(
+        self,
+        identity: KnowledgeEntityIdentity,
+        *,
+        updated_after: datetime | None = None,
+    ) -> tuple[str, ...]:
+        loader = getattr(self._asset_service, "list_topics_for_entity_file", None)
+        if loader is None:
+            return ()
+        topics = await loader(
+            knowledge_base_id=identity.knowledge_base_id,
+            fs_entry_id=identity.file_id,
+            updated_after=updated_after,
+        )
+        return tuple(
+            dict.fromkeys(str(topic).strip() for topic in topics if str(topic).strip())
+        )
+
+    async def _load_previous_enrich_at(
+        self,
+        context: KnowledgeEntityTaskContext | Any,
+        identity: KnowledgeEntityIdentity,
+    ) -> datetime | None:
+        loader = getattr(
+            self._entity_repository,
+            "get_latest_successful_enrich_finished_at",
+            None,
+        )
+        if loader is None:
+            return None
+        connection = await self._connection_factory()
+        try:
+            value = await loader(
+                connection.cursor(),
+                knowledge_base_id=identity.knowledge_base_id,
+                fs_entry_id=identity.file_id,
+                before_task_id=int(context.task_id),
+            )
+        finally:
+            await connection.close()
+        if value is None:
+            return None
+        if not isinstance(value, datetime) or value.tzinfo is None:
+            raise ValueError("previous enrich finished_at must be timezone-aware")
+        return value
 
     async def _read_markdown(self, row: Mapping[str, Any]) -> str:
         markdown_namespace = row.get("markdown_bucket_name")
@@ -775,6 +871,8 @@ class KnowledgeEntityTaskWorker:
         *,
         identity: KnowledgeEntityIdentity,
         existing_markdown: str,
+        topics: Sequence[str] = (),
+        updated_after: datetime | None = None,
     ) -> list[EvidenceFragment]:
         connection = await self._connection_factory()
         try:
@@ -792,6 +890,12 @@ class KnowledgeEntityTaskWorker:
             selected_relations: list[Mapping[str, Any]] = []
             selected_source_ids: set[int] = set()
             for relation in relations:
+                relation_created_at = relation.get("created_at")
+                if updated_after is not None and (
+                    not isinstance(relation_created_at, datetime)
+                    or relation_created_at <= updated_after
+                ):
+                    continue
                 source_id = int(relation["source_fs_entry_id"])
                 if source_id in selected_source_ids:
                     continue
@@ -831,39 +935,51 @@ class KnowledgeEntityTaskWorker:
             selected_content = self._select_entity_sections(
                 content,
                 names=(identity.entity_name, *identity.aliases),
+                topics=topics,
             )
             if not selected_content:
                 continue
-            fragments.append(
-                EvidenceFragment(
-                    document_file_id=file_id,
-                    document_path=str(row["file_path"]),
-                    content=selected_content,
-                    direct_mention=True,
-                    explicit_reference=True,
-                    relation_code=str(relation.get("relation_code") or "MENTIONS"),
+            for selected_fragment in self._split_relation_evidence(selected_content):
+                fragments.append(
+                    EvidenceFragment(
+                        document_file_id=file_id,
+                        document_path=str(row["file_path"]),
+                        content=selected_fragment,
+                        direct_mention=True,
+                        explicit_reference=True,
+                        relation_code=str(relation.get("relation_code") or "MENTIONS"),
+                    )
                 )
-            )
 
         params = context.request_params or {}
-        query = self._build_enrichment_search_query(
-            existing_markdown,
-            names=(identity.entity_name, *identity.aliases),
-        )
-        hits = await self._search.search(
-            SearchRequest(
-                query=query,
-                kb_code_list=[context.kb_code],
-                top_k=int(params.get("topK", params.get("top_k", 20))),
-                search_mode="mixedRecall",
-                where=self._enrichment_search_where(context.file_path),
+        names = (identity.entity_name, *identity.aliases)
+        topic_batches = [
+            topics[index : index + MAX_TOPICS_PER_SEARCH_QUERY]
+            for index in range(0, len(topics), MAX_TOPICS_PER_SEARCH_QUERY)
+        ] or [()]
+        grouped_hits: list[tuple[int, Any]] = []
+        for group_index, topic_batch in enumerate(topic_batches):
+            batch_hits = await self._search.search(
+                SearchRequest(
+                    query=self._build_enrichment_search_query(
+                        existing_markdown,
+                        names=names,
+                        topics=topic_batch,
+                    ),
+                    kb_code_list=[context.kb_code],
+                    top_k=int(params.get("topK", params.get("top_k", 20))),
+                    search_mode="mixedRecall",
+                    where=self._enrichment_search_where(
+                        context.file_path, updated_after=updated_after
+                    ),
+                )
             )
-        )
+            grouped_hits.extend((group_index, hit) for hit in batch_hits)
         search_connection = await self._connection_factory()
         try:
             cursor = search_connection.cursor()
-            semantic_candidates: list[tuple[Any, Mapping[str, Any]]] = []
-            for hit in hits:
+            semantic_candidates: list[tuple[int, Any, Mapping[str, Any]]] = []
+            for group_index, hit in grouped_hits:
                 kb_code = str(self._value(hit, "kb_code", "knCode"))
                 file_path = str(self._value(hit, "file_path", "filePath"))
                 if kb_code != str(context.kb_code) or file_path == str(
@@ -879,26 +995,42 @@ class KnowledgeEntityTaskWorker:
                     continue
                 if int(row["kid"]) == identity.file_id:
                     continue
+                row_updated_at = row.get("updated_at")
+                if updated_after is not None and (
+                    not isinstance(row_updated_at, datetime)
+                    or row_updated_at <= updated_after
+                ):
+                    continue
                 if (
                     row.get("document_kind") == "knowledgeEntity"
                     and row.get("entity_enriched") is not True
                 ):
                     continue
-                semantic_candidates.append((hit, row))
+                semantic_candidates.append((group_index, hit, row))
 
-            best_score = max(
-                (
-                    float(self._value(hit, "score") or 0.0)
-                    for hit, _ in semantic_candidates
-                ),
-                default=0.0,
-            )
+            best_scores: dict[int, float] = {}
+            for group_index, hit, _ in semantic_candidates:
+                best_scores[group_index] = max(
+                    best_scores.get(group_index, 0.0),
+                    float(self._value(hit, "score") or 0.0),
+                )
             document_counts: dict[int, int] = {}
             seen_content: set[str] = set()
-            for hit, row in semantic_candidates:
+            for group_index, hit, row in semantic_candidates:
                 content = str(self._value(hit, "chunk_text", "chunkText")).strip()
                 score = float(self._value(hit, "score") or 0.0)
+                best_score = best_scores.get(group_index, 0.0)
                 file_id = int(row["kid"])
+                names_entity_in_scope = self._text_mentions_entity(
+                    content, names=(identity.entity_name, *identity.aliases)
+                )
+                source_entity_in_scope = (
+                    file_id in selected_source_ids
+                    or self._text_mentions_entity(
+                        str(row["file_path"]),
+                        names=(identity.entity_name, *identity.aliases),
+                    )
+                )
                 normalized_content = normalize_surface(content)
                 if (
                     not content
@@ -911,10 +1043,9 @@ class KnowledgeEntityTaskWorker:
                     or (
                         best_score > 0
                         and score < best_score * STRONG_SEMANTIC_SCORE_RATIO
-                        and not self._text_mentions_entity(
-                            content, names=(identity.entity_name, *identity.aliases)
-                        )
+                        and not names_entity_in_scope
                     )
+                    or (not names_entity_in_scope and not source_entity_in_scope)
                     or self._is_stub_evidence(
                         content, names=(identity.entity_name, *identity.aliases)
                     )
@@ -940,31 +1071,41 @@ class KnowledgeEntityTaskWorker:
         return fragments
 
     @staticmethod
-    def _enrichment_search_where(file_path: str) -> dict[str, Any]:
-        return {
-            "and": [
-                {"ne": {"fieldName": "filePath", "value": str(file_path)}},
-                {
-                    "or": [
-                        {
-                            "ne": {
-                                "fieldName": "documentKind",
-                                "value": "knowledgeEntity",
-                            }
-                        },
-                        {
-                            "eq": {
-                                "fieldName": ENTITY_ENRICHED_PROPERTY,
-                                "value": True,
-                            }
-                        },
-                    ]
-                },
-            ]
-        }
+    def _enrichment_search_where(
+        file_path: str, *, updated_after: datetime | None = None
+    ) -> dict[str, Any]:
+        conditions: list[dict[str, Any]] = [
+            {"ne": {"fieldName": "filePath", "value": str(file_path)}},
+            {
+                "or": [
+                    {
+                        "ne": {
+                            "fieldName": "documentKind",
+                            "value": "knowledgeEntity",
+                        }
+                    },
+                    {
+                        "eq": {
+                            "fieldName": ENTITY_ENRICHED_PROPERTY,
+                            "value": True,
+                        }
+                    },
+                ]
+            },
+        ]
+        if updated_after is not None:
+            normalized = (
+                updated_after.astimezone(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z")
+            )
+            conditions.append({"gt": {"fieldName": "updatedAt", "value": normalized}})
+        return {"and": conditions}
 
     @staticmethod
-    def _build_enrichment_search_query(content: str, *, names: Sequence[str]) -> str:
+    def _build_enrichment_search_query(
+        content: str, *, names: Sequence[str], topics: Sequence[str] = ()
+    ) -> str:
         body = re.sub(
             r"\A---[ \t]*\n.*?\n---[ \t]*(?:\n|\Z)",
             "",
@@ -977,7 +1118,17 @@ class KnowledgeEntityTaskWorker:
             for line in body.splitlines()
             if line.strip() and not line.lstrip().startswith("#")
         ]
-        parts = [*(name.strip() for name in names if name.strip()), *factual_lines]
+        parts = [
+            *(name.strip() for name in names if name.strip()),
+            *(
+                f"{name.strip()} {topic.strip()}"
+                for topic in topics
+                if topic.strip()
+                for name in names
+                if name.strip()
+            ),
+            *factual_lines,
+        ]
         return "\n".join(dict.fromkeys(parts))[:MAX_SEARCH_QUERY_CHARS]
 
     @staticmethod
@@ -1011,14 +1162,17 @@ class KnowledgeEntityTaskWorker:
             return None
 
     @staticmethod
-    def _select_entity_sections(content: str, *, names: Sequence[str]) -> str:
-        """Keep bounded complete Markdown sections that mention the entity."""
+    def _select_entity_sections(
+        content: str,
+        *,
+        names: Sequence[str],
+        topics: Sequence[str] = (),
+    ) -> str:
+        """Keep Entity-scoped source context, with a deterministic fallback."""
 
         normalized_names = tuple(
             normalize_surface(name) for name in names if normalize_surface(name)
         )
-        if not normalized_names:
-            return ""
         body = re.sub(
             r"\A---[ \t]*\n.*?\n---[ \t]*(?:\n|\Z)",
             "",
@@ -1031,21 +1185,95 @@ class KnowledgeEntityTaskWorker:
             for section in re.split(r"(?=^#{1,6}\s)", body, flags=re.MULTILINE)
             if section.strip()
         ]
+        normalized_topics = tuple(
+            normalize_surface(topic) for topic in topics if normalize_surface(topic)
+        )
+
+        def matching_sections(terms: Sequence[str]) -> list[str]:
+            return [
+                section
+                for section in sections
+                if any(term in normalize_surface(section) for term in terms)
+            ]
+
+        candidate_sections = matching_sections(normalized_names)
+        if not candidate_sections:
+            candidate_sections = matching_sections(normalized_topics)
+        if not candidate_sections:
+            discovery_context = build_discovery_context(body)
+            candidate_sections = [
+                reference.content for reference in discovery_context.source_references
+            ]
+
         matches: list[str] = []
         total_chars = 0
-        for section in sections:
-            normalized_section = normalize_surface(section)
-            if not any(name in normalized_section for name in normalized_names):
-                continue
+        for section in candidate_sections:
             remaining = MAX_RELATION_DOCUMENT_CHARS - total_chars
             if remaining <= 0:
                 break
-            selected = section[:remaining]
+            selected = KnowledgeEntityTaskWorker._bounded_context_around_terms(
+                section,
+                terms=(*names, *topics),
+                limit=remaining,
+            )
             matches.append(selected)
             total_chars += len(selected)
             if len(matches) >= MAX_MATCHED_SECTIONS_PER_DOCUMENT:
                 break
         return "\n\n".join(matches)
+
+    @staticmethod
+    def _bounded_context_around_terms(
+        content: str, *, terms: Sequence[str], limit: int
+    ) -> str:
+        """Keep a long source section centered on its first Entity/Topic mention."""
+
+        if len(content) <= limit:
+            return content
+        folded = content.casefold()
+        positions = [
+            position
+            for term in terms
+            if term.strip() and (position := folded.find(term.strip().casefold())) >= 0
+        ]
+        if not positions:
+            return content[:limit]
+        mention = min(positions)
+        start = max(0, mention - limit // 4)
+        end = min(len(content), start + limit)
+        start = max(0, end - limit)
+        return content[start:end]
+
+    @staticmethod
+    def _split_relation_evidence(content: str) -> tuple[str, ...]:
+        """Split selected source context without losing text to fragment limits."""
+
+        blocks = [
+            block.strip() for block in re.split(r"\n\s*\n", content) if block.strip()
+        ]
+        fragments: list[str] = []
+        current = ""
+        for block in blocks:
+            pending = block
+            while pending:
+                remaining = MAX_RELATION_FRAGMENT_CHARS - len(current)
+                if remaining <= 0:
+                    fragments.append(current)
+                    current = ""
+                    remaining = MAX_RELATION_FRAGMENT_CHARS
+                if len(pending) <= remaining:
+                    current = f"{current}\n\n{pending}".strip()
+                    pending = ""
+                    continue
+                if current:
+                    fragments.append(current)
+                    current = ""
+                    continue
+                fragments.append(pending[:MAX_RELATION_FRAGMENT_CHARS])
+                pending = pending[MAX_RELATION_FRAGMENT_CHARS:]
+        if current:
+            fragments.append(current)
+        return tuple(fragments)
 
     @staticmethod
     def _candidate_aliases(candidate: DiscoveredEntity) -> tuple[str, ...]:

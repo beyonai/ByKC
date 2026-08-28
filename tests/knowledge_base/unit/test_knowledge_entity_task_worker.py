@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +15,7 @@ from by_qa.knowledge_base.services.knowledge_entity_discovery import (
 )
 from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
     EnrichmentResult,
+    KnowledgeEntityIdentity,
     SemanticRelation,
     format_source_reference,
     organize_evidence,
@@ -105,6 +107,7 @@ def file_row(
     entity_type: str | None = None,
     entity_enriched: bool | None = None,
     checksum: str = "checksum-1",
+    updated_at: datetime | None = None,
 ) -> dict:
     return {
         "kid": file_id,
@@ -124,6 +127,7 @@ def file_row(
         "subject_file_id": subject_file_id,
         "entity_type": entity_type,
         "entity_enriched": entity_enriched,
+        "updated_at": updated_at or datetime(2026, 8, 27, tzinfo=UTC),
     }
 
 
@@ -131,6 +135,7 @@ class FakeEntityRepository:
     def __init__(self, rows: list[dict]) -> None:
         self.rows = {int(row["kid"]): row for row in rows}
         self.list_surface_calls = 0
+        self.previous_enrich_at: datetime | None = None
 
     async def get_file_with_metadata(
         self, cursor, *, knowledge_base_id: int, file_path: str
@@ -180,6 +185,10 @@ class FakeEntityRepository:
             if file_id in self.rows
             and int(self.rows[file_id]["knowledge_base_id"]) == knowledge_base_id
         ]
+
+    async def get_latest_successful_enrich_finished_at(self, cursor, **kwargs):
+        del cursor, kwargs
+        return self.previous_enrich_at
 
 
 class FakeStorage:
@@ -331,9 +340,11 @@ class FakeSearch:
 
 
 class FakeCreatedAssetService:
-    def __init__(self) -> None:
+    def __init__(self, topics: tuple[str, ...] = ()) -> None:
         self.attachments: list[dict] = []
         self.topic_upserts: list[dict] = []
+        self.topics = topics
+        self.topic_requests: list[dict] = []
 
     async def resolve_candidate(self, **kwargs):
         return SimpleNamespace(
@@ -354,6 +365,10 @@ class FakeCreatedAssetService:
         self.topic_upserts.append(kwargs)
         return []
 
+    async def list_topics_for_entity_file(self, **kwargs):
+        self.topic_requests.append(kwargs)
+        return self.topics
+
 
 class FakeEnricher:
     def __init__(self, relations=()) -> None:
@@ -362,6 +377,8 @@ class FakeEnricher:
         self.targets = ()
         self.log_context = None
         self.existing_markdown = ""
+        self.topics = ()
+        self.incremental = False
 
     async def enrich(
         self,
@@ -370,11 +387,15 @@ class FakeEnricher:
         *,
         existing_markdown,
         relation_targets,
+        topics=(),
+        incremental=False,
         log_context=None,
     ) -> EnrichmentResult:
         self.existing_markdown = existing_markdown
         self.evidence = list(evidence)
         self.targets = relation_targets
+        self.topics = tuple(topics)
+        self.incremental = incremental
         self.log_context = log_context
         bundle = organize_evidence(self.evidence, target_file_id=identity.file_id)
         if not bundle.fragments:
@@ -415,6 +436,7 @@ def make_worker(
     discovery = discovery or FakeDiscovery(())
     enricher = enricher or FakeEnricher()
     search = FakeSearch(search_hits)
+    asset_service = asset_service or object()
     worker = KnowledgeEntityTaskWorker(
         connection_factory=factory,
         knowledge_entity_repository=repository,
@@ -426,7 +448,7 @@ def make_worker(
         knowledge_item_search_service=search,
         knowledge_entity_discovery=discovery,
         knowledge_entity_enricher=enricher,
-        knowledge_entity_asset_service=asset_service or object(),
+        knowledge_entity_asset_service=asset_service,
     )
     return SimpleNamespace(
         worker=worker,
@@ -439,6 +461,7 @@ def make_worker(
         discovery=discovery,
         enricher=enricher,
         search=search,
+        asset_service=asset_service,
     )
 
 
@@ -896,6 +919,305 @@ async def test_enrich_uses_bounded_evidence_cas_and_replaces_only_enrich_relatio
     assert result.index_version is None
     assert result.result_payload["templateCoverage"] == 0.67
     assert result.result_payload["warnings"] == ["soft-template-warning"]
+
+
+@pytest.mark.asyncio
+async def test_reenrich_uses_topics_and_only_evidence_newer_than_previous_run():
+    watermark = datetime(2026, 8, 27, 10, 0, tzinfo=UTC)
+    entity = file_row(
+        30,
+        "/KnowledgeEntity/beta.md",
+        content_key="entity",
+        markdown_key="entity-md",
+        document_kind="knowledgeEntity",
+        entity_name="Beta",
+        entity_enriched=True,
+        checksum="before-enrich",
+    )
+    old_source = file_row(
+        10,
+        "/docs/old.md",
+        content_key="old",
+        updated_at=watermark - timedelta(minutes=1),
+    )
+    new_source = file_row(
+        11,
+        "/docs/new.md",
+        content_key="new",
+        updated_at=watermark + timedelta(minutes=1),
+    )
+    topics = tuple(f"Topic {index}" for index in range(13))
+    deps = make_worker(
+        rows=[entity, old_source, new_source],
+        objects={
+            ("original", "entity"): b"# Beta",
+            ("markdown", "entity-md"): b"# Beta\n\nOld baseline. [old](/docs/old.md)",
+            ("original", "old"): b"Old Beta evidence.",
+            ("original", "new"): b"New Beta evidence.",
+        },
+        search_hits=[
+            SimpleNamespace(
+                kb_code="1",
+                file_path="/docs/old.md",
+                chunk_text="Old Beta evidence.",
+                score=0.9,
+            ),
+            SimpleNamespace(
+                kb_code="1",
+                file_path="/docs/new.md",
+                chunk_text="New Beta evidence.",
+                score=0.95,
+            ),
+        ],
+        asset_service=FakeCreatedAssetService(topics),
+    )
+    deps.repository.previous_enrich_at = watermark
+    deps.references.incoming_relations = [
+        {
+            "source_fs_entry_id": 10,
+            "relation_code": "MENTIONS",
+            "created_at": watermark - timedelta(seconds=1),
+        },
+        {
+            "source_fs_entry_id": 11,
+            "relation_code": "MENTIONS",
+            "created_at": watermark + timedelta(seconds=1),
+        },
+    ]
+
+    result = await deps.worker.run_task(
+        KnowledgeEntityTaskContext(
+            task_id=602,
+            task_type="DOCUMENT_ENRICH",
+            kb_code="1",
+            knowledge_base_id=1,
+            source_file_id=30,
+            file_path="/KnowledgeEntity/beta.md",
+            input_checksum="before-enrich",
+        )
+    )
+
+    assert deps.enricher.topics == topics
+    assert deps.asset_service.topic_requests == [
+        {
+            "knowledge_base_id": 1,
+            "fs_entry_id": 30,
+            "updated_after": watermark,
+        }
+    ]
+    assert len(deps.search.requests) == 3
+    assert all(
+        len(
+            [
+                line
+                for line in request.query.splitlines()
+                if line.startswith("Beta Topic ")
+            ]
+        )
+        <= 6
+        for request in deps.search.requests
+    )
+    assert all(
+        request.where["and"][-1]
+        == {"gt": {"fieldName": "updatedAt", "value": "2026-08-27T10:00:00Z"}}
+        for request in deps.search.requests
+    )
+    assert {item.document_file_id for item in deps.enricher.evidence} == {11}
+    assert deps.enricher.incremental is True
+    assert result.result_payload["incremental"] is True
+    assert result.result_payload["topicCount"] == 13
+
+
+@pytest.mark.asyncio
+async def test_topic_query_batches_apply_score_thresholds_independently():
+    entity = file_row(
+        30,
+        "/KnowledgeEntity/beta.md",
+        content_key="entity",
+        markdown_key="entity-md",
+        document_kind="knowledgeEntity",
+        entity_name="Beta",
+        checksum="before-enrich",
+    )
+    first_source = file_row(10, "/docs/first.md", content_key="first")
+    second_source = file_row(11, "/docs/second.md", content_key="second")
+    deps = make_worker(
+        rows=[entity, first_source, second_source],
+        objects={
+            ("original", "entity"): b"# Beta",
+            ("markdown", "entity-md"): b"# Beta\n\nBaseline.",
+            ("original", "first"): b"First evidence.",
+            ("original", "second"): b"Second evidence.",
+        },
+        asset_service=FakeCreatedAssetService(
+            tuple(f"Topic {index}" for index in range(7))
+        ),
+    )
+
+    class PerBatchSearch(FakeSearch):
+        def __init__(self):
+            super().__init__()
+            self.batches = [
+                [
+                    SimpleNamespace(
+                        kb_code="1",
+                        file_path="/docs/first.md",
+                        chunk_text="First Beta evidence.",
+                        score=0.99,
+                    )
+                ],
+                [
+                    SimpleNamespace(
+                        kb_code="1",
+                        file_path="/docs/second.md",
+                        chunk_text="Second Beta evidence.",
+                        score=0.60,
+                    )
+                ],
+            ]
+
+        async def search(self, request):
+            self.requests.append(request)
+            return self.batches[len(self.requests) - 1]
+
+    deps.search = PerBatchSearch()
+    deps.worker._search = deps.search
+
+    await deps.worker.run_task(
+        KnowledgeEntityTaskContext(
+            task_id=604,
+            task_type="DOCUMENT_ENRICH",
+            kb_code="1",
+            knowledge_base_id=1,
+            source_file_id=30,
+            file_path="/KnowledgeEntity/beta.md",
+            input_checksum="before-enrich",
+        )
+    )
+
+    assert {item.document_file_id for item in deps.enricher.evidence} == {10, 11}
+
+
+def test_topic_search_query_scopes_each_topic_with_entity_name():
+    query = KnowledgeEntityTaskWorker._build_enrichment_search_query(
+        "# OpenClaw\n\nExisting fact.",
+        names=("OpenClaw", "Moltbot"),
+        topics=("上下文工程", "记忆架构"),
+    )
+
+    lines = query.splitlines()
+    assert "OpenClaw 上下文工程" in lines
+    assert "Moltbot 上下文工程" in lines
+    assert "OpenClaw 记忆架构" in lines
+    assert "上下文工程" not in lines
+
+
+@pytest.mark.asyncio
+async def test_topic_hit_without_entity_scope_is_not_used_as_evidence():
+    entity = file_row(
+        30,
+        "/KnowledgeEntity/OpenClaw.md",
+        content_key="entity",
+        markdown_key="entity-md",
+        document_kind="knowledgeEntity",
+        entity_name="OpenClaw",
+    )
+    hermes = file_row(10, "/docs/hermes.md", content_key="hermes")
+    deps = make_worker(
+        rows=[entity, hermes],
+        objects={
+            ("original", "entity"): b"# OpenClaw",
+            ("markdown", "entity-md"): b"# OpenClaw",
+            ("original", "hermes"): b"Hermes source",
+        },
+        search_hits=[
+            SimpleNamespace(
+                kb_code="1",
+                file_path="/docs/hermes.md",
+                chunk_text="上下文工程包括压缩、修剪与记忆召回。",
+                score=1.0,
+            )
+        ],
+        asset_service=FakeCreatedAssetService(("上下文工程",)),
+    )
+
+    evidence = await deps.worker._collect_evidence(
+        KnowledgeEntityTaskContext(
+            task_id=605,
+            task_type="DOCUMENT_ENRICH",
+            kb_code="1",
+            knowledge_base_id=1,
+            source_file_id=30,
+            file_path="/KnowledgeEntity/OpenClaw.md",
+        ),
+        identity=KnowledgeEntityIdentity(30, 1, "OpenClaw"),
+        existing_markdown="# OpenClaw",
+        topics=("上下文工程",),
+    )
+
+    assert evidence == []
+
+
+def test_relation_source_context_has_fallback_and_preserves_late_entity_mention():
+    no_literal_mention = (
+        "# 文章\n\n这是来自已确认发现关系的原文背景。\n\n"
+        "## 架构\n\n系统包含网关、工具和记忆模块。"
+    )
+    fallback = KnowledgeEntityTaskWorker._select_entity_sections(
+        no_literal_mention,
+        names=("OpenClaw",),
+    )
+    long_section = f"# 背景\n\n{'x' * 6_000} OpenClaw 的关键机制 {'y' * 2_000}"
+    matched = KnowledgeEntityTaskWorker._select_entity_sections(
+        long_section,
+        names=("OpenClaw",),
+    )
+
+    assert "已确认发现关系的原文背景" in fallback
+    assert "OpenClaw 的关键机制" in matched
+    fragments = KnowledgeEntityTaskWorker._split_relation_evidence(matched)
+    assert all(len(fragment) <= 2_000 for fragment in fragments)
+    assert "OpenClaw 的关键机制" in "".join(fragments)
+
+
+@pytest.mark.asyncio
+async def test_reenrich_without_new_evidence_keeps_existing_document_unchanged():
+    watermark = datetime(2026, 8, 27, 10, 0, tzinfo=UTC)
+    entity = file_row(
+        30,
+        "/KnowledgeEntity/beta.md",
+        content_key="entity",
+        markdown_key="entity-md",
+        document_kind="knowledgeEntity",
+        entity_name="Beta",
+        entity_enriched=True,
+        checksum="before-enrich",
+    )
+    deps = make_worker(
+        rows=[entity],
+        objects={
+            ("original", "entity"): b"# Beta",
+            ("markdown", "entity-md"): b"# Beta\n\nStable content. [old](/old.md)",
+        },
+        asset_service=FakeCreatedAssetService(("Stable topic",)),
+    )
+    deps.repository.previous_enrich_at = watermark
+
+    result = await deps.worker.run_task(
+        KnowledgeEntityTaskContext(
+            task_id=603,
+            task_type="DOCUMENT_ENRICH",
+            kb_code="1",
+            knowledge_base_id=1,
+            source_file_id=30,
+            file_path="/KnowledgeEntity/beta.md",
+            input_checksum="before-enrich",
+        )
+    )
+
+    assert deps.updater.requests == []
+    assert deps.ingestion.indexed_paths == []
+    assert result.result_payload["actions"][0]["action"] == "SKIPPED_NO_NEW_EVIDENCE"
 
 
 @pytest.mark.asyncio

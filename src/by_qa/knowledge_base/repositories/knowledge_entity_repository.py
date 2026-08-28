@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
+from datetime import datetime
 from typing import Any
 
 
@@ -126,6 +127,36 @@ class KnowledgeEntityRepository:
             },
         )
         return self._fold_file_rows(await cursor.fetchall())
+
+    async def get_latest_successful_enrich_finished_at(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        fs_entry_id: int,
+        before_task_id: int,
+    ) -> datetime | None:
+        """Return the previous completed enrich watermark for one Entity file."""
+
+        await cursor.execute(
+            """
+            SELECT MAX(finished_at) AS finished_at
+            FROM knowledge_semantic_processing_task
+            WHERE knowledge_base_id = %(knowledge_base_id)s
+              AND fs_entry_id = %(fs_entry_id)s
+              AND task_type = 'DOCUMENT_ENRICH'
+              AND status = 'succeeded'
+              AND kid < %(before_task_id)s
+              AND finished_at IS NOT NULL
+            """,
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "fs_entry_id": fs_entry_id,
+                "before_task_id": before_task_id,
+            },
+        )
+        row = await cursor.fetchone()
+        return row.get("finished_at") if row else None
 
     async def list_entity_surfaces(
         self,

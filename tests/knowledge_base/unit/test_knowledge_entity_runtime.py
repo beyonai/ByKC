@@ -84,7 +84,11 @@ async def test_build_knowledge_entity_processing_service_composes_real_worker(
     assert service.worker._discovery._llm._provider is provider
     assert service.worker._enricher._llm._provider is provider
     assert service.worker._discovery._llm._temperature == 0.0
-    assert service.worker._enricher._llm._temperature is None
+    assert service.worker._enricher._llm._temperature == 0.0
+    assert service.worker._enricher._llm._request_extra_body == {
+        "thinking": {"type": "enabled"},
+        "reasoning_effort": "low",
+    }
     assert calls[:2] == [
         ("get_config", LLMModelProfile.EMBEDDING),
         ("storage", settings, embedding_config),

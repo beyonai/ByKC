@@ -418,6 +418,26 @@ def build_discovery_llm(
     )
 
 
+def build_enrichment_llm(
+    *,
+    provider: ModelConfigProvider | None = None,
+    timeout: float = 300.0,
+    client_factory: Callable[..., Any] | None = None,
+) -> OpenAICompatibleKnowledgeEntityLLM:
+    """Build the production Enrich client with deterministic low reasoning."""
+
+    return OpenAICompatibleKnowledgeEntityLLM(
+        provider=provider,
+        temperature=0.0,
+        timeout=timeout,
+        client_factory=client_factory,
+        request_extra_body={
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": "low",
+        },
+    )
+
+
 async def _complete_strict_json(
     llm: KnowledgeEntityLLM,
     messages: Sequence[Mapping[str, str]],
@@ -556,6 +576,7 @@ __all__ = [
     "OpenAICompatibleKnowledgeEntityLLM",
     "RelationCode",
     "build_discovery_llm",
+    "build_enrichment_llm",
     "normalize_surface",
     "normalize_text_with_offsets",
 ]

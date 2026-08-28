@@ -92,8 +92,8 @@ from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
     KnowledgeEntityEnricher,
 )
 from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
-    OpenAICompatibleKnowledgeEntityLLM,
     build_discovery_llm,
+    build_enrichment_llm,
 )
 from by_qa.knowledge_base.services.knowledge_entity_processing_service import (
     KnowledgeEntityProcessingOrchestrator,
@@ -462,7 +462,9 @@ async def build_knowledge_entity_processing_service(
     # Discovery is an information-selection task. Its production model settings
     # are intentionally fixed and do not inherit a higher reasoning effort.
     discovery_llm = build_discovery_llm(provider=provider)
-    enrichment_llm = OpenAICompatibleKnowledgeEntityLLM(provider=provider)
+    # Entity pages are durable editorial artifacts. Keep generation deterministic
+    # and bounded to low reasoning instead of inheriting conversational defaults.
+    enrichment_llm = build_enrichment_llm(provider=provider)
     asset_service = KnowledgeEntityAssetService(
         connection_factory=connection_factory,
         knowledge_base_repository=knowledge_base_repository,

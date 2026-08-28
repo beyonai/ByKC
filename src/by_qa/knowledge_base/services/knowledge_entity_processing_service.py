@@ -56,7 +56,7 @@ from by_qa.knowledge_base.services.knowledge_entity_discovery import (
 )
 
 DISCOVERY_METHOD_VERSION = f"discovery/2.0+{DISCOVERY_PROMPT_HASH[:12]}"
-ENRICH_METHOD_VERSION = "enrich/1.0"
+ENRICH_METHOD_VERSION = "enrich/2.0"
 MAX_RECENT_RELATION_EVIDENCE = 3
 
 _TEXT_DOCUMENT_SUFFIXES = frozenset(

@@ -640,6 +640,31 @@ def test_quality_audit_requires_original_source_in_references_not_body() -> None
     assert audit.hard_original_reference_count == 1
 
 
+def test_quality_audit_does_not_treat_natural_inline_attribution_as_hard_citation():
+    evidence = organize_evidence(
+        [
+            EvidenceFragment(
+                7,
+                "/authorized.md",
+                "Beta 通过检索恢复记忆。",
+                direct_mention=True,
+                matched_topics=("记忆检索",),
+            )
+        ]
+    )
+
+    audit = audit_enriched_markdown(
+        "# Beta\n\n## 记忆检索\n\n"
+        "[来源作者](/authorized.md) 将这一行为描述为按需恢复，"
+        "Beta 据此实现记忆检索。\n\n"
+        "## 参考资料\n\n- [authorized](/authorized.md)",
+        claim_groups=build_evidence_claim_groups(evidence),
+    )
+
+    assert audit.untraceable_source_group_ids == ()
+    assert audit.hard_original_reference_count == 0
+
+
 def test_quality_audit_accepts_natural_chinese_reference_heading_variant() -> None:
     evidence = organize_evidence(
         [
@@ -821,6 +846,113 @@ def test_generated_references_repair_single_source_and_remove_unknown_external()
     assert "invented.example" not in normalized
 
 
+def test_generated_references_move_trailing_original_link_to_references() -> None:
+    generated = (
+        "# Beta\n\n## 核心事实\n\n"
+        "Beta 支持稳定检索。[source](/docs/source.md)\n\n"
+        "[source](/docs/source.md) 对该机制给出了完整示例。"
+    )
+
+    normalized, corrected, discarded = normalize_generated_references(
+        generated,
+        existing_markdown="# Beta",
+        evidence=[EvidenceFragment(2, "/docs/source.md", "Supported fact.")],
+        identity=KnowledgeEntityIdentity(1, 1, "Beta"),
+    )
+
+    assert corrected == 1
+    assert discarded == 0
+    assert "Beta 支持稳定检索。\n\n" in normalized
+    assert "[source](/docs/source.md) 对该机制给出了完整示例。" in normalized
+    assert normalized.endswith("## 参考资料\n\n- [source](/docs/source.md)\n")
+
+
+def test_generated_references_move_old_unrecalled_trailing_source_link() -> None:
+    existing = "# Beta\n\nOld fact.[old source](/docs/old.md)"
+    generated = "# Beta\n\n## 核心事实\n\nOld fact.[old source](/docs/old.md)"
+
+    normalized, corrected, discarded = normalize_generated_references(
+        generated,
+        existing_markdown=existing,
+        evidence=[EvidenceFragment(2, "/docs/new.md", "New fact.")],
+        identity=KnowledgeEntityIdentity(1, 1, "Beta"),
+    )
+
+    assert corrected == 1
+    assert discarded == 0
+    assert "Old fact.\n\n## 参考资料" in normalized
+    assert normalized.endswith("- [old source](/docs/old.md)\n")
+
+
+def test_generated_references_link_longest_recalled_entity_names_first() -> None:
+    generated = (
+        "# Beta\n\n## 相关实体\n\n"
+        "Microsoft Fabric IQ Ontology 可向 Microsoft Fabric 提供语义模型，"
+        "也常简称为 Fabric IQ。"
+    )
+    evidence = [
+        EvidenceFragment(
+            2,
+            "/KnowledgeEntity/Microsoft-Fabric-IQ-Ontology.md",
+            "Ontology evidence.",
+            document_kind="knowledgeEntity",
+            source_entity_name="Microsoft Fabric IQ Ontology",
+            source_entity_aliases=("Fabric IQ",),
+        ),
+        EvidenceFragment(
+            3,
+            "/KnowledgeEntity/Microsoft-Fabric.md",
+            "Fabric evidence.",
+            document_kind="knowledgeEntity",
+            source_entity_name="Microsoft Fabric",
+        ),
+    ]
+
+    normalized, corrected, discarded = normalize_generated_references(
+        generated,
+        existing_markdown="# Beta",
+        evidence=evidence,
+        identity=KnowledgeEntityIdentity(1, 1, "Beta"),
+    )
+
+    assert corrected == 2
+    assert discarded == 0
+    assert (
+        "[Microsoft Fabric IQ Ontology]"
+        "(/KnowledgeEntity/Microsoft-Fabric-IQ-Ontology.md)"
+    ) in normalized
+    assert "[Microsoft Fabric](/KnowledgeEntity/Microsoft-Fabric.md)" in normalized
+    assert "也常简称为 Fabric IQ" in normalized
+
+
+def test_generated_references_do_not_duplicate_existing_entity_link() -> None:
+    generated = (
+        "# Beta\n\n## 设计来源\n\n"
+        "Beta 受到 [GBrain](/KnowledgeEntity/GBrain.md) 启发，"
+        "后续仍可与 GBrain 对比。"
+    )
+
+    normalized, corrected, discarded = normalize_generated_references(
+        generated,
+        existing_markdown="# Beta",
+        evidence=[
+            EvidenceFragment(
+                2,
+                "/KnowledgeEntity/GBrain.md",
+                "GBrain evidence.",
+                document_kind="knowledgeEntity",
+                source_entity_name="Garry's Opinionated Agent Brain",
+                source_entity_aliases=("GBrain",),
+            )
+        ],
+        identity=KnowledgeEntityIdentity(1, 1, "Beta"),
+    )
+
+    assert corrected == 0
+    assert discarded == 0
+    assert normalized.count("](/KnowledgeEntity/GBrain.md)") == 1
+
+
 @pytest.mark.asyncio
 async def test_enrich_prompt_uses_topics_as_clustered_coverage_guidance():
     llm = _FakeLLM(
@@ -892,6 +1024,43 @@ async def test_knowledge_entity_source_is_linked_naturally_in_body():
     assert "EvidenceClaimGroup" not in user_prompt
     assert result.quality_audit.untraceable_source_group_ids == ()
     assert result.quality_audit.hard_original_reference_count == 0
+
+
+@pytest.mark.asyncio
+async def test_enrich_adds_missing_recalled_knowledge_entity_link():
+    llm = _FakeLLM(
+        json.dumps(
+            {
+                "markdown": (
+                    "# Beta\n\n## 对比\n\n"
+                    "Beta 与 GBrain 都采用持久化记忆，但任务边界不同。"
+                ),
+                "relations": [],
+                "warnings": [],
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    result = await KnowledgeEntityEnricher(llm).enrich(
+        KnowledgeEntityIdentity(1, 1, "Beta"),
+        [
+            EvidenceFragment(
+                2,
+                "/KnowledgeEntity/GBrain.md",
+                "GBrain 使用持久化记忆。",
+                document_kind="knowledgeEntity",
+                source_entity_name="Garry's Opinionated Agent Brain",
+                source_entity_aliases=("GBrain",),
+            )
+        ],
+    )
+
+    assert (
+        "Beta 与 [GBrain](/KnowledgeEntity/GBrain.md) 都采用持久化记忆"
+        in result.markdown
+    )
+    assert result.quality_audit.untraceable_source_group_ids == ()
 
 
 @pytest.mark.asyncio

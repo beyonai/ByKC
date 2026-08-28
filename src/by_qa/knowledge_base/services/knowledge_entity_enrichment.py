@@ -60,6 +60,8 @@ class EvidenceFragment:
     authorized: bool = True
     matched_topics: tuple[str, ...] = ()
     document_kind: str = "originalDocument"
+    source_entity_name: str | None = None
+    source_entity_aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +176,17 @@ def organize_evidence(
                 relation_code=existing.relation_code or item.relation_code,
                 matched_topics=tuple(
                     dict.fromkeys((*existing.matched_topics, *item.matched_topics))
+                ),
+                source_entity_name=(
+                    existing.source_entity_name or item.source_entity_name
+                ),
+                source_entity_aliases=tuple(
+                    dict.fromkeys(
+                        (
+                            *existing.source_entity_aliases,
+                            *item.source_entity_aliases,
+                        )
+                    )
                 ),
             )
             continue
@@ -364,6 +377,17 @@ def _merge_semantic_into_mentions(
             semantic_score=max(mention.semantic_score, semantic.semantic_score),
             matched_topics=tuple(
                 dict.fromkeys((*mention.matched_topics, *semantic.matched_topics))
+            ),
+            source_entity_name=(
+                mention.source_entity_name or semantic.source_entity_name
+            ),
+            source_entity_aliases=tuple(
+                dict.fromkeys(
+                    (
+                        *mention.source_entity_aliases,
+                        *semantic.source_entity_aliases,
+                    )
+                )
             ),
         )
     return result
@@ -787,6 +811,7 @@ def _normalize_payload_markdown(
             markdown,
             existing_markdown=existing_markdown,
             evidence=evidence,
+            identity=identity,
         )
     )
     markdown, preserved_reference_count = preserve_existing_references(
@@ -809,11 +834,7 @@ def audit_enriched_markdown(
     """Validate source placement without pretending to audit claim semantics."""
 
     required = tuple(group.claim_group_id for group in claim_groups if group.required)
-    reference_heading = re.search(
-        r"(?m)^\s{0,3}##\s+(?:参考资料|资料参考|参考文献|references|sources)\s*$",
-        markdown,
-        re.IGNORECASE,
-    )
+    reference_heading = _REFERENCE_HEADING_RE.search(markdown)
     body = markdown[: reference_heading.start()] if reference_heading else markdown
     body_targets = {
         _canonical_link_target(match.group(2))
@@ -847,9 +868,8 @@ def audit_enriched_markdown(
                 group_is_traceable = group_is_traceable and target in reference_targets
         if group_is_traceable:
             traceable.append(group.claim_group_id)
-    hard_original_reference_count = sum(
-        _canonical_link_target(match.group(2)) in original_targets
-        for match in _MARKDOWN_LINK_RE.finditer(body)
+    hard_original_reference_count = _count_trailing_source_links(
+        body, source_targets=original_targets
     )
 
     paragraphs = [
@@ -1132,6 +1152,18 @@ def format_source_reference(
 
 _MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[([^\]\n]+)\]\(([^)\n]+)\)")
 _PLAIN_URL_RE = re.compile(r"https?://[^\s<>()\]]+")
+_REFERENCE_HEADING_RE = re.compile(
+    r"(?m)^\s{0,3}##\s+(?:参考资料|资料参考|参考文献|references|sources)\s*$",
+    re.IGNORECASE,
+)
+_FENCED_CODE_BLOCK_RE = re.compile(r"(?ms)^```[^\n]*\n.*?^```[^\n]*$")
+_INLINE_PROTECTED_RE = re.compile(
+    r"!?\[[^\]\n]+\]\([^)\n]+\)|`[^`\n]+`|https?://[^\s<>()\]]+"
+)
+_TRAILING_LINK_RE = re.compile(
+    r"(?P<space>[ \t]*)(?P<link>\[([^\]\n]+)\]\(([^)\n]+)\))"
+    r"(?P<punct>[。.!！?？]*)[ \t]*$"
+)
 
 
 def _canonical_link_target(target: str) -> str:
@@ -1141,13 +1173,18 @@ def _canonical_link_target(target: str) -> str:
     return quote(decoded, safe="/:@-._~!$&'*+,;=%")
 
 
+def _is_knowledge_entity_target(target: str) -> bool:
+    return unquote(_canonical_link_target(target)).startswith("/KnowledgeEntity/")
+
+
 def normalize_generated_references(
     generated_markdown: str,
     *,
     existing_markdown: str,
     evidence: Sequence[EvidenceFragment],
+    identity: KnowledgeEntityIdentity | None = None,
 ) -> tuple[str, int, int]:
-    """Keep only supplied references and repair unambiguous internal paths."""
+    """Normalize authorized links, hard citations, and entity references."""
 
     allowed: set[str] = {
         _canonical_link_target(match.group(2))
@@ -1187,7 +1224,239 @@ def normalize_generated_references(
         discarded += 1
         return label
 
-    return _MARKDOWN_LINK_RE.sub(replace_link, generated_markdown), corrected, discarded
+    normalized = _MARKDOWN_LINK_RE.sub(replace_link, generated_markdown)
+    original_source_targets = {
+        _canonical_link_target(
+            _MARKDOWN_LINK_RE.search(
+                format_source_reference(item.document_path, item.document_kind)
+            ).group(2)
+        )
+        for item in evidence
+        if item.document_kind != "knowledgeEntity"
+    }
+    original_source_targets.update(
+        target
+        for match in _MARKDOWN_LINK_RE.finditer(existing_markdown or "")
+        if not _is_knowledge_entity_target(
+            target := _canonical_link_target(match.group(2))
+        )
+    )
+    normalized, moved_count = _move_trailing_original_links_to_references(
+        normalized,
+        source_targets=original_source_targets,
+    )
+    normalized, added_entity_link_count = _link_unlinked_knowledge_entities(
+        normalized,
+        evidence=evidence,
+        identity=identity,
+    )
+    corrected += moved_count + added_entity_link_count
+    return normalized, corrected, discarded
+
+
+def _move_trailing_original_links_to_references(
+    markdown: str,
+    *,
+    source_targets: set[str],
+) -> tuple[str, int]:
+    """Move paragraph-ending original source links into references once."""
+
+    if not source_targets:
+        return markdown, 0
+    reference_heading = _REFERENCE_HEADING_RE.search(markdown)
+    body = markdown[: reference_heading.start()] if reference_heading else markdown
+    references = markdown[reference_heading.start() :] if reference_heading else ""
+    removed_links: list[tuple[str, str]] = []
+
+    def normalize_paragraph(paragraph: str) -> str:
+        if not paragraph.strip() or paragraph.lstrip().startswith("#"):
+            return paragraph
+        current = paragraph.rstrip()
+        while match := _TRAILING_LINK_RE.search(current):
+            target = _canonical_link_target(match.group(4))
+            if target not in source_targets:
+                break
+            removed_links.append((target, f"[{match.group(3)}]({target})"))
+            current = f"{current[: match.start()].rstrip()}{match.group('punct')}"
+        return current
+
+    body = _transform_outside_fenced_code(
+        body, _transform_paragraphs, normalize_paragraph
+    )
+    if not removed_links:
+        return markdown, 0
+    reference_targets = {
+        _canonical_link_target(match.group(2))
+        for match in _MARKDOWN_LINK_RE.finditer(references)
+    }
+    additions: list[str] = []
+    for target, link in removed_links:
+        if target in reference_targets:
+            continue
+        reference_targets.add(target)
+        additions.append(f"- {link}")
+    body = body.rstrip()
+    if not references:
+        references = "## 参考资料"
+    references = references.rstrip()
+    if additions:
+        references += "\n\n" + "\n".join(additions)
+    return f"{body}\n\n{references}\n", len(removed_links)
+
+
+def _count_trailing_source_links(markdown: str, *, source_targets: set[str]) -> int:
+    count = 0
+
+    def count_paragraph(paragraph: str) -> str:
+        nonlocal count
+        if not paragraph.strip() or paragraph.lstrip().startswith("#"):
+            return paragraph
+        current = paragraph.rstrip()
+        while match := _TRAILING_LINK_RE.search(current):
+            if _canonical_link_target(match.group(4)) not in source_targets:
+                break
+            count += 1
+            current = current[: match.start()].rstrip()
+        return paragraph
+
+    _transform_outside_fenced_code(markdown, _transform_paragraphs, count_paragraph)
+    return count
+
+
+def _link_unlinked_knowledge_entities(
+    markdown: str,
+    *,
+    evidence: Sequence[EvidenceFragment],
+    identity: KnowledgeEntityIdentity | None,
+) -> tuple[str, int]:
+    """Link the first unlinked mention of each recalled KnowledgeEntity."""
+
+    reference_heading = _REFERENCE_HEADING_RE.search(markdown)
+    body = markdown[: reference_heading.start()] if reference_heading else markdown
+    references = markdown[reference_heading.start() :] if reference_heading else ""
+    linked_targets = {
+        _canonical_link_target(match.group(2))
+        for match in _MARKDOWN_LINK_RE.finditer(body)
+    }
+    target_surfaces: dict[str, set[str]] = {}
+    surface_targets: dict[str, set[str]] = {}
+    identity_surfaces = (identity.entity_name, *identity.aliases) if identity else ()
+    excluded_surfaces = {
+        normalize_surface(value) for value in identity_surfaces if str(value).strip()
+    }
+    for item in evidence:
+        if item.document_kind != "knowledgeEntity" or not item.source_entity_name:
+            continue
+        reference_match = _MARKDOWN_LINK_RE.search(
+            format_source_reference(item.document_path, item.document_kind)
+        )
+        if not reference_match:
+            continue
+        target = _canonical_link_target(reference_match.group(2))
+        for raw_surface in (item.source_entity_name, *item.source_entity_aliases):
+            surface = str(raw_surface).strip()
+            surface_key = normalize_surface(surface)
+            if not surface_key or surface_key in excluded_surfaces:
+                continue
+            target_surfaces.setdefault(target, set()).add(surface)
+            surface_targets.setdefault(surface_key, set()).add(target)
+    candidates = sorted(
+        (
+            (surface, target)
+            for target, surfaces in target_surfaces.items()
+            if target not in linked_targets
+            for surface in surfaces
+            if len(surface_targets[normalize_surface(surface)]) == 1
+        ),
+        key=lambda item: (-len(item[0]), item[0].casefold(), item[1]),
+    )
+    added = 0
+    for surface, target in candidates:
+        if target in linked_targets:
+            continue
+        updated, replaced = _replace_first_prose_surface(
+            body,
+            surface=surface,
+            replacement=lambda text, target=target: f"[{text}]({target})",
+        )
+        if not replaced:
+            continue
+        body = updated
+        linked_targets.add(target)
+        added += 1
+    return f"{body}{references}", added
+
+
+def _replace_first_prose_surface(
+    markdown: str,
+    *,
+    surface: str,
+    replacement: Callable[[str], str],
+) -> tuple[str, bool]:
+    ascii_word = re.compile(r"[A-Za-z0-9_]")
+    prefix = r"(?<![A-Za-z0-9_])" if ascii_word.match(surface[0]) else ""
+    suffix = r"(?![A-Za-z0-9_])" if ascii_word.match(surface[-1]) else ""
+    surface_re = re.compile(f"{prefix}{re.escape(surface)}{suffix}", re.IGNORECASE)
+    replaced = False
+
+    def replace_text(text: str) -> str:
+        nonlocal replaced
+        if replaced:
+            return text
+        parts: list[str] = []
+        cursor = 0
+        for protected in _INLINE_PROTECTED_RE.finditer(text):
+            prefix_text = text[cursor : protected.start()]
+            if not replaced:
+                prefix_text, count = surface_re.subn(
+                    lambda match: replacement(match.group(0)),
+                    prefix_text,
+                    count=1,
+                )
+                replaced = bool(count)
+            parts.extend((prefix_text, protected.group(0)))
+            cursor = protected.end()
+        suffix_text = text[cursor:]
+        if not replaced:
+            suffix_text, count = surface_re.subn(
+                lambda match: replacement(match.group(0)),
+                suffix_text,
+                count=1,
+            )
+            replaced = bool(count)
+        parts.append(suffix_text)
+        return "".join(parts)
+
+    def replace_lines(text: str) -> str:
+        lines = text.splitlines(keepends=True)
+        return "".join(
+            line if line.lstrip().startswith("#") else replace_text(line)
+            for line in lines
+        )
+
+    return _transform_outside_fenced_code(markdown, replace_lines), replaced
+
+
+def _transform_paragraphs(text: str, transform: Callable[[str], str]) -> str:
+    parts = re.split(r"(\n\s*\n)", text)
+    return "".join(
+        part if index % 2 else transform(part) for index, part in enumerate(parts)
+    )
+
+
+def _transform_outside_fenced_code(
+    text: str,
+    transform: Callable[..., str],
+    *args: Any,
+) -> str:
+    parts: list[str] = []
+    cursor = 0
+    for fenced in _FENCED_CODE_BLOCK_RE.finditer(text):
+        parts.append(transform(text[cursor : fenced.start()], *args))
+        parts.append(fenced.group(0))
+        cursor = fenced.end()
+    parts.append(transform(text[cursor:], *args))
+    return "".join(parts)
 
 
 def preserve_existing_references(

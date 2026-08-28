@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -15,6 +16,7 @@ from by_qa.knowledge_base.services.knowledge_entity_discovery import (
 )
 from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
     EnrichmentResult,
+    KnowledgeEntityEnricher,
     KnowledgeEntityIdentity,
     SemanticRelation,
     format_source_reference,
@@ -1372,6 +1374,168 @@ async def test_topic_hit_is_not_removed_by_lexical_entity_scope_rules():
     assert len(evidence) == 1
     assert evidence[0].content == "上下文工程包括压缩、修剪与记忆召回。"
     assert evidence[0].matched_topics == ("上下文工程",)
+
+
+@pytest.mark.asyncio
+async def test_knowledge_entity_evidence_carries_name_and_aliases_for_linking():
+    entity = file_row(
+        30,
+        "/KnowledgeEntity/target.md",
+        content_key="entity",
+        markdown_key="entity-md",
+        document_kind="knowledgeEntity",
+        entity_name="Target",
+    )
+    recalled = file_row(
+        10,
+        "/KnowledgeEntity/GBrain.md",
+        content_key="gbrain",
+        document_kind="knowledgeEntity",
+        entity_name="Garry's Opinionated Agent Brain",
+        aliases=["GBrain", "GB"],
+        entity_enriched=True,
+    )
+    deps = make_worker(
+        rows=[entity, recalled],
+        objects={
+            ("original", "entity"): b"# Target",
+            ("markdown", "entity-md"): b"# Target",
+            ("original", "gbrain"): b"GBrain evidence.",
+        },
+        search_hits=[
+            SimpleNamespace(
+                kb_code="1",
+                file_path="/KnowledgeEntity/GBrain.md",
+                chunk_text="GBrain uses persistent memory.",
+                score=1.0,
+            )
+        ],
+        asset_service=FakeCreatedAssetService(("Memory",)),
+    )
+
+    evidence = await deps.worker._collect_evidence(
+        KnowledgeEntityTaskContext(
+            task_id=610,
+            task_type="DOCUMENT_ENRICH",
+            kb_code="1",
+            knowledge_base_id=1,
+            source_file_id=30,
+            file_path="/KnowledgeEntity/target.md",
+        ),
+        identity=KnowledgeEntityIdentity(30, 1, "Target"),
+        existing_markdown="# Target",
+        topics=("Memory",),
+    )
+
+    assert len(evidence) == 1
+    assert evidence[0].source_entity_name == "Garry's Opinionated Agent Brain"
+    assert evidence[0].source_entity_aliases == ("GBrain", "GB")
+
+
+@pytest.mark.asyncio
+async def test_collected_knowledge_entities_add_longest_missing_links_once():
+    """Collected entity metadata drives safe linking after an unlinked LLM draft."""
+
+    target = file_row(
+        30,
+        "/KnowledgeEntity/target.md",
+        content_key="target",
+        markdown_key="target-md",
+        document_kind="knowledgeEntity",
+        entity_name="Target",
+    )
+    ontology = file_row(
+        10,
+        "/KnowledgeEntity/Microsoft-Fabric-IQ-Ontology.md",
+        content_key="ontology",
+        document_kind="knowledgeEntity",
+        entity_name="Microsoft Fabric IQ Ontology",
+        aliases=["Fabric IQ"],
+        entity_enriched=True,
+    )
+    fabric = file_row(
+        11,
+        "/KnowledgeEntity/Microsoft-Fabric.md",
+        content_key="fabric",
+        document_kind="knowledgeEntity",
+        entity_name="Microsoft Fabric",
+        aliases=["Fabric"],
+        entity_enriched=True,
+    )
+    deps = make_worker(
+        rows=[target, ontology, fabric],
+        objects={
+            ("original", "target"): b"# Target",
+            ("markdown", "target-md"): b"# Target",
+            ("original", "ontology"): b"Ontology evidence.",
+            ("original", "fabric"): b"Fabric evidence.",
+        },
+        search_hits=[
+            SimpleNamespace(
+                kb_code="1",
+                file_path="/KnowledgeEntity/Microsoft-Fabric-IQ-Ontology.md",
+                chunk_text="The ontology provides a semantic model.",
+                score=1.0,
+            ),
+            SimpleNamespace(
+                kb_code="1",
+                file_path="/KnowledgeEntity/Microsoft-Fabric.md",
+                chunk_text="Microsoft Fabric provides the data platform.",
+                score=0.95,
+            ),
+        ],
+        asset_service=FakeCreatedAssetService(("Semantic model",)),
+    )
+
+    evidence = await deps.worker._collect_evidence(
+        KnowledgeEntityTaskContext(
+            task_id=611,
+            task_type="DOCUMENT_ENRICH",
+            kb_code="1",
+            knowledge_base_id=1,
+            source_file_id=30,
+            file_path="/KnowledgeEntity/target.md",
+        ),
+        identity=KnowledgeEntityIdentity(30, 1, "Target"),
+        existing_markdown="# Target",
+        topics=("Semantic model",),
+    )
+
+    class UnlinkedDraftLLM:
+        async def complete(self, messages, *, json_mode=False):
+            del messages, json_mode
+            return json.dumps(
+                {
+                    "markdown": (
+                        "# Target\n\n## Related systems\n\n"
+                        "Microsoft Fabric IQ Ontology extends Microsoft Fabric "
+                        "with a semantic model. Fabric IQ is mentioned again.\n\n"
+                        "The configuration key is `Microsoft Fabric IQ Ontology`."
+                    ),
+                    "relations": [],
+                    "warnings": [],
+                }
+            )
+
+    result = await KnowledgeEntityEnricher(UnlinkedDraftLLM()).enrich(
+        KnowledgeEntityIdentity(30, 1, "Target"),
+        evidence,
+        topics=("Semantic model",),
+    )
+
+    ontology_link = (
+        "[Microsoft Fabric IQ Ontology]"
+        "(/KnowledgeEntity/Microsoft-Fabric-IQ-Ontology.md)"
+    )
+    fabric_link = "[Microsoft Fabric](/KnowledgeEntity/Microsoft-Fabric.md)"
+    assert f"{ontology_link} extends {fabric_link}" in result.markdown
+    assert (
+        result.markdown.count("/KnowledgeEntity/Microsoft-Fabric-IQ-Ontology.md") == 1
+    )
+    assert result.markdown.count("/KnowledgeEntity/Microsoft-Fabric.md") == 1
+    assert "Fabric IQ is mentioned again" in result.markdown
+    assert "`Microsoft Fabric IQ Ontology`" in result.markdown
+    assert result.quality_audit.untraceable_source_group_ids == ()
 
 
 @pytest.mark.asyncio

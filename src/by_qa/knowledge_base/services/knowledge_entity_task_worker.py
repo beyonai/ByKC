@@ -946,6 +946,10 @@ class KnowledgeEntityTaskWorker:
                         document_kind=str(
                             row.get("document_kind") or "originalDocument"
                         ),
+                        source_entity_name=(
+                            str(row.get("entity_name") or "").strip() or None
+                        ),
+                        source_entity_aliases=self._row_entity_aliases(row),
                     )
                 )
 
@@ -1108,6 +1112,10 @@ class KnowledgeEntityTaskWorker:
                         document_kind=str(
                             row.get("document_kind") or "originalDocument"
                         ),
+                        source_entity_name=(
+                            str(row.get("entity_name") or "").strip() or None
+                        ),
+                        source_entity_aliases=self._row_entity_aliases(row),
                     )
                 )
                 semantic_by_content[content_key] = len(fragments) - 1
@@ -1182,6 +1190,14 @@ class KnowledgeEntityTaskWorker:
             return int(value) if value is not None else None
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _row_entity_aliases(row: Mapping[str, Any]) -> tuple[str, ...]:
+        raw_aliases = row.get("aliases") or ()
+        values = (raw_aliases,) if isinstance(raw_aliases, str) else raw_aliases
+        return tuple(
+            dict.fromkeys(alias for value in values if (alias := str(value).strip()))
+        )
 
     @staticmethod
     def _split_relation_evidence(content: str) -> tuple[str, ...]:

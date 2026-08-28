@@ -22,6 +22,9 @@ from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
     KnowledgeEntityEnricher,
     KnowledgeEntityIdentity,
     RelationTarget,
+    audit_enriched_markdown,
+    build_evidence_claim_groups,
+    build_incremental_edit_hints,
     format_source_reference,
     normalize_generated_references,
     organize_evidence,
@@ -477,6 +480,156 @@ def test_topic_source_quota_prevents_early_topic_from_consuming_budget() -> None
     }
 
 
+def test_adjacent_same_kind_fragments_are_coalesced_before_budgeting() -> None:
+    bundle = organize_evidence(
+        [
+            EvidenceFragment(
+                7,
+                "/openclaw.md",
+                "OpenClaw 的上下文由会话历史组成。",
+                start=10,
+                end=12,
+                direct_mention=True,
+                matched_topics=("上下文工程",),
+            ),
+            EvidenceFragment(
+                7,
+                "/openclaw.md",
+                "系统会在接近阈值时压缩历史。",
+                start=13,
+                end=15,
+                direct_mention=True,
+                matched_topics=("上下文压缩",),
+            ),
+        ],
+        max_fragment_chars=200,
+    )
+
+    assert len(bundle.fragments) == 1
+    assert "会话历史" in bundle.fragments[0].content
+    assert "压缩历史" in bundle.fragments[0].content
+    assert bundle.fragments[0].matched_topics == ("上下文工程", "上下文压缩")
+
+
+def test_information_dense_evidence_wins_equal_relevance_fill() -> None:
+    bundle = organize_evidence(
+        [
+            EvidenceFragment(
+                7,
+                "/source.md",
+                "这是一段普通说明文字。" * 4,
+                semantic_score=0.8,
+                matched_topics=("运行机制",),
+            ),
+            EvidenceFragment(
+                7,
+                "/source.md",
+                "系统通过 3 个组件实现流程，但限制是延迟可能增加 20%。",
+                semantic_score=0.8,
+                matched_topics=("运行机制",),
+            ),
+        ],
+        max_total_chars=30,
+        max_fragments=1,
+        max_fragment_chars=30,
+    )
+
+    assert len(bundle.fragments) == 1
+    assert "3 个组件" in bundle.fragments[0].content
+
+
+def test_claim_groups_preserve_topic_source_and_supported_subthemes() -> None:
+    bundle = organize_evidence(
+        [
+            EvidenceFragment(
+                7,
+                "/openclaw.md",
+                "OpenClaw 通过流水线实现压缩，用于长会话，但限制是会损失细节。",
+                direct_mention=True,
+                matched_topics=("上下文工程",),
+            )
+        ]
+    )
+
+    groups = build_evidence_claim_groups(bundle)
+
+    assert len(groups) == 1
+    assert groups[0].topic == "上下文工程"
+    assert groups[0].source_id == "S1"
+    assert groups[0].evidence_ids == ("F1",)
+    assert {"机制", "场景", "限制与风险"} <= set(groups[0].supported_aspects)
+    assert groups[0].required is True
+
+
+def test_incremental_edit_hint_keeps_identical_old_claim_in_its_section() -> None:
+    evidence = organize_evidence(
+        [
+            EvidenceFragment(
+                7,
+                "/source.md",
+                "系统通过检索恢复长期记忆。",
+                direct_mention=True,
+                matched_topics=("记忆检索",),
+            )
+        ]
+    )
+    groups = build_evidence_claim_groups(evidence)
+
+    hints = build_incremental_edit_hints(
+        groups,
+        evidence,
+        "# OpenClaw\n\n## 记忆检索\n\n系统通过检索恢复长期记忆。",
+    )
+
+    assert hints[0].status == "ALREADY_COVERED"
+    assert hints[0].action == "keep"
+    assert hints[0].target_section == "记忆检索"
+
+
+def test_quality_audit_rejects_claim_source_not_linked_in_target_section() -> None:
+    evidence = organize_evidence(
+        [
+            EvidenceFragment(
+                7,
+                "/authorized.md",
+                "Beta 通过检索恢复记忆。",
+                direct_mention=True,
+                matched_topics=("记忆检索",),
+            )
+        ]
+    )
+    groups = build_evidence_claim_groups(evidence)
+    payload = {
+        "claimCoverage": [
+            {
+                "claimGroupId": "CG1",
+                "targetSection": "记忆检索",
+                "anchor": "Beta 通过检索恢复记忆",
+                "sourceIds": ["S1"],
+            }
+        ],
+        "citationPlan": [
+            {
+                "claimGroupId": "CG1",
+                "sourceIds": ["S1"],
+                "placement": "章节开头",
+            }
+        ],
+        "editPlan": [],
+    }
+
+    audit = audit_enriched_markdown(
+        "# Beta\n\n## 记忆检索\n\nBeta 通过检索恢复记忆。[错误来源](/wrong.md)",
+        payload=payload,
+        claim_groups=groups,
+        incremental=True,
+    )
+
+    assert audit.uncovered_claim_group_ids == ("CG1",)
+    assert audit.invalid_claim_coverage_count == 1
+    assert audit.invalid_edit_plan_count == 1
+
+
 @pytest.mark.asyncio
 async def test_enrich_uses_soft_template_pins_identity_and_discards_bad_relations() -> (
     None
@@ -659,6 +812,80 @@ async def test_enrich_prompt_uses_topics_as_clustered_coverage_guidance():
     assert "连续段落或列表项末尾" in normalized_prompt
     assert "应合并重叠 Topic" in user_prompt
     assert "- Architecture\n- Retrieval\n- Deployment" in user_prompt
+
+
+@pytest.mark.asyncio
+async def test_enrich_repairs_missing_claim_coverage_and_mechanical_citations():
+    first = {
+        "qualityPlanVersion": 1,
+        "markdown": "# Beta\n\n## 核心事实\n\nBeta 是一个系统。",
+        "claimCoverage": [],
+        "editPlan": [],
+        "citationPlan": [],
+        "relations": [],
+        "warnings": [],
+    }
+    repaired = {
+        "qualityPlanVersion": 1,
+        "markdown": (
+            "# Beta\n\n## 核心事实\n\n"
+            "根据 [source.md](/source.md) 的说明，Beta 通过流水线处理请求，"
+            "适用于批量任务，但限制是延迟可能增加。"
+        ),
+        "claimCoverage": [
+            {
+                "claimGroupId": "CG1",
+                "targetSection": "核心事实",
+                "anchor": "Beta 通过流水线处理请求",
+                "sourceIds": ["S1"],
+            }
+        ],
+        "editPlan": [
+            {
+                "claimGroupId": "CG1",
+                "status": "NEW",
+                "action": "merge",
+                "targetSection": "核心事实",
+            }
+        ],
+        "citationPlan": [
+            {
+                "claimGroupId": "CG1",
+                "sourceIds": ["S1"],
+                "placement": "核心事实的完整主张组开头",
+            }
+        ],
+        "relations": [],
+        "warnings": [],
+    }
+    llm = _FakeLLM(
+        json.dumps(first, ensure_ascii=False),
+        json.dumps(repaired, ensure_ascii=False),
+    )
+
+    result = await KnowledgeEntityEnricher(llm).enrich(
+        KnowledgeEntityIdentity(1, 1, "Beta"),
+        [
+            EvidenceFragment(
+                2,
+                "/source.md",
+                "Beta 通过流水线处理请求，适用于批量任务，但限制是延迟可能增加。",
+                direct_mention=True,
+                matched_topics=("运行机制",),
+            )
+        ],
+        topics=("运行机制",),
+    )
+
+    assert result.repair_performed is True
+    assert result.attempts == 2
+    assert result.quality_audit.uncovered_claim_group_ids == ()
+    assert result.quality_audit.uncited_sections == ()
+    assert "根据 [source.md](/source.md) 的说明" in result.markdown
+    assert len(llm.calls) == 2
+    repair_prompt = llm.calls[1][0][-1]["content"]
+    assert "只做定向修复" in repair_prompt
+    assert "CG1" in repair_prompt
 
 
 @pytest.mark.asyncio

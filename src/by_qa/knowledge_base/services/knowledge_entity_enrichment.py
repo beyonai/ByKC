@@ -71,6 +71,62 @@ class EvidenceBundle:
     warnings: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class EvidenceClaimGroup:
+    """One source-grounded writing obligation derived before generation."""
+
+    claim_group_id: str
+    topic: str
+    source_id: str
+    source_file_id: int
+    source_path: str
+    evidence_ids: tuple[str, ...]
+    supported_aspects: tuple[str, ...]
+    section_hint: str
+    required: bool
+
+
+@dataclass(frozen=True, slots=True)
+class IncrementalEditHint:
+    """Deterministic old-document placement hint for one claim group."""
+
+    claim_group_id: str
+    status: str
+    action: str
+    target_section: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class EnrichmentQualityAudit:
+    """Machine-checkable generation quality signals used for targeted repair."""
+
+    required_claim_group_ids: tuple[str, ...] = ()
+    covered_claim_group_ids: tuple[str, ...] = ()
+    uncovered_claim_group_ids: tuple[str, ...] = ()
+    invalid_claim_coverage_count: int = 0
+    invalid_edit_plan_count: int = 0
+    invalid_citation_plan_count: int = 0
+    uncited_sections: tuple[str, ...] = ()
+    adjacent_duplicate_citation_count: int = 0
+    trailing_citation_ratio: float = 0.0
+    repeated_paragraph_count: int = 0
+    ambiguous_section_subject_count: int = 0
+
+    @property
+    def needs_repair(self) -> bool:
+        return bool(
+            self.uncovered_claim_group_ids
+            or self.invalid_edit_plan_count
+            or self.invalid_citation_plan_count
+            or self.uncited_sections
+            or self.adjacent_duplicate_citation_count
+            or self.trailing_citation_ratio > 0.6
+            or self.repeated_paragraph_count
+            or self.ambiguous_section_subject_count
+        )
+
+
 def organize_evidence(
     fragments: Iterable[EvidenceFragment],
     *,
@@ -95,7 +151,10 @@ def organize_evidence(
     ):
         raise ValueError("evidence limits must all be positive")
     source = list(fragments)
-    merged_source = _merge_semantic_into_mentions(source)
+    adjacent_merged = _merge_adjacent_fragments(
+        source, max_fragment_chars=max_fragment_chars
+    )
+    merged_source = _merge_semantic_into_mentions(adjacent_merged)
     eligible: list[EvidenceFragment] = []
     seen: dict[tuple[int, int | None, int | None, str], int] = {}
     for item in merged_source:
@@ -135,6 +194,7 @@ def organize_evidence(
             not item.direct_mention,
             not item.explicit_reference,
             -item.semantic_score,
+            -_evidence_information_density(item),
             item.document_file_id,
             item.start if item.start is not None else -1,
         )
@@ -220,6 +280,123 @@ def organize_evidence(
         total_chars=sum(len(item.content) for item in selected),
         discarded_count=discarded,
         warnings=warnings,
+    )
+
+
+def _merge_adjacent_fragments(
+    fragments: Sequence[EvidenceFragment], *, max_fragment_chars: int
+) -> list[EvidenceFragment]:
+    """Coalesce same-kind source neighbors without consuming evidence twice."""
+
+    merged: list[EvidenceFragment] = []
+    for item in fragments:
+        match_index = next(
+            (
+                index
+                for index in range(len(merged) - 1, -1, -1)
+                if _fragments_are_mergeable_neighbors(merged[index], item)
+            ),
+            None,
+        )
+        if match_index is None:
+            merged.append(item)
+            continue
+        previous = merged[match_index]
+        content = _merge_evidence_content(previous.content, item.content)
+        if len(content) > max_fragment_chars and not (
+            normalize_surface(previous.content) in normalize_surface(item.content)
+            or normalize_surface(item.content) in normalize_surface(previous.content)
+        ):
+            merged.append(item)
+            continue
+        merged[match_index] = replace(
+            previous,
+            content=content,
+            start=_min_optional(previous.start, item.start),
+            end=_max_optional(previous.end, item.end),
+            semantic_score=max(previous.semantic_score, item.semantic_score),
+            matched_topics=tuple(
+                dict.fromkeys((*previous.matched_topics, *item.matched_topics))
+            ),
+        )
+    return merged
+
+
+def _fragments_are_mergeable_neighbors(
+    left: EvidenceFragment, right: EvidenceFragment
+) -> bool:
+    if left.document_file_id != right.document_file_id:
+        return False
+    if (left.direct_mention or left.explicit_reference) != (
+        right.direct_mention or right.explicit_reference
+    ):
+        return False
+    if all(
+        value is not None for value in (left.start, left.end, right.start, right.end)
+    ):
+        if max(left.start, right.start) <= min(left.end, right.end) + 2:
+            return True
+    return _evidence_content_overlaps(left.content, right.content)
+
+
+_ASPECT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("定义", re.compile(r"定义|是指|定位|属于|means?|refers? to", re.IGNORECASE)),
+    ("架构", re.compile(r"架构|组件|模块|分层|architecture|component", re.IGNORECASE)),
+    (
+        "机制",
+        re.compile(
+            r"机制|流程|通过|调用|实现|工作原理|pipeline|workflow|how it works",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "场景",
+        re.compile(
+            r"场景|用于|适用|例如|案例|use case|scenario|example", re.IGNORECASE
+        ),
+    ),
+    (
+        "指标",
+        re.compile(
+            r"\d|指标|比例|耗时|性能|默认值|metric|latency|default", re.IGNORECASE
+        ),
+    ),
+    (
+        "限制与风险",
+        re.compile(
+            r"限制|风险|边界|不足|不支持|代价|权衡|limitation|risk|trade-?off",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "比较",
+        re.compile(r"相比|区别|优于|不同于|versus|\bvs\.?\b|compare", re.IGNORECASE),
+    ),
+)
+
+
+def _supported_aspects(content: str) -> tuple[str, ...]:
+    aspects = tuple(
+        name for name, pattern in _ASPECT_PATTERNS if pattern.search(content)
+    )
+    return aspects or ("核心事实",)
+
+
+def _evidence_information_density(item: EvidenceFragment) -> float:
+    normalized = normalize_surface(item.content)
+    if not normalized:
+        return 0.0
+    distinct_blocks = len(
+        {
+            normalize_surface(block)
+            for block in re.split(r"\n\s*\n|(?<=[。！？.!?])\s+", item.content)
+            if len(normalize_surface(block)) >= 8
+        }
+    )
+    return (
+        len(_supported_aspects(item.content)) * 2
+        + min(distinct_blocks, 8)
+        + min(len(re.findall(r"\d+(?:\.\d+)?%?", item.content)), 5)
     )
 
 
@@ -328,6 +505,155 @@ DEFAULT_SOFT_TEMPLATE = """\
 """.strip()
 
 
+def build_evidence_claim_groups(
+    evidence: EvidenceBundle,
+) -> tuple[EvidenceClaimGroup, ...]:
+    """Build stable Topic/source writing obligations from selected evidence."""
+
+    source_ids: dict[tuple[int, str], str] = {}
+    grouped: dict[tuple[str, str, int], list[tuple[str, EvidenceFragment]]] = {}
+    topic_labels: dict[str, str] = {}
+    for index, item in enumerate(evidence.fragments, start=1):
+        source_key = (item.document_file_id, item.document_path)
+        source_id = source_ids.setdefault(source_key, f"S{len(source_ids) + 1}")
+        item_topics = item.matched_topics or ("实体总览",)
+        for topic in item_topics:
+            topic_label = str(topic).strip() or "实体总览"
+            topic_key = normalize_surface(topic_label)
+            topic_labels.setdefault(topic_key, topic_label)
+            grouped.setdefault(
+                (topic_key, source_id, item.document_file_id), []
+            ).append((f"F{index}", item))
+
+    groups: list[EvidenceClaimGroup] = []
+    for group_index, ((topic_key, source_id, file_id), items) in enumerate(
+        grouped.items(), start=1
+    ):
+        aspects: list[str] = []
+        for _, item in items:
+            aspects.extend(_supported_aspects(item.content))
+        groups.append(
+            EvidenceClaimGroup(
+                claim_group_id=f"CG{group_index}",
+                topic=topic_labels[topic_key],
+                source_id=source_id,
+                source_file_id=file_id,
+                source_path=items[0][1].document_path,
+                evidence_ids=tuple(evidence_id for evidence_id, _ in items),
+                supported_aspects=tuple(dict.fromkeys(aspects)),
+                section_hint=(
+                    "实体定义与边界"
+                    if topic_labels[topic_key] == "实体总览"
+                    else topic_labels[topic_key]
+                ),
+                required=any(
+                    item.direct_mention
+                    or item.explicit_reference
+                    or item.semantic_score >= 0.5
+                    for _, item in items
+                ),
+            )
+        )
+    return tuple(groups)
+
+
+@dataclass(frozen=True, slots=True)
+class _MarkdownSection:
+    heading: str
+    content: str
+
+
+def _markdown_sections(markdown: str) -> tuple[_MarkdownSection, ...]:
+    heading_re = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$", re.MULTILINE)
+    matches = list(heading_re.finditer(markdown or ""))
+    sections: list[_MarkdownSection] = []
+    for index, match in enumerate(matches):
+        if len(match.group(1)) < 2:
+            continue
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
+        sections.append(
+            _MarkdownSection(
+                heading=match.group(2).strip(),
+                content=markdown[match.end() : end].strip(),
+            )
+        )
+    return tuple(sections)
+
+
+_CONFLICT_RE = re.compile(
+    r"更正|纠正|不再|改为|废弃|相反|冲突|deprecated|no longer|instead",
+    re.IGNORECASE,
+)
+
+
+def build_incremental_edit_hints(
+    claim_groups: Sequence[EvidenceClaimGroup],
+    evidence: EvidenceBundle,
+    existing_markdown: str,
+) -> tuple[IncrementalEditHint, ...]:
+    """Map new claim groups to old sections before asking the model to edit."""
+
+    sections = _markdown_sections(existing_markdown)
+    fragments = {
+        f"F{index}": item for index, item in enumerate(evidence.fragments, start=1)
+    }
+    hints: list[IncrementalEditHint] = []
+    for group in claim_groups:
+        topic_key = normalize_surface(group.topic)
+        target = next(
+            (
+                section
+                for section in sections
+                if topic_key
+                and (
+                    topic_key in normalize_surface(section.heading)
+                    or topic_key in normalize_surface(section.content)
+                )
+            ),
+            None,
+        )
+        group_content = "\n".join(
+            fragments[evidence_id].content
+            for evidence_id in group.evidence_ids
+            if evidence_id in fragments
+        )
+        already_covered = any(
+            normalize_surface(fragment.content)
+            and normalize_surface(fragment.content)
+            in normalize_surface(existing_markdown)
+            for evidence_id in group.evidence_ids
+            if (fragment := fragments.get(evidence_id)) is not None
+        )
+        if already_covered:
+            status, action, reason = (
+                "ALREADY_COVERED",
+                "keep",
+                "旧文档已包含相同证据文本；除非需要改善结构，否则不要重复表述。",
+            )
+        elif _CONFLICT_RE.search(group_content) and existing_markdown.strip():
+            status, action, reason = (
+                "CONFLICT",
+                "compare",
+                "新证据包含更正或冲突信号；保留旧说法及来源并明确说明差异。",
+            )
+        else:
+            status, action, reason = (
+                "NEW",
+                "merge" if target else "add-or-merge",
+                "这是本轮新增证据，应合并进最接近的旧章节且避免追加重复章节。",
+            )
+        hints.append(
+            IncrementalEditHint(
+                claim_group_id=group.claim_group_id,
+                status=status,
+                action=action,
+                target_section=(target.heading if target else group.section_hint),
+                reason=reason,
+            )
+        )
+    return tuple(hints)
+
+
 ENRICH_SYSTEM_PROMPT = """\
 你是一名谨慎的知识文档编辑，每次只更新一份已存在的 KnowledgeEntity
 Markdown 文档。必须将传入的旧文档视为完整、权威的编辑基线：除非新证据明确纠正、
@@ -350,6 +676,10 @@ Markdown 必须以精确给定的 Entity 名称作为唯一 H1 标题，不得�
 输出一篇连贯、可独立阅读的 Entity 文档，不要写成证据堆叠。Topics 只是检索和覆盖度指引，
 不是必须逐项生成的目录。将重叠 Topic 合并为少量自然章节；若授权证据不支持某个 Topic，
 可以不写。当证据支持机制、边界、取舍或其他主要 Topic 时，不得退化为只有一句定义的卡片。
+即使只有一个 Topic，也要按证据实际支持的定义、架构、机制、场景、指标、限制与比较组织
+子主题，而不是反复改写 Topic 名称。证据提到多个实体时，每个事实必须明确主语；不得把另一
+实体仅因 Topic 相似而召回的事实归给当前 Entity，也不得在跨段落或跨标题处用“它”“该系统”
+等含混代词承接。分析性推论必须明确标记为推论，并与来源直接陈述的事实分开。
 
 已融入有用章节的临时发现脚手架应被删除。所有来自证据的事实、数字、机制、评价和不确定性
 都必须可追溯，但可追溯不等于每段都要添加引用。将同一来源集支持的一个小节或连续多段视为
@@ -363,8 +693,19 @@ Markdown 必须以精确给定的 Entity 名称作为唯一 H1 标题，不得�
 不得引用 F1、S1 等证据编号、裸文件名或虚构路径。除非对应主张被新证据明确纠正，否则必须
 保留每一个旧引用；不再适合放在正文中的旧引用，必须保留在文末“参考资料”中。
 
+写作前必须使用输入中的 EvidenceClaimGroup 和增量编辑提示制定计划。每个 required=true
+的主张组都要覆盖，且 supportedAspects 中有证据的机制、场景、指标、限制等不能被一句定义
+代替。claimCoverage 的 anchor 必须是最终 Markdown 中实际存在的一小段原文，sourceIds 只能
+使用该 ClaimGroup 授权的来源。增量模式必须返回 editPlan；先判断 NEW、ALREADY_COVERED、
+CORRECTION 或 CONFLICT，再决定 merge、keep、correct 或 compare。citationPlan 以主张组而非
+段落为单位，同一来源支持的连续内容只规划一次自然引用。
+
 只返回一个严格 JSON 对象，不得输出任何其他内容：
-{"markdown":"...","relations":[{"relationCode":"PART_OF","targetFileId":1,
+{"qualityPlanVersion":1,"markdown":"...","claimCoverage":[{"claimGroupId":"CG1",
+"targetSection":"...","anchor":"最终正文中的短原文","sourceIds":["S1"]}],
+"editPlan":[{"claimGroupId":"CG1","status":"NEW","action":"merge",
+"targetSection":"..."}],"citationPlan":[{"claimGroupId":"CG1","sourceIds":["S1"],
+"placement":"..."}],"relations":[{"relationCode":"PART_OF","targetFileId":1,
 "targetEntityName":"...","confidence":0.9}],"warnings":[]}
 """.strip()
 
@@ -395,6 +736,10 @@ class EnrichmentResult:
     placeholder_count: int
     evidence: EvidenceBundle
     attempts: int
+    claim_groups: tuple[EvidenceClaimGroup, ...] = ()
+    edit_hints: tuple[IncrementalEditHint, ...] = ()
+    quality_audit: EnrichmentQualityAudit = EnrichmentQualityAudit()
+    repair_performed: bool = False
 
 
 class KnowledgeEntityEnricher:
@@ -405,13 +750,17 @@ class KnowledgeEntityEnricher:
         llm: KnowledgeEntityLLM,
         *,
         max_attempts: int = 3,
+        max_quality_repair_attempts: int = 1,
         retry_backoff_seconds: float = 0.0,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         if max_attempts < 1:
             raise ValueError("max_attempts must be at least one")
+        if max_quality_repair_attempts < 0:
+            raise ValueError("max_quality_repair_attempts cannot be negative")
         self._llm = llm
         self._max_attempts = max_attempts
+        self._max_quality_repair_attempts = max_quality_repair_attempts
         self._retry_backoff_seconds = retry_backoff_seconds
         self._sleep = sleep
 
@@ -463,6 +812,10 @@ class KnowledgeEntityEnricher:
             topics=topics,
             incremental=incremental,
         )
+        claim_groups = build_evidence_claim_groups(bundle)
+        edit_hints = build_incremental_edit_hints(
+            claim_groups, bundle, existing_markdown
+        )
         payload, attempts = await _complete_strict_json(
             self._llm,
             messages,
@@ -473,19 +826,72 @@ class KnowledgeEntityEnricher:
             operation="enrich",
             log_context=log_context,
         )
-        markdown, markdown_warnings = normalize_enriched_markdown(
-            payload.get("markdown"), identity.entity_name
+        (
+            markdown,
+            markdown_warnings,
+            corrected_reference_count,
+            discarded_reference_count,
+            preserved_reference_count,
+        ) = _normalize_payload_markdown(
+            payload,
+            identity=identity,
+            existing_markdown=existing_markdown,
+            evidence=bundle.fragments,
         )
-        markdown, corrected_reference_count, discarded_reference_count = (
-            normalize_generated_references(
+        quality_audit = audit_enriched_markdown(
+            markdown,
+            payload=payload,
+            claim_groups=claim_groups,
+            incremental=incremental,
+        )
+        repair_performed = False
+        if (
+            payload.get("qualityPlanVersion") == 1
+            and quality_audit.needs_repair
+            and self._max_quality_repair_attempts
+        ):
+            repaired_payload, repair_attempts = await _complete_strict_json(
+                self._llm,
+                _build_quality_repair_messages(
+                    messages,
+                    payload=payload,
+                    markdown=markdown,
+                    audit=quality_audit,
+                    claim_groups=claim_groups,
+                    existing_markdown=existing_markdown,
+                ),
+                expected_type=dict,
+                max_attempts=self._max_quality_repair_attempts,
+                retry_backoff_seconds=self._retry_backoff_seconds,
+                sleep=self._sleep,
+                operation="enrich_quality_repair",
+                log_context=log_context,
+            )
+            payload = repaired_payload
+            attempts += repair_attempts
+            repair_performed = True
+            (
                 markdown,
+                repair_markdown_warnings,
+                repair_corrected_count,
+                repair_discarded_count,
+                repair_preserved_count,
+            ) = _normalize_payload_markdown(
+                payload,
+                identity=identity,
                 existing_markdown=existing_markdown,
                 evidence=bundle.fragments,
             )
-        )
-        markdown, preserved_reference_count = preserve_existing_references(
-            existing_markdown, markdown
-        )
+            markdown_warnings = repair_markdown_warnings
+            corrected_reference_count = repair_corrected_count
+            discarded_reference_count = repair_discarded_count
+            preserved_reference_count = repair_preserved_count
+            quality_audit = audit_enriched_markdown(
+                markdown,
+                payload=payload,
+                claim_groups=claim_groups,
+                incremental=incremental,
+            )
         relations, relation_warnings, discarded = normalize_relations(
             payload.get("relations", ()),
             source_file_id=identity.file_id,
@@ -498,6 +904,46 @@ class KnowledgeEntityEnricher:
         )
         placeholder_count = len(_PLACEHOLDER_RE.findall(markdown))
         warnings = [*bundle.warnings, *markdown_warnings, *relation_warnings]
+        if repair_performed:
+            warnings.append("targeted quality repair performed")
+        if quality_audit.uncovered_claim_group_ids:
+            warnings.append(
+                "required claim groups uncovered: "
+                + ", ".join(quality_audit.uncovered_claim_group_ids)
+            )
+        if quality_audit.invalid_edit_plan_count:
+            warnings.append(
+                f"invalid incremental edit plans: {quality_audit.invalid_edit_plan_count}"
+            )
+        if quality_audit.invalid_citation_plan_count:
+            warnings.append(
+                "invalid claim-group citation plans: "
+                f"{quality_audit.invalid_citation_plan_count}"
+            )
+        if quality_audit.uncited_sections:
+            warnings.append(
+                "substantive sections without inline source: "
+                + ", ".join(quality_audit.uncited_sections)
+            )
+        if quality_audit.adjacent_duplicate_citation_count:
+            warnings.append(
+                "adjacent duplicate citations: "
+                f"{quality_audit.adjacent_duplicate_citation_count}"
+            )
+        if quality_audit.trailing_citation_ratio > 0.6:
+            warnings.append(
+                "mechanical trailing citation ratio: "
+                f"{quality_audit.trailing_citation_ratio:.3f}"
+            )
+        if quality_audit.repeated_paragraph_count:
+            warnings.append(
+                f"repeated substantive paragraphs: {quality_audit.repeated_paragraph_count}"
+            )
+        if quality_audit.ambiguous_section_subject_count:
+            warnings.append(
+                "ambiguous section-opening subjects: "
+                f"{quality_audit.ambiguous_section_subject_count}"
+            )
         if preserved_reference_count:
             warnings.append(
                 f"existing source references restored: {preserved_reference_count}"
@@ -530,6 +976,10 @@ class KnowledgeEntityEnricher:
             placeholder_count=placeholder_count,
             evidence=bundle,
             attempts=attempts,
+            claim_groups=claim_groups,
+            edit_hints=edit_hints,
+            quality_audit=quality_audit,
+            repair_performed=repair_performed,
         )
         logger.info(
             "knowledge_entity_intelligence enrich completed: entity_file_id=%s "
@@ -545,6 +995,287 @@ class KnowledgeEntityEnricher:
             _safe_log_context(log_context),
         )
         return result
+
+
+def _normalize_payload_markdown(
+    payload: Mapping[str, Any],
+    *,
+    identity: KnowledgeEntityIdentity,
+    existing_markdown: str,
+    evidence: Sequence[EvidenceFragment],
+) -> tuple[str, tuple[str, ...], int, int, int]:
+    markdown, markdown_warnings = normalize_enriched_markdown(
+        payload.get("markdown"), identity.entity_name
+    )
+    markdown, corrected_reference_count, discarded_reference_count = (
+        normalize_generated_references(
+            markdown,
+            existing_markdown=existing_markdown,
+            evidence=evidence,
+        )
+    )
+    markdown, preserved_reference_count = preserve_existing_references(
+        existing_markdown, markdown
+    )
+    return (
+        markdown,
+        markdown_warnings,
+        corrected_reference_count,
+        discarded_reference_count,
+        preserved_reference_count,
+    )
+
+
+def audit_enriched_markdown(
+    markdown: str,
+    *,
+    payload: Mapping[str, Any],
+    claim_groups: Sequence[EvidenceClaimGroup],
+    incremental: bool = False,
+) -> EnrichmentQualityAudit:
+    """Validate claim-plan traceability, section citations, and repetition."""
+
+    groups_by_id = {group.claim_group_id: group for group in claim_groups}
+    required = tuple(group.claim_group_id for group in claim_groups if group.required)
+    covered: list[str] = []
+    invalid_coverage = 0
+    raw_coverage = payload.get("claimCoverage", ())
+    if not isinstance(raw_coverage, Sequence) or isinstance(raw_coverage, (str, bytes)):
+        raw_coverage = ()
+        invalid_coverage += 1
+    sections = _markdown_sections(markdown)
+    sections_by_heading = {
+        normalize_surface(section.heading): section for section in sections
+    }
+    for item in raw_coverage:
+        if not isinstance(item, Mapping):
+            invalid_coverage += 1
+            continue
+        claim_group_id = _text(item, "claimGroupId", "claim_group_id")
+        group = groups_by_id.get(claim_group_id)
+        anchor = _text(item, "anchor")
+        target_section = _text(item, "targetSection", "target_section")
+        section = sections_by_heading.get(normalize_surface(target_section))
+        raw_source_ids = item.get("sourceIds", item.get("source_ids", ()))
+        if not isinstance(raw_source_ids, Sequence) or isinstance(
+            raw_source_ids, (str, bytes)
+        ):
+            raw_source_ids = ()
+        source_ids = {
+            str(value).strip() for value in raw_source_ids if str(value).strip()
+        }
+        expected_target = ""
+        if group is not None:
+            reference_match = _MARKDOWN_LINK_RE.search(
+                format_source_reference(group.source_path)
+            )
+            if reference_match:
+                expected_target = _canonical_link_target(reference_match.group(2))
+        section_targets = {
+            _canonical_link_target(match.group(2))
+            for match in _MARKDOWN_LINK_RE.finditer(section.content if section else "")
+        }
+        if (
+            group is None
+            or section is None
+            or not anchor
+            or normalize_surface(anchor) not in normalize_surface(section.content)
+            or not source_ids
+            or not source_ids <= {group.source_id}
+            or expected_target not in section_targets
+        ):
+            invalid_coverage += 1
+            continue
+        covered.append(claim_group_id)
+
+    valid_citation_plan_ids: set[str] = set()
+    invalid_citation_plan_count = 0
+    raw_citation_plan = payload.get("citationPlan", ())
+    if not isinstance(raw_citation_plan, Sequence) or isinstance(
+        raw_citation_plan, (str, bytes)
+    ):
+        raw_citation_plan = ()
+        invalid_citation_plan_count += 1
+    for item in raw_citation_plan:
+        if not isinstance(item, Mapping):
+            invalid_citation_plan_count += 1
+            continue
+        claim_group_id = _text(item, "claimGroupId", "claim_group_id")
+        group = groups_by_id.get(claim_group_id)
+        raw_source_ids = item.get("sourceIds", item.get("source_ids", ()))
+        source_ids = (
+            {str(value).strip() for value in raw_source_ids if str(value).strip()}
+            if isinstance(raw_source_ids, Sequence)
+            and not isinstance(raw_source_ids, (str, bytes))
+            else set()
+        )
+        if (
+            group is None
+            or source_ids != {group.source_id}
+            or not _text(item, "placement")
+        ):
+            invalid_citation_plan_count += 1
+            continue
+        valid_citation_plan_ids.add(claim_group_id)
+    invalid_citation_plan_count += sum(
+        group_id not in valid_citation_plan_ids for group_id in required
+    )
+
+    invalid_edit_plan_count = 0
+    if incremental:
+        valid_edit_plan_ids: set[str] = set()
+        raw_edit_plan = payload.get("editPlan", ())
+        if not isinstance(raw_edit_plan, Sequence) or isinstance(
+            raw_edit_plan, (str, bytes)
+        ):
+            raw_edit_plan = ()
+            invalid_edit_plan_count += 1
+        allowed_statuses = {"NEW", "ALREADY_COVERED", "CORRECTION", "CONFLICT"}
+        allowed_actions = {"merge", "keep", "correct", "compare", "add-or-merge"}
+        for item in raw_edit_plan:
+            if not isinstance(item, Mapping):
+                invalid_edit_plan_count += 1
+                continue
+            claim_group_id = _text(item, "claimGroupId", "claim_group_id")
+            target_section = _text(item, "targetSection", "target_section")
+            if (
+                claim_group_id not in groups_by_id
+                or _text(item, "status").upper() not in allowed_statuses
+                or _text(item, "action").casefold() not in allowed_actions
+                or normalize_surface(target_section) not in sections_by_heading
+            ):
+                invalid_edit_plan_count += 1
+                continue
+            valid_edit_plan_ids.add(claim_group_id)
+        invalid_edit_plan_count += sum(
+            group_id not in valid_edit_plan_ids for group_id in required
+        )
+
+    uncited_sections = tuple(
+        section.heading
+        for section in sections
+        if normalize_surface(section.heading)
+        not in {"参考资料", "参考文献", "references", "sources"}
+        and len(normalize_surface(_MARKDOWN_LINK_RE.sub("", section.content))) >= 40
+        and not _MARKDOWN_LINK_RE.search(section.content)
+    )
+    reference_heading = re.search(
+        r"(?m)^\s{0,3}##\s+(?:参考资料|参考文献|references|sources)\s*$",
+        markdown,
+        re.IGNORECASE,
+    )
+    body = markdown[: reference_heading.start()] if reference_heading else markdown
+    paragraphs = [
+        block.strip()
+        for block in re.split(r"\n\s*\n", body)
+        if block.strip() and not block.lstrip().startswith("#")
+    ]
+    paragraph_targets = [
+        {
+            _canonical_link_target(match.group(2))
+            for match in _MARKDOWN_LINK_RE.finditer(block)
+        }
+        for block in paragraphs
+    ]
+    adjacent_duplicates = sum(
+        bool(previous and current and previous & current)
+        for previous, current in zip(paragraph_targets, paragraph_targets[1:])
+    )
+    trailing_cited = sum(
+        bool(re.search(r"\]\([^)\n]+\)[。.!！?？]?$", paragraph))
+        for paragraph in paragraphs
+    )
+    paragraph_keys = [
+        normalize_surface(_MARKDOWN_LINK_RE.sub(r"\1", paragraph))
+        for paragraph in paragraphs
+        if len(normalize_surface(paragraph)) >= 60
+    ]
+    repeated_paragraph_count = sum(
+        count - 1 for count in Counter(paragraph_keys).values() if count > 1
+    )
+    ambiguous_section_subject_count = sum(
+        bool(
+            re.match(
+                r"^(?:它|其|该系统|该平台|这一系统|这一平台|it\b|this system\b|they\b)",
+                normalize_surface(section.content),
+                re.IGNORECASE,
+            )
+        )
+        for section in sections
+        if section.content.strip()
+    )
+    covered_ids = tuple(dict.fromkeys(covered))
+    return EnrichmentQualityAudit(
+        required_claim_group_ids=required,
+        covered_claim_group_ids=covered_ids,
+        uncovered_claim_group_ids=tuple(
+            group_id for group_id in required if group_id not in set(covered_ids)
+        ),
+        invalid_claim_coverage_count=invalid_coverage,
+        invalid_edit_plan_count=invalid_edit_plan_count,
+        invalid_citation_plan_count=invalid_citation_plan_count,
+        uncited_sections=uncited_sections,
+        adjacent_duplicate_citation_count=adjacent_duplicates,
+        trailing_citation_ratio=trailing_cited / max(1, len(paragraphs)),
+        repeated_paragraph_count=repeated_paragraph_count,
+        ambiguous_section_subject_count=ambiguous_section_subject_count,
+    )
+
+
+def _build_quality_repair_messages(
+    messages: Sequence[Mapping[str, str]],
+    *,
+    payload: Mapping[str, Any],
+    markdown: str,
+    audit: EnrichmentQualityAudit,
+    claim_groups: Sequence[EvidenceClaimGroup],
+    existing_markdown: str,
+) -> list[dict[str, str]]:
+    missing = set(audit.uncovered_claim_group_ids)
+    missing_groups = [
+        {
+            "claimGroupId": group.claim_group_id,
+            "topic": group.topic,
+            "sourceId": group.source_id,
+            "sourcePath": group.source_path,
+            "evidenceIds": list(group.evidence_ids),
+            "supportedAspects": list(group.supported_aspects),
+            "sectionHint": group.section_hint,
+        }
+        for group in claim_groups
+        if group.claim_group_id in missing
+    ]
+    current_payload = dict(payload)
+    current_payload["markdown"] = markdown
+    repair_instruction = {
+        "uncoveredClaimGroups": missing_groups,
+        "invalidEditPlanCount": audit.invalid_edit_plan_count,
+        "invalidCitationPlanCount": audit.invalid_citation_plan_count,
+        "uncitedSections": list(audit.uncited_sections),
+        "adjacentDuplicateCitationCount": audit.adjacent_duplicate_citation_count,
+        "trailingCitationRatio": round(audit.trailing_citation_ratio, 3),
+        "repeatedParagraphCount": audit.repeated_paragraph_count,
+        "ambiguousSectionSubjectCount": audit.ambiguous_section_subject_count,
+    }
+    return [
+        *[dict(message) for message in messages],
+        {
+            "role": "assistant",
+            "content": json.dumps(current_payload, ensure_ascii=False),
+        },
+        {
+            "role": "user",
+            "content": (
+                "上次文档通过 JSON 校验，但没有通过确定性质量校验。只做定向修复："
+                "把缺失主张合并进最合适的现有章节，为无引用的实质章节加入自然来源归因，"
+                "合并连续段落的重复引用和重复内容。不得重写无关章节，不得删除完整旧文档中的"
+                "事实、限制和引用；把跨标题后含混的代词改成明确实体主语。旧文档仍是完整基线（字符数="
+                f"{len(existing_markdown)}）。修复项："
+                f"{json.dumps(repair_instruction, ensure_ascii=False)}。"
+                "重新返回完整严格 JSON 对象，并更新 claimCoverage、editPlan 和 citationPlan。"
+            ),
+        },
+    ]
 
 
 def normalize_enriched_markdown(
@@ -667,6 +1398,8 @@ def _build_enrichment_messages(
     topics: Sequence[str],
     incremental: bool = False,
 ) -> list[dict[str, str]]:
+    claim_groups = build_evidence_claim_groups(evidence)
+    edit_hints = build_incremental_edit_hints(claim_groups, evidence, existing_markdown)
     grouped: dict[tuple[int, str], list[tuple[int, EvidenceFragment]]] = {}
     for index, item in enumerate(evidence.fragments, start=1):
         grouped.setdefault((item.document_file_id, item.document_path), []).append(
@@ -684,8 +1417,10 @@ def _build_enrichment_messages(
                 else "unknown"
             )
             relation = item.relation_code or "semantic-match"
+            matched_topics = ", ".join(item.matched_topics) or "实体总览"
             fragment_blocks.append(
-                f"[F{fragment_index}] relation={relation} location={location}\n"
+                f"[F{fragment_index}] relation={relation} location={location} "
+                f"matchedTopics={matched_topics}\n"
                 f"{item.content}"
             )
         evidence_blocks.append(
@@ -705,6 +1440,30 @@ def _build_enrichment_messages(
         "\n".join(f"- {topic}" for topic in dict.fromkeys(topics) if topic.strip())
         or "- none"
     )
+    claim_group_payload = [
+        {
+            "claimGroupId": group.claim_group_id,
+            "topic": group.topic,
+            "sourceId": group.source_id,
+            "sourceFileId": group.source_file_id,
+            "sourcePath": group.source_path,
+            "evidenceIds": list(group.evidence_ids),
+            "supportedAspects": list(group.supported_aspects),
+            "sectionHint": group.section_hint,
+            "required": group.required,
+        }
+        for group in claim_groups
+    ]
+    edit_hint_payload = [
+        {
+            "claimGroupId": hint.claim_group_id,
+            "status": hint.status,
+            "action": hint.action,
+            "targetSection": hint.target_section,
+            "reason": hint.reason,
+        }
+        for hint in edit_hints
+    ]
     mode_instruction = (
         "新证据只是本轮增量，不是完整替代语料。写作前必须逐节审计旧 Markdown；"
         "除非新证据明确反驳，否则保留并可重新安置每一条有支持的旧主张、数字、"
@@ -732,6 +1491,12 @@ def _build_enrichment_messages(
 
 本轮 Topics（仅用于检索和覆盖指引；应合并重叠 Topic，不得强制每个 Topic 生成一节）：
 {topic_guidance}
+
+EvidenceClaimGroup（确定性生成的覆盖义务；同一 Topic 内仍要覆盖有证据支持的子主题）：
+{json.dumps(claim_group_payload, ensure_ascii=False, indent=2)}
+
+旧文档增量编辑提示（这是初始判断；你必须结合完整旧文档复核并在 editPlan 返回最终判断）：
+{json.dumps(edit_hint_payload, ensure_ascii=False, indent=2)}
 
 允许的现有关系目标：
 {targets}
@@ -897,13 +1662,19 @@ __all__ = [
     "DEFAULT_SOFT_TEMPLATE",
     "ENRICH_SYSTEM_PROMPT",
     "EnrichmentResult",
+    "EnrichmentQualityAudit",
     "EvidenceBundle",
+    "EvidenceClaimGroup",
     "EvidenceFragment",
+    "IncrementalEditHint",
     "KnowledgeEntityEnricher",
     "KnowledgeEntityIdentity",
     "RelationTarget",
     "SemanticRelation",
     "normalize_enriched_markdown",
+    "audit_enriched_markdown",
+    "build_evidence_claim_groups",
+    "build_incremental_edit_hints",
     "format_source_reference",
     "preserve_existing_references",
     "normalize_relations",

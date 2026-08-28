@@ -33,9 +33,11 @@ from by_qa.knowledge_base.services.knowledge_entity_discovery import (
 )
 from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
     DEFAULT_SOFT_TEMPLATE,
+    EvidenceBundle,
     EvidenceFragment,
     RelationTarget,
     _build_enrichment_messages,
+    build_evidence_claim_groups,
     format_source_reference,
     organize_evidence,
 )
@@ -250,6 +252,14 @@ def analyze_context(
     messages: list[dict[str, str]],
 ) -> dict[str, Any]:
     counts = Counter(item.document_file_id for item in evidence)
+    claim_groups = build_evidence_claim_groups(
+        EvidenceBundle(
+            fragments=tuple(evidence),
+            total_chars=sum(len(item.content) for item in evidence),
+            discarded_count=0,
+            warnings=(),
+        )
+    )
     topic_source_groups = sorted(
         {
             (
@@ -271,6 +281,17 @@ def analyze_context(
     )
     return {
         "topicCount": len(topics),
+        "claimGroupCount": len(claim_groups),
+        "requiredClaimGroupCount": sum(group.required for group in claim_groups),
+        "supportedAspectCounts": dict(
+            sorted(
+                Counter(
+                    aspect
+                    for group in claim_groups
+                    for aspect in group.supported_aspects
+                ).items()
+            )
+        ),
         "semanticSearchQueryCount": max(1, len(topics)),
         "topicSourceQuotaGroupCount": len(topic_source_groups),
         "topicSourceQuotaGroups": [
@@ -295,6 +316,18 @@ def analyze_context(
         "withinEvidenceBudget": len(evidence) <= 50
         and sum(len(item.content) for item in evidence) <= 50_000,
         "allAuthorized": all(item.authorized for item in evidence),
+    }
+
+
+def enrichment_protocol_report(result: Any) -> dict[str, Any]:
+    """Serialize the P0/P1 planning and deterministic audit for one output."""
+
+    return {
+        "attempts": result.attempts,
+        "repairPerformed": result.repair_performed,
+        "claimGroups": [asdict(item) for item in result.claim_groups],
+        "editHints": [asdict(item) for item in result.edit_hints],
+        "qualityAudit": asdict(result.quality_audit),
     }
 
 
@@ -704,6 +737,7 @@ async def _evaluate_entity(
             "analysis": full_analysis,
             "judge": None,
             "warnings": list(full_result.warnings),
+            "protocol": enrichment_protocol_report(full_result),
         },
     }
     _write_json(entity_dir / "report.json", report)
@@ -791,6 +825,8 @@ async def _evaluate_entity(
             "analysis": incremental_analysis,
             "judge": None,
             "warnings": list(incremental_result.warnings),
+            "baselineProtocol": enrichment_protocol_report(baseline_result),
+            "protocol": enrichment_protocol_report(incremental_result),
         }
         report["timingSeconds"].update(
             {
@@ -1103,6 +1139,7 @@ async def _evaluate_two_stage_scenario(
                 "judge": judged,
                 "citationTransition": transition,
                 "warnings": list(result.warnings),
+                "protocol": enrichment_protocol_report(result),
             }
         )
         stage_records[index - 1]["timingSeconds"].update(

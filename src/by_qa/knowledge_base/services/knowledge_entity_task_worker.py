@@ -1217,8 +1217,19 @@ class KnowledgeEntityTaskWorker:
     ) -> str:
         """Keep Entity-scoped source context, with a deterministic fallback."""
 
+        scope_names = list(names)
+        for name in names:
+            latin_tokens = re.findall(r"[A-Za-z][A-Za-z0-9.-]*", name)
+            if len(latin_tokens) >= 3:
+                # Product prose commonly omits the vendor prefix, e.g.
+                # "Microsoft Fabric IQ Ontology" -> "Fabric IQ Ontology".
+                scope_names.append(" ".join(latin_tokens[1:]))
         normalized_names = tuple(
-            normalize_surface(name) for name in names if normalize_surface(name)
+            dict.fromkeys(
+                normalize_surface(name)
+                for name in scope_names
+                if normalize_surface(name)
+            )
         )
         body = re.sub(
             r"\A---[ \t]*\n.*?\n---[ \t]*(?:\n|\Z)",
@@ -1361,8 +1372,17 @@ class KnowledgeEntityTaskWorker:
         contains no literal name at all.
         """
 
+        scope_names = list(names)
+        for name in names:
+            latin_tokens = re.findall(r"[A-Za-z][A-Za-z0-9.-]*", name)
+            if len(latin_tokens) >= 3:
+                scope_names.append(" ".join(latin_tokens[1:]))
         normalized_names = tuple(
-            normalize_surface(name) for name in names if normalize_surface(name)
+            dict.fromkeys(
+                normalize_surface(name)
+                for name in scope_names
+                if normalize_surface(name)
+            )
         )
         if not content.strip() or not normalized_names:
             return content.strip() if preserve_without_mention else ""
@@ -1377,17 +1397,29 @@ class KnowledgeEntityTaskWorker:
         if not target_indexes:
             return content.strip() if preserve_without_mention else ""
 
-        selected_indexes: set[int] = set()
+        entity_headings: dict[int, int] = {}
         for index in target_indexes:
+            for line_index, line in enumerate(blocks[index].splitlines()):
+                normalized_line = normalize_surface(
+                    re.sub(r"^#{1,6}\s*", "", line.strip())
+                )
+                if len(line.strip()) <= 200 and any(
+                    normalized_line.startswith(name) for name in normalized_names
+                ):
+                    entity_headings[index] = line_index
+                    break
+
+        # Prefer explicit product-profile headings over incidental mentions in
+        # comparison lists or broad Topic prose.
+        active_indexes = list(entity_headings) or target_indexes
+        selected_blocks: dict[int, str] = {}
+        for index in active_indexes:
             block = blocks[index]
-            selected_indexes.add(index)
-            first_line = block.splitlines()[0].strip()
-            normalized_first_line = normalize_surface(
-                re.sub(r"^#{1,6}\s*", "", first_line)
-            )
-            is_entity_heading = len(first_line) <= 200 and any(
-                normalized_first_line.startswith(name) for name in normalized_names
-            )
+            heading_line_index = entity_headings.get(index)
+            is_entity_heading = heading_line_index is not None
+            if heading_line_index is not None:
+                block = "\n".join(block.splitlines()[heading_line_index:]).strip()
+            selected_blocks[index] = block
             if is_entity_heading and index + 1 < len(blocks):
                 following = blocks[index + 1]
                 following_first = following.splitlines()[0].strip()
@@ -1403,14 +1435,32 @@ class KnowledgeEntityTaskWorker:
                     )
                 )
                 if not looks_like_next_profile:
-                    selected_indexes.add(index + 1)
+                    sentences = [
+                        sentence.strip()
+                        for sentence in re.split(r"(?<=[。！？.!?])\s*", following)
+                        if sentence.strip()
+                    ]
+                    matched_sentences = [
+                        sentence
+                        for sentence in sentences
+                        if any(
+                            name in normalize_surface(sentence)
+                            for name in normalized_names
+                        )
+                    ]
+                    # A shared paragraph can profile Fabric and Salesforce in
+                    # adjacent sentences. Keep only target-bearing sentences;
+                    # an unlabelled continuation remains intact.
+                    selected_blocks[index + 1] = (
+                        " ".join(matched_sentences) if matched_sentences else following
+                    )
             if index > 0:
                 previous = blocks[index - 1]
                 if re.match(r"^#{1,6}\s+", previous.splitlines()[0].strip()):
-                    selected_indexes.add(index - 1)
+                    selected_blocks[index - 1] = previous
 
         scoped = "\n\n".join(
-            block for index, block in enumerate(blocks) if index in selected_indexes
+            selected_blocks[index] for index in sorted(selected_blocks)
         ).strip()
         return scoped[:MAX_RELATION_DOCUMENT_CHARS]
 

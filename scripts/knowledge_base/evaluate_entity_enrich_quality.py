@@ -219,7 +219,7 @@ def analyze_document(
         "oldReferencesPreserved": old_targets <= current_targets,
         "onlyAuthorizedReferences": current_targets <= allowed_targets,
         "notDefinitionStub": not (
-            substantive_evidence and (body_chars < 400 or len(headings) < 3)
+            substantive_evidence and body_chars < 400 and len(headings) < 3
         ),
         "citationsNotMechanical": (
             len(body_paragraphs) < 5 or trailing_citation_ratio <= 0.6

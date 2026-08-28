@@ -130,6 +130,22 @@ def test_document_gate_rejects_definition_stub_for_substantive_evidence() -> Non
     assert result["passed"] is False
 
 
+def test_document_gate_accepts_substantive_single_section_document() -> None:
+    result = analyze_document(
+        entity_name="Entity",
+        markdown=(
+            "# Entity\n\n## 实体定义与边界\n\n"
+            + "有证据支持的机制、场景、局限和边界。" * 30
+            + "[source](/source.md)"
+        ),
+        existing_markdown="# Entity",
+        evidence=[fragment(2, "/source.md", "evidence " * 200)],
+    )
+
+    assert result["checks"]["notDefinitionStub"] is True
+    assert result["passed"] is True
+
+
 def test_document_gate_preserves_old_links_and_rejects_unknown_links() -> None:
     result = analyze_document(
         entity_name="Entity",

@@ -287,15 +287,6 @@ def analyze_context(
         "topicCount": len(topics),
         "claimGroupCount": len(claim_groups),
         "requiredClaimGroupCount": sum(group.required for group in claim_groups),
-        "supportedAspectCounts": dict(
-            sorted(
-                Counter(
-                    aspect
-                    for group in claim_groups
-                    for aspect in group.supported_aspects
-                ).items()
-            )
-        ),
         "semanticSearchQueryCount": max(1, len(topics)),
         "topicSourceQuotaGroupCount": len(topic_source_groups),
         "topicSourceQuotaGroups": [
@@ -331,16 +322,11 @@ def analyze_context(
 
 
 def enrichment_protocol_report(result: Any) -> dict[str, Any]:
-    """Serialize the P0/P1 planning and deterministic audit for one output."""
+    """Serialize evidence layout and deterministic source checks."""
 
     return {
         "attempts": result.attempts,
-        "repairPerformed": result.repair_performed,
         "claimGroups": [asdict(item) for item in result.claim_groups],
-        "editHints": [asdict(item) for item in result.edit_hints],
-        "existingClaimAnchors": [
-            asdict(item) for item in result.existing_claim_anchors
-        ],
         "qualityAudit": asdict(result.quality_audit),
     }
 
@@ -474,38 +460,21 @@ def _source_evidence(
     *,
     source_row: dict[str, Any],
     markdown: str,
-    names: tuple[str, ...],
-    topics: tuple[str, ...],
 ) -> list[EvidenceFragment]:
-    evidence: list[EvidenceFragment] = []
-    scopes = [((), False, False)]
-    scopes.extend(((topic,), True, True) for topic in topics)
-    for matched_topics, prefer_topics, require_topic_match in scopes:
-        selected = worker._select_entity_sections(  # noqa: SLF001
-            markdown,
-            names=names,
-            topics=matched_topics,
-            prefer_topics=prefer_topics,
-            require_topic_match=require_topic_match,
+    return [
+        EvidenceFragment(
+            document_file_id=int(source_row["kid"]),
+            document_path=str(source_row["file_path"]),
+            content=fragment,
+            direct_mention=True,
+            explicit_reference=True,
+            relation_code="MENTIONS",
+            authorized=True,
+            document_kind=str(source_row.get("document_kind") or "originalDocument"),
         )
-        evidence.extend(
-            EvidenceFragment(
-                document_file_id=int(source_row["kid"]),
-                document_path=str(source_row["file_path"]),
-                content=fragment,
-                direct_mention=True,
-                explicit_reference=True,
-                relation_code="MENTIONS",
-                authorized=True,
-                matched_topics=matched_topics,
-                document_kind=str(
-                    source_row.get("document_kind") or "originalDocument"
-                ),
-            )
-            for fragment in worker._split_relation_evidence(selected)  # noqa: SLF001
-            if fragment.strip()
-        )
-    return evidence
+        for fragment in worker._split_relation_evidence(markdown)  # noqa: SLF001
+        if fragment.strip()
+    ]
 
 
 async def judge_document(
@@ -984,7 +953,6 @@ async def _evaluate_two_stage_scenario(
     discoveries: list[DiscoveryResult] = []
     stage_topics: list[tuple[str, ...]] = []
     stage_evidence: list[list[EvidenceFragment]] = []
-    names = (identity.entity_name, *identity.aliases)
     for index, (source_path, source_row, markdown) in enumerate(
         zip(source_paths, source_rows, source_markdowns, strict=True), start=1
     ):
@@ -1016,11 +984,9 @@ async def _evaluate_two_stage_scenario(
             worker,
             source_row=source_row,
             markdown=markdown,
-            names=names,
-            topics=topics,
         )
         if not evidence:
-            raise RuntimeError(f"stage {index} produced no Entity-scoped evidence")
+            raise RuntimeError(f"stage {index} produced no source evidence")
         discoveries.append(discovery)
         stage_topics.append(topics)
         stage_evidence.append(evidence)

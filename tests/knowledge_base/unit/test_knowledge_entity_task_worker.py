@@ -1157,7 +1157,7 @@ def test_topic_search_query_scopes_each_topic_with_entity_name():
 
 
 @pytest.mark.asyncio
-async def test_topic_hit_without_entity_scope_is_not_used_as_evidence():
+async def test_topic_hit_is_not_removed_by_lexical_entity_scope_rules():
     entity = file_row(
         30,
         "/KnowledgeEntity/OpenClaw.md",
@@ -1199,71 +1199,9 @@ async def test_topic_hit_without_entity_scope_is_not_used_as_evidence():
         topics=("上下文工程",),
     )
 
-    assert evidence == []
-
-
-def test_relation_source_context_has_fallback_and_preserves_late_entity_mention():
-    no_literal_mention = (
-        "# 文章\n\n这是来自已确认发现关系的原文背景。\n\n"
-        "## 架构\n\n系统包含网关、工具和记忆模块。"
-    )
-    fallback = KnowledgeEntityTaskWorker._select_entity_sections(
-        no_literal_mention,
-        names=("OpenClaw",),
-    )
-    long_section = f"# 背景\n\n{'x' * 6_000} OpenClaw 的关键机制 {'y' * 2_000}"
-    matched = KnowledgeEntityTaskWorker._select_entity_sections(
-        long_section,
-        names=("OpenClaw",),
-    )
-
-    assert "已确认发现关系的原文背景" in fallback
-    assert "OpenClaw 的关键机制" in matched
-    fragments = KnowledgeEntityTaskWorker._split_relation_evidence(matched)
-    assert all(len(fragment) <= 2_000 for fragment in fragments)
-    assert "OpenClaw 的关键机制" in "".join(fragments)
-
-
-def test_relation_source_can_select_topic_section_before_early_entity_section():
-    content = (
-        "# OpenClaw\n\nOpenClaw 是一个个人助手，也使用 Harness Engineering。\n\n"
-        "## Prompt Engineering\n\nPrompt 使用动态模块组装。\n\n"
-        "## Harness Engineering\n\nHarness 包含 Hook、Guardrail 与沙箱。"
-    )
-
-    selected = KnowledgeEntityTaskWorker._select_entity_sections(
-        content,
-        names=("OpenClaw",),
-        topics=("Harness Engineering",),
-        prefer_topics=True,
-        require_topic_match=True,
-    )
-
-    assert "Hook、Guardrail 与沙箱" in selected
-    assert "个人助手" not in selected
-
-
-def test_relation_source_centers_plain_text_topic_heading_in_long_document():
-    content = (
-        "# OpenClaw\n\nOpenClaw 的 Harness Engineering 值得关注。\n\n"
-        + "早期 Prompt 与 Context 内容。" * 1_000
-        + "\n\nHarness Engineering：可控的运行环境\n\n"
-        + "Hook 负责生命周期扩展，Guardrail 和沙箱共同限制权限边界。\n\n"
-        + "后续深入材料。" * 1_000
-    )
-
-    selected = KnowledgeEntityTaskWorker._select_entity_sections(
-        content,
-        names=("OpenClaw",),
-        topics=("Harness Engineering",),
-        prefer_topics=True,
-        require_topic_match=True,
-    )
-
-    assert "Hook 负责生命周期扩展" in selected
-    assert "OpenClaw 的 Harness Engineering 值得关注" not in selected
-    first_fragment = KnowledgeEntityTaskWorker._split_relation_evidence(selected)[0]
-    assert "Harness Engineering：可控的运行环境" in first_fragment
+    assert len(evidence) == 1
+    assert evidence[0].content == "上下文工程包括压缩、修剪与记忆召回。"
+    assert evidence[0].matched_topics == ("上下文工程",)
 
 
 @pytest.mark.asyncio

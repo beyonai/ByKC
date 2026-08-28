@@ -24,8 +24,6 @@ from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
     RelationTarget,
     audit_enriched_markdown,
     build_evidence_claim_groups,
-    build_existing_claim_anchors,
-    build_incremental_edit_hints,
     format_source_reference,
     normalize_generated_references,
     organize_evidence,
@@ -512,7 +510,7 @@ def test_adjacent_same_kind_fragments_are_coalesced_before_budgeting() -> None:
     assert bundle.fragments[0].matched_topics == ("上下文工程", "上下文压缩")
 
 
-def test_information_dense_evidence_wins_equal_relevance_fill() -> None:
+def test_equal_relevance_fill_uses_stable_source_order_not_lexical_density() -> None:
     bundle = organize_evidence(
         [
             EvidenceFragment(
@@ -536,10 +534,10 @@ def test_information_dense_evidence_wins_equal_relevance_fill() -> None:
     )
 
     assert len(bundle.fragments) == 1
-    assert "3 个组件" in bundle.fragments[0].content
+    assert bundle.fragments[0].content.startswith("这是一段普通说明文字")
 
 
-def test_claim_groups_preserve_topic_source_and_supported_subthemes() -> None:
+def test_claim_groups_preserve_topic_source_without_lexical_aspects() -> None:
     bundle = organize_evidence(
         [
             EvidenceFragment(
@@ -558,7 +556,6 @@ def test_claim_groups_preserve_topic_source_and_supported_subthemes() -> None:
     assert groups[0].topic == "上下文工程"
     assert groups[0].source_id == "S1"
     assert groups[0].evidence_ids == ("F1",)
-    assert {"机制", "场景", "限制与风险"} <= set(groups[0].supported_aspects)
     assert groups[0].required is True
 
 
@@ -613,51 +610,11 @@ def test_quality_audit_requires_every_original_source_in_references() -> None:
     audit = audit_enriched_markdown(
         "# OpenClaw\n\n## 核心事实\n\nOpenClaw 支持记忆检索和排序。\n\n"
         "## 参考资料\n\n- [first.md](/first.md)",
-        payload={},
         claim_groups=build_evidence_claim_groups(bundle),
     )
 
-    assert audit.uncovered_claim_group_ids == ("CG1",)
-    assert audit.needs_repair is True
-
-
-def test_old_claim_anchors_prioritize_numbers_and_identifiers() -> None:
-    anchors = build_existing_claim_anchors(
-        "# OpenClaw\n\n## 记忆机制\n\n"
-        "OpenClaw 使用双源记忆。\n\n"
-        "`buildSessionEntry` 会写入 JSONL，Hook 读取最近 15 条消息。"
-        "[source](/source.md)"
-    )
-
-    assert anchors
-    assert any("buildSessionEntry" in anchor.key_terms for anchor in anchors)
-    assert any("15" in anchor.key_terms for anchor in anchors)
-    assert all(anchor.source_targets == ("/source.md",) for anchor in anchors)
-
-
-def test_incremental_edit_hint_keeps_identical_old_claim_in_its_section() -> None:
-    evidence = organize_evidence(
-        [
-            EvidenceFragment(
-                7,
-                "/source.md",
-                "系统通过检索恢复长期记忆。",
-                direct_mention=True,
-                matched_topics=("记忆检索",),
-            )
-        ]
-    )
-    groups = build_evidence_claim_groups(evidence)
-
-    hints = build_incremental_edit_hints(
-        groups,
-        evidence,
-        "# OpenClaw\n\n## 记忆检索\n\n系统通过检索恢复长期记忆。",
-    )
-
-    assert hints[0].status == "ALREADY_COVERED"
-    assert hints[0].action == "keep"
-    assert hints[0].target_section == "记忆检索"
+    assert audit.untraceable_source_group_ids == ("CG1",)
+    assert audit.invalid_source_traceability_count == 1
 
 
 def test_quality_audit_requires_original_source_in_references_not_body() -> None:
@@ -675,45 +632,12 @@ def test_quality_audit_requires_original_source_in_references_not_body() -> None
     groups = build_evidence_claim_groups(evidence)
     audit = audit_enriched_markdown(
         "# Beta\n\n## 记忆检索\n\nBeta 通过检索恢复记忆。[authorized](/authorized.md)",
-        payload={},
         claim_groups=groups,
     )
 
-    assert audit.uncovered_claim_group_ids == ("CG1",)
-    assert audit.invalid_claim_coverage_count == 1
-    assert audit.invalid_edit_plan_count == 0
+    assert audit.untraceable_source_group_ids == ("CG1",)
+    assert audit.invalid_source_traceability_count == 1
     assert audit.hard_original_reference_count == 1
-
-
-def test_quality_audit_rejects_silent_loss_of_old_claim_details() -> None:
-    existing = (
-        "# Beta\n\n## 记忆机制\n\n"
-        "`buildSessionEntry` 会写入 JSONL，Hook 每次读取最近 15 条消息。"
-    )
-    anchors = build_existing_claim_anchors(existing)
-    audit = audit_enriched_markdown(
-        "# Beta\n\n## 记忆机制\n\nBeta 会保留会话历史。",
-        payload={
-            "claimCoverage": [],
-            "citationPlan": [],
-            "editPlan": [],
-            "oldClaimRetention": [
-                {
-                    "anchorId": anchors[0].anchor_id,
-                    "status": "KEEP",
-                    "targetSection": "记忆机制",
-                    "anchor": "Beta 会保留会话历史",
-                    "sourceIds": [],
-                }
-            ],
-        },
-        claim_groups=(),
-        existing_claim_anchors=anchors,
-    )
-
-    assert audit.missing_old_claim_anchor_ids
-    assert audit.invalid_old_claim_retention_count == 1
-    assert audit.needs_repair is True
 
 
 @pytest.mark.asyncio
@@ -913,7 +837,6 @@ async def test_knowledge_entity_source_is_linked_naturally_in_body():
     llm = _FakeLLM(
         json.dumps(
             {
-                "qualityPlanVersion": 2,
                 "markdown": (
                     "# Beta\n\n## 设计来源\n\n"
                     "Beta 的记忆编排受到了 [GBrain](/KnowledgeEntity/GBrain.md) "
@@ -943,32 +866,18 @@ async def test_knowledge_entity_source_is_linked_naturally_in_body():
     assert "sourceType=knowledgeEntity" in user_prompt
     assert "[GBrain](/KnowledgeEntity/GBrain.md)" in user_prompt
     assert "EvidenceClaimGroup" not in user_prompt
-    assert result.quality_audit.uncovered_claim_group_ids == ()
+    assert result.quality_audit.untraceable_source_group_ids == ()
     assert result.quality_audit.hard_original_reference_count == 0
 
 
 @pytest.mark.asyncio
-async def test_enrich_repairs_original_source_into_references_without_hard_citation():
+async def test_enrich_does_not_add_a_semantic_quality_repair_call():
     first = {
-        "qualityPlanVersion": 2,
         "markdown": "# Beta\n\n## 核心事实\n\nBeta 是一个系统。",
         "relations": [],
         "warnings": [],
     }
-    repaired = {
-        "qualityPlanVersion": 2,
-        "markdown": (
-            "# Beta\n\n## 核心事实\n\n"
-            "Beta 通过流水线处理请求，适用于批量任务，但限制是延迟可能增加。\n\n"
-            "## 参考资料\n\n- [source.md](/source.md)"
-        ),
-        "relations": [],
-        "warnings": [],
-    }
-    llm = _FakeLLM(
-        json.dumps(first, ensure_ascii=False),
-        json.dumps(repaired, ensure_ascii=False),
-    )
+    llm = _FakeLLM(json.dumps(first, ensure_ascii=False))
 
     result = await KnowledgeEntityEnricher(llm).enrich(
         KnowledgeEntityIdentity(1, 1, "Beta"),
@@ -984,19 +893,10 @@ async def test_enrich_repairs_original_source_into_references_without_hard_citat
         topics=("运行机制",),
     )
 
-    assert result.repair_performed is True
-    assert result.attempts == 2
-    assert result.quality_audit.uncovered_claim_group_ids == ()
-    assert result.quality_audit.uncited_sections == ()
+    assert result.attempts == 1
+    assert result.quality_audit.untraceable_source_group_ids == ("CG1",)
     assert result.quality_audit.hard_original_reference_count == 0
-    assert "根据 [source.md](/source.md)" not in result.markdown
-    assert "## 参考资料\n\n- [source.md](/source.md)" in result.markdown
-    assert len(llm.calls) == 2
-    repair_prompt = llm.calls[1][0][-1]["content"]
-    assert "只做定向修复" in repair_prompt
-    assert "CG1" not in repair_prompt
-    assert "EvidenceClaimGroup" not in repair_prompt
-    assert "missingSourceTraceability" in repair_prompt
+    assert len(llm.calls) == 1
 
 
 @pytest.mark.asyncio

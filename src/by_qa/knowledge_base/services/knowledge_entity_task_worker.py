@@ -37,7 +37,6 @@ from by_qa.knowledge_base.services.knowledge_entity_discovery import (
     DISCOVERY_PROTOCOL_VERSION,
     DiscoveredEntity,
     KnowledgeEntityDiscovery,
-    build_discovery_context,
 )
 from by_qa.knowledge_base.services.knowledge_entity_enrichment import (
     EvidenceFragment,
@@ -58,14 +57,11 @@ ENRICH_RELATION_SOURCE = "ENTITY_ENRICH"
 DISCOVERY_RELATION_SOURCE = "ENTITY_DISCOVERY"
 MAX_RECENT_RELATIONS = 50
 MAX_RELATION_DOCUMENTS = 3
-MAX_MATCHED_SECTIONS_PER_DOCUMENT = 6
-MAX_RELATION_DOCUMENT_CHARS = 5_000
 MAX_RELATION_FRAGMENT_CHARS = 2_000
 MAX_SEARCH_QUERY_CHARS = 1_000
 MAX_TOPICS_PER_SEARCH_QUERY = 6
 MAX_SEMANTIC_FRAGMENTS_PER_DOCUMENT = 25
 MIN_SEMANTIC_SCORE_RATIO = 0.7
-STRONG_SEMANTIC_SCORE_RATIO = 0.97
 ENTITY_ENRICHED_PROPERTY = "entityEnriched"
 _SAFE_SLUG_RE = re.compile(r"[^\w-]+", re.UNICODE)
 
@@ -932,42 +928,21 @@ class KnowledgeEntityTaskWorker:
             strict=True,
         ):
             file_id = int(relation["source_fs_entry_id"])
-            mention_scopes = [("", ())]
-            mention_scopes.extend((topic, (topic,)) for topic in topics)
-            for topic, matched_topics in mention_scopes:
-                selected_content = self._select_entity_sections(
-                    content,
-                    names=(identity.entity_name, *identity.aliases),
-                    topics=matched_topics,
-                    prefer_topics=bool(topic),
-                    require_topic_match=bool(topic),
-                )
-                if not selected_content:
-                    continue
-                selected_content = self._scope_evidence_to_entity(
-                    selected_content,
-                    names=(identity.entity_name, *identity.aliases),
-                    preserve_without_mention=True,
-                )
-                for selected_fragment in self._split_relation_evidence(
-                    selected_content
-                ):
-                    fragments.append(
-                        EvidenceFragment(
-                            document_file_id=file_id,
-                            document_path=str(row["file_path"]),
-                            content=selected_fragment,
-                            direct_mention=True,
-                            explicit_reference=True,
-                            relation_code=str(
-                                relation.get("relation_code") or "MENTIONS"
-                            ),
-                            matched_topics=matched_topics,
-                            document_kind=str(
-                                row.get("document_kind") or "originalDocument"
-                            ),
-                        )
+            relation_code = str(relation.get("relation_code") or "MENTIONS")
+            for selected_fragment in self._split_relation_evidence(content):
+                fragments.append(
+                    EvidenceFragment(
+                        document_file_id=file_id,
+                        document_path=str(row["file_path"]),
+                        content=selected_fragment,
+                        direct_mention=relation_code == "MENTIONS",
+                        explicit_reference=True,
+                        relation_code=relation_code,
+                        document_kind=str(
+                            row.get("document_kind") or "originalDocument"
+                        ),
                     )
+                )
 
         params = context.request_params or {}
         names = (identity.entity_name, *identity.aliases)
@@ -1041,41 +1016,11 @@ class KnowledgeEntityTaskWorker:
                 score = float(self._value(hit, "score") or 0.0)
                 best_score = best_scores.get(group_index, 0.0)
                 file_id = int(row["kid"])
-                names_entity_in_scope = self._text_mentions_entity(
-                    content, names=(identity.entity_name, *identity.aliases)
-                )
-                source_entity_in_scope = (
-                    file_id in selected_source_ids
-                    or self._text_mentions_entity(
-                        str(row["file_path"]),
-                        names=(identity.entity_name, *identity.aliases),
-                    )
-                )
                 normalized_content = normalize_surface(content)
-                if (
-                    not content
-                    or (
-                        best_score > 0 and score < best_score * MIN_SEMANTIC_SCORE_RATIO
-                    )
-                    or (
-                        best_score > 0
-                        and score < best_score * STRONG_SEMANTIC_SCORE_RATIO
-                        and not names_entity_in_scope
-                    )
-                    or (not names_entity_in_scope and not source_entity_in_scope)
-                    or self._is_stub_evidence(
-                        content, names=(identity.entity_name, *identity.aliases)
-                    )
+                if not content or (
+                    best_score > 0 and score < best_score * MIN_SEMANTIC_SCORE_RATIO
                 ):
                     continue
-                content = self._scope_evidence_to_entity(
-                    content,
-                    names=(identity.entity_name, *identity.aliases),
-                    preserve_without_mention=False,
-                )
-                if not content:
-                    continue
-                normalized_content = normalize_surface(content)
                 content_key = (file_id, normalized_content)
                 existing_index = semantic_by_content.get(content_key)
                 if existing_index is not None:
@@ -1183,292 +1128,11 @@ class KnowledgeEntityTaskWorker:
         return "\n".join(dict.fromkeys(parts))[:MAX_SEARCH_QUERY_CHARS]
 
     @staticmethod
-    def _text_mentions_entity(content: str, *, names: Sequence[str]) -> bool:
-        normalized_content = normalize_surface(content)
-        return any(
-            normalized_name in normalized_content
-            for name in names
-            if (normalized_name := normalize_surface(name))
-        )
-
-    @staticmethod
-    def _is_stub_evidence(content: str, *, names: Sequence[str]) -> bool:
-        normalized_names = {
-            normalize_surface(name) for name in names if normalize_surface(name)
-        }
-        lines = [
-            re.sub(r"^#{1,6}\s*", "", line).strip()
-            for line in content.splitlines()
-            if line.strip()
-        ]
-        return bool(lines and normalized_names) and all(
-            normalize_surface(line) in normalized_names for line in lines
-        )
-
-    @staticmethod
     def _optional_int(value: Any) -> int | None:
         try:
             return int(value) if value is not None else None
         except (TypeError, ValueError):
             return None
-
-    @staticmethod
-    def _select_entity_sections(
-        content: str,
-        *,
-        names: Sequence[str],
-        topics: Sequence[str] = (),
-        prefer_topics: bool = False,
-        require_topic_match: bool = False,
-    ) -> str:
-        """Keep Entity-scoped source context, with a deterministic fallback."""
-
-        scope_names = list(names)
-        for name in names:
-            latin_tokens = re.findall(r"[A-Za-z][A-Za-z0-9.-]*", name)
-            if len(latin_tokens) >= 3:
-                # Product prose commonly omits the vendor prefix, e.g.
-                # "Microsoft Fabric IQ Ontology" -> "Fabric IQ Ontology".
-                scope_names.append(" ".join(latin_tokens[1:]))
-        normalized_names = tuple(
-            dict.fromkeys(
-                normalize_surface(name)
-                for name in scope_names
-                if normalize_surface(name)
-            )
-        )
-        body = re.sub(
-            r"\A---[ \t]*\n.*?\n---[ \t]*(?:\n|\Z)",
-            "",
-            content,
-            count=1,
-            flags=re.DOTALL,
-        ).strip()
-        sections = [
-            section.strip()
-            for section in re.split(r"(?=^#{1,6}\s)", body, flags=re.MULTILINE)
-            if section.strip()
-        ]
-        normalized_topics = tuple(
-            normalize_surface(topic) for topic in topics if normalize_surface(topic)
-        )
-
-        def matching_sections(
-            terms: Sequence[str], *, prefer_heading_match: bool = False
-        ) -> list[str]:
-            matches = [
-                section
-                for section in sections
-                if any(term in normalize_surface(section) for term in terms)
-            ]
-            if not prefer_heading_match:
-                return matches
-
-            def heading_matches(section: str) -> bool:
-                heading = section.splitlines()[0] if section else ""
-                normalized_heading = normalize_surface(
-                    re.sub(r"^#{1,6}\s*", "", heading)
-                )
-                return any(term in normalized_heading for term in terms)
-
-            heading_matched = [
-                section for section in matches if heading_matches(section)
-            ]
-            return heading_matched or matches
-
-        candidate_sections = (
-            matching_sections(normalized_topics, prefer_heading_match=True)
-            if prefer_topics
-            else []
-        )
-        if require_topic_match and not candidate_sections:
-            return ""
-        if not candidate_sections:
-            candidate_sections = matching_sections(normalized_names)
-        if not candidate_sections:
-            candidate_sections = matching_sections(normalized_topics)
-        if not candidate_sections:
-            discovery_context = build_discovery_context(body)
-            candidate_sections = [
-                reference.content for reference in discovery_context.source_references
-            ]
-
-        matches: list[str] = []
-        total_chars = 0
-        for section in candidate_sections:
-            remaining = MAX_RELATION_DOCUMENT_CHARS - total_chars
-            if remaining <= 0:
-                break
-            selected = KnowledgeEntityTaskWorker._bounded_context_around_terms(
-                section,
-                terms=topics if prefer_topics else (*names, *topics),
-                limit=remaining,
-            )
-            matches.append(selected)
-            total_chars += len(selected)
-            if len(matches) >= MAX_MATCHED_SECTIONS_PER_DOCUMENT:
-                break
-        return "\n\n".join(matches)
-
-    @staticmethod
-    def _bounded_context_around_terms(
-        content: str, *, terms: Sequence[str], limit: int
-    ) -> str:
-        """Keep a long source section centered on its first Entity/Topic mention."""
-
-        if len(content) <= limit:
-            return content
-        folded = content.casefold()
-        heading_positions: list[tuple[bool, int, int]] = []
-        line_start = 0
-        normalized_terms = tuple(
-            (term.casefold(), normalize_surface(term)) for term in terms if term.strip()
-        )
-        for line in content.splitlines(keepends=True):
-            stripped = line.strip()
-            folded_line = stripped.casefold()
-            normalized_line = normalize_surface(
-                re.sub(r"^(?:#{1,6}\s*|\*\*|__)", "", stripped)
-            )
-            if len(stripped) <= 200 and any(
-                folded_term in folded_line for folded_term, _ in normalized_terms
-            ):
-                starts_with_term = any(
-                    normalized_line.startswith(normalized_term)
-                    for _, normalized_term in normalized_terms
-                )
-                heading_positions.append(
-                    (not starts_with_term, len(stripped), line_start)
-                )
-            line_start += len(line)
-        if heading_positions:
-            mention = min(heading_positions)[2]
-        else:
-            positions = [
-                position
-                for term in terms
-                if term.strip()
-                and (position := folded.find(term.strip().casefold())) >= 0
-            ]
-            if not positions:
-                return content[:limit]
-            mention = min(positions)
-        # Keep the matched Topic in the first evidence fragment. Topic × Source
-        # quota allocation may only have room for that fragment, so placing the
-        # anchor several fragments later would satisfy the quota with background
-        # text instead of the Topic's substantive section.
-        start = max(0, mention - min(limit // 4, MAX_RELATION_FRAGMENT_CHARS // 4))
-        end = min(len(content), start + limit)
-        start = max(0, end - limit)
-        return content[start:end]
-
-    @staticmethod
-    def _scope_evidence_to_entity(
-        content: str,
-        *,
-        names: Sequence[str],
-        preserve_without_mention: bool,
-    ) -> str:
-        """Remove sibling-entity prose from a mixed recall fragment.
-
-        Search chunks and topic-selected source sections often contain several
-        product profiles. A literal Entity match authorizes only the block that
-        contains it, not adjacent profiles that happen to discuss the same Topic.
-        Explicit relation evidence retains its previous fallback when the source
-        contains no literal name at all.
-        """
-
-        scope_names = list(names)
-        for name in names:
-            latin_tokens = re.findall(r"[A-Za-z][A-Za-z0-9.-]*", name)
-            if len(latin_tokens) >= 3:
-                scope_names.append(" ".join(latin_tokens[1:]))
-        normalized_names = tuple(
-            dict.fromkeys(
-                normalize_surface(name)
-                for name in scope_names
-                if normalize_surface(name)
-            )
-        )
-        if not content.strip() or not normalized_names:
-            return content.strip() if preserve_without_mention else ""
-        blocks = [
-            block.strip() for block in re.split(r"\n\s*\n", content) if block.strip()
-        ]
-        target_indexes = [
-            index
-            for index, block in enumerate(blocks)
-            if any(name in normalize_surface(block) for name in normalized_names)
-        ]
-        if not target_indexes:
-            return content.strip() if preserve_without_mention else ""
-
-        entity_headings: dict[int, int] = {}
-        for index in target_indexes:
-            for line_index, line in enumerate(blocks[index].splitlines()):
-                normalized_line = normalize_surface(
-                    re.sub(r"^#{1,6}\s*", "", line.strip())
-                )
-                if len(line.strip()) <= 200 and any(
-                    normalized_line.startswith(name) for name in normalized_names
-                ):
-                    entity_headings[index] = line_index
-                    break
-
-        # Prefer explicit product-profile headings over incidental mentions in
-        # comparison lists or broad Topic prose.
-        active_indexes = list(entity_headings) or target_indexes
-        selected_blocks: dict[int, str] = {}
-        for index in active_indexes:
-            block = blocks[index]
-            heading_line_index = entity_headings.get(index)
-            is_entity_heading = heading_line_index is not None
-            if heading_line_index is not None:
-                block = "\n".join(block.splitlines()[heading_line_index:]).strip()
-            selected_blocks[index] = block
-            if is_entity_heading and index + 1 < len(blocks):
-                following = blocks[index + 1]
-                following_first = following.splitlines()[0].strip()
-                looks_like_next_profile = bool(
-                    re.match(r"^#{1,6}\s+", following_first)
-                    or (
-                        len(following_first) <= 160
-                        and re.search(r"[：:]", following_first)
-                        and not any(
-                            name in normalize_surface(following_first)
-                            for name in normalized_names
-                        )
-                    )
-                )
-                if not looks_like_next_profile:
-                    sentences = [
-                        sentence.strip()
-                        for sentence in re.split(r"(?<=[。！？.!?])\s*", following)
-                        if sentence.strip()
-                    ]
-                    matched_sentences = [
-                        sentence
-                        for sentence in sentences
-                        if any(
-                            name in normalize_surface(sentence)
-                            for name in normalized_names
-                        )
-                    ]
-                    # A shared paragraph can profile Fabric and Salesforce in
-                    # adjacent sentences. Keep only target-bearing sentences;
-                    # an unlabelled continuation remains intact.
-                    selected_blocks[index + 1] = (
-                        " ".join(matched_sentences) if matched_sentences else following
-                    )
-            if index > 0:
-                previous = blocks[index - 1]
-                if re.match(r"^#{1,6}\s+", previous.splitlines()[0].strip()):
-                    selected_blocks[index - 1] = previous
-
-        scoped = "\n\n".join(
-            selected_blocks[index] for index in sorted(selected_blocks)
-        ).strip()
-        return scoped[:MAX_RELATION_DOCUMENT_CHARS]
 
     @staticmethod
     def _split_relation_evidence(content: str) -> tuple[str, ...]:

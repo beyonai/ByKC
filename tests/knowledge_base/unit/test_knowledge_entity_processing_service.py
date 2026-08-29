@@ -456,6 +456,85 @@ async def test_enrich_fingerprint_changes_with_latest_relation_watermark():
     assert first != second
 
 
+async def test_enrich_version_is_audit_only_and_reuses_unchanged_input(
+    monkeypatch,
+):
+    source = original(10, "/docs/evidence.md")
+    entity = original(
+        20,
+        "/KnowledgeEntity/A.md",
+        document_kind="knowledgeEntity",
+        entity_name="A",
+        aliases=[],
+        updated_at=datetime(2026, 8, 18, tzinfo=timezone.utc),
+    )
+    relation_created_at = datetime(2026, 8, 17, tzinfo=timezone.utc)
+    relation = {
+        "kid": 9,
+        "source_fs_entry_id": 10,
+        "relation_code": "MENTIONS",
+        "created_at": relation_created_at,
+    }
+    service, _ = make_service([source, entity])
+    fingerprint = service._fingerprint(
+        entity,
+        ProcessingCapability.ENTITY_ENRICH,
+        [relation],
+    )
+    monkeypatch.setattr(processing_module, "ENRICH_METHOD_VERSION", "enrich/9.9")
+    assert (
+        service._fingerprint(
+            entity,
+            ProcessingCapability.ENTITY_ENRICH,
+            [relation],
+        )
+        == fingerprint
+    )
+
+    tasks = Tasks(
+        [
+            {
+                "kid": 80,
+                "knowledge_base_id": 7,
+                "fs_entry_id": 20,
+                "file_path": entity["file_path"],
+                "task_type": "DOCUMENT_ENRICH",
+                "status": "succeeded",
+                "input_fingerprint": fingerprint,
+                "method_version": "enrich/1.0",
+                "protocol_version": None,
+                "finished_at": datetime(2026, 8, 18, tzinfo=timezone.utc),
+            }
+        ]
+    )
+    relations = Relations(incoming=[relation])
+    service, _ = make_service(
+        [source, entity],
+        relations=relations,
+        tasks=tasks,
+    )
+
+    eligibility = await service.evaluate_processing_eligibility(
+        ProcessingEligibilityRequest(
+            knCode="7",
+            filePath=entity["file_path"],
+            capability="entityEnrich",
+        )
+    )
+    accepted = await service.enrich_knowledge_entities(
+        EntityEnrichRequest(knCode="7", filePath=entity["file_path"])
+    )
+
+    assert eligibility.eligibility == ProcessingEligibility.ELIGIBLE_BUT_FRESH
+    assert eligibility.reason_code == "NO_NEW_RELATIONS"
+    assert accepted.accepted_count == 0
+    assert accepted.reused_count == 1
+    assert accepted.skipped_count == 0
+    assert accepted.tasks[0].task_id == "80"
+    assert accepted.tasks[0].reused is True
+    assert len(tasks.rows) == 1
+
+
 async def test_invalid_subject_file_id_is_ineligible_instead_of_json_failure():
     entity = original(
         21,

@@ -28,6 +28,18 @@ def _validate_file_path(value: str | None) -> str | None:
     return "/" + "/".join(part for part in normalized.split("/") if part)
 
 
+def _validate_directory_path(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized.startswith("/"):
+        raise ValueError("directoryPath must start with '/'")
+    if any(part == ".." for part in normalized.split("/")):
+        raise ValueError("directoryPath must not contain '..'")
+    parts = [part for part in normalized.split("/") if part]
+    return "/" + "/".join(parts) if parts else "/"
+
+
 class ProcessingCapability(StrEnum):
     ENTITY_DISCOVERY = "entityDiscovery"
     ENTITY_ENRICH = "entityEnrich"
@@ -55,6 +67,7 @@ class ProcessingTaskStatus(StrEnum):
 
 class ProcessingScope(StrEnum):
     SINGLE_FILE = "SINGLE_FILE"
+    DIRECTORY = "DIRECTORY"
     WHOLE_KB = "WHOLE_KB"
 
 
@@ -92,7 +105,7 @@ class ProcessingEligibilityRequest(_ApiModel):
 
 
 class EntityDiscoveryRequest(_ApiModel):
-    """Request for single-file or whole-knowledge-base entity discovery."""
+    """Request for file, directory, or whole-knowledge-base entity discovery."""
 
     kb_code: str = Field(
         min_length=1,
@@ -101,6 +114,10 @@ class EntityDiscoveryRequest(_ApiModel):
     file_path: str | None = Field(
         default=None,
         validation_alias=AliasChoices("filePath", "file_path"),
+    )
+    directory_path: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("directoryPath", "directory_path"),
     )
     max_entities: int = Field(
         default=12,
@@ -123,6 +140,9 @@ class EntityDiscoveryRequest(_ApiModel):
         description="Deprecated compatibility field; accepted but ignored.",
     )
     _normalize_file_path = field_validator("file_path")(_validate_file_path)
+    _normalize_directory_path = field_validator("directory_path")(
+        _validate_directory_path
+    )
 
 
 class EntityEnrichRequest(_ApiModel):
@@ -328,11 +348,15 @@ class ProcessingTaskSummary(_ApiModel):
 class ProcessingBatchAccepted(_ApiModel):
     batch_id: str = Field(serialization_alias="batchId")
     scope: ProcessingScope
+    target_path: str | None = Field(default=None, serialization_alias="targetPath")
     task_type: ProcessingTaskType = Field(serialization_alias="taskType")
+    candidate_count: int = Field(ge=0, serialization_alias="candidateCount")
     eligible_count: int = Field(ge=0, serialization_alias="eligibleCount")
     accepted_count: int = Field(ge=0, serialization_alias="acceptedCount")
     reused_count: int = Field(ge=0, serialization_alias="reusedCount")
     skipped_count: int = Field(ge=0, serialization_alias="skippedCount")
+    returned_task_count: int = Field(ge=0, serialization_alias="returnedTaskCount")
+    tasks_truncated: bool = Field(serialization_alias="tasksTruncated")
     tasks: list[ProcessingTaskSummary]
 
 

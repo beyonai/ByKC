@@ -27,7 +27,8 @@
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- | --- |
 | `knCode` | string | 是 | - | 原始文档所属知识库 |
-| `filePath` | string | 否 | - | 原始文档路径；不传表示处理该知识库下全部符合条件的原始文档 |
+| `filePath` | string | 否 | - | 原始文档路径；传入时优先于 `directoryPath` |
+| `directoryPath` | string | 否 | - | 原始文档目录，递归处理子目录；未传 `filePath` 时生效 |
 | `maxEntities` | integer | 否 | `12` | 每个源文档的最大抽取实体数，不得超过 12 |
 | `force` | boolean | 否 | `false` | 是否跳过 freshness 判断；不跳过资格和权限校验 |
 | `extraParams` | object | 否 | `null` | **已弃用**，仅为历史请求兼容而接收；服务端不修改其内容，也不使用、持久化或传入 Callback |
@@ -57,7 +58,7 @@ HTTP 请求中不包含 `callback` 字段。历史客户端也可使用别名 `e
 
 上述对象仅在请求模型中原样接收，不进入 batch/task 执行参数、状态响应或 Callback 事件。
 
-全库触发时不传 `filePath`：
+全库触发时不传 `filePath` 和 `directoryPath`：
 
 ```json
 {
@@ -66,6 +67,19 @@ HTTP 请求中不包含 `callback` 字段。历史客户端也可使用别名 `e
   "force": false
 }
 ```
+
+按目录触发：
+
+```json
+{
+  "knCode": "1",
+  "directoryPath": "/原始文档/人力资源",
+  "maxEntities": 12,
+  "force": false
+}
+```
+
+定位优先级为 `filePath > directoryPath > knCode`。同时传入文件和目录时只处理该文件。
 
 ## 成功响应示例（已受理）
 
@@ -76,11 +90,15 @@ HTTP 请求中不包含 `callback` 字段。历史客户端也可使用别名 `e
   "resultObject": {
     "batchId": "ed-20260817-0001",
     "scope": "SINGLE_FILE",
+    "targetPath": "/原始文档/AI时代的组织革命.md",
     "taskType": "ENTITY_DISCOVERY",
+    "candidateCount": 1,
     "eligibleCount": 1,
     "acceptedCount": 1,
     "reusedCount": 0,
     "skippedCount": 0,
+    "returnedTaskCount": 1,
+    "tasksTruncated": false,
     "tasks": [
       {
         "taskId": "9001",
@@ -94,7 +112,7 @@ HTTP 请求中不包含 `callback` 字段。历史客户端也可使用别名 `e
 }
 ```
 
-全库请求的响应结构相同，`scope=WHOLE_KB`，计数为本次资格筛选和幂等判断的汇总。`tasks` 只返回本次接受或复用的任务摘要；当数量超过服务端上限时可以截断，完整状态通过 `processingTaskStatus` 按 `batchId` 查询。
+目录请求返回 `scope=DIRECTORY`，全库请求返回 `scope=WHOLE_KB`。`candidateCount` 是本次扫描数，且始终满足 `candidateCount = acceptedCount + reusedCount + skippedCount`。`tasks` 只预览本次接受或复用的任务，最多返回 20 条；`tasksTruncated=true` 时表示已截断。本次新建任务的完整状态通过 `processingTaskStatus` 按 `batchId` 分页查询。
 
 相同输入指纹已经成功或已有运行中任务时不创建重复任务，计入 `reusedCount`：
 
@@ -105,11 +123,15 @@ HTTP 请求中不包含 `callback` 字段。历史客户端也可使用别名 `e
   "resultObject": {
     "batchId": "ed-20260817-0002",
     "scope": "SINGLE_FILE",
+    "targetPath": "/原始文档/AI时代的组织革命.md",
     "taskType": "ENTITY_DISCOVERY",
+    "candidateCount": 1,
     "eligibleCount": 1,
     "acceptedCount": 0,
     "reusedCount": 1,
     "skippedCount": 0,
+    "returnedTaskCount": 1,
+    "tasksTruncated": false,
     "tasks": [
       {
         "taskId": "801",
@@ -139,7 +161,7 @@ Discovery 成功任务结果示例见任务状态接口。
 
 - 只接受 `documentKind=original` 且启用 `entityDiscovery` 的文档；
 - 文档必须已经生成可读 Markdown 正文；
-- `filePath` 未传时，枚举当前知识库中所有符合上述条件的文件，并排除 `/KnowledgeEntity` 目录；
+- `filePath` 未传时，候选查询直接排除显式 `documentKind=knowledgeEntity` 的文件和 `/KnowledgeEntity` 整个子树；未配置 `documentKind` 的历史普通文件仍按 `original` 进入后续资格校验；
 - 新实体只写入源文档所在知识库的固定 `/KnowledgeEntity` 目录，目录不存在时自动创建；接口不允许调用方指定其他知识库或目录；
 - 新实体路径固定为 `/KnowledgeEntity/{规范可读名称}.md`，不附加 MD5、哈希签名或数字序号；
 - 同库规范路径已存在时直接锚定该文件，不创建副本：文件必须是 KnowledgeEntity，`entityName` 与候选相同或缺失，subject 身份一致；明显的元数据或文档类型冲突使任务失败；
@@ -169,7 +191,9 @@ Discovery 成功任务结果示例见任务状态接口。
 ## 特殊逻辑
 
 - 一次请求创建一个 batch，每个合格文件对应一个独立 task。
+- 受理前已确定不合格的文件只计入 `skippedCount`，不写入 task 表；复用时直接返回原 task ID，不创建 `SKIPPED` task。
 - 仅处理 `documentKind=original` 且已生成可读 Markdown 的文档。
+- 目录/全库召回阶段不返回 `documentKind=knowledgeEntity` 或 `/KnowledgeEntity` 子树内的文件，这些文件不计入 `candidateCount` 和 `skippedCount`。
 - 新实体只能写入当前知识库固定 `/KnowledgeEntity` 目录，不建立跨库关系。
 - `force=true` 跳过已成功结果的 freshness 复用，但同文件仍有 `PENDING/RUNNING` 任务时复用活动任务。
 - 文件失败、`TASK_TIMEOUT` 或 `WORKER_LOST` 都是终态，不自动重试。
@@ -178,6 +202,8 @@ Discovery 成功任务结果示例见任务状态接口。
 
 - `knCode` 是知识库编码，HTTP 请求中使用字符串。
 - `filePath` 必须以 `/` 开头，表示知识库内完整文件路径，不允许使用 `..` 越界。
+- `directoryPath` 必须以 `/` 开头，允许根目录 `/`，不允许使用 `..`；目录必须存在。
+- `/KnowledgeEntity` 及其子目录不能作为 Discovery 的 `directoryPath`。
 
 ---
 

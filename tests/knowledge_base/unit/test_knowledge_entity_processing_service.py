@@ -86,19 +86,47 @@ class EntityRepo:
     def __init__(self, files):
         self.files = files
 
+    async def get_directory_by_path(self, cursor, *, knowledge_base_id, directory_path):
+        del cursor, knowledge_base_id
+        if directory_path == "/":
+            return {"kid": None, "file_path": "/", "entry_type": "DIRECTORY"}
+        prefix = directory_path.rstrip("/") + "/"
+        if any(row["file_path"].startswith(prefix) for row in self.files):
+            return {
+                "kid": 900,
+                "file_path": directory_path,
+                "entry_type": "DIRECTORY",
+            }
+        return None
+
     async def get_file_with_metadata(self, cursor, *, knowledge_base_id, file_path):
         del cursor, knowledge_base_id
         return next((row for row in self.files if row["file_path"] == file_path), None)
 
     async def list_files_with_metadata(
-        self, cursor, *, knowledge_base_id, path_prefix=None
+        self,
+        cursor,
+        *,
+        knowledge_base_id,
+        path_prefix=None,
+        exclude_knowledge_entities=False,
     ):
         del cursor, knowledge_base_id
-        if path_prefix is None:
-            return list(self.files)
-        return [
-            row for row in self.files if row["file_path"].startswith(path_prefix + "/")
-        ]
+        rows = list(self.files)
+        if path_prefix not in {None, "/"}:
+            rows = [
+                row
+                for row in rows
+                if row["file_path"].startswith(path_prefix.rstrip("/") + "/")
+            ]
+        if exclude_knowledge_entities:
+            rows = [
+                row
+                for row in rows
+                if not row["file_path"].startswith("/KnowledgeEntity/")
+                and row.get("document_kind") != "knowledgeEntity"
+            ]
+        return rows
 
     async def get_files_by_ids(self, cursor, *, knowledge_base_id, fs_entry_ids):
         del cursor, knowledge_base_id
@@ -654,7 +682,118 @@ async def test_whole_kb_discovery_schedules_only_text_documents():
     assert [
         row["status"]
         for row in service.knowledge_semantic_processing_task_repository.rows
-    ].count("skipped") == 2
+    ].count("skipped") == 0
+    assert len(service.knowledge_semantic_processing_task_repository.rows) == 4
+
+
+async def test_directory_discovery_recursively_selects_only_requested_subtree():
+    files = [
+        original(10, "/docs/a.md"),
+        original(11, "/docs/nested/b.md"),
+        original(12, "/docs-other/c.md"),
+    ]
+    service, _ = make_service(files)
+
+    accepted = await service.discover_knowledge_entities(
+        EntityDiscoveryRequest(knCode="7", directoryPath="//docs//")
+    )
+
+    assert accepted.scope.value == "DIRECTORY"
+    assert accepted.target_path == "/docs"
+    assert accepted.candidate_count == 2
+    assert accepted.accepted_count == 2
+    assert {
+        row["file_path_snapshot"]
+        for row in service.knowledge_semantic_processing_task_repository.rows
+    } == {
+        "/docs/a.md",
+        "/docs/nested/b.md",
+    }
+
+
+async def test_discovery_file_path_takes_priority_over_directory_path():
+    files = [original(10, "/docs/a.md"), original(11, "/other/b.md")]
+    service, _ = make_service(files)
+
+    accepted = await service.discover_knowledge_entities(
+        EntityDiscoveryRequest(
+            knCode="7",
+            filePath="/other/b.md",
+            directoryPath="/missing",
+        )
+    )
+
+    assert accepted.scope.value == "SINGLE_FILE"
+    assert accepted.target_path == "/other/b.md"
+    assert accepted.candidate_count == 1
+    assert accepted.tasks[0].file_path == "/other/b.md"
+
+
+async def test_directory_discovery_rejects_missing_and_entity_directories():
+    service, connection = make_service(
+        [original(10, "/docs/a.md"), original(11, "/KnowledgeEntity/e.md")]
+    )
+
+    with pytest.raises(
+        processing_module.KnowledgeBaseValidationError, match="directory not found"
+    ):
+        await service.discover_knowledge_entities(
+            EntityDiscoveryRequest(knCode="7", directoryPath="/missing")
+        )
+    with pytest.raises(
+        processing_module.KnowledgeBaseValidationError,
+        match="must not be /KnowledgeEntity",
+    ):
+        await service.discover_knowledge_entities(
+            EntityDiscoveryRequest(knCode="7", directoryPath="/KnowledgeEntity")
+        )
+
+    assert connection.rollbacks == 2
+    assert service.knowledge_semantic_processing_task_repository.rows == []
+
+
+async def test_acceptance_omits_preflight_skips_and_bounds_task_summaries():
+    files = [original(index, f"/docs/{index}.md") for index in range(1, 26)]
+    files.append(original(30, "/docs/unsupported.pdf", mime_type="application/pdf"))
+    service, _ = make_service(files)
+
+    accepted = await service.discover_knowledge_entities(
+        EntityDiscoveryRequest(knCode="7")
+    )
+
+    assert accepted.candidate_count == 26
+    assert accepted.accepted_count == 25
+    assert accepted.skipped_count == 1
+    assert len(service.knowledge_semantic_processing_task_repository.rows) == 25
+    assert accepted.returned_task_count == 20
+    assert accepted.tasks_truncated is True
+    assert len(accepted.tasks) == 20
+    batch = service.knowledge_semantic_processing_batch_repository.rows[
+        accepted.batch_id
+    ]
+    assert batch["total_count"] == 25
+    assert batch["completed_count"] == 0
+
+
+async def test_all_preflight_skips_create_completed_empty_batch_without_tasks():
+    service, _ = make_service(
+        [original(10, "/docs/a.pdf", mime_type="application/pdf")]
+    )
+
+    accepted = await service.discover_knowledge_entities(
+        EntityDiscoveryRequest(knCode="7")
+    )
+
+    assert accepted.accepted_count == 0
+    assert accepted.reused_count == 0
+    assert accepted.skipped_count == 1
+    assert accepted.tasks == []
+    assert service.knowledge_semantic_processing_task_repository.rows == []
+    batch = service.knowledge_semantic_processing_batch_repository.rows[
+        accepted.batch_id
+    ]
+    assert batch["total_count"] == 0
+    assert batch["status"] == "completed"
 
 
 async def test_whole_kb_enrich_schedules_only_markdown_entities():
@@ -718,7 +857,8 @@ async def test_whole_kb_enrich_schedules_only_markdown_entities():
     assert [
         row["status"]
         for row in service.knowledge_semantic_processing_task_repository.rows
-    ].count("skipped") == 1
+    ].count("skipped") == 0
+    assert len(service.knowledge_semantic_processing_task_repository.rows) == 2
     assert all(
         "extraParams" not in row["request_params"]
         for row in service.knowledge_semantic_processing_task_repository.rows
@@ -747,6 +887,7 @@ async def test_whole_kb_discovery_accepts_unclassified_ordinary_files_only():
     files = [
         original(10, "/docs/legacy.md", document_kind=None),
         original(11, "/KnowledgeEntity/legacy-entity.md", document_kind=None),
+        original(12, "/docs/misplaced-entity.md", document_kind="knowledgeEntity"),
     ]
     service, _ = make_service(files, scheduler=scheduler)
 
@@ -756,7 +897,8 @@ async def test_whole_kb_discovery_accepts_unclassified_ordinary_files_only():
 
     assert accepted.eligible_count == 1
     assert accepted.accepted_count == 1
-    assert accepted.skipped_count == 1
+    assert accepted.skipped_count == 0
+    assert accepted.candidate_count == 1
     assert scheduler.factories == []
 
 
@@ -1001,15 +1143,10 @@ async def test_same_fingerprint_succeeded_task_is_reused_without_scheduling():
     )
     assert accepted.accepted_count == 0
     assert accepted.reused_count == 1
-    assert accepted.tasks[0].task_id != "81"
-    assert accepted.tasks[0].status.value == "SKIPPED"
-    created = service.knowledge_semantic_processing_task_repository.rows[-1]
-    assert created["result_payload"] == {
-        "reasonCode": "INPUT_UNCHANGED",
-        "reusedTaskId": "81",
-    }
-    assert created["method_version"] == processing_module.DISCOVERY_METHOD_VERSION
-    assert created["protocol_version"] == processing_module.DISCOVERY_PROTOCOL_VERSION
+    assert accepted.skipped_count == 0
+    assert accepted.tasks[0].task_id == "81"
+    assert accepted.tasks[0].status.value == "SUCCEEDED"
+    assert len(service.knowledge_semantic_processing_task_repository.rows) == 1
 
 
 async def test_pending_same_fingerprint_is_reused_under_file_lock():
@@ -1036,7 +1173,10 @@ async def test_pending_same_fingerprint_is_reused_under_file_lock():
         EntityDiscoveryRequest(knCode="7", filePath="/docs/source.md")
     )
     assert accepted.reused_count == 1
-    assert accepted.tasks[0].status.value == "SKIPPED"
+    assert accepted.skipped_count == 0
+    assert accepted.tasks[0].task_id == "82"
+    assert accepted.tasks[0].status.value == "PENDING"
+    assert len(service.knowledge_semantic_processing_task_repository.rows) == 1
     assert connection.locked_ids == [10]
 
 
@@ -1062,13 +1202,10 @@ async def test_force_reuses_active_task_even_when_fingerprint_changed():
 
     assert accepted.accepted_count == 0
     assert accepted.reused_count == 1
-    assert accepted.tasks[0].task_id != "83"
-    assert accepted.tasks[0].status.value == "SKIPPED"
-    created = service.knowledge_semantic_processing_task_repository.rows[-1]
-    assert created["result_payload"] == {
-        "reasonCode": "ALREADY_PROCESSING",
-        "activeTaskId": "83",
-    }
+    assert accepted.skipped_count == 0
+    assert accepted.tasks[0].task_id == "83"
+    assert accepted.tasks[0].status.value == "RUNNING"
+    assert len(service.knowledge_semantic_processing_task_repository.rows) == 1
     assert connection.locked_ids == [10]
 
 

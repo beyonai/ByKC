@@ -1712,9 +1712,10 @@ def register_routes(
                 status_code=422,
             )
         logger.info(
-            "entity_discovery request received: kb_code=%s, file_path=%s, force=%s",
+            "entity_discovery request received: kb_code=%s, file_path=%s, directory_path=%s, force=%s",
             request.kb_code,
             request.file_path,
+            request.directory_path,
             request.force,
         )
         try:

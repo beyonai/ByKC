@@ -180,6 +180,40 @@ async def test_get_file_with_metadata_folds_eav_values_and_storage_fields():
     assert "definitionVersion" not in params["property_names"]
 
 
+async def test_get_directory_by_path_supports_root_and_live_directory_lookup():
+    repository = KnowledgeEntityRepository()
+    root_cursor = FakeCursor()
+
+    root = await repository.get_directory_by_path(
+        root_cursor, knowledge_base_id=7, directory_path="/"
+    )
+
+    assert root == {
+        "kid": None,
+        "knowledge_base_id": 7,
+        "file_path": "/",
+        "entry_type": "DIRECTORY",
+    }
+    assert root_cursor.executed == []
+
+    directory = {
+        "kid": 12,
+        "knowledge_base_id": 7,
+        "file_path": "/docs",
+        "entry_type": "DIRECTORY",
+    }
+    cursor = FakeCursor(fetchone_results=[directory])
+    result = await repository.get_directory_by_path(
+        cursor, knowledge_base_id=7, directory_path="docs/"
+    )
+
+    assert result == directory
+    sql, params = cursor.executed[0]
+    assert "entry_type = 'DIRECTORY'" in sql
+    assert "is_deleted = FALSE" in sql
+    assert params["directory_path"] == "/docs"
+
+
 async def test_list_files_with_metadata_uses_segment_safe_prefix_and_stable_order():
     rows = [
         file_row(
@@ -226,6 +260,24 @@ async def test_list_files_without_prefix_keeps_query_parameterized():
     assert "%(path_prefix)s::text IS NULL" in sql
     assert params["path_prefix"] is None
     assert "7" not in sql
+
+
+async def test_discovery_candidate_query_excludes_entity_kind_and_directory():
+    cursor = FakeCursor(fetchall_results=[[]])
+
+    await KnowledgeEntityRepository().list_files_with_metadata(
+        cursor,
+        knowledge_base_id=7,
+        exclude_knowledge_entities=True,
+    )
+
+    sql, params = cursor.executed[0]
+    assert "fe.virtual_path = '/KnowledgeEntity'" in sql
+    assert "'/KnowledgeEntity/'" in sql
+    assert "NOT EXISTS" in sql
+    assert "document_kind.property_name = 'documentKind'" in sql
+    assert "document_kind.value_string = 'knowledgeEntity'" in sql
+    assert params["exclude_knowledge_entities"] is True
 
 
 async def test_missing_processing_capabilities_is_distinct_from_explicit_empty_list():

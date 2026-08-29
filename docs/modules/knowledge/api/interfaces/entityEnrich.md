@@ -68,11 +68,15 @@ HTTP 请求中不包含 `callback` 或模板正文。历史客户端也可使用
   "resultObject": {
     "batchId": "ee-20260817-0001",
     "scope": "SINGLE_FILE",
+    "targetPath": "/KnowledgeEntity/OSOT.md",
     "taskType": "DOCUMENT_ENRICH",
+    "candidateCount": 1,
     "eligibleCount": 1,
     "acceptedCount": 1,
     "reusedCount": 0,
     "skippedCount": 0,
+    "returnedTaskCount": 1,
+    "tasksTruncated": false,
     "tasks": [
       {
         "taskId": "9101",
@@ -86,7 +90,7 @@ HTTP 请求中不包含 `callback` 或模板正文。历史客户端也可使用
 }
 ```
 
-没有可用证据的文件不进入可执行任务，计入 `skippedCount`；如果证据在任务执行过程中失效，则该文件任务进入终态 `SKIPPED`：
+没有可用证据的文件在受理前就会计入 `skippedCount`，不创建 task；如果证据在任务执行过程中失效，则已创建的文件 task 进入终态 `SKIPPED`：
 
 ```json
 {
@@ -95,12 +99,14 @@ HTTP 请求中不包含 `callback` 或模板正文。历史客户端也可使用
 }
 ```
 
+`candidateCount` 始终满足 `candidateCount = acceptedCount + reusedCount + skippedCount`。`tasks` 只预览接受或复用的任务，最多返回 20 条；超过上限时 `tasksTruncated=true`。复用任务直接返回原 task ID，不额外创建 `SKIPPED` task。
+
 ## 6.1 Enrich 执行约束
 
 - 只接受 `documentKind=knowledgeEntity` 且启用 `entityEnrich` 的文档；
 - 传入 `filePath` 时，目标必须属于当前知识库的 `/KnowledgeEntity` 目录；不传时只枚举该固定目录；
 - `entityName`、`aliases` 等身份 metadata 必须完整；
-- 至少存在一份调用方有权访问的证据，否则任务进入 `SKIPPED`；
+- 至少存在一份调用方有权访问的证据，否则受理时跳过且不创建 task；
 - evidence 范围只能收窄调用方权限，不能扩大权限；
 - 模板章节缺失、顺序变化或占位符残留只产生 warning；
 - 身份漂移、空正文、无权限引用和并发 checksum 冲突阻断写入；
@@ -123,6 +129,7 @@ HTTP 请求中不包含 `callback` 或模板正文。历史客户端也可使用
 ## 特殊逻辑
 
 - 一次请求创建一个 batch，每个合格 KnowledgeEntity 文件对应一个 task。
+- 受理前不合格的文件只计入 `skippedCount`，不写入 task 表。
 - 目标限定为当前库 `/KnowledgeEntity` 中 `documentKind=knowledgeEntity` 的文档。
 - 证据范围不能超过调用方权限；无可用证据时跳过该文件。
 - 并发 checksum 冲突、身份漂移和空正文会阻断写入。

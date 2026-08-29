@@ -853,6 +853,100 @@ def _entity_surfaces(knowledge_base_id: int | None) -> list[dict[str, Any]]:
 
 
 @pytest.mark.integration
+def test_entity_discovery_directory_acceptance_filters_without_skip_tasks() -> None:
+    """Verify directory scope and preflight filtering through the real API/DB."""
+
+    _assert_real_runtime_configuration()
+    with _real_test_client() as client:
+        kb_code = _create_kb(client)
+        try:
+            selected_path = "/selected/unbuilt.md"
+            outside_path = "/outside/unbuilt.md"
+            misplaced_entity_path = "/misplaced/entity.md"
+            reserved_entity_path = "/KnowledgeEntity/ignored.md"
+            _upload_markdown(
+                client,
+                kb_code=kb_code,
+                file_path=selected_path,
+                content="# Selected\n\nThis file has not been indexed.",
+            )
+            _upload_markdown(
+                client,
+                kb_code=kb_code,
+                file_path=outside_path,
+                content="# Outside\n\nThis file is outside the requested directory.",
+            )
+            _upload_markdown(
+                client,
+                kb_code=kb_code,
+                file_path=misplaced_entity_path,
+                content="# Misplaced entity\n\nExcluded by documentKind.",
+            )
+            _set_entity_metadata(
+                client,
+                kb_code=kb_code,
+                file_path=misplaced_entity_path,
+                entity_name="Misplaced entity",
+            )
+            _upload_markdown(
+                client,
+                kb_code=kb_code,
+                file_path=reserved_entity_path,
+                content="# Reserved entity\n\nExcluded by path.",
+            )
+
+            accepted = _assert_success(
+                client.post(
+                    "/api/v1/knowledgeItems/entityDiscovery",
+                    json={"knCode": kb_code, "directoryPath": "/selected"},
+                )
+            )
+
+            assert accepted["scope"] == "DIRECTORY"
+            assert accepted["targetPath"] == "/selected"
+            assert accepted["candidateCount"] == 1
+            assert accepted["eligibleCount"] == 0
+            assert accepted["acceptedCount"] == 0
+            assert accepted["reusedCount"] == 0
+            assert accepted["skippedCount"] == 1
+            assert accepted["returnedTaskCount"] == 0
+            assert accepted["tasksTruncated"] is False
+            assert accepted["tasks"] == []
+
+            batch = _assert_success(
+                client.post(
+                    "/api/v1/knowledgeItems/processingBatchStatus",
+                    json={"knCode": kb_code, "batchId": accepted["batchId"]},
+                )
+            )
+            assert batch["scope"] == "DIRECTORY"
+            assert batch["status"] == "COMPLETED"
+            assert batch["totalCount"] == 0
+            assert batch["data"] == []
+
+            root_scope = _assert_success(
+                client.post(
+                    "/api/v1/knowledgeItems/entityDiscovery",
+                    json={"knCode": kb_code, "directoryPath": "/"},
+                )
+            )
+            assert root_scope["scope"] == "DIRECTORY"
+            assert root_scope["candidateCount"] == 2
+            assert root_scope["acceptedCount"] == 0
+            assert root_scope["skippedCount"] == 2
+            assert root_scope["tasks"] == []
+
+            enrich_response = client.post(
+                "/api/v1/knowledgeItems/entityEnrich",
+                json={"knCode": kb_code, "directoryPath": "/selected"},
+            )
+            assert enrich_response.status_code == 200
+            assert enrich_response.json()["resultCode"] == "-1"
+        finally:
+            _delete_kb(client, kb_code)
+
+
+@pytest.mark.integration
 def test_knowledge_entity_real_api_end_to_end() -> None:
     """Exercise KnowledgeEntity through only real public APIs and dependencies."""
 
@@ -1052,6 +1146,38 @@ stores stable entity names and aliases for knowledge-governance workflows.
                 file_path=second_source_path,
                 content=second_source,
             )
+            directory_batch = _assert_success(
+                client.post(
+                    "/api/v1/knowledgeItems/entityDiscovery",
+                    json={
+                        "knCode": kb_code,
+                        "directoryPath": "/documents",
+                        "maxEntities": 2,
+                    },
+                )
+            )
+            assert directory_batch["scope"] == "DIRECTORY"
+            assert directory_batch["targetPath"] == "/documents"
+            assert directory_batch["candidateCount"] == 2
+            assert directory_batch["acceptedCount"] == 0
+            assert directory_batch["reusedCount"] == 1
+            assert directory_batch["skippedCount"] == 1
+            assert [item["filePath"] for item in directory_batch["tasks"]] == [
+                source_path
+            ]
+            directory_status = _assert_success(
+                client.post(
+                    "/api/v1/knowledgeItems/processingBatchStatus",
+                    json={
+                        "knCode": kb_code,
+                        "batchId": directory_batch["batchId"],
+                    },
+                )
+            )
+            assert directory_status["status"] == "COMPLETED"
+            assert directory_status["totalCount"] == 0
+            assert directory_status["data"] == []
+
             whole_batch = _assert_success(
                 client.post(
                     "/api/v1/knowledgeItems/entityDiscovery",
@@ -1068,11 +1194,7 @@ stores stable entity names and aliases for knowledge-governance workflows.
             ]
             assert len(reused_tasks) == 1
             assert reused_tasks[0]["filePath"] == source_path
-            assert {item["filePath"] for item in whole_batch["tasks"]} >= {
-                source_path,
-                second_source_path,
-                entity_path,
-            }
+            assert {item["filePath"] for item in whole_batch["tasks"]} == {source_path}
 
             discovery_fresh = _eligibility(
                 client,
@@ -1546,6 +1668,19 @@ def test_knowledge_entity_real_eligibility_and_request_matrix() -> None:
             )
             assert skipped_enrich["acceptedCount"] == 0
             assert skipped_enrich["skippedCount"] == 1
+            assert skipped_enrich["tasks"] == []
+            skipped_status = _assert_success(
+                client.post(
+                    "/api/v1/knowledgeItems/processingBatchStatus",
+                    json={
+                        "knCode": kb_code,
+                        "batchId": skipped_enrich["batchId"],
+                    },
+                )
+            )
+            assert skipped_status["status"] == "COMPLETED"
+            assert skipped_status["totalCount"] == 0
+            assert skipped_status["data"] == []
             assert (
                 _metadata(
                     client,
@@ -1748,11 +1883,12 @@ entity and links to its canonical file.
             task_ids = {
                 task["taskId"] for response in responses for task in response["tasks"]
             }
-            assert len(task_ids) == 2
+            assert len(task_ids) == 1
             accepted = next(item for item in responses if item["acceptedCount"] == 1)
             reused = next(item for item in responses if item["reusedCount"] == 1)
             assert accepted["tasks"][0]["status"] == "PENDING"
-            assert reused["tasks"][0]["status"] == "SKIPPED"
+            assert reused["tasks"][0]["status"] in {"PENDING", "RUNNING"}
+            assert reused["tasks"][0]["taskId"] == accepted["tasks"][0]["taskId"]
             assert reused["tasks"][0]["reused"] is True
             accepted_task_ids = {item["taskId"] for item in accepted["tasks"]}
             first_tasks, snapshots = _wait_for_batch_snapshots(
@@ -2395,17 +2531,13 @@ integration subject described by this current-KB source.
             assert whole_batch["acceptedCount"] == 1
             assert whole_batch["reusedCount"] == 0
             assert whole_batch["skippedCount"] == 2
-            assert len(whole_batch["tasks"]) == 3
+            assert len(whole_batch["tasks"]) == 1
             accepted_tasks = [
                 item for item in whole_batch["tasks"] if item["status"] == "PENDING"
             ]
             assert len(accepted_tasks) == 1
             assert accepted_tasks[0]["filePath"] == entity_path
-            assert {item["filePath"] for item in whole_batch["tasks"]} == {
-                entity_path,
-                no_evidence_path,
-                unsupported_path,
-            }
+            assert {item["filePath"] for item in whole_batch["tasks"]} == {entity_path}
             first_tasks = _wait_for_batch(
                 client,
                 kb_code=kb_code,

@@ -36,6 +36,38 @@ class KnowledgeEntityRepository:
         "entityEnriched": "entity_enriched",
     }
 
+    async def get_directory_by_path(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        directory_path: str,
+    ) -> dict[str, Any] | None:
+        """Return one live directory by its knowledge-base-relative path."""
+        normalized_path = self._normalize_path(directory_path)
+        if normalized_path == "/":
+            return {
+                "kid": None,
+                "knowledge_base_id": knowledge_base_id,
+                "file_path": "/",
+                "entry_type": "DIRECTORY",
+            }
+        await cursor.execute(
+            """
+            SELECT kid, knowledge_base_id, virtual_path AS file_path, entry_type
+            FROM knowledge_fs_entry
+            WHERE knowledge_base_id = %(knowledge_base_id)s
+              AND virtual_path = %(directory_path)s
+              AND entry_type = 'DIRECTORY'
+              AND is_deleted = FALSE
+            """,
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "directory_path": normalized_path,
+            },
+        )
+        return await cursor.fetchone()
+
     async def get_file_with_metadata(
         self,
         cursor: Any,
@@ -69,8 +101,9 @@ class KnowledgeEntityRepository:
         *,
         knowledge_base_id: int,
         path_prefix: str | None = None,
+        exclude_knowledge_entities: bool = False,
     ) -> list[dict[str, Any]]:
-        """List live files in stable path order, optionally below a path prefix."""
+        """List live files in stable path order with optional scope filters."""
         normalized_prefix = (
             self._normalize_path(path_prefix) if path_prefix is not None else None
         )
@@ -89,12 +122,34 @@ class KnowledgeEntityRepository:
                         LENGTH(%(path_prefix)s) + 1
                     ) = %(path_prefix)s || '/'
                   )
+              AND (
+                    NOT %(exclude_knowledge_entities)s
+                    OR (
+                        NOT (
+                            fe.virtual_path = '/KnowledgeEntity'
+                            OR LEFT(
+                                fe.virtual_path,
+                                LENGTH('/KnowledgeEntity/')
+                            ) = '/KnowledgeEntity/'
+                        )
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM knowledge_file_metadata_value document_kind
+                            WHERE document_kind.fs_entry_id = fe.kid
+                              AND document_kind.is_deleted = FALSE
+                              AND document_kind.property_name = 'documentKind'
+                              AND document_kind.value_type = 'string'
+                              AND document_kind.value_string = 'knowledgeEntity'
+                        )
+                    )
+                  )
             ORDER BY fe.virtual_path ASC, fe.kid ASC,
                      mv.property_name ASC, mv.kid ASC
             """,
             {
                 "knowledge_base_id": knowledge_base_id,
                 "path_prefix": normalized_prefix,
+                "exclude_knowledge_entities": exclude_knowledge_entities,
                 "property_names": list(self._METADATA_FIELDS),
             },
         )

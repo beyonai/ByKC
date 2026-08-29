@@ -29,6 +29,8 @@
 
 单文件失败只增加 `failedCount`，batch 仍在所有文件进入终态后成为 `COMPLETED`。
 
+`totalCount` 只统计本 batch 真正创建的可执行 task。受理前已过滤的文件不写 task 表，因此不进入该状态页；若一个批次没有新建任务，则 `totalCount=0`且批次直接为 `COMPLETED`。
+
 ## 请求参数
 
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
@@ -132,6 +134,7 @@
 ## 特殊逻辑
 
 - batch 不是另一个父 task；它是一次触发及其文件 task 的聚合状态。
+- `scope` 可为 `SINGLE_FILE`、`DIRECTORY` 或 `WHOLE_KB`；`DIRECTORY` 仅用于 Entity Discovery。
 - 单文件失败只增加 `failedCount`，不会让其他文件失败。
 - 全部文件进入终态后，batch 进入 `COMPLETED`，即使 `failedCount > 0`。
 

@@ -46,7 +46,6 @@ from by_qa.knowledge_base.api.knowledge_entity_schemas import (
 from by_qa.knowledge_base.events import (
     KnowledgeEventPublisherInvoker,
     build_semantic_empty_batch_event,
-    build_semantic_terminal_events,
     normalize_json_mapping,
 )
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
@@ -58,6 +57,7 @@ from by_qa.knowledge_base.services.knowledge_entity_discovery import (
 DISCOVERY_METHOD_VERSION = f"discovery/2.0+{DISCOVERY_PROMPT_HASH[:12]}"
 ENRICH_METHOD_VERSION = "enrich/2.0"
 MAX_RECENT_RELATION_EVIDENCE = 3
+MAX_ACCEPTED_TASK_SUMMARIES = 20
 
 _TEXT_DOCUMENT_SUFFIXES = frozenset(
     {".csv", ".htm", ".html", ".markdown", ".md", ".txt"}
@@ -485,25 +485,31 @@ class KnowledgeEntityProcessingOrchestrator:
     ) -> ProcessingBatchAccepted:
         batch_id = self._batch_id(task_type)
         acceptance_started_at = time.perf_counter()
-        scope = (
-            ProcessingScope.SINGLE_FILE
-            if request.file_path
-            else ProcessingScope.WHOLE_KB
+        directory_path = (
+            request.directory_path
+            if isinstance(request, EntityDiscoveryRequest) and request.file_path is None
+            else None
         )
+        if request.file_path is not None:
+            scope = ProcessingScope.SINGLE_FILE
+            target_path = request.file_path
+        elif directory_path is not None:
+            scope = ProcessingScope.DIRECTORY
+            target_path = directory_path
+        else:
+            scope = ProcessingScope.WHOLE_KB
+            target_path = None
         logger.info(
-            "knowledge_entity_processing_service batch acceptance started: batch_id=%s, kb_code=%s, file_path=%s, task_type=%s, scope=%s, force=%s",
+            "knowledge_entity_processing_service batch acceptance started: batch_id=%s, kb_code=%s, target_path=%s, task_type=%s, scope=%s, force=%s",
             batch_id,
             request.kb_code,
-            request.file_path,
+            target_path,
             task_type.value,
             scope.value,
             request.force,
         )
         connection = await self.connection_factory()
         summaries: list[ProcessingTaskSummary] = []
-        terminal_callbacks: list[
-            tuple[dict[str, Any], dict[str, Any], dict[str, int]]
-        ] = []
         eligible_count = reused_count = skipped_count = 0
         eligibility_counts: Counter[str] = Counter()
         reason_counts: Counter[str] = Counter()
@@ -517,15 +523,23 @@ class KnowledgeEntityProcessingOrchestrator:
                     await self._get_file(cursor, knowledge_base_id, request.file_path)
                 ]
             else:
-                prefix = (
-                    "/KnowledgeEntity"
-                    if capability == ProcessingCapability.ENTITY_ENRICH
-                    else None
-                )
+                if directory_path is not None:
+                    await self._get_directory(cursor, knowledge_base_id, directory_path)
+                    if self._inside_entity_directory(directory_path):
+                        raise KnowledgeBaseValidationError(
+                            "entity discovery directory must not be /KnowledgeEntity "
+                            "or one of its descendants"
+                        )
+                prefix = directory_path
+                if capability == ProcessingCapability.ENTITY_ENRICH:
+                    prefix = "/KnowledgeEntity"
                 files = await self.knowledge_entity_repository.list_files_with_metadata(
                     cursor,
                     knowledge_base_id=knowledge_base_id,
                     path_prefix=prefix,
+                    exclude_knowledge_entities=(
+                        capability == ProcessingCapability.ENTITY_DISCOVERY
+                    ),
                 )
             logger.info(
                 "knowledge_entity_processing_service batch candidates selected: batch_id=%s, knowledge_base_id=%s, kb_code=%s, file_path=%s, task_type=%s, scope=%s, candidate_count=%s",
@@ -537,28 +551,25 @@ class KnowledgeEntityProcessingOrchestrator:
                 scope.value,
                 len(files),
             )
-            batch = (
-                await self.knowledge_semantic_processing_batch_repository.create_batch(
-                    cursor,
-                    batch_id=batch_id,
-                    knowledge_base_id=knowledge_base_id,
-                    task_type=task_type.value,
-                    scope=scope.value,
-                    total_count=len(files),
-                )
-            )
-            if batch is None:
-                raise RuntimeError("failed to create semantic processing batch")
             params = request.model_dump(
                 mode="json",
                 by_alias=True,
                 exclude={"extra_params"},
             )
+            dispositions: list[
+                tuple[
+                    str,
+                    Mapping[str, Any],
+                    _Evaluation | None,
+                    Mapping[str, Any] | None,
+                ]
+            ] = []
             for file_row in files:
                 file_id = self._row_id(file_row)
                 file_path = str(file_row["file_path"])
                 skip_reason: str | None = None
                 reused_task_id: int | None = None
+                reusable: Mapping[str, Any] | None = None
                 evaluation: _Evaluation | None = None
                 if (
                     capability == ProcessingCapability.ENTITY_DISCOVERY
@@ -615,43 +626,69 @@ class KnowledgeEntityProcessingOrchestrator:
                             if reusable is not None:
                                 skip_reason = "INPUT_UNCHANGED"
                                 reused_task_id = self._row_id(reusable)
-                status = "skipped" if skip_reason else "pending"
-                if skip_reason:
-                    skipped_count += 1
                 if reused_task_id is not None:
                     reused_count += 1
-                result_payload = None
-                if skip_reason:
-                    result_payload = {"reasonCode": skip_reason}
-                    if reused_task_id is not None:
-                        key = (
-                            "activeTaskId"
-                            if skip_reason == "ALREADY_PROCESSING"
-                            else "reusedTaskId"
+                    dispositions.append(("reused", file_row, evaluation, reusable))
+                elif skip_reason:
+                    skipped_count += 1
+                    dispositions.append(("skipped", file_row, evaluation, None))
+                else:
+                    dispositions.append(("accepted", file_row, evaluation, None))
+
+            accepted_count = sum(
+                disposition == "accepted" for disposition, _, _, _ in dispositions
+            )
+            batch = (
+                await self.knowledge_semantic_processing_batch_repository.create_batch(
+                    cursor,
+                    batch_id=batch_id,
+                    knowledge_base_id=knowledge_base_id,
+                    task_type=task_type.value,
+                    scope=scope.value,
+                    total_count=accepted_count,
+                )
+            )
+            if batch is None:
+                raise RuntimeError("failed to create semantic processing batch")
+
+            for disposition, file_row, evaluation, reusable in dispositions:
+                file_id = self._row_id(file_row)
+                file_path = str(file_row["file_path"])
+                if disposition == "skipped":
+                    continue
+                if disposition == "reused":
+                    if reusable is None:
+                        raise RuntimeError("reused task is missing")
+                    if len(summaries) < MAX_ACCEPTED_TASK_SUMMARIES:
+                        summaries.append(
+                            ProcessingTaskSummary(
+                                task_id=str(self._row_id(reusable)),
+                                status=ProcessingTaskStatus(
+                                    str(reusable["status"]).upper()
+                                ),
+                                file_id=str(file_id),
+                                file_path=file_path,
+                                reused=True,
+                            )
                         )
-                        result_payload[key] = str(reused_task_id)
+                    continue
+                if evaluation is None:
+                    raise RuntimeError("accepted task eligibility is missing")
                 created = await self.knowledge_semantic_processing_task_repository.create_processing_task(
                     cursor,
                     knowledge_base_id=knowledge_base_id,
                     fs_entry_id=file_id,
                     task_type=task_type.value,
-                    status=status,
+                    status="pending",
                     batch_id=batch_id,
                     file_path_snapshot=file_path,
-                    current_stage="skipped" if skip_reason else "accepted",
-                    progress=100 if skip_reason else 0,
-                    input_fingerprint=(
-                        evaluation.input_fingerprint if evaluation is not None else None
-                    ),
+                    current_stage="accepted",
+                    progress=0,
+                    input_fingerprint=evaluation.input_fingerprint,
                     input_checksum=file_row.get("checksum"),
-                    method_version=(
-                        evaluation.method_version if evaluation is not None else None
-                    ),
-                    protocol_version=(
-                        evaluation.protocol_version if evaluation is not None else None
-                    ),
+                    method_version=evaluation.method_version,
+                    protocol_version=evaluation.protocol_version,
                     request_params=params,
-                    result_payload=result_payload,
                 )
                 if created is None:
                     raise RuntimeError("failed to create processing task")
@@ -664,27 +701,18 @@ class KnowledgeEntityProcessingOrchestrator:
                     file_id,
                     file_path,
                     task_type.value,
-                    status,
+                    "pending",
                 )
-                summaries.append(
-                    ProcessingTaskSummary(
-                        task_id=str(self._row_id(created)),
-                        status=ProcessingTaskStatus(status.upper()),
-                        file_id=str(file_id),
-                        file_path=file_path,
-                        reused=reused_task_id is not None,
+                if len(summaries) < MAX_ACCEPTED_TASK_SUMMARIES:
+                    summaries.append(
+                        ProcessingTaskSummary(
+                            task_id=str(self._row_id(created)),
+                            status=ProcessingTaskStatus.PENDING,
+                            file_id=str(file_id),
+                            file_path=file_path,
+                            reused=False,
+                        )
                     )
-                )
-                if skip_reason:
-                    batch = await self.knowledge_semantic_processing_batch_repository.advance_batch(
-                        cursor, batch_id=batch_id
-                    )
-                    if batch is None:
-                        raise RuntimeError("failed to advance batch for skipped task")
-                    counts = await self.knowledge_semantic_processing_batch_repository.count_tasks_by_status(
-                        cursor, batch_id=batch_id
-                    )
-                    terminal_callbacks.append((created, batch, counts))
             await connection.commit()
         except Exception as exc:
             await connection.rollback()
@@ -711,18 +739,14 @@ class KnowledgeEntityProcessingOrchestrator:
             scope.value,
             len(files),
             eligible_count,
-            len(files) - skipped_count,
+            accepted_count,
             reused_count,
             skipped_count,
             dict(eligibility_counts),
             dict(reason_counts),
             (time.perf_counter() - acceptance_started_at) * 1000,
         )
-        for task, terminal_batch, counts in terminal_callbacks:
-            await self.event_publisher_invoker.publish_all(
-                build_semantic_terminal_events(task, terminal_batch, counts)
-            )
-        if not files:
+        if accepted_count == 0:
             await self.event_publisher_invoker.publish(
                 build_semantic_empty_batch_event(
                     batch=batch,
@@ -733,11 +757,15 @@ class KnowledgeEntityProcessingOrchestrator:
         return ProcessingBatchAccepted(
             batch_id=batch_id,
             scope=scope,
+            target_path=target_path,
             task_type=task_type,
+            candidate_count=len(files),
             eligible_count=eligible_count,
-            accepted_count=len(files) - skipped_count,
+            accepted_count=accepted_count,
             reused_count=reused_count,
             skipped_count=skipped_count,
+            returned_task_count=len(summaries),
+            tasks_truncated=accepted_count + reused_count > len(summaries),
             tasks=summaries,
         )
 
@@ -992,6 +1020,18 @@ class KnowledgeEntityProcessingOrchestrator:
         )
         if row is None:
             raise KnowledgeBaseValidationError(f"document not found: {file_path}")
+        return row
+
+    async def _get_directory(
+        self, cursor: Any, knowledge_base_id: int, directory_path: str
+    ) -> dict[str, Any]:
+        row = await self.knowledge_entity_repository.get_directory_by_path(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            directory_path=directory_path,
+        )
+        if row is None:
+            raise KnowledgeBaseValidationError(f"directory not found: {directory_path}")
         return row
 
     def _fingerprint(

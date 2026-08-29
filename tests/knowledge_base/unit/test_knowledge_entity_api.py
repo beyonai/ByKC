@@ -33,9 +33,15 @@ class FakeKnowledgeEntityService:
 
     async def discover_knowledge_entities(self, request):
         self.calls.append(("discovery", request, None))
+        scope = (
+            "SINGLE_FILE"
+            if request.file_path
+            else ("DIRECTORY" if request.directory_path else "WHOLE_KB")
+        )
         return {
             "batchId": "ed-1",
-            "scope": "WHOLE_KB" if request.file_path is None else "SINGLE_FILE",
+            "scope": scope,
+            "targetPath": request.file_path or request.directory_path,
             "taskType": "ENTITY_DISCOVERY",
             "eligibleCount": 2,
             "acceptedCount": 2,
@@ -154,6 +160,32 @@ def test_discovery_and_enrich_requests_support_whole_kb_scope():
     assert discovery.max_entities == 12
     assert enrich.file_path is None
     assert enrich.top_k == 20
+
+
+def test_discovery_accepts_normalized_directory_but_enrich_rejects_it():
+    discovery = EntityDiscoveryRequest.model_validate(
+        {"knCode": "1", "directoryPath": "//Policies///2026/"}
+    )
+
+    assert discovery.file_path is None
+    assert discovery.directory_path == "/Policies/2026"
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        EntityEnrichRequest.model_validate(
+            {"knCode": "1", "directoryPath": "/KnowledgeEntity"}
+        )
+
+
+def test_discovery_directory_path_validation_allows_root_and_rejects_escape():
+    assert (
+        EntityDiscoveryRequest.model_validate(
+            {"knCode": "1", "directoryPath": "/"}
+        ).directory_path
+        == "/"
+    )
+    with pytest.raises(ValidationError, match="must not contain"):
+        EntityDiscoveryRequest.model_validate(
+            {"knCode": "1", "directoryPath": "/docs/../secret"}
+        )
 
 
 @pytest.mark.parametrize("field_name", ["extraParams", "extra_params"])
@@ -283,6 +315,28 @@ def test_discovery_route_uses_provider_and_never_accepts_http_callback():
     )
     assert invalid_response.json()["resultCode"] == "-1"
     assert len(service.calls) == 1
+
+
+def test_discovery_route_passes_directory_scope_and_file_has_priority():
+    service = FakeKnowledgeEntityService()
+    client = make_client(service)
+
+    directory_response = client.post(
+        "/api/v1/knowledgeItems/entityDiscovery",
+        json={"knCode": "1", "directoryPath": "/Policies"},
+    )
+    assert directory_response.json()["resultObject"]["scope"] == "DIRECTORY"
+    assert service.calls[-1][1].directory_path == "/Policies"
+
+    file_response = client.post(
+        "/api/v1/knowledgeItems/entityDiscovery",
+        json={
+            "knCode": "1",
+            "filePath": "/Policies/a.md",
+            "directoryPath": "/ignored",
+        },
+    )
+    assert file_response.json()["resultObject"]["scope"] == "SINGLE_FILE"
 
 
 def test_enrich_route_supports_whole_kb_and_passes_no_callback():

@@ -124,13 +124,19 @@ def test_consolidated_schema_removes_redundant_local_name_storage() -> None:
 
 def test_consolidated_schema_has_no_topic_evidence_or_iterative_followups() -> None:
     sql_directory = Path("src/by_qa/knowledge_base/sql")
+    deprecated_incremental_migrations = {
+        "037_knowledge_entity_evidence_summary.sql",
+        "038_knowledge_entity_description.sql",
+        "039_knowledge_entity_drop_local_names.sql",
+        "040_knowledge_entity_full_embedding_only.sql.tpl",
+        "041_drop_knowledge_entity_topic_evidence.sql",
+    }
     terminal_schema = "\n".join(
         path.read_text(encoding="utf-8")
         for path in sorted(sql_directory.glob("*.sql*"))
     )
 
     assert "knowledge_entity_topic_evidence" not in terminal_schema
-    assert not any(
-        path.name.startswith(("037_", "038_", "039_", "040_", "041_"))
-        for path in sql_directory.iterdir()
+    assert deprecated_incremental_migrations.isdisjoint(
+        path.name for path in sql_directory.iterdir()
     )

@@ -56,13 +56,21 @@
         "knCode": "1",
         "name": "/制度/人事/请假制度.pdf",
         "type": "file",
-        "size": 245760
+        "size": 245760,
+        "updatedAt": "2026-08-30T10:20:30+08:00",
+        "buildStatus": "complete",
+        "buildCurrentStep": "complete",
+        "metadata": {}
       },
       {
         "knCode": "1",
         "name": "/制度/法务/合同规范.pdf",
         "type": "file",
-        "size": 327680
+        "size": 327680,
+        "updatedAt": "2026-08-30T10:21:00+08:00",
+        "buildStatus": null,
+        "buildCurrentStep": null,
+        "metadata": {}
       }
     ]
   }
@@ -83,6 +91,9 @@
 
 - `*` 仅匹配单层路径段，当前不支持 `**`。
 - 返回项的 `name` 是知识库内完整路径。
+- `updatedAt` 使用 ISO 8601 格式。
+- `buildStatus`、`buildCurrentStep` 返回文件最新构建任务的状态；目录或尚未创建构建任务的文件返回 `null`。
+- `metadata` 始终返回对象；当前未指定元数据字段时返回空对象 `{}`。
 
 ## 路径与定位规则
 

@@ -928,6 +928,10 @@ def test_list_dir_route_returns_filesystem_entries(monkeypatch):
                     "name": "/dir1/doc.md",
                     "type": "file",
                     "size": 100,
+                    "updatedAt": None,
+                    "buildStatus": None,
+                    "buildCurrentStep": None,
+                    "metadata": {},
                 }
             ]
         },
@@ -1080,6 +1084,10 @@ def test_glob_route_returns_matching_entries(monkeypatch):
                     "name": "/dir1/doc.md",
                     "type": "file",
                     "size": 100,
+                    "updatedAt": None,
+                    "buildStatus": None,
+                    "buildCurrentStep": None,
+                    "metadata": {},
                 }
             ]
         },

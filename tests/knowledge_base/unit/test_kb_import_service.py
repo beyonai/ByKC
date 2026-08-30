@@ -2054,7 +2054,16 @@ async def test_list_dir_root_returns_top_level_entries():
     )
 
     assert response.model_dump()["data"] == [
-        {"kb_code": "hr-policy", "name": "/dir1", "type": "directory", "size": 0}
+        {
+            "kb_code": "hr-policy",
+            "name": "/dir1",
+            "type": "directory",
+            "size": 0,
+            "updated_at": None,
+            "build_status": None,
+            "build_current_step": None,
+            "metadata": {},
+        }
     ]
     assert knowledge_fs_entry_repository.calls == [
         (
@@ -2081,12 +2090,25 @@ async def test_list_dir_directory_path_returns_direct_children_only():
     )
 
     assert response.model_dump()["data"] == [
-        {"kb_code": "hr-policy", "name": "/dir1/doc.md", "type": "file", "size": 128},
+        {
+            "kb_code": "hr-policy",
+            "name": "/dir1/doc.md",
+            "type": "file",
+            "size": 128,
+            "updated_at": None,
+            "build_status": None,
+            "build_current_step": None,
+            "metadata": {},
+        },
         {
             "kb_code": "hr-policy",
             "name": "/dir1/subdir",
             "type": "directory",
             "size": 0,
+            "updated_at": None,
+            "build_status": None,
+            "build_current_step": None,
+            "metadata": {},
         },
     ]
     assert knowledge_fs_entry_repository.calls == [
@@ -2152,6 +2174,10 @@ async def test_glob_pattern_matches_one_segment_at_a_time():
             "name": "/dir1/doc.md",
             "type": "file",
             "size": 128,
+            "updated_at": None,
+            "build_status": None,
+            "build_current_step": None,
+            "metadata": {},
         }
     ]
     assert knowledge_fs_entry_repository.calls == [

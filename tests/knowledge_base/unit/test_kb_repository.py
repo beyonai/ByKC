@@ -552,6 +552,7 @@ async def test_list_children_by_parent_entry_id_uses_current_fs_entry_columns():
     assert "knowledge_item" not in lowered
     assert "knowledge_item_version" not in lowered
     assert "fs.file_size" in lowered
+    assert "fs.updated_at" in lowered
     assert params == {"knowledge_base_id": 7, "parent_entry_id": 80}
 
 

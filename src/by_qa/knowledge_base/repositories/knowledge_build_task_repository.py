@@ -41,6 +41,33 @@ class KnowledgeBuildTaskRepository:
         )
         return await cursor.fetchone()
 
+    async def get_latest_by_fs_entry_ids(
+        self, cursor: Any, *, fs_entry_ids: list[int]
+    ) -> list[dict[str, Any]]:
+        """Fetch the latest build task for each requested file entry."""
+        if not fs_entry_ids:
+            return []
+        await cursor.execute(
+            """
+            SELECT fs_entry_id, status, current_step
+            FROM (
+                SELECT
+                    fs_entry_id,
+                    status,
+                    current_step,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY fs_entry_id
+                        ORDER BY created_at DESC, kid DESC
+                    ) AS row_no
+                FROM knowledge_build_task
+                WHERE fs_entry_id = ANY(%(fs_entry_ids)s)
+            ) ranked
+            WHERE row_no = 1
+            """,
+            {"fs_entry_ids": fs_entry_ids},
+        )
+        return await cursor.fetchall()
+
     async def create_task(
         self,
         cursor: Any,

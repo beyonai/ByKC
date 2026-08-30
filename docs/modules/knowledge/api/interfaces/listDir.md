@@ -50,13 +50,21 @@
         "knCode": "1",
         "name": "/制度/人事/考勤",
         "type": "directory",
-        "size": 0
+        "size": 0,
+        "updatedAt": "2026-08-30T10:00:00+08:00",
+        "buildStatus": null,
+        "buildCurrentStep": null,
+        "metadata": {}
       },
       {
         "knCode": "1",
         "name": "/制度/人事/请假制度.pdf",
         "type": "file",
-        "size": 245760
+        "size": 245760,
+        "updatedAt": "2026-08-30T10:20:30+08:00",
+        "buildStatus": "complete",
+        "buildCurrentStep": "complete",
+        "metadata": {}
       }
     ]
   }
@@ -76,6 +84,9 @@
 ## 特殊逻辑
 
 - 只返回直接子项，不递归遍历整个子树。
+- `updatedAt` 使用 ISO 8601 格式。
+- `buildStatus`、`buildCurrentStep` 返回文件最新构建任务的状态；目录或尚未创建构建任务的文件返回 `null`。
+- `metadata` 始终返回对象；当前未指定元数据字段时返回空对象 `{}`。
 
 ## 路径与定位规则
 

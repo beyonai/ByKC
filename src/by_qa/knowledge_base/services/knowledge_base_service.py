@@ -925,12 +925,20 @@ class KnowledgeBaseService:
                 knowledge_base_id=knowledge_base_id,
                 parent_entry_id=parent_entry_id,
             )
+            latest_builds = await self._latest_browse_builds(cursor, child_rows)
             items = [
                 KnowledgeItemListDirItem(
                     kb_code=request.kb_code,
                     name=f"{output_prefix}/{row['name']}",
                     type=row["type"],
                     size=int(row.get("size") or 0),
+                    updated_at=self._isoformat(row.get("updated_at")),
+                    build_status=(latest_builds.get(int(row["kid"])) or {}).get(
+                        "status"
+                    ),
+                    build_current_step=(latest_builds.get(int(row["kid"])) or {}).get(
+                        "current_step"
+                    ),
                 )
                 for row in child_rows
             ]
@@ -1628,11 +1636,11 @@ class KnowledgeBaseService:
         kb_code: str,
         pattern_segments: list[str],
     ) -> list[KnowledgeItemListDirItem]:
-        current_matches: list[tuple[int | None, str, str, int]] = [
-            (None, "", "directory", 0)
+        current_matches: list[tuple[int | None, str, str, int, Any]] = [
+            (None, "", "directory", 0, None)
         ]
         for segment in pattern_segments:
-            next_matches: list[tuple[int, str, str, int]] = []
+            next_matches: list[tuple[int, str, str, int, Any]] = []
             for match in current_matches:
                 parent_entry_id = match[0]
                 parent_path = match[1]
@@ -1652,21 +1660,52 @@ class KnowledgeBaseService:
                             child_path,
                             str(row["type"]),
                             int(row.get("size") or 0),
+                            row.get("updated_at"),
                         )
                     )
             current_matches = next_matches
             if not current_matches:
                 return []
+        latest_builds = await self._latest_browse_builds(
+            cursor,
+            [
+                {"kid": row_id, "type": item_type}
+                for row_id, _, item_type, _, _ in current_matches
+                if row_id is not None
+            ],
+        )
         return [
             KnowledgeItemListDirItem(
                 kb_code=kb_code,
                 name=matched_path,
                 type=item_type,
                 size=item_size,
+                updated_at=self._isoformat(updated_at),
+                build_status=(latest_builds.get(int(row_id)) or {}).get("status"),
+                build_current_step=(latest_builds.get(int(row_id)) or {}).get(
+                    "current_step"
+                ),
             )
-            for row_id, matched_path, item_type, item_size in current_matches
+            for row_id, matched_path, item_type, item_size, updated_at in current_matches
             if row_id is not None
         ]
+
+    async def _latest_browse_builds(
+        self,
+        cursor: Any,
+        rows: list[dict[str, Any]],
+    ) -> dict[int, dict[str, Any]]:
+        """Return latest build snapshots for file rows without per-item queries."""
+        if self.knowledge_build_task_repository is None:
+            return {}
+        file_ids = [int(row["kid"]) for row in rows if row.get("type") == "file"]
+        build_rows = (
+            await self.knowledge_build_task_repository.get_latest_by_fs_entry_ids(
+                cursor,
+                fs_entry_ids=file_ids,
+            )
+        )
+        return {int(row["fs_entry_id"]): row for row in build_rows}
 
     def _segment_matches_path_rule(self, name: str, pattern: str) -> bool:
         return fnmatch.fnmatchcase(name, pattern)

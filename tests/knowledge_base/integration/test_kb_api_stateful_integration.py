@@ -2191,6 +2191,174 @@ async def test_success_responses_follow_documented_path_contract(monkeypatch, tm
 
 
 @pytest.mark.integration
+def test_list_dir_and_glob_return_timestamps_latest_build_state_and_empty_metadata(
+    monkeypatch, tmp_path
+):
+    """Browse APIs expose the same fixed entry fields without metadata selection."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch,
+        FakeDocumentChunkingService(markdown_text="# Built\n"),
+    )
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Browse fields {uuid4().hex[:12]}")
+        _create_directory(client, kb_code=kb_code, directory_path="/docs")
+        _upload_and_build_file(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/built.md",
+            file_content=b"# Built source\n",
+        )
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/unbuilt.md",
+            file_content=b"# Unbuilt\n",
+        )
+
+        root_response = client.post(
+            "/api/v1/listDir",
+            json={"knCode": kb_code, "directoryPath": "/"},
+        )
+        list_response = client.post(
+            "/api/v1/listDir",
+            json={"knCode": kb_code, "directoryPath": "/docs"},
+        )
+        glob_response = client.post(
+            "/api/v1/glob",
+            json={"knCode": kb_code, "pathRule": "/docs/*.md"},
+        )
+
+    root_item = root_response.json()["resultObject"]["data"][0]
+    assert root_item["type"] == "directory"
+    assert root_item["size"] == 0
+    assert root_item["updatedAt"]
+    assert root_item["buildStatus"] is None
+    assert root_item["buildCurrentStep"] is None
+    assert root_item["metadata"] == {}
+
+    listed = {
+        item["name"]: item for item in list_response.json()["resultObject"]["data"]
+    }
+    globbed = {
+        item["name"]: item for item in glob_response.json()["resultObject"]["data"]
+    }
+    assert listed == globbed
+    assert set(listed) == {"/docs/built.md", "/docs/unbuilt.md"}
+    assert listed["/docs/built.md"]["buildStatus"] == "complete"
+    assert listed["/docs/built.md"]["buildCurrentStep"] == "complete"
+    assert listed["/docs/unbuilt.md"]["buildStatus"] is None
+    assert listed["/docs/unbuilt.md"]["buildCurrentStep"] is None
+    for item in listed.values():
+        assert item["size"] > 0
+        assert item["updatedAt"]
+        assert item["metadata"] == {}
+
+
+@pytest.mark.integration
+async def test_browse_returns_each_latest_terminal_or_running_build_state(
+    monkeypatch, tmp_path
+):
+    """Browse state uses the latest task per file across every supported status."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    paths = {
+        "running.md": [("running", "markdown")],
+        "failed.md": [("failed", "chunking")],
+        "unsupported.png": [("unsupported", "markdown")],
+        "latest.md": [("failed", "markdown"), ("complete", "complete")],
+    }
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Browse statuses {uuid4().hex[:12]}")
+        _create_directory(client, kb_code=kb_code, directory_path="/states")
+        for name in paths:
+            _upload_file(
+                client,
+                kb_code=kb_code,
+                file_path=f"/states/{name}",
+                file_content=b"state",
+                content_type=(
+                    "image/png" if name.endswith(".png") else "text/markdown"
+                ),
+            )
+
+        connection = await build_connection_factory(settings)()
+        try:
+            cursor = connection.cursor()
+            for name, task_states in paths.items():
+                for status, current_step in task_states:
+                    await cursor.execute(
+                        """
+                        INSERT INTO knowledge_build_task (
+                            knowledge_base_id,
+                            fs_entry_id,
+                            status,
+                            current_step,
+                            created_at,
+                            updated_at
+                        )
+                        SELECT
+                            %(knowledge_base_id)s,
+                            kid,
+                            %(status)s,
+                            %(current_step)s,
+                            NOW(),
+                            NOW()
+                        FROM knowledge_fs_entry
+                        WHERE knowledge_base_id = %(knowledge_base_id)s
+                          AND virtual_path = %(virtual_path)s
+                          AND is_deleted = false
+                        """,
+                        {
+                            "knowledge_base_id": int(kb_code),
+                            "virtual_path": f"/states/{name}",
+                            "status": status,
+                            "current_step": current_step,
+                        },
+                    )
+            await connection.commit()
+        finally:
+            await connection.close()
+
+        listed_response = client.post(
+            "/api/v1/listDir",
+            json={"knCode": kb_code, "directoryPath": "/states"},
+        )
+        globbed_response = client.post(
+            "/api/v1/glob",
+            json={"knCode": kb_code, "pathRule": "/states/*"},
+        )
+
+    listed = {
+        item["name"].rsplit("/", 1)[-1]: (
+            item["buildStatus"],
+            item["buildCurrentStep"],
+        )
+        for item in listed_response.json()["resultObject"]["data"]
+    }
+    globbed = {
+        item["name"].rsplit("/", 1)[-1]: (
+            item["buildStatus"],
+            item["buildCurrentStep"],
+        )
+        for item in globbed_response.json()["resultObject"]["data"]
+    }
+    assert (
+        listed
+        == globbed
+        == {
+            "running.md": ("running", "markdown"),
+            "failed.md": ("failed", "chunking"),
+            "unsupported.png": ("unsupported", "markdown"),
+            "latest.md": ("complete", "complete"),
+        }
+    )
+
+
+@pytest.mark.integration
 async def test_directory_rename_updates_parent_and_child_queries(monkeypatch, tmp_path):
     """Renaming a directory should update browse, match, and read behavior together."""
     settings = _kb_settings(agent_data_path=tmp_path)

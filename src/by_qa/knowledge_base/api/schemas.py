@@ -402,10 +402,19 @@ class KnowledgeItemListDirRequest(BaseModel):
 class KnowledgeItemListDirItem(BaseModel):
     """Single filesystem entry returned by list_dir."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     kb_code: str = Field(serialization_alias="knCode")
     name: str
     type: Literal["file", "directory"]
     size: int = 0
+    updated_at: str | None = Field(default=None, serialization_alias="updatedAt")
+    build_status: str | None = Field(default=None, serialization_alias="buildStatus")
+    build_current_step: str | None = Field(
+        default=None,
+        serialization_alias="buildCurrentStep",
+    )
+    metadata: dict = Field(default_factory=dict)
 
 
 class KnowledgeItemListDirResponse(BaseModel):

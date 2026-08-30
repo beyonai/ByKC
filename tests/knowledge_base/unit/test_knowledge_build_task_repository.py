@@ -12,9 +12,10 @@ SQL_DIR = Path(__file__).resolve().parents[3] / "src/by_qa/knowledge_base/sql"
 
 
 class FakeCursor:
-    def __init__(self, *, fetchone_results=None):
+    def __init__(self, *, fetchone_results=None, fetchall_results=None):
         self.executed: list[tuple[str, dict | None]] = []
         self._fetchone_results = list(fetchone_results or [])
+        self._fetchall_results = list(fetchall_results or [])
 
     async def execute(self, sql, params=None):
         self.executed.append((sql, params))
@@ -23,6 +24,37 @@ class FakeCursor:
         if self._fetchone_results:
             return self._fetchone_results.pop(0)
         return None
+
+    async def fetchall(self):
+        if self._fetchall_results:
+            return self._fetchall_results.pop(0)
+        return []
+
+
+async def test_get_latest_build_tasks_batches_file_entries():
+    repo = KnowledgeBuildTaskRepository()
+    expected = [
+        {"fs_entry_id": 11, "status": "failed", "current_step": "markdown"},
+        {"fs_entry_id": 12, "status": "complete", "current_step": "complete"},
+    ]
+    cursor = FakeCursor(fetchall_results=[expected])
+
+    rows = await repo.get_latest_by_fs_entry_ids(cursor, fs_entry_ids=[11, 12])
+
+    assert rows == expected
+    sql, params = cursor.executed[0]
+    assert "row_number() over" in sql.lower()
+    assert "partition by fs_entry_id" in sql.lower()
+    assert "order by created_at desc, kid desc" in sql.lower()
+    assert params == {"fs_entry_ids": [11, 12]}
+
+
+async def test_get_latest_build_tasks_skips_empty_input():
+    repo = KnowledgeBuildTaskRepository()
+    cursor = FakeCursor()
+
+    assert await repo.get_latest_by_fs_entry_ids(cursor, fs_entry_ids=[]) == []
+    assert cursor.executed == []
 
 
 async def test_build_task_repository_keeps_the_file_build_schema_contract():

@@ -595,7 +595,8 @@ class KnowledgeFsEntryRepository:
                     CASE
                         WHEN fs.entry_type = 'DIRECTORY' THEN 0
                         ELSE COALESCE(fs.file_size, 0)
-                    END AS size
+                    END AS size,
+                    fs.updated_at
                 FROM knowledge_fs_entry fs
                 WHERE fs.knowledge_base_id = %(knowledge_base_id)s
                   AND fs.parent_entry_id IS NULL
@@ -621,7 +622,8 @@ class KnowledgeFsEntryRepository:
                     CASE
                         WHEN fs.entry_type = 'DIRECTORY' THEN 0
                         ELSE COALESCE(fs.file_size, 0)
-                    END AS size
+                    END AS size,
+                    fs.updated_at
                 FROM knowledge_fs_entry fs
                 WHERE fs.knowledge_base_id = %(knowledge_base_id)s
                   AND fs.parent_entry_id = %(parent_entry_id)s

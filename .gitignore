@@ -13,13 +13,11 @@ data/minio/
 eval/reports/
 eval/datasets/**/.ingest_state.json
 eval/datasets/**/.download_failed.json
-<<<<<<< HEAD
-
 # AOCI index files (local only)
 aoci.txt
 aoci.meta.txt
 aoci.code.txt
 .aoci/
-=======
 大厂文章/
->>>>>>> 8ce6f39 (feat(knowledge): integrate reliable entity discovery)
+Document/
+docs/superpowers

@@ -1131,7 +1131,15 @@ def test_document_update_failures_preserve_content_and_metadata(monkeypatch, tmp
         async def fail_status(self, cursor, **kwargs):
             if kwargs["property_name"] == "status":
                 raise RuntimeError("simulated metadata database failure")
-            return await original_upsert(self, cursor, **kwargs)
+            return await original_upsert(
+                self,
+                cursor,
+                fs_entry_id=kwargs["fs_entry_id"],
+                knowledge_base_id=kwargs["knowledge_base_id"],
+                property_name=kwargs["property_name"],
+                value_type=kwargs["value_type"],
+                value=kwargs["value"],
+            )
 
         monkeypatch.setattr(FileMetadataValueRepository, "upsert_value", fail_status)
         database_failure = _update_file(
@@ -1697,7 +1705,15 @@ def test_import_metadata_failure_rolls_back_entry_storage_and_values(
         async def fail_owner(self, cursor, **kwargs):
             if kwargs["property_name"] == "owner":
                 raise RuntimeError("simulated metadata write failure")
-            return await original_upsert(self, cursor, **kwargs)
+            return await original_upsert(
+                self,
+                cursor,
+                fs_entry_id=kwargs["fs_entry_id"],
+                knowledge_base_id=kwargs["knowledge_base_id"],
+                property_name=kwargs["property_name"],
+                value_type=kwargs["value_type"],
+                value=kwargs["value"],
+            )
 
         monkeypatch.setattr(FileMetadataValueRepository, "upsert_value", fail_owner)
         monkeypatch.setattr(S3KnowledgeStorageProvider, "delete_quietly", record_delete)

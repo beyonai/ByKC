@@ -1293,6 +1293,165 @@ DataCloud\xe5\xb9\xb3\xe5\x8f\xb0\xe9\x9c\x80\xe6\xb1\x82\xe7\xa1\xae\xe8\xae\xa
 
 
 @pytest.mark.integration
+def test_import_metadata_merges_with_front_matter_and_can_disable_it(monkeypatch):
+    """Explicit import metadata is independent from front-matter processing."""
+    settings = _kb_settings()
+    _reset_runtime(monkeypatch, settings)
+    markdown = b"""---
+owner: front-matter
+frontOnly: 7
+---
+# Body
+"""
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Import metadata {uuid4().hex[:12]}")
+        merged_response = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={
+                "knCode": kb_code,
+                "filePath": "/merged.md",
+                "metadata": '{"owner":"request","requestOnly":true,"tags":["a","b"]}',
+            },
+            files={"fileContent": ("merged.md", markdown, "text/markdown")},
+        )
+        disabled_response = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={
+                "knCode": kb_code,
+                "filePath": "/disabled.md",
+                "processFrontMatter": "false",
+                "metadata": '{"owner":"request","requestOnly":true}',
+            },
+            files={"fileContent": ("disabled.md", markdown, "text/markdown")},
+        )
+        binary_response = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={
+                "knCode": kb_code,
+                "filePath": "/manual.pdf",
+                "metadata": '{"owner":"PDF","priority":2.5}',
+            },
+            files={"fileContent": ("manual.pdf", b"pdf", "application/pdf")},
+        )
+        invalid_response = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={
+                "knCode": kb_code,
+                "filePath": "/invalid.md",
+                "metadata": "not-json",
+            },
+            files={"fileContent": ("invalid.md", b"# Invalid", "text/markdown")},
+        )
+        merged = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/merged.md",
+            field_names=["owner", "requestOnly", "frontOnly", "tags"],
+        )
+        disabled = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/disabled.md",
+            field_names=["owner", "requestOnly", "frontOnly"],
+        )
+        binary = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/manual.pdf",
+            field_names=["owner", "priority"],
+        )
+        invalid_list = client.post(
+            "/api/v1/listDir",
+            json={"knCode": kb_code, "directoryPath": "/"},
+        ).json()["resultObject"]["data"]
+
+    assert merged_response.json()["resultCode"] == "0"
+    assert disabled_response.json()["resultCode"] == "0"
+    assert binary_response.json()["resultCode"] == "0"
+    assert invalid_response.json()["resultCode"] == "-1"
+    assert merged == {
+        "owner": {"valueType": "string", "value": "front-matter"},
+        "requestOnly": {"valueType": "boolean", "value": True},
+        "frontOnly": {"valueType": "number", "value": 7.0},
+        "tags": {"valueType": "stringList", "value": ["a", "b"]},
+    }
+    assert disabled == {
+        "owner": {"valueType": "string", "value": "request"},
+        "requestOnly": {"valueType": "boolean", "value": True},
+    }
+    assert binary == {
+        "owner": {"valueType": "string", "value": "PDF"},
+        "priority": {"valueType": "number", "value": 2.5},
+    }
+    assert "/invalid.md" not in {item["name"] for item in invalid_list}
+
+
+@pytest.mark.integration
+def test_zip_import_applies_common_metadata_before_each_markdown_front_matter(
+    monkeypatch,
+):
+    """Zip metadata is common to every entry and each front matter wins conflicts."""
+    import io
+    import zipfile
+
+    settings = _kb_settings()
+    _reset_runtime(monkeypatch, settings)
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr("plain.txt", "plain")
+        output.writestr(
+            "note.md",
+            "---\nowner: note-owner\nnoteOnly: true\n---\n# Note\n",
+        )
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Zip metadata {uuid4().hex[:12]}")
+        response = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={
+                "knCode": kb_code,
+                "filePath": "/zip-meta",
+                "metadata": '{"owner":"common","commonOnly":"all"}',
+            },
+            files={
+                "fileContent": (
+                    "metadata.zip",
+                    archive.getvalue(),
+                    "application/zip",
+                )
+            },
+        )
+        plain = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/zip-meta/plain.txt",
+            field_names=["owner", "commonOnly", "noteOnly"],
+        )
+        note = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/zip-meta/note.md",
+            field_names=["owner", "commonOnly", "noteOnly"],
+        )
+
+    assert response.json()["resultObject"]["summary"] == {
+        "total": 2,
+        "succeeded": 2,
+        "failed": 0,
+    }
+    assert plain == {
+        "owner": {"valueType": "string", "value": "common"},
+        "commonOnly": {"valueType": "string", "value": "all"},
+    }
+    assert note == {
+        "owner": {"valueType": "string", "value": "note-owner"},
+        "commonOnly": {"valueType": "string", "value": "all"},
+        "noteOnly": {"valueType": "boolean", "value": True},
+    }
+
+
+@pytest.mark.integration
 def test_metadata_update_is_atomic_and_downloads_current_front_matter(monkeypatch):
     settings = _kb_settings()
     _reset_runtime(monkeypatch, settings)

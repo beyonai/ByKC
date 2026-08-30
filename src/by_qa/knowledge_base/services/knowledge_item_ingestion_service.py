@@ -29,7 +29,10 @@ from by_qa.knowledge_base.events import (
     build_file_completed_event,
 )
 from by_qa.knowledge_base.infrastructure.storage import StorageLocation
-from by_qa.knowledge_base.metadata_types import prepare_front_matter_metadata_value
+from by_qa.knowledge_base.services.entry_metadata import (
+    merge_entry_metadata,
+    upsert_entry_metadata,
+)
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
 from by_qa.knowledge_base.services.knowledge_document_metadata import (
     ensure_document_kind_metadata,
@@ -256,14 +259,18 @@ class KnowledgeItemIngestionService:
                 checksum=checksum,
             )
 
-            if request.process_front_matter:
-                await self._apply_front_matter_metadata(
-                    cursor,
-                    fs_entry_id=fs_entry_id,
-                    knowledge_base_id=knowledge_base_id,
-                    content=request.file_content,
-                    file_path=normalized_file_path,
-                )
+            front_matter = {}
+            if request.process_front_matter and self._is_markdown_upload(
+                normalized_object_path, mime_type
+            ):
+                front_matter = parse_front_matter(request.file_content)
+            await upsert_entry_metadata(
+                cursor,
+                metadata_repository=self.file_metadata_value_repository,
+                fs_entry_id=fs_entry_id,
+                knowledge_base_id=knowledge_base_id,
+                metadata=merge_entry_metadata(request.metadata, front_matter),
+            )
             await ensure_document_kind_metadata(
                 cursor,
                 file_metadata_value_repository=self.file_metadata_value_repository,
@@ -533,38 +540,6 @@ class KnowledgeItemIngestionService:
             seen.add(dedupe_key)
             targets.append((knowledge_base_id, target_path, target_fs_entry_id))
         return targets
-
-    async def _apply_front_matter_metadata(
-        self,
-        cursor: Any,
-        *,
-        fs_entry_id: int,
-        knowledge_base_id: int,
-        content: bytes,
-        file_path: str,
-    ) -> None:
-        """Parse front matter and auto-set metadata if repos are available."""
-        if self.file_metadata_value_repository is None:
-            return
-
-        suffix = PurePosixPath(file_path).suffix.lower()
-        if suffix not in {".md", ".markdown"}:
-            return
-
-        front_matter = parse_front_matter(content)
-        if not front_matter:
-            return
-
-        for field_name, value in front_matter.items():
-            value_type, normalized_value = prepare_front_matter_metadata_value(value)
-            await self.file_metadata_value_repository.upsert_value(
-                cursor,
-                fs_entry_id=fs_entry_id,
-                knowledge_base_id=knowledge_base_id,
-                property_name=str(field_name),
-                value_type=value_type,
-                value=normalized_value,
-            )
 
     async def file_to_markdown_index(
         self, request: FileToMarkdownIndexRequest, *, document_chunking_service: Any

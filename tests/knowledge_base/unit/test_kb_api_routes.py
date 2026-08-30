@@ -1748,6 +1748,47 @@ def test_upload_file_route_passes_markdown_bytes_to_ingestion(monkeypatch):
     assert service.import_calls[0].skip_if_duplicate is True
 
 
+def test_upload_file_route_parses_metadata_json_object(monkeypatch):
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/knowledgeItems/import",
+        data={
+            "knCode": "hr-policy",
+            "filePath": "/docs/readme.md",
+            "metadata": '{"owner":"Alice","tags":["one"]}',
+        },
+        files={"fileContent": ("readme.md", b"# Readme\n", "text/markdown")},
+    )
+
+    assert response.json()["resultCode"] == "0"
+    assert service.import_calls[0].metadata == {
+        "owner": "Alice",
+        "tags": ["one"],
+    }
+
+
+@pytest.mark.parametrize("metadata", ["not-json", "[]", '"text"'])
+def test_upload_file_route_rejects_non_object_metadata(monkeypatch, metadata):
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/knowledgeItems/import",
+        data={
+            "knCode": "hr-policy",
+            "filePath": "/docs/readme.md",
+            "metadata": metadata,
+        },
+        files={"fileContent": ("readme.md", b"# Readme\n", "text/markdown")},
+    )
+
+    assert response.json()["resultCode"] == "-1"
+    assert response.json()["resultMsg"] == "request validation failed"
+    assert service.import_calls == []
+
+
 def test_upload_zip_route_includes_post_process_errors(monkeypatch):
     class FakeZipBatchImportService:
         def __init__(self, *, ingestion_service):

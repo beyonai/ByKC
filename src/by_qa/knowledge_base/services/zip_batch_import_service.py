@@ -127,6 +127,7 @@ class ZipBatchImportService:
         process_front_matter: bool = True,
         file_description: str | None = None,
         skip_if_duplicate: bool = False,
+        metadata: dict[str, Any] | None = None,
         max_concurrency: int | None = None,
     ) -> ZipBatchImportResult:
         normalized_target = (target_dir or "").strip("/") or ""
@@ -169,6 +170,7 @@ class ZipBatchImportService:
             process_front_matter=process_front_matter,
             file_description=file_description,
             skip_if_duplicate=skip_if_duplicate,
+            metadata=metadata,
         )
 
         # Phase 2: md concurrent after barrier.
@@ -180,6 +182,7 @@ class ZipBatchImportService:
             process_front_matter=process_front_matter,
             file_description=file_description,
             skip_if_duplicate=skip_if_duplicate,
+            metadata=metadata,
         )
 
         imports = list(non_md_imports) + list(md_imports)
@@ -218,6 +221,7 @@ class ZipBatchImportService:
         process_front_matter: bool,
         file_description: str | None,
         skip_if_duplicate: bool,
+        metadata: dict[str, Any] | None = None,
     ) -> list[_ImportedItem]:
         async def one(name: str, data: bytes) -> _ImportedItem:
             async with sem:
@@ -229,6 +233,7 @@ class ZipBatchImportService:
                     process_front_matter=process_front_matter,
                     file_description=file_description,
                     skip_if_duplicate=skip_if_duplicate,
+                    metadata=metadata,
                 )
 
         return await asyncio.gather(*(one(n, d) for n, d in group))
@@ -304,6 +309,7 @@ class ZipBatchImportService:
         process_front_matter: bool,
         file_description: str | None,
         skip_if_duplicate: bool,
+        metadata: dict[str, Any] | None = None,
     ) -> _ImportedItem:
         resolved = _resolve_within_target(target_dir, name)
         if resolved is None:
@@ -346,6 +352,7 @@ class ZipBatchImportService:
                 file_content=data,
                 process_front_matter=process_front_matter,
                 skip_if_duplicate=skip_if_duplicate,
+                metadata=metadata,
             )
             upload_row = await self.ingestion_service.upload_file(request)
             return _ImportedItem(

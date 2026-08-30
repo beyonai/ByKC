@@ -117,6 +117,19 @@ def _documented_error_response(
     )
 
 
+def _parse_optional_metadata_form(value: str | None) -> dict[str, Any] | None:
+    """Parse an optional multipart JSON object used as entry metadata."""
+    if value is None:
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError("metadata must be a valid JSON object") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("metadata must be a JSON object")
+    return parsed
+
+
 async def _resolve_maybe_async(factory):
     """Resolve a dependency factory that may be synchronous or asynchronous."""
     result = factory()
@@ -691,6 +704,7 @@ def register_routes(
         file_content: UploadFile | None = File(None, alias="fileContent"),
         process_front_matter: bool = Form(True, alias="processFrontMatter"),
         skip_if_duplicate: bool = Form(False, alias="skipIfDuplicate"),
+        metadata: str | None = Form(None, alias="metadata"),
     ):
         try:
             payload = await file_content.read() if file_content is not None else None
@@ -705,6 +719,7 @@ def register_routes(
                     ),
                     "processFrontMatter": process_front_matter,
                     "skipIfDuplicate": skip_if_duplicate,
+                    "metadata": _parse_optional_metadata_form(metadata),
                 }
             )
         except (ValidationError, ValueError) as exc:
@@ -742,6 +757,7 @@ def register_routes(
                     process_front_matter=request.process_front_matter,
                     file_description=request.file_description,
                     skip_if_duplicate=request.skip_if_duplicate,
+                    metadata=request.metadata,
                 )
                 result_object = {
                     "data": [item.model_dump(by_alias=True) for item in result.data],

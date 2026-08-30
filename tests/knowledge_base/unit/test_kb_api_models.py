@@ -126,6 +126,19 @@ def test_upload_request_accepts_documented_form_fields():
     assert request.mime_type == "application/pdf"
 
 
+def test_upload_request_accepts_metadata_mapping():
+    from by_qa.knowledge_base.api.schemas import KnowledgeItemUploadRequest
+
+    request = KnowledgeItemUploadRequest(
+        knCode="hr-policy",
+        filePath="/doc.md",
+        fileContent=b"body",
+        metadata={"owner": "Alice", "tags": ["one"]},
+    )
+
+    assert request.metadata == {"owner": "Alice", "tags": ["one"]}
+
+
 def test_glob_request_accepts_documented_fields():
     """Glob requests should accept knCode and pathRule."""
     from by_qa.knowledge_base.api.schemas import KnowledgeItemGlobRequest

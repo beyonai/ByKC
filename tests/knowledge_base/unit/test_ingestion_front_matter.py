@@ -7,8 +7,9 @@ from datetime import date, datetime, timezone
 import pytest
 
 from by_qa.knowledge_base.metadata_types import prepare_front_matter_metadata_value
-from by_qa.knowledge_base.services.knowledge_item_ingestion_service import (
-    KnowledgeItemIngestionService,
+from by_qa.knowledge_base.services.entry_metadata import (
+    merge_entry_metadata,
+    upsert_entry_metadata,
 )
 from by_qa.knowledge_base.services.markdown_front_matter import (
     parse_front_matter,
@@ -101,15 +102,14 @@ async def test_ingestion_stores_quoted_iso_date_as_datetime_metadata():
             self.calls.append(kwargs)
 
     repository = MetadataRepository()
-    service = object.__new__(KnowledgeItemIngestionService)
-    service.file_metadata_value_repository = repository
-
-    await service._apply_front_matter_metadata(
+    await upsert_entry_metadata(
         object(),
+        metadata_repository=repository,
         fs_entry_id=11,
         knowledge_base_id=7,
-        file_path="article.md",
-        content=b'---\ntitle: "AI systems"\npublished_date: "2026-08-18"\n---\n',
+        metadata=parse_front_matter(
+            b'---\ntitle: "AI systems"\npublished_date: "2026-08-18"\n---\n'
+        ),
     )
 
     assert repository.calls == [
@@ -128,3 +128,14 @@ async def test_ingestion_stores_quoted_iso_date_as_datetime_metadata():
             "value": date(2026, 8, 18),
         },
     ]
+
+
+def test_request_metadata_is_merged_before_front_matter():
+    assert merge_entry_metadata(
+        {"owner": "request", "requestOnly": True},
+        {"owner": "front matter", "frontOnly": 1},
+    ) == {
+        "owner": "front matter",
+        "requestOnly": True,
+        "frontOnly": 1,
+    }

@@ -1974,6 +1974,47 @@ async def test_upload_file_imports_front_matter_without_registered_properties():
     assert storage.written[0][1] == b"# Hello"
 
 
+async def test_upload_file_rolls_back_entry_and_object_when_metadata_write_fails():
+    class FailingMetadataRepository(FakeFileMetadataValueRepository):
+        async def upsert_value(self, cursor, **kwargs):
+            del cursor, kwargs
+            raise RuntimeError("metadata write failed")
+
+    connection = FakeConnection()
+    storage = FakeStorageProvider()
+    service = KnowledgeItemIngestionService(
+        connection_factory=lambda: _async_return(connection),
+        knowledge_base_repository=FakeKnowledgeBaseRepository(
+            default_lookup_result={"kid": 7, "kb_code": "hr-policy"}
+        ),
+        knowledge_fs_entry_repository=FakeKnowledgeFsEntryRepository(),
+        knowledge_item_chunk_repository=FakeKnowledgeItemChunkRepository(),
+        retrieval_projection_repository=FakeRetrievalProjectionRepository(),
+        storage_provider=storage,
+        embedding_dimension=2,
+        file_metadata_value_repository=FailingMetadataRepository(),
+    )
+
+    try:
+        await service.upload_file(
+            KnowledgeItemUploadRequest(
+                knCode="hr-policy",
+                filePath="/doc.md",
+                fileContent=b"# Hello",
+                metadata={"owner": "Alice"},
+            )
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "metadata write failed"
+    else:
+        raise AssertionError("expected metadata write failure")
+
+    assert connection.committed is False
+    assert connection.rolled_back is True
+    assert len(storage.written) == 1
+    assert storage.deleted == [("kb/7/fs-entry/71/original.md", "knowledge-base")]
+
+
 async def test_upload_file_persists_path_default_and_preserves_explicit_document_kind():
     cases = [
         ("/plain.md", b"# Plain", True, "original"),

@@ -37,6 +37,14 @@ Content-Type: application/json
 {"status":"ok"}
 ```
 
+## 响应参数
+
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| `status` | string | 是 | 服务存活状态；正常时为 `ok` |
+
+该接口不使用知识模块统一 JSON 信封，因此没有 `resultObject.data` 字段。
+
 ## 特殊逻辑
 
 - 路径不包含 `/api/v1`。

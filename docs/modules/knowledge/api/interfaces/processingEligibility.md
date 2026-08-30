@@ -60,6 +60,23 @@
 }
 ```
 
+## 响应参数
+
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| `resultCode` | string | 是 | 业务结果码；`0` 表示资格判断已完成 |
+| `resultMsg` | string | 是 | 业务结果说明 |
+| `resultObject` | object | 是 | 文件处理资格结果 |
+| `resultObject.fileId` | string | 是 | 文件 ID |
+| `resultObject.knCode` | string | 是 | 知识库编码 |
+| `resultObject.filePath` | string | 是 | 文件路径 |
+| `resultObject.documentKind` | string | 是 | 文档类型：`original` 或 `knowledgeEntity` |
+| `resultObject.capability` | string | 是 | 被评估的能力 |
+| `resultObject.eligibility` | string | 是 | `ELIGIBLE_AND_STALE`、`ELIGIBLE_BUT_FRESH` 或 `INELIGIBLE` |
+| `resultObject.reasonCode` | string | 是 | 资格或 freshness 判定原因码 |
+| `resultObject.lastSuccessfulTaskId` | string | 否 | 最近成功任务 ID；从未成功处理时省略 |
+| `resultObject.lastSuccessfulAt` | string | 否 | 最近成功时间，ISO 8601 格式；无记录时省略 |
+
 `reasonCode` 建议值：
 
 ```text

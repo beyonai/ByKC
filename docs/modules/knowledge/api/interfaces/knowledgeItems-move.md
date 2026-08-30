@@ -95,22 +95,22 @@
 }
 ```
 
-`data` 元素字段：
+## 响应参数
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `sourcePath` | string | 本次移动的源路径 |
-| `targetPath` | string \| null | 该源路径实际移动后的目标路径；失败时可为 `null` |
-| `success` | boolean | 是否移动成功 |
-| `error` | string \| null | 失败原因；成功时为 `null` |
-
-`summary` 字段：
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `total` | integer | 本次请求处理的移动项总数 |
-| `succeeded` | integer | 成功数 |
-| `failed` | integer | 失败数 |
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| `resultCode` | string | 是 | 业务结果码；整批请求被正常处理时为 `0` |
+| `resultMsg` | string | 是 | 业务结果说明 |
+| `resultObject` | object | 是 | 批量移动结果 |
+| `resultObject.data` | array[object] | 是 | 按源路径排列的逐项移动结果 |
+| `resultObject.data[].sourcePath` | string | 是 | 本次移动的源路径 |
+| `resultObject.data[].targetPath` | string \| null | 是 | 实际目标路径；失败时可为 `null` |
+| `resultObject.data[].success` | boolean | 是 | 该移动项是否成功 |
+| `resultObject.data[].error` | string \| null | 是 | 失败原因；成功时为 `null` |
+| `resultObject.summary` | object | 是 | 本次请求的汇总统计 |
+| `resultObject.summary.total` | integer | 是 | 本次请求处理的移动项总数 |
+| `resultObject.summary.succeeded` | integer | 是 | 成功数 |
+| `resultObject.summary.failed` | integer | 是 | 失败数 |
 
 部分成功响应示例：
 

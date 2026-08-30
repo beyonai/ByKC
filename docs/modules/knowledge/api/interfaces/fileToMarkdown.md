@@ -50,8 +50,6 @@ curl -X POST http://localhost:8000/api/v1/fileToMarkdown \
 - `Content-Type`：`application/octet-stream`
 - `Content-Disposition`：`attachment; filename="<原文件名去扩展名>.md"`
 
-## 成功响应示例
-
 ```http
 HTTP/1.1 200 OK
 Content-Type: application/octet-stream
@@ -61,6 +59,16 @@ Content-Disposition: attachment; filename="考勤制度.md"
 
 ...
 ```
+
+## 响应参数
+
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| 响应体 | string | 是 | 转换后的 Markdown 正文 |
+| `Content-Type` | string | 是 | 固定为 `application/octet-stream` |
+| `Content-Disposition` | string | 是 | Markdown 下载文件名信息 |
+
+成功响应不使用 JSON 信封，因此没有 `resultObject.data` 字段。
 
 ## 失败响应示例
 

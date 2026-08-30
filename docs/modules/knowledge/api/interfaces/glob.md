@@ -113,6 +113,29 @@
 }
 ```
 
+## 响应参数
+
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| `resultCode` | string | 是 | 业务结果码；`0` 表示成功 |
+| `resultMsg` | string | 是 | 业务结果说明 |
+| `resultObject` | object | 是 | Glob 匹配结果 |
+| `resultObject.data` | array[object] | 是 | 匹配条目列表；无结果时为空数组 |
+| `resultObject.data[].knCode` | string | 是 | 条目所属知识库编码 |
+| `resultObject.data[].name` | string | 是 | 条目的知识库内完整路径 |
+| `resultObject.data[].type` | string | 是 | 条目类型：`file` 或 `directory` |
+| `resultObject.data[].size` | integer | 是 | 文件字节数；目录为 `0` |
+| `resultObject.data[].updatedAt` | string \| null | 是 | 最后更新时间，ISO 8601 格式；无记录时为 `null` |
+| `resultObject.data[].buildStatus` | string \| null | 是 | 文件最新构建状态；目录或无构建任务时为 `null` |
+| `resultObject.data[].buildCurrentStep` | string \| null | 是 | 文件最新构建阶段；目录或无构建任务时为 `null` |
+| `resultObject.data[].metadata` | object | 是 | 请求返回的元数据映射；未请求或无值时为空对象 |
+| `resultObject.data[].metadata.<propertyName>` | object | 否 | 某个实际返回的元数据属性 |
+| `resultObject.data[].metadata.<propertyName>.valueType` | string | 是 | 属性类型 |
+| `resultObject.data[].metadata.<propertyName>.value` | any | 是 | 属性值，实际 JSON 类型由 `valueType` 决定 |
+| `resultObject.total` | integer | 否 | 匹配总数；启用分页时返回 |
+| `resultObject.pageNum` | integer | 否 | 当前页码；启用分页时返回 |
+| `resultObject.pageSize` | integer | 否 | 每页条数；启用分页时返回 |
+
 ## 失败响应示例
 
 ```json

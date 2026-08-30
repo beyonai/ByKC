@@ -91,6 +91,35 @@ Agent DSL 版纯元数据检索，同一份请求同时查询文件和目录。�
 
 完整的系统文件属性清单见“系统文件属性”章节。所有系统文件属性均可用于 `where` 过滤，也可通过 `metadataFieldList` 获取值。
 
+## 响应参数
+
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| `resultCode` | string | 是 | 业务结果码；`0` 表示成功 |
+| `resultMsg` | string | 是 | 业务结果说明 |
+| `resultObject` | object | 是 | 元数据检索结果 |
+| `resultObject.data` | array[object] | 是 | 当前页条目；无结果时为空数组 |
+| `resultObject.data[].knCode` | string | 是 | 条目所属知识库编码 |
+| `resultObject.data[].filePath` | string | 是 | 文件或目录的知识库内完整路径 |
+| `resultObject.data[].type` | string | 是 | 条目类型：`file` 或 `directory` |
+| `resultObject.data[].metadata` | object | 是 | 请求返回的元数据映射；无值时为空对象 |
+| `resultObject.data[].metadata.<propertyName>` | object | 否 | 某个实际返回的元数据属性 |
+| `resultObject.data[].metadata.<propertyName>.valueType` | string | 是 | 属性类型 |
+| `resultObject.data[].metadata.<propertyName>.value` | any | 是 | 属性值，实际 JSON 类型由 `valueType` 决定 |
+| `resultObject.total` | integer | 是 | 文件和目录的匹配总数 |
+| `resultObject.pageNum` | integer | 是 | 当前页码 |
+| `resultObject.pageSize` | integer | 是 | 每页条数 |
+
+失败时 `resultObject` 可进一步包含以下校验明细：
+
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| `resultObject.errorCode` | string | 否 | 结构化错误码 |
+| `resultObject.errorList` | array[object] | 否 | DSL 校验错误列表 |
+| `resultObject.errorList[].path` | string | 是 | 错误所在请求字段路径 |
+| `resultObject.errorList[].code` | string | 是 | 错误项代码 |
+| `resultObject.errorList[].message` | string | 是 | 错误项说明 |
+
 ## 失败响应示例
 
 ```json

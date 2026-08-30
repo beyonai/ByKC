@@ -44,6 +44,17 @@
 }
 ```
 
+## 响应参数
+
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| `resultCode` | string | 是 | 业务结果码；`0` 表示成功 |
+| `resultMsg` | string | 是 | 业务结果说明 |
+| `resultObject` | object | 是 | 删除统计 |
+| `resultObject.deletedEntityCount` | integer | 是 | 删除的规范实体记录数 |
+| `resultObject.deletedAliasCount` | integer | 是 | 随规范实体删除的 alias 记录数 |
+| `resultObject.deletedFileCount` | integer | 是 | 随规范实体删除的锚定文件数 |
+
 ## 失败语义
 
 - `entityId` 是 alias、属于其他知识库或不存在：返回 `resultCode=-1`；

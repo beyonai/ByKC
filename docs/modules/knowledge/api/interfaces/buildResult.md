@@ -152,21 +152,60 @@
 }
 ```
 
-主要响应字段：
+## 响应参数
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `build` | object | 最新构建任务的状态、当前步骤、错误信息、开始/完成时间和耗时 |
-| `markdown.available` | boolean | 是否存在已生成的 Markdown 文件 |
-| `markdown.data` | string/null | Markdown 正文；`includeMarkdown=false` 时为 `null` |
-| `markdown.lineCount` | integer | Markdown 行数 |
-| `markdown.characterCount` | integer/null | Markdown 字符数；未读取正文时为 `null` |
-| `markdown.byteCount` | integer/null | Markdown UTF-8 字节数；未读取正文时为 `null` |
-| `chunks.data` | array[object] | 当前页切片，包含行号、正文、向量和索引状态 |
-| `chunks.total` | integer | 文件切片总数 |
-| `chunks.reachedEof` | boolean | 当前页是否已经到达最后一页 |
-| `embedding.coverageRate` | number | 已生成向量的切片占比，单位为百分比 |
-| `retrieval.coverageRate` | number | 已进入检索索引的切片占比，单位为百分比 |
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| `resultCode` | string | 是 | 业务结果码；`0` 表示成功 |
+| `resultMsg` | string | 是 | 业务结果说明 |
+| `resultObject` | object | 是 | 文件最新一次构建的完整结果 |
+| `resultObject.knCode` | string | 是 | 知识库编码 |
+| `resultObject.filePath` | string | 是 | 文件完整路径 |
+| `resultObject.fileName` | string | 是 | 文件名 |
+| `resultObject.fileType` | string | 是 | 文件扩展类型，不含点号 |
+| `resultObject.fileSize` | integer | 是 | 文件字节数 |
+| `resultObject.mimeType` | string \| null | 是 | 文件媒体类型；未知时为 `null` |
+| `resultObject.build` | object | 是 | 最新构建任务状态 |
+| `resultObject.build.status` | string | 是 | 构建状态 |
+| `resultObject.build.currentStep` | string | 是 | 当前或最终构建环节 |
+| `resultObject.build.errorMessage` | string \| null | 是 | 构建失败信息；无错误时为 `null` |
+| `resultObject.build.startedAt` | string \| null | 是 | 开始时间，ISO 8601 格式 |
+| `resultObject.build.finishedAt` | string \| null | 是 | 完成时间，ISO 8601 格式 |
+| `resultObject.build.durationMs` | integer \| null | 是 | 构建耗时，单位毫秒 |
+| `resultObject.build.statusDict` | array[object] | 是 | 构建状态字典 |
+| `resultObject.build.statusDict[].standCode` | string | 是 | 状态代码 |
+| `resultObject.build.statusDict[].standDisplayValue` | string | 是 | 状态中文展示值 |
+| `resultObject.build.statusDict[].standDisplayValueEn` | string | 是 | 状态英文展示值 |
+| `resultObject.build.stepDict` | array[object] | 是 | 构建环节字典 |
+| `resultObject.build.stepDict[].standCode` | string | 是 | 环节代码 |
+| `resultObject.build.stepDict[].standDisplayValue` | string | 是 | 环节中文展示值 |
+| `resultObject.build.stepDict[].standDisplayValueEn` | string | 是 | 环节英文展示值 |
+| `resultObject.markdown` | object | 是 | Markdown 产物信息 |
+| `resultObject.markdown.available` | boolean | 是 | 是否存在已生成的 Markdown 文件 |
+| `resultObject.markdown.data` | string \| null | 是 | Markdown 正文；`includeMarkdown=false` 时为 `null` |
+| `resultObject.markdown.lineCount` | integer | 是 | Markdown 行数 |
+| `resultObject.markdown.characterCount` | integer \| null | 是 | Markdown 字符数；未读取正文时为 `null` |
+| `resultObject.markdown.byteCount` | integer \| null | 是 | Markdown UTF-8 字节数；未读取正文时为 `null` |
+| `resultObject.chunks` | object | 是 | 切片分页结果 |
+| `resultObject.chunks.data` | array[object] | 是 | 当前页切片；无切片时为空数组 |
+| `resultObject.chunks.data[].chunkNo` | integer | 是 | 切片序号 |
+| `resultObject.chunks.data[].startLine` | integer | 是 | 切片起始行 |
+| `resultObject.chunks.data[].endLine` | integer | 是 | 切片结束行 |
+| `resultObject.chunks.data[].content` | string | 是 | 切片正文 |
+| `resultObject.chunks.data[].characterCount` | integer | 是 | 切片字符数 |
+| `resultObject.chunks.data[].hasEmbedding` | boolean | 是 | 是否已生成向量 |
+| `resultObject.chunks.data[].retrievalIndexed` | boolean | 是 | 是否已进入检索索引 |
+| `resultObject.chunks.page` | integer | 是 | 当前切片页码 |
+| `resultObject.chunks.pageSize` | integer | 是 | 每页切片数量 |
+| `resultObject.chunks.total` | integer | 是 | 文件切片总数 |
+| `resultObject.chunks.reachedEof` | boolean | 是 | 当前页是否已到最后一页 |
+| `resultObject.embedding` | object | 是 | 向量化统计 |
+| `resultObject.embedding.dimension` | integer | 是 | 向量维度 |
+| `resultObject.embedding.embeddedChunkCount` | integer | 是 | 已生成向量的切片数 |
+| `resultObject.embedding.coverageRate` | number | 是 | 向量化覆盖率，单位为百分比 |
+| `resultObject.retrieval` | object | 是 | 检索索引统计 |
+| `resultObject.retrieval.indexedChunkCount` | integer | 是 | 已进入检索索引的切片数 |
+| `resultObject.retrieval.coverageRate` | number | 是 | 检索索引覆盖率，单位为百分比 |
 
 ## 失败响应示例
 

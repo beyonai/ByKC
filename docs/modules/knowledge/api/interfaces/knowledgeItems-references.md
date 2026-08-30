@@ -99,6 +99,23 @@
 - 默认不返回已删除 source 文件产生的引用；outbound 查询的 source 文件不存在或已删除时返回空数组。
 - 该接口只查询引用关系，不读取或修改 Markdown 内容。
 
+## 响应参数
+
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| `resultCode` | string | 是 | 业务结果码；`0` 表示成功 |
+| `resultMsg` | string | 是 | 业务结果说明 |
+| `resultObject` | object | 是 | Markdown 引用关系结果 |
+| `resultObject.inbound` | array[object] | 是 | 指向查询文件的引用；未请求该方向时为空数组 |
+| `resultObject.outbound` | array[object] | 是 | 查询文件发出的引用；未请求该方向时为空数组 |
+| `resultObject.inbound[]` | object | 否 | 单条入向引用，字段结构同 `outbound[]` |
+| `resultObject.outbound[]` | object | 否 | 单条出向引用，字段结构同 `inbound[]` |
+| `resultObject.inbound[].sourcePath` / `resultObject.outbound[].sourcePath` | string | 是 | 包含 Markdown 引用的来源文件路径 |
+| `resultObject.inbound[].originalTarget` / `resultObject.outbound[].originalTarget` | string | 是 | Markdown 中原始写入的引用目标 |
+| `resultObject.inbound[].targetSuffix` / `resultObject.outbound[].targetSuffix` | string | 是 | 引用目标后缀；无后缀时为空字符串 |
+| `resultObject.inbound[].targetPath` / `resultObject.outbound[].targetPath` | string | 是 | 当前解析到或删除时记录的目标路径 |
+| `resultObject.inbound[].status` / `resultObject.outbound[].status` | string | 是 | `resolved`、`unresolved` 或 `broken` |
+
 ## 失败响应示例
 
 ```json

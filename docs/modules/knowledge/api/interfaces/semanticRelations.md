@@ -117,6 +117,44 @@
 }
 ```
 
+## 响应参数
+
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| `resultCode` | string | 是 | 业务结果码；`0` 表示查询成功 |
+| `resultMsg` | string | 是 | 业务结果说明 |
+| `resultObject` | object | 是 | 语义关系分页结果 |
+| `resultObject.fileId` | string | 是 | 查询目标文件 ID |
+| `resultObject.total` | integer | 是 | 权限过滤后的逻辑关系总数 |
+| `resultObject.pageNum` | integer | 是 | 当前页码 |
+| `resultObject.pageSize` | integer | 是 | 每页关系数 |
+| `resultObject.data` | array[object] | 是 | 当前页逻辑关系；无结果时为空数组 |
+| `resultObject.data[].relationId` | string | 是 | 由 source、关系类型和 target 派生的稳定逻辑 ID |
+| `resultObject.data[].relationCode` | string | 是 | 关系类型代码 |
+| `resultObject.data[].direction` | string | 是 | 相对查询文件的方向：`OUTGOING` 或 `INCOMING` |
+| `resultObject.data[].source` | object | 是 | 关系起点文档 |
+| `resultObject.data[].source.fileId` | string | 是 | 起点文件 ID |
+| `resultObject.data[].source.knCode` | string | 是 | 起点知识库编码 |
+| `resultObject.data[].source.filePath` | string | 是 | 起点文件路径 |
+| `resultObject.data[].source.documentKind` | string | 是 | 起点文档类型 |
+| `resultObject.data[].target` | object | 是 | 关系终点文档 |
+| `resultObject.data[].target.fileId` | string | 是 | 终点文件 ID |
+| `resultObject.data[].target.knCode` | string | 是 | 终点知识库编码 |
+| `resultObject.data[].target.filePath` | string | 是 | 终点文件路径 |
+| `resultObject.data[].target.documentKind` | string | 是 | 终点文档类型 |
+| `resultObject.data[].assertionCount` | integer | 是 | 聚合到该逻辑关系的物理断言数 |
+| `resultObject.data[].confidence` | number | 是 | 代表断言置信度，范围 0～1 |
+| `resultObject.data[].discoveredBy` | string | 是 | 关系发现来源 |
+| `resultObject.data[].sourceTaskId` | string | 否 | 产生关系的文件任务 ID |
+| `resultObject.data[].representativeEvidence` | object \| null | 是 | 一条代表性轻量证据；无证据位置时为 `null` |
+| `resultObject.data[].representativeEvidence.producerRunId` | string | 否 | 证据生产运行 ID |
+| `resultObject.data[].representativeEvidence.evidenceFingerprint` | string | 否 | 证据指纹 |
+| `resultObject.data[].representativeEvidence.sourceHeadingPath` | string | 否 | 来源章节路径 |
+| `resultObject.data[].representativeEvidence.startLine` | integer | 否 | 来源起始行 |
+| `resultObject.data[].representativeEvidence.endLine` | integer | 否 | 来源结束行 |
+| `resultObject.data[].representativeEvidence.startOffset` | integer | 否 | 来源起始字符偏移 |
+| `resultObject.data[].representativeEvidence.endOffset` | integer | 否 | 来源结束字符偏移 |
+
 关系查询执行目标文档和相邻文档的权限过滤。调用方无权访问的边不返回，也不以数量暴露。`relationId` 是由 source/relation/target 派生的稳定逻辑 ID，不随某条物理断言重建而变化；`assertionCount` 是当前聚合的物理断言数。如果存在 Markdown 位置断言，`representativeEvidence` 优先返回其章节、行和偏移。
 
 v1 不提供独立证据正文查询，也不实现 `knowledge_document_relation_evidence`。当前返回的是聚合数量和一条代表性轻量位置；若后续需要展开所有证据出现、证据 checksum 失效检测或长期关系审计，再增加独立证据层。

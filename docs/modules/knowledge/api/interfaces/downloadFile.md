@@ -45,6 +45,16 @@
 - `Content-Disposition: attachment; filename="..."` 或带 `filename*`
 - 响应体为文件字节流；Markdown 文件为解析后的 Markdown 字节流
 
+## 响应参数
+
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| 响应体 | binary | 是 | 文件二进制字节流 |
+| `Content-Type` | string | 是 | 文件的媒体类型 |
+| `Content-Disposition` | string | 是 | 下载文件名信息 |
+
+成功响应不使用 JSON 信封，因此没有 `resultObject.data` 字段。
+
 ## 失败响应示例
 
 ```json

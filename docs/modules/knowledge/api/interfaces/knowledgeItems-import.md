@@ -118,21 +118,22 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
 }
 ```
 
-`data` 元素字段：
+## 响应参数
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `filePath` | string | 该文件入库后的全路径 |
-| `success` | boolean | 是否导入成功 |
-| `error` | string \| null | 失败原因；成功时为 `null` |
-
-`summary` 字段：
-
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `total` | integer | 本次上传处理的文件总数 |
-| `succeeded` | integer | 成功数 |
-| `failed` | integer | 失败数 |
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| `resultCode` | string | 是 | 业务结果码；整批请求被正常处理时为 `0` |
+| `resultMsg` | string | 是 | 业务结果说明 |
+| `resultObject` | object | 是 | 批量导入结果；单文件上传也使用相同结构 |
+| `resultObject.data` | array[object] | 是 | 逐文件导入结果 |
+| `resultObject.data[].filePath` | string | 是 | 该文件入库后的完整路径 |
+| `resultObject.data[].success` | boolean | 是 | 该文件是否导入成功 |
+| `resultObject.data[].error` | string \| null | 是 | 失败原因；成功时为 `null` |
+| `resultObject.summary` | object | 是 | 本次上传的汇总统计 |
+| `resultObject.summary.total` | integer | 是 | 本次上传处理的文件总数 |
+| `resultObject.summary.succeeded` | integer | 是 | 成功数 |
+| `resultObject.summary.failed` | integer | 是 | 失败数 |
+| `resultObject.postProcessErrors` | array[string] | 否 | 文件入库后的批后处理错误；不计入 `summary` |
 
 zip 批量上传可能包含可选字段 `postProcessErrors`（string 数组），用于返回文件入库完成后的批后处理错误（例如 Markdown 引用批量补偿失败）。该字段不属于 `data` 文件结果列表，且不计入 `summary.total` / `summary.succeeded` / `summary.failed`；`data` 和 `summary` 只统计真实 zip entry / 知识库路径。
 

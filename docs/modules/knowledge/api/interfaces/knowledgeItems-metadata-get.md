@@ -61,6 +61,18 @@
 }
 ```
 
+## 响应参数
+
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| `resultCode` | string | 是 | 业务结果码；`0` 表示成功 |
+| `resultMsg` | string | 是 | 业务结果说明 |
+| `resultObject` | object | 是 | 元数据查询结果 |
+| `resultObject.metadata` | object | 是 | 元数据映射；键为属性名 |
+| `resultObject.metadata.<propertyName>` | object | 否 | 某个实际存在且被请求的元数据属性 |
+| `resultObject.metadata.<propertyName>.valueType` | string | 是 | 属性类型，如 `string`、`datetime`、`stringList` |
+| `resultObject.metadata.<propertyName>.value` | any | 是 | 属性值，实际 JSON 类型由 `valueType` 决定 |
+
 ## 失败响应示例
 
 ```json

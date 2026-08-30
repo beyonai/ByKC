@@ -77,14 +77,18 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/update \
 }
 ```
 
-`data` 元素字段：
+## 响应参数
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `knCode` | string | 知识库编码 |
-| `filePath` | string | 被更新文件的完整路径 |
-| `success` | boolean | 是否更新成功；该接口只接受一个文件，成功时恒为 `true` |
-| `error` | string \| null | 成功时为 `null` |
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| `resultCode` | string | 是 | 业务结果码；`0` 表示成功 |
+| `resultMsg` | string | 是 | 业务结果说明 |
+| `resultObject` | object | 是 | 文件更新结果 |
+| `resultObject.data` | array[object] | 是 | 逐文件结果；本接口成功时固定为单元素数组 |
+| `resultObject.data[].knCode` | string | 是 | 知识库编码 |
+| `resultObject.data[].filePath` | string | 是 | 被更新文件的完整路径 |
+| `resultObject.data[].success` | boolean | 是 | 是否更新成功；成功响应中恒为 `true` |
+| `resultObject.data[].error` | string \| null | 是 | 成功时为 `null` |
 
 失败响应统一使用 HTTP 200 与 `resultCode: "-1"`：
 

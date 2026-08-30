@@ -59,6 +59,20 @@
 }
 ```
 
+## 响应参数
+
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| `resultCode` | string | 是 | 业务结果码；`0` 表示成功 |
+| `resultMsg` | string | 是 | 业务结果说明 |
+| `resultObject` | object | 是 | 文件读取结果 |
+| `resultObject.knCode` | string | 是 | 知识库编码 |
+| `resultObject.filePath` | string | 是 | 文件完整路径 |
+| `resultObject.startLine` | integer \| null | 是 | 本次返回内容的起始行；全量读取时为 `null` |
+| `resultObject.endLine` | integer \| null | 是 | 本次返回内容的结束行；全量读取时为 `null` |
+| `resultObject.data` | string | 是 | 本次读取的 Markdown 文本 |
+| `resultObject.reachedEof` | boolean | 是 | 是否已读取到文件末尾 |
+
 ## 失败响应示例
 
 ```json

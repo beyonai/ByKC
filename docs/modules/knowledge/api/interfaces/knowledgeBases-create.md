@@ -52,6 +52,17 @@
 }
 ```
 
+## 响应参数
+
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| `resultCode` | string | 是 | 业务结果码；`0` 表示成功 |
+| `resultMsg` | string | 是 | 业务结果说明 |
+| `resultObject` | object | 是 | 新建知识库信息 |
+| `resultObject.knCode` | string | 是 | 新建知识库编码 |
+| `resultObject.knName` | string | 是 | 知识库名称 |
+| `resultObject.knDescription` | string \| null | 是 | 知识库描述；未设置时为 `null` |
+
 ## 失败响应示例
 
 ```json

@@ -89,6 +89,27 @@
 }
 ```
 
+## 响应参数
+
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| `resultCode` | string | 是 | 业务结果码；`0` 表示成功 |
+| `resultMsg` | string | 是 | 业务结果说明 |
+| `resultObject` | object | 是 | 切片检索结果 |
+| `resultObject.data` | array[object] | 是 | 命中的切片列表；无结果时为空数组 |
+| `resultObject.data[].knCode` | string | 是 | 命中切片所属知识库编码 |
+| `resultObject.data[].filePath` | string | 是 | 命中切片所属文件路径 |
+| `resultObject.data[].chunkId` | integer | 是 | 切片 ID |
+| `resultObject.data[].chunkNo` | integer | 是 | 切片在文件中的序号 |
+| `resultObject.data[].chunkText` | string | 是 | 切片正文 |
+| `resultObject.data[].score` | number | 是 | 相关性得分 |
+| `resultObject.data[].startLine` | integer | 是 | 切片起始行 |
+| `resultObject.data[].endLine` | integer | 是 | 切片结束行 |
+| `resultObject.data[].metadata` | object | 是 | 请求返回的元数据映射；未请求或无值时为空对象 |
+| `resultObject.data[].metadata.<propertyName>` | object | 否 | 某个实际返回的元数据属性 |
+| `resultObject.data[].metadata.<propertyName>.valueType` | string | 是 | 属性类型 |
+| `resultObject.data[].metadata.<propertyName>.value` | any | 是 | 属性值，实际 JSON 类型由 `valueType` 决定 |
+
 ## 失败响应示例
 
 ```json

@@ -104,6 +104,14 @@
 }
 ```
 
+### 响应参数
+
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| `resultCode` | string | 是 | 业务结果码；`0` 表示全部元数据操作成功 |
+| `resultMsg` | string | 是 | 业务结果说明 |
+| `resultObject` | object | 是 | 成功时为空对象；最新元数据需通过 metadata get 接口查询 |
+
 成功后如需获取文件的完整最新元数据，调用 `POST /api/v1/knowledgeItems/metadata/get`。
 
 ### 失败响应示例

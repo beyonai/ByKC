@@ -90,6 +90,31 @@ HTTP 请求中不包含 `callback` 或模板正文。历史客户端也可使用
 }
 ```
 
+## 响应参数
+
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| `resultCode` | string | 是 | 业务结果码；请求受理时为 `0` |
+| `resultMsg` | string | 是 | 业务结果说明；受理时为 `accepted` |
+| `resultObject` | object | 是 | 批次受理结果 |
+| `resultObject.batchId` | string | 是 | 本次触发形成的批次 ID |
+| `resultObject.scope` | string | 是 | 处理范围：`SINGLE_FILE` 或 `WHOLE_KB` |
+| `resultObject.targetPath` | string | 否 | 单文件目标路径；全库触发时省略 |
+| `resultObject.taskType` | string | 是 | 固定为 `DOCUMENT_ENRICH` |
+| `resultObject.candidateCount` | integer | 是 | 本次扫描到的候选文件数 |
+| `resultObject.eligibleCount` | integer | 是 | 通过基础资格筛选的文件数 |
+| `resultObject.acceptedCount` | integer | 是 | 本次新建任务数 |
+| `resultObject.reusedCount` | integer | 是 | 复用已有任务数 |
+| `resultObject.skippedCount` | integer | 是 | 受理前跳过的文件数 |
+| `resultObject.returnedTaskCount` | integer | 是 | `tasks` 实际返回的任务数 |
+| `resultObject.tasksTruncated` | boolean | 是 | 任务预览是否因 20 条上限被截断 |
+| `resultObject.tasks` | array[object] | 是 | 新建或复用的任务预览 |
+| `resultObject.tasks[].taskId` | string | 是 | 文件任务 ID |
+| `resultObject.tasks[].status` | string | 是 | 任务当前状态 |
+| `resultObject.tasks[].fileId` | string | 是 | 待处理文件 ID |
+| `resultObject.tasks[].filePath` | string | 是 | 待处理文件路径 |
+| `resultObject.tasks[].reused` | boolean | 是 | 是否复用了已有任务 |
+
 没有可用证据的文件在受理前就会计入 `skippedCount`，不创建 task；如果证据在任务执行过程中失效，则已创建的文件 task 进入终态 `SKIPPED`：
 
 ```json

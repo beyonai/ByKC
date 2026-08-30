@@ -44,6 +44,17 @@
 }
 ```
 
+## 响应参数
+
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| `resultCode` | string | 是 | 业务结果码；`0` 表示成功 |
+| `resultMsg` | string | 是 | 业务结果说明 |
+| `resultObject` | object | 是 | 删除统计 |
+| `resultObject.deletedEntityCount` | integer | 是 | 删除的规范实体记录数；本接口成功时为 `0` |
+| `resultObject.deletedAliasCount` | integer | 是 | 删除的 alias 记录数 |
+| `resultObject.deletedFileCount` | integer | 是 | 删除的锚定文件数；本接口成功时为 `0` |
+
 `aliasId` 不属于指定 `entityId`、不是 alias、属于其他知识库或不存在时，返回 `resultCode=-1`。HTTP 状态和统一错误信封见[通用约定](../common.md)。
 
 ---

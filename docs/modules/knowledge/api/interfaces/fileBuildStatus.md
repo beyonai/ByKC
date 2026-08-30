@@ -45,65 +45,82 @@
   "resultCode": "0",
   "resultMsg": "success",
   "resultObject": {
-    "status": "processing",
+    "status": "running",
     "currentStep": "vectorizing",
-    "currentStepStatus": "running",
     "statusDict": [
       {
-        "standDisplayValue": "处理中",
-        "standCode": "processing",
-        "standDisplayValueEn": "Processing"
-      },
-      {
-        "standDisplayValue": "成功",
-        "standCode": "success",
-        "standDisplayValueEn": "Success"
+        "standDisplayValue": "已完成",
+        "standCode": "complete",
+        "standDisplayValueEn": "complete"
       },
       {
         "standDisplayValue": "失败",
         "standCode": "failed",
-        "standDisplayValueEn": "Failed"
+        "standDisplayValueEn": "failed"
+      },
+      {
+        "standDisplayValue": "构建中",
+        "standCode": "running",
+        "standDisplayValueEn": "running"
+      },
+      {
+        "standDisplayValue": "不支持构建",
+        "standCode": "unsupported",
+        "standDisplayValueEn": "unsupported"
       }
     ],
     "stepDict": [
       {
         "standDisplayValue": "原始文件转 Markdown",
         "standCode": "markdown",
-        "standDisplayValueEn": "Markdown"
+        "standDisplayValueEn": "markdown"
       },
       {
         "standDisplayValue": "文档切片",
         "standCode": "chunking",
-        "standDisplayValueEn": "Chunking"
+        "standDisplayValueEn": "chunking"
       },
       {
         "standDisplayValue": "切片向量化",
         "standCode": "vectorizing",
-        "standDisplayValueEn": "Vectorizing"
+        "standDisplayValueEn": "vectorizing"
+      },
+      {
+        "standDisplayValue": "已完成",
+        "standCode": "complete",
+        "standDisplayValueEn": "complete"
       }
     ]
   }
 }
 ```
 
-字段说明：
+## 响应参数
 
-| 字段 | 类型 | 说明 |
-| --- | --- | --- |
-| `status` | string | 构建状态 |
-| `currentStep` | string | 当前环节 |
-| `currentStepStatus` | string | 当前环节状态 |
-| `statusDict` | array[object] | 状态字典 |
-| `stepDict` | array[object] | 环节字典 |
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| `resultCode` | string | 是 | 业务结果码；`0` 表示成功 |
+| `resultMsg` | string | 是 | 业务结果说明 |
+| `resultObject` | object | 是 | 最新构建任务摘要 |
+| `resultObject.status` | string | 是 | 构建状态 |
+| `resultObject.currentStep` | string | 是 | 当前构建环节 |
+| `resultObject.statusDict` | array[object] | 是 | 构建状态字典 |
+| `resultObject.statusDict[].standCode` | string | 是 | 状态代码 |
+| `resultObject.statusDict[].standDisplayValue` | string | 是 | 状态中文展示值 |
+| `resultObject.statusDict[].standDisplayValueEn` | string | 是 | 状态英文展示值 |
+| `resultObject.stepDict` | array[object] | 是 | 构建环节字典 |
+| `resultObject.stepDict[].standCode` | string | 是 | 环节代码 |
+| `resultObject.stepDict[].standDisplayValue` | string | 是 | 环节中文展示值 |
+| `resultObject.stepDict[].standDisplayValueEn` | string | 是 | 环节英文展示值 |
 
 `statusDict` 当前支持取值：
 
 | `standCode` | `standDisplayValue` | `standDisplayValueEn` |
 | --- | --- | --- |
-| `processing` | 处理中 | Processing |
-| `success` | 成功 | Success |
-| `failed` | 失败 | Failed |
-| `unsupported` | 不支持构建 | Unsupported |
+| `complete` | 已完成 | complete |
+| `failed` | 失败 | failed |
+| `running` | 构建中 | running |
+| `unsupported` | 不支持构建 | unsupported |
 
 `unsupported` 表示该文件类型不在可构建类型范围内（见 `POST /api/v1/knowledgeItems/import` 的文件类型说明），构建在「原始文件转 Markdown」环节即结束，不会进入切片与向量化。
 
@@ -111,9 +128,9 @@
 
 | `standCode` | `standDisplayValue` | `standDisplayValueEn` |
 | --- | --- | --- |
-| `markdown` | 原始文件转 Markdown | Markdown |
-| `chunking` | 文档切片 | Chunking |
-| `vectorizing` | 切片向量化 | Vectorizing |
+| `markdown` | 原始文件转 Markdown | markdown |
+| `chunking` | 文档切片 | chunking |
+| `vectorizing` | 切片向量化 | vectorizing |
 | `complete` | 已完成 | complete |
 
 ## 失败响应示例
@@ -129,7 +146,7 @@
 ## 特殊逻辑
 
 - 返回文件最新一次构建任务的摘要状态。
-- `processing/success/failed/unsupported` 是任务状态，`markdown/chunking/vectorizing/complete` 是阶段。
+- `complete/failed/running/unsupported` 是任务状态，`markdown/chunking/vectorizing/complete` 是阶段。
 
 ## 路径与定位规则
 

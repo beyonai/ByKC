@@ -116,6 +116,52 @@
 }
 ```
 
+## 响应参数
+
+| 字段路径 | 类型 | 必返 | 说明 |
+| --- | --- | --- | --- |
+| `resultCode` | string | 是 | 业务结果码；`0` 表示查询成功 |
+| `resultMsg` | string | 是 | 业务结果说明 |
+| `resultObject` | object | 是 | 文件任务分页结果 |
+| `resultObject.knowledgeBaseId` | string | 是 | 内部知识库 ID |
+| `resultObject.knCode` | string | 是 | 知识库编码 |
+| `resultObject.filePath` | string | 否 | 请求指定的文件路径；全库查询时省略 |
+| `resultObject.total` | integer | 是 | 匹配任务总数 |
+| `resultObject.pageNum` | integer | 是 | 当前页码 |
+| `resultObject.pageSize` | integer | 是 | 每页任务数 |
+| `resultObject.data` | array[object] | 是 | 当前页任务；无匹配任务时为空数组 |
+| `resultObject.data[].taskId` | string | 是 | 文件任务 ID |
+| `resultObject.data[].batchId` | string | 否 | 所属批次 ID |
+| `resultObject.data[].taskType` | string | 是 | 任务类型 |
+| `resultObject.data[].status` | string | 是 | 任务状态 |
+| `resultObject.data[].currentStage` | string | 否 | 当前或最终处理阶段 |
+| `resultObject.data[].progress` | integer | 否 | 任务进度，范围 0～100 |
+| `resultObject.data[].fileId` | string | 否 | 文件 ID |
+| `resultObject.data[].filePath` | string | 是 | 文件路径 |
+| `resultObject.data[].indexVersion` | string | 否 | 任务使用的输入索引版本 |
+| `resultObject.data[].createdAt` | string | 是 | 任务创建时间，ISO 8601 格式 |
+| `resultObject.data[].startedAt` | string | 否 | 任务开始时间 |
+| `resultObject.data[].finishedAt` | string | 否 | 任务结束时间 |
+| `resultObject.data[].result` | object | 否 | 成功或跳过任务的结果；仅 `includeDetails=true` 时返回 |
+| `resultObject.data[].result.candidateCount` | integer | 否 | Discovery 候选实体数 |
+| `resultObject.data[].result.entityCount` | integer | 否 | Discovery 有效实体数 |
+| `resultObject.data[].result.anchoredCount` | integer | 否 | 锚定已有实体数 |
+| `resultObject.data[].result.createdCount` | integer | 否 | 新建实体数 |
+| `resultObject.data[].result.mergedAliasCount` | integer | 否 | 合并 alias 数 |
+| `resultObject.data[].result.droppedCount` | integer | 否 | 丢弃候选数 |
+| `resultObject.data[].result.items` | array[object] | 否 | Discovery 结果项 |
+| `resultObject.data[].result.items[].action` | string | 是 | `ANCHORED`、`CREATED` 或 `DROPPED` |
+| `resultObject.data[].result.items[].fileId` | string \| null | 否 | 锚定或新建实体文件 ID |
+| `resultObject.data[].result.items[].filePath` | string \| null | 否 | 锚定或新建实体文件路径 |
+| `resultObject.data[].result.items[].entityName` | string | 否 | 实体规范名称 |
+| `resultObject.data[].result.items[].sourceLocation` | object | 否 | 实体在源文件中的代表位置 |
+| `resultObject.data[].result.items[].sourceLocation.startLine` | integer | 是 | 证据起始行 |
+| `resultObject.data[].result.items[].sourceLocation.endLine` | integer | 是 | 证据结束行 |
+| `resultObject.data[].result.items[].sourceLocation.text` | string | 是 | 证据文本摘要 |
+| `resultObject.data[].error` | object | 否 | 失败任务错误；仅 `includeDetails=true` 时返回 |
+| `resultObject.data[].error.errorCode` | string | 是 | 任务错误码 |
+| `resultObject.data[].error.message` | string | 是 | 任务错误说明 |
+
 `includeDetails=false` 时省略 `result` 和 `error`。失败任务仍使用正常成功信封，任务项的 `status=FAILED`，并在启用明细时返回 `errorCode` 和 `message`。Discovery/Enrich 请求中已弃用的 `extraParams` 不会出现在任务状态中。
 
 一次全库触发不额外创建“父任务”记录：所有文件任务共用 `batchId`。因此可按知识库查看整体任务面，也可叠加 `filePath` 或 `batchId` 精确收窄范围。

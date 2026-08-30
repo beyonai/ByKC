@@ -962,6 +962,10 @@ def test_document_update_metadata_merges_preserves_and_rolls_back_with_content(
             json={"knCode": kb_code, "filePath": "/docs/a.md"},
         )
         assert built.json()["resultCode"] == "0"
+        before_update_browse = client.post(
+            "/api/v1/listDir",
+            json={"knCode": kb_code, "directoryPath": "/docs"},
+        ).json()["resultObject"]["data"][0]
 
         updated = _update_file(
             client,
@@ -981,6 +985,19 @@ def test_document_update_metadata_merges_preserves_and_rolls_back_with_content(
             json={
                 "knCode": kb_code,
                 "directoryPath": "/docs",
+                "metadataFieldList": [
+                    "preserved",
+                    "owner",
+                    "requestOnly",
+                    "frontOnly",
+                ],
+            },
+        ).json()["resultObject"]["data"][0]
+        glob_browse = client.post(
+            "/api/v1/glob",
+            json={
+                "knCode": kb_code,
+                "pathRule": "/docs/*",
                 "metadataFieldList": [
                     "preserved",
                     "owner",
@@ -1029,6 +1046,8 @@ def test_document_update_metadata_merges_preserves_and_rolls_back_with_content(
     assert updated.json()["resultCode"] == "0"
     assert after_update == expected
     assert browse["metadata"] == expected
+    assert glob_browse == browse
+    assert browse["updatedAt"] > before_update_browse["updatedAt"]
     assert browse["buildStatus"] is None
     assert browse["buildCurrentStep"] is None
     assert stale.json()["resultCode"] == "-1"
@@ -1038,6 +1057,106 @@ def test_document_update_metadata_merges_preserves_and_rolls_back_with_content(
         **expected,
         "owner": {"valueType": "string", "value": "explicit-final"},
     }
+
+
+@pytest.mark.integration
+def test_document_update_failures_preserve_content_and_metadata(monkeypatch, tmp_path):
+    """Duplicate, storage, and metadata failures never leave a partial update."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Update rollback {uuid4().hex[:12]}")
+        for file_path, content, metadata in (
+            ("/docs/source.md", b"# Original\n", '{"status":"original"}'),
+            ("/docs/duplicate.md", b"# Duplicate\n", None),
+        ):
+            data = {"knCode": kb_code, "filePath": file_path}
+            if metadata is not None:
+                data["metadata"] = metadata
+            response = client.post(
+                "/api/v1/knowledgeItems/import",
+                data=data,
+                files={
+                    "fileContent": (
+                        file_path.rsplit("/", 1)[-1],
+                        content,
+                        "text/markdown",
+                    )
+                },
+            )
+            assert response.json()["resultCode"] == "0", response.json()
+
+        duplicate_failure = client.post(
+            "/api/v1/knowledgeItems/update",
+            data={
+                "knCode": kb_code,
+                "filePath": "/docs/source.md",
+                "skipIfDuplicate": "true",
+                "metadata": '{"status":"duplicate-rejected"}',
+            },
+            files={
+                "fileContent": (
+                    "source.md",
+                    b"# Duplicate\n",
+                    "text/markdown",
+                )
+            },
+        ).json()
+        service = main_module._document_update_service
+        assert service is not None
+
+        original_write = service.storage_provider.write
+
+        async def fail_storage(*args, **kwargs):
+            del args, kwargs
+            raise RuntimeError("simulated storage failure")
+
+        monkeypatch.setattr(service.storage_provider, "write", fail_storage)
+        storage_failure = _update_file(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/source.md",
+            file_content=b"# Storage rejected\n",
+            metadata={"status": "storage-rejected"},
+        ).json()
+        monkeypatch.setattr(service.storage_provider, "write", original_write)
+
+        repository = service.file_metadata_value_repository
+        original_upsert = repository.upsert_value
+
+        async def fail_status(cursor, **kwargs):
+            if kwargs["property_name"] == "status":
+                raise RuntimeError("simulated metadata database failure")
+            return await original_upsert(cursor, **kwargs)
+
+        monkeypatch.setattr(repository, "upsert_value", fail_status)
+        database_failure = _update_file(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/source.md",
+            file_content=b"# Database rejected\n",
+            metadata={"status": "database-rejected"},
+        ).json()
+        metadata_after_failures = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/source.md",
+            field_names=["status"],
+        )
+        content_after_failures = _download_file_bytes(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/source.md",
+        )
+
+    for failure in (duplicate_failure, storage_failure, database_failure):
+        assert failure["resultCode"] == "-1"
+    assert metadata_after_failures == {
+        "status": {"valueType": "string", "value": "original"}
+    }
+    assert b"# Original" in content_after_failures
+    assert b"rejected" not in content_after_failures.lower()
 
 
 @pytest.mark.integration
@@ -1430,7 +1549,10 @@ frontOnly: 7
             data={
                 "knCode": kb_code,
                 "filePath": "/merged.md",
-                "metadata": '{"owner":"request","requestOnly":true,"tags":["a","b"]}',
+                "metadata": (
+                    '{"owner":"request","requestOnly":true,"tags":["a","b"],'
+                    '"publishedAt":"2026-08-30T01:02:03Z"}'
+                ),
             },
             files={"fileContent": ("merged.md", markdown, "text/markdown")},
         )
@@ -1462,11 +1584,35 @@ frontOnly: 7
             },
             files={"fileContent": ("invalid.md", b"# Invalid", "text/markdown")},
         )
+        non_object_responses = [
+            client.post(
+                "/api/v1/knowledgeItems/import",
+                data={
+                    "knCode": kb_code,
+                    "filePath": f"/non-object-{index}.md",
+                    "metadata": metadata,
+                },
+                files={
+                    "fileContent": (
+                        f"non-object-{index}.md",
+                        b"# Invalid",
+                        "text/markdown",
+                    )
+                },
+            )
+            for index, metadata in enumerate(("[]", '"scalar"', "1"), start=1)
+        ]
         merged = _get_file_metadata(
             client,
             kb_code=kb_code,
             file_path="/merged.md",
-            field_names=["owner", "requestOnly", "frontOnly", "tags"],
+            field_names=[
+                "owner",
+                "requestOnly",
+                "frontOnly",
+                "tags",
+                "publishedAt",
+            ],
         )
         disabled = _get_file_metadata(
             client,
@@ -1489,11 +1635,18 @@ frontOnly: 7
     assert disabled_response.json()["resultCode"] == "0"
     assert binary_response.json()["resultCode"] == "0"
     assert invalid_response.json()["resultCode"] == "-1"
+    assert all(
+        response.json()["resultCode"] == "-1" for response in non_object_responses
+    )
     assert merged == {
         "owner": {"valueType": "string", "value": "front-matter"},
         "requestOnly": {"valueType": "boolean", "value": True},
         "frontOnly": {"valueType": "number", "value": 7.0},
         "tags": {"valueType": "stringList", "value": ["a", "b"]},
+        "publishedAt": {
+            "valueType": "datetime",
+            "value": "2026-08-30T09:02:03+08:00",
+        },
     }
     assert disabled == {
         "owner": {"valueType": "string", "value": "request"},
@@ -1504,6 +1657,65 @@ frontOnly: 7
         "priority": {"valueType": "number", "value": 2.5},
     }
     assert "/invalid.md" not in {item["name"] for item in invalid_list}
+    assert not any(item["name"].startswith("/non-object-") for item in invalid_list)
+
+
+@pytest.mark.integration
+def test_import_metadata_failure_rolls_back_entry_storage_and_values(
+    monkeypatch, tmp_path
+):
+    """A metadata repository failure compensates storage and rolls back the entry."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Import metadata rollback {uuid4().hex[:12]}")
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/seed.md",
+            file_content=b"# Seed\n",
+        )
+        service = main_module._knowledge_item_ingestion_service
+        assert service is not None
+        repository = service.file_metadata_value_repository
+        original_upsert = repository.upsert_value
+        original_delete = service.storage_provider.delete_quietly
+        compensated_locations = []
+
+        async def record_delete(location):
+            compensated_locations.append(location)
+            return await original_delete(location)
+
+        async def fail_owner(cursor, **kwargs):
+            if kwargs["property_name"] == "owner":
+                raise RuntimeError("simulated metadata write failure")
+            return await original_upsert(cursor, **kwargs)
+
+        monkeypatch.setattr(repository, "upsert_value", fail_owner)
+        monkeypatch.setattr(service.storage_provider, "delete_quietly", record_delete)
+        failed = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={
+                "knCode": kb_code,
+                "filePath": "/rollback.md",
+                "metadata": '{"owner":"Alice"}',
+            },
+            files={"fileContent": ("rollback.md", b"# Rollback\n", "text/markdown")},
+        ).json()
+        listed = client.post(
+            "/api/v1/listDir",
+            json={"knCode": kb_code, "directoryPath": "/"},
+        ).json()["resultObject"]["data"]
+        metadata_fields = client.post(
+            "/api/v1/knowledgeItems/metadataFields/list",
+            json={"knCodeList": [kb_code]},
+        ).json()["resultObject"]["data"]
+
+    assert failed["resultCode"] == "-1"
+    assert "/rollback.md" not in {item["name"] for item in listed}
+    assert "owner" not in {item["propertyName"] for item in metadata_fields}
+    assert len(compensated_locations) == 1
 
 
 @pytest.mark.integration
@@ -2846,6 +3058,117 @@ def test_browse_optional_pagination_preserves_unpaged_shape_and_stable_order(
 
 
 @pytest.mark.integration
+def test_browse_validates_page_edges_and_globally_pages_selected_metadata(
+    monkeypatch, tmp_path
+):
+    """Browse edge cases preserve global ordering and page-local metadata."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Browse edges {uuid4().hex[:12]}")
+        for directory_path in ("/group-z", "/group-a"):
+            _create_directory(
+                client,
+                kb_code=kb_code,
+                directory_path=directory_path,
+            )
+        for file_path, marker in (
+            ("/group-z/alpha.md", "z-lower"),
+            ("/group-z/Alpha.md", "z-upper"),
+            ("/group-a/zulu.md", "a-zulu"),
+        ):
+            response = client.post(
+                "/api/v1/knowledgeItems/import",
+                data={
+                    "knCode": kb_code,
+                    "filePath": file_path,
+                    "metadata": json.dumps({"marker": marker}),
+                },
+                files={
+                    "fileContent": (
+                        file_path.rsplit("/", 1)[-1],
+                        marker.encode(),
+                        "text/markdown",
+                    )
+                },
+            )
+            assert response.json()["resultCode"] == "0", response.json()
+
+        unpaged = client.post(
+            "/api/v1/glob",
+            json={
+                "knCode": kb_code,
+                "pathRule": "/group-*/*",
+                "metadataFieldList": [],
+            },
+        ).json()["resultObject"]
+        empty_list_selection = client.post(
+            "/api/v1/listDir",
+            json={
+                "knCode": kb_code,
+                "directoryPath": "/group-z",
+                "metadataFieldList": [],
+            },
+        ).json()["resultObject"]["data"]
+        pages = [
+            client.post(
+                "/api/v1/glob",
+                json={
+                    "knCode": kb_code,
+                    "pathRule": "/group-*/*",
+                    "metadataFieldList": ["marker"],
+                    "pageNum": page_num,
+                    "pageSize": 1,
+                },
+            ).json()["resultObject"]
+            for page_num in range(1, 4)
+        ]
+        invalid_payloads = (
+            {"pageNum": 0, "pageSize": 1},
+            {"pageNum": -1, "pageSize": 1},
+            {"pageSize": 0},
+            {"pageSize": -1},
+            {"pageSize": 10001},
+        )
+        invalid_results = []
+        for endpoint, base in (
+            ("/api/v1/listDir", {"directoryPath": "/group-z"}),
+            ("/api/v1/glob", {"pathRule": "/group-*/*"}),
+        ):
+            for invalid_payload in invalid_payloads:
+                invalid_results.append(
+                    client.post(
+                        endpoint,
+                        json={"knCode": kb_code, **base, **invalid_payload},
+                    ).json()
+                )
+
+    expected = [
+        ("/group-a/zulu.md", "a-zulu"),
+        ("/group-z/Alpha.md", "z-upper"),
+        ("/group-z/alpha.md", "z-lower"),
+    ]
+    assert set(unpaged) == {"data"}
+    assert [(item["name"], item["metadata"]) for item in unpaged["data"]] == [
+        (name, {}) for name, _ in expected
+    ]
+    assert all(item["metadata"] == {} for item in empty_list_selection)
+    assert [page["total"] for page in pages] == [3, 3, 3]
+    assert [
+        (
+            page["data"][0]["name"],
+            page["data"][0]["metadata"]["marker"]["value"],
+        )
+        for page in pages
+    ] == expected
+    assert all(result["resultCode"] == "-1" for result in invalid_results)
+    assert all(
+        result["resultMsg"] == "request validation failed" for result in invalid_results
+    )
+
+
+@pytest.mark.integration
 def test_browse_metadata_field_list_returns_selected_nested_metadata(
     monkeypatch, tmp_path
 ):
@@ -3078,6 +3401,19 @@ def test_directory_create_and_rename_share_entry_metadata_lifecycle(
             "tags": {"valueType": "stringList", "value": ["policy", "draft"]},
         }
         assert parent == {}
+        all_child = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={"knCode": kb_code, "filePath": "/parent/child"},
+        ).json()["resultObject"]["metadata"]
+        assert all_child["owner"]["value"] == "hr"
+        assert all_child["fileName"]["value"] == "child"
+        assert all_child["filePath"]["value"] == "/parent/child"
+        assert all_child["fileSize"]["value"] == 0
+        assert all_child["fileType"]["value"] == ""
+        assert all_child["mimeType"]["value"] is None
+        assert all_child["fileSignature"]["value"] is None
+        assert all_child["createdAt"]["value"]
+        assert all_child["updatedAt"]["value"]
         field_list = client.post(
             "/api/v1/knowledgeItems/metadataFields/list",
             json={"knCodeList": [kb_code]},
@@ -3151,6 +3487,68 @@ def test_directory_create_and_rename_share_entry_metadata_lifecycle(
         "tags": {"valueType": "stringList", "value": ["policy", "draft"]},
         "createdAgain": {"valueType": "boolean", "value": True},
     }
+
+
+@pytest.mark.integration
+def test_empty_directory_metadata_disappears_from_every_entry_interface(
+    monkeypatch, tmp_path
+):
+    """Deleting a metadata-bearing empty directory hides its entry and values."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Empty directory metadata {uuid4().hex[:12]}")
+        _create_directory(
+            client,
+            kb_code=kb_code,
+            directory_path="/empty",
+            metadata={"emptyOnly": "value"},
+        )
+        deleted = client.post(
+            "/api/v1/directories/delete",
+            json={"knCode": kb_code, "directoryPath": "/empty"},
+        ).json()
+        metadata_get = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={
+                "knCode": kb_code,
+                "filePath": "/empty",
+                "metadataFieldList": ["emptyOnly"],
+            },
+        ).json()
+        metadata_update = _update_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/empty",
+            operation_list=[
+                {
+                    "propertyName": "emptyOnly",
+                    "operation": "set",
+                    "valueType": "string",
+                    "value": "new",
+                }
+            ],
+        ).json()
+        listed = client.post(
+            "/api/v1/listDir",
+            json={"knCode": kb_code, "directoryPath": "/"},
+        ).json()["resultObject"]["data"]
+        globbed = client.post(
+            "/api/v1/glob",
+            json={"knCode": kb_code, "pathRule": "/*"},
+        ).json()["resultObject"]["data"]
+        fields = client.post(
+            "/api/v1/knowledgeItems/metadataFields/list",
+            json={"knCodeList": [kb_code]},
+        ).json()["resultObject"]["data"]
+
+    assert deleted["resultCode"] == "0"
+    assert metadata_get["resultCode"] == "-1"
+    assert metadata_update["resultCode"] == "-1"
+    assert listed == []
+    assert globbed == []
+    assert "emptyOnly" not in {item["propertyName"] for item in fields}
 
 
 @pytest.mark.integration
@@ -6939,7 +7337,19 @@ def test_metadata_search_uses_unchanged_request_for_files_and_directories(
             page_size=1,
         )
         directory_only = search({"eq": {"fieldName": "directoryOnly", "value": "yes"}})
+        directory_updated_at = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/catalog",
+            field_names=["updatedAt"],
+        )["updatedAt"]["value"]
+        exact_directory_name = search(
+            {"eq": {"fieldName": "fileName", "value": "catalog"}}
+        )
         exact_directory = search({"eq": {"fieldName": "filePath", "value": "/catalog"}})
+        exact_directory_update = search(
+            {"eq": {"fieldName": "updatedAt", "value": directory_updated_at}}
+        )
 
         renamed = client.post(
             "/api/v1/directories/update",
@@ -6976,8 +7386,12 @@ def test_metadata_search_uses_unchanged_request_for_files_and_directories(
     assert {item["type"] for item in paged} == {"directory", "file"}
     assert directory_only["total"] == 1
     assert directory_only["data"][0]["type"] == "directory"
+    assert exact_directory_name["total"] == 1
+    assert exact_directory_name["data"][0]["type"] == "directory"
     assert exact_directory["total"] == 1
     assert exact_directory["data"][0]["type"] == "directory"
+    assert exact_directory_update["total"] == 1
+    assert exact_directory_update["data"][0]["type"] == "directory"
     assert renamed["resultCode"] == "0"
     assert {item["filePath"] for item in after_rename["data"]} == {
         "/renamed",
@@ -6986,6 +7400,95 @@ def test_metadata_search_uses_unchanged_request_for_files_and_directories(
     assert deleted["resultCode"] == "0"
     assert after_delete["total"] == 0
     assert after_delete["data"] == []
+
+
+@pytest.mark.integration
+async def test_metadata_search_uses_entry_id_to_break_equal_timestamp_ties(
+    monkeypatch, tmp_path
+):
+    """Mixed metadataSearch results remain stable when updatedAt values tie."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Metadata tie {uuid4().hex[:12]}")
+        _create_directory(
+            client,
+            kb_code=kb_code,
+            directory_path="/tie",
+            metadata={"tieScope": "shared"},
+        )
+        response = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={
+                "knCode": kb_code,
+                "filePath": "/tie/file.md",
+                "metadata": '{"tieScope":"shared"}',
+            },
+            files={"fileContent": ("file.md", b"# Tie\n", "text/markdown")},
+        )
+        assert response.json()["resultCode"] == "0", response.json()
+
+        connection = await build_connection_factory(settings)()
+        try:
+            cursor = connection.cursor()
+            await cursor.execute(
+                """
+                UPDATE knowledge_fs_entry
+                SET updated_at = %(updated_at)s
+                WHERE knowledge_base_id = %(knowledge_base_id)s
+                  AND virtual_path = ANY(%(paths)s)
+                  AND is_deleted = false
+                """,
+                {
+                    "knowledge_base_id": int(kb_code),
+                    "paths": ["/tie", "/tie/file.md"],
+                    "updated_at": "2026-08-30T00:00:00+08:00",
+                },
+            )
+            await cursor.execute(
+                """
+                SELECT kid, virtual_path
+                FROM knowledge_fs_entry
+                WHERE knowledge_base_id = %(knowledge_base_id)s
+                  AND virtual_path = ANY(%(paths)s)
+                  AND is_deleted = false
+                ORDER BY kid
+                """,
+                {
+                    "knowledge_base_id": int(kb_code),
+                    "paths": ["/tie", "/tie/file.md"],
+                },
+            )
+            expected_paths = [row["virtual_path"] for row in await cursor.fetchall()]
+            await connection.commit()
+        finally:
+            await connection.close()
+
+        result = client.post(
+            "/api/v1/knowledgeItems/metadataSearch",
+            json={
+                "knCodeList": [kb_code],
+                "where": {"eq": {"fieldName": "tieScope", "value": "shared"}},
+                "pageNum": 1,
+                "pageSize": 1,
+            },
+        ).json()["resultObject"]
+        second_page = client.post(
+            "/api/v1/knowledgeItems/metadataSearch",
+            json={
+                "knCodeList": [kb_code],
+                "where": {"eq": {"fieldName": "tieScope", "value": "shared"}},
+                "pageNum": 2,
+                "pageSize": 1,
+            },
+        ).json()["resultObject"]
+
+    assert result["total"] == second_page["total"] == 2
+    assert [
+        result["data"][0]["filePath"],
+        second_page["data"][0]["filePath"],
+    ] == expected_paths
 
 
 @pytest.mark.integration

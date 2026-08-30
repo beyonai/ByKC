@@ -35,6 +35,19 @@ def test_document_update_request_tracks_provided_description(description):
     assert "file_description" in request.model_fields_set
 
 
+def test_document_update_request_accepts_metadata_mapping():
+    request = DocumentUpdateRequest.model_validate(
+        {
+            "knCode": "hr-policy",
+            "filePath": "/docs/readme.md",
+            "fileContent": b"# Updated\n",
+            "metadata": {"owner": "Alice", "tags": ["one"]},
+        }
+    )
+
+    assert request.metadata == {"owner": "Alice", "tags": ["one"]}
+
+
 @pytest.mark.parametrize(
     "file_path",
     ["docs/readme.md", "/", "/docs/../readme.md", "/docs/./readme.md"],

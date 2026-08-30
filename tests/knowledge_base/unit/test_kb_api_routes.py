@@ -1316,6 +1316,7 @@ def test_document_update_route_returns_documented_success_shape():
             "processFrontMatter": "false",
             "skipIfDuplicate": "true",
             "referSignature": "old-signature",
+            "metadata": '{"owner":"Alice","tags":["one"]}',
         },
         files={"fileContent": ("README.md", b"# Updated\n", "text/markdown")},
     )
@@ -1338,9 +1339,35 @@ def test_document_update_route_returns_documented_success_shape():
     request = service.document_update_requests[0]
     assert request.file_path == "/docs/readme.md"
     assert request.file_description == "updated description"
+    assert request.metadata == {"owner": "Alice", "tags": ["one"]}
     assert request.process_front_matter is False
     assert request.skip_if_duplicate is True
     assert request.refer_signature == "old-signature"
+
+
+def test_document_update_route_rejects_invalid_metadata_json():
+    service = FakeKBService()
+
+    async def get_document_update_service():
+        return service
+
+    client = make_document_update_client(
+        service,
+        get_document_update_service=get_document_update_service,
+    )
+    response = client.post(
+        "/api/v1/knowledgeItems/update",
+        data={
+            "knCode": "hr-policy",
+            "filePath": "/docs/readme.md",
+            "metadata": "[]",
+        },
+        files={"fileContent": ("readme.md", b"# Updated\n", "text/markdown")},
+    )
+
+    assert response.json()["resultCode"] == "-1"
+    assert response.json()["resultMsg"] == "request validation failed"
+    assert service.document_update_requests == []
 
 
 class _TimelineConnection:

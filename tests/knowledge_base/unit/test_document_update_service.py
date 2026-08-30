@@ -416,6 +416,20 @@ async def test_markdown_update_rewrites_final_bytes_cleans_state_and_records_bou
     assert result.old_markdown_context and result.new_markdown_context
 
 
+async def test_markdown_update_merges_request_metadata_before_front_matter():
+    calls = []
+    service, _, _ = build_service(calls)
+
+    await service.update_file(
+        request(metadata={"title": "Request", "requestOnly": True})
+    )
+
+    metadata_upserts = [data for name, data in calls if name == "metadata_upsert"]
+    values = {item["property_name"]: item["value"] for item in metadata_upserts}
+    assert values["title"] == "New"
+    assert values["requestOnly"] is True
+
+
 async def test_non_markdown_update_never_decodes_or_calls_llm_and_uses_fixed_summary():
     calls = []
     service, _, storage = build_service(calls, markdown=False)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import json
 import os
 from uuid import uuid4
 
@@ -474,6 +475,8 @@ def _update_file(
     process_front_matter: bool = True,
     file_description: str | None = None,
     include_file_description: bool = False,
+    metadata: dict | None = None,
+    refer_signature: str | None = None,
 ) -> object:
     """Replace one existing file through the public multipart update endpoint."""
     data = {
@@ -483,6 +486,10 @@ def _update_file(
     }
     if include_file_description:
         data["fileDescription"] = file_description or ""
+    if metadata is not None:
+        data["metadata"] = json.dumps(metadata, ensure_ascii=False)
+    if refer_signature is not None:
+        data["referSignature"] = refer_signature
     return client.post(
         "/api/v1/knowledgeItems/update",
         data=data,
@@ -919,6 +926,113 @@ async def test_document_update_can_skip_front_matter_and_preserve_existing_metad
     assert raw_bytes.startswith(b"---\ntitle: Before")
     assert raw_bytes.endswith(b"# New\n")
     assert metadata.json()["resultObject"]["metadata"]["title"]["value"] == "Before"
+
+
+@pytest.mark.integration
+def test_document_update_metadata_merges_preserves_and_rolls_back_with_content(
+    monkeypatch, tmp_path
+):
+    """Update metadata shares content transaction and front matter wins conflicts."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    _set_document_chunking_service(
+        monkeypatch,
+        FakeDocumentChunkingService(markdown_text="# Built\n"),
+    )
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Update metadata {uuid4().hex[:12]}")
+        imported = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={
+                "knCode": kb_code,
+                "filePath": "/docs/a.md",
+                "metadata": '{"preserved":"keep","owner":"old"}',
+            },
+            files={"fileContent": ("a.md", b"# Old\n", "text/markdown")},
+        )
+        assert imported.json()["resultCode"] == "0"
+        built = client.post(
+            "/api/v1/fileToMarkdownIndex",
+            json={"knCode": kb_code, "filePath": "/docs/a.md"},
+        )
+        assert built.json()["resultCode"] == "0"
+
+        updated = _update_file(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/a.md",
+            file_content=b"---\nowner: front-matter\nfrontOnly: 8\n---\n# New\n",
+            metadata={"owner": "request", "requestOnly": True},
+        )
+        after_update = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/a.md",
+            field_names=["preserved", "owner", "requestOnly", "frontOnly"],
+        )
+        browse = client.post(
+            "/api/v1/listDir",
+            json={
+                "knCode": kb_code,
+                "directoryPath": "/docs",
+                "metadataFieldList": [
+                    "preserved",
+                    "owner",
+                    "requestOnly",
+                    "frontOnly",
+                ],
+            },
+        ).json()["resultObject"]["data"][0]
+
+        stale = _update_file(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/a.md",
+            file_content=b"# Must not persist\n",
+            metadata={"owner": "must-not-persist"},
+            refer_signature="stale-signature",
+        )
+        after_stale = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/a.md",
+            field_names=["preserved", "owner", "requestOnly", "frontOnly"],
+        )
+
+        disabled = _update_file(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/a.md",
+            file_content=b"---\nowner: ignored-front\n---\n# Final\n",
+            process_front_matter=False,
+            metadata={"owner": "explicit-final"},
+        )
+        final_metadata = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/docs/a.md",
+            field_names=["preserved", "owner", "requestOnly", "frontOnly"],
+        )
+
+    expected = {
+        "preserved": {"valueType": "string", "value": "keep"},
+        "owner": {"valueType": "string", "value": "front-matter"},
+        "requestOnly": {"valueType": "boolean", "value": True},
+        "frontOnly": {"valueType": "number", "value": 8.0},
+    }
+    assert updated.json()["resultCode"] == "0"
+    assert after_update == expected
+    assert browse["metadata"] == expected
+    assert browse["buildStatus"] is None
+    assert browse["buildCurrentStep"] is None
+    assert stale.json()["resultCode"] == "-1"
+    assert after_stale == expected
+    assert disabled.json()["resultCode"] == "0"
+    assert final_metadata == {
+        **expected,
+        "owner": {"valueType": "string", "value": "explicit-final"},
+    }
 
 
 @pytest.mark.integration

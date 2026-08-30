@@ -15,7 +15,10 @@ from by_qa.core import logger
 from by_qa.knowledge_base.api.schemas import DocumentUpdateRequest
 from by_qa.knowledge_base.build_status import BUILD_STATUS_RUNNING
 from by_qa.knowledge_base.infrastructure.storage import StorageLocation
-from by_qa.knowledge_base.metadata_types import prepare_front_matter_metadata_value
+from by_qa.knowledge_base.services.entry_metadata import (
+    merge_entry_metadata,
+    upsert_entry_metadata,
+)
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
 from by_qa.knowledge_base.services.knowledge_document_metadata import (
     ensure_document_kind_metadata,
@@ -242,13 +245,18 @@ class DocumentUpdateService:
             await self.knowledge_fs_entry_repository.clear_markdown_metadata(
                 cursor, fs_entry_id=fs_entry_id
             )
-            if is_markdown and request.process_front_matter:
-                await self._apply_front_matter(
-                    cursor,
-                    fs_entry_id=fs_entry_id,
-                    knowledge_base_id=knowledge_base_id,
-                    content=request.file_content,
-                )
+            front_matter = (
+                parse_front_matter(request.file_content)
+                if is_markdown and request.process_front_matter
+                else {}
+            )
+            await upsert_entry_metadata(
+                cursor,
+                metadata_repository=self.file_metadata_value_repository,
+                fs_entry_id=fs_entry_id,
+                knowledge_base_id=knowledge_base_id,
+                metadata=merge_entry_metadata(request.metadata, front_matter),
+            )
             await ensure_document_kind_metadata(
                 cursor,
                 file_metadata_value_repository=self.file_metadata_value_repository,
@@ -408,18 +416,6 @@ class DocumentUpdateService:
                 target_locator_type="ENTITY_SURFACE",
                 target_locator_value=assertion.original_target,
                 source_task_id=assertion.source_task_id,
-            )
-
-    async def _apply_front_matter(self, cursor: Any, **kwargs: Any) -> None:
-        for name, value in parse_front_matter(kwargs["content"]).items():
-            value_type, normalized_value = prepare_front_matter_metadata_value(value)
-            await self.file_metadata_value_repository.upsert_value(
-                cursor,
-                fs_entry_id=kwargs["fs_entry_id"],
-                knowledge_base_id=kwargs["knowledge_base_id"],
-                property_name=str(name),
-                value_type=value_type,
-                value=normalized_value,
             )
 
     @staticmethod

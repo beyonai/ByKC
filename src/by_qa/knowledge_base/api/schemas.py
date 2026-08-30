@@ -362,6 +362,7 @@ class DocumentUpdateRequest(BaseModel):
         default=True,
         validation_alias=AliasChoices("processFrontMatter", "process_front_matter"),
     )
+    metadata: dict[str, Any] | None = None
     skip_if_duplicate: bool = Field(
         default=False,
         validation_alias=AliasChoices(

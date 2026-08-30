@@ -855,6 +855,7 @@ def register_routes(
         process_front_matter: bool = Form(True, alias="processFrontMatter"),
         skip_if_duplicate: bool = Form(False, alias="skipIfDuplicate"),
         refer_signature: str | None = Form(None, alias="referSignature"),
+        metadata: str | None = Form(None, alias="metadata"),
     ):
         payload = await file_content.read() if file_content is not None else None
         request_data = {
@@ -872,6 +873,7 @@ def register_routes(
             request_data["fileDescription"] = file_description or ""
 
         try:
+            request_data["metadata"] = _parse_optional_metadata_form(metadata)
             document_request = DocumentUpdateRequest.model_validate(request_data)
         except (ValidationError, ValueError) as exc:
             return _documented_error_response(

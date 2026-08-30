@@ -34,11 +34,14 @@
 | `processFrontMatter` | boolean | 否 | 是否解析 Markdown YAML front matter 并写入元数据，默认 `true`；非 Markdown 文件忽略该字段 |
 | `skipIfDuplicate` | boolean | 否 | 是否检查同一知识库内除目标文件外的相同 checksum；默认 `false`，命中时拒绝更新 |
 | `referSignature` | string | 否 | 乐观并发校验使用的目标文件 checksum；传入值与当前 `fileSignature` 不一致时拒绝更新 |
+| `metadata` | string(JSON object) | 否 | 显式文件元数据；顶层必须是 JSON object，值使用与 YAML front matter 相同的类型推断规则 |
 
 行为描述：
 
 - 目标文件必须已经存在；接口不会把更新请求变成新文件导入。
 - 对 Markdown，复用导入接口的稳定引用重写与 YAML front matter 解析。front matter 中出现的字段按现有 upsert 规则更新；数据表中已有、但新文件未出现的字段保留。
+- 请求 `metadata` 与新文件的 YAML front matter 合并后再 upsert；同名冲突以 front matter 为准，未在两者中出现的既有字段继续保留。
+- `processFrontMatter=false` 只关闭 front matter 解析，不影响显式 `metadata`；非 Markdown 文件同样支持显式 metadata。
 - 成功更新会清理旧 Markdown sidecar、chunk、向量、检索投影、构建记录与抓取缓存；不会自动创建新的构建任务。
 - 更新会同步写入一条文件更新时间线。Markdown 初始写入规则摘要，后台任务可在大模型摘要成功后原地更新该摘要；模型失败时保留规则摘要。非 Markdown 文件写入固定格式摘要且不调用大模型。
 - 如果该文件存在运行中的构建任务，更新失败，避免旧构建结果覆盖新内容。
@@ -50,6 +53,7 @@
 curl -X POST http://localhost:8000/api/v1/knowledgeItems/update \
   -F "knCode=1" \
   -F "filePath=/制度/人事/请假制度.md" \
+  -F 'metadata={"owner":"HR","status":"review"}' \
   -F "fileContent=@./请假制度.md" \
   -F "processFrontMatter=true"
 ```

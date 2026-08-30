@@ -1062,6 +1062,13 @@ def test_document_update_metadata_merges_preserves_and_rolls_back_with_content(
 @pytest.mark.integration
 def test_document_update_failures_preserve_content_and_metadata(monkeypatch, tmp_path):
     """Duplicate, storage, and metadata failures never leave a partial update."""
+    from by_qa.knowledge_base.infrastructure.storage_s3 import (
+        S3KnowledgeStorageProvider,
+    )
+    from by_qa.knowledge_base.repositories.file_metadata_value_repository import (
+        FileMetadataValueRepository,
+    )
+
     settings = _kb_settings(agent_data_path=tmp_path)
     _reset_runtime(monkeypatch, settings)
 
@@ -1103,16 +1110,13 @@ def test_document_update_failures_preserve_content_and_metadata(monkeypatch, tmp
                 )
             },
         ).json()
-        service = main_module._document_update_service
-        assert service is not None
+        original_write = S3KnowledgeStorageProvider.write
 
-        original_write = service.storage_provider.write
-
-        async def fail_storage(*args, **kwargs):
-            del args, kwargs
+        async def fail_storage(self, *args, **kwargs):
+            del self, args, kwargs
             raise RuntimeError("simulated storage failure")
 
-        monkeypatch.setattr(service.storage_provider, "write", fail_storage)
+        monkeypatch.setattr(S3KnowledgeStorageProvider, "write", fail_storage)
         storage_failure = _update_file(
             client,
             kb_code=kb_code,
@@ -1120,17 +1124,16 @@ def test_document_update_failures_preserve_content_and_metadata(monkeypatch, tmp
             file_content=b"# Storage rejected\n",
             metadata={"status": "storage-rejected"},
         ).json()
-        monkeypatch.setattr(service.storage_provider, "write", original_write)
+        monkeypatch.setattr(S3KnowledgeStorageProvider, "write", original_write)
 
-        repository = service.file_metadata_value_repository
-        original_upsert = repository.upsert_value
+        original_upsert = FileMetadataValueRepository.upsert_value
 
-        async def fail_status(cursor, **kwargs):
+        async def fail_status(self, cursor, **kwargs):
             if kwargs["property_name"] == "status":
                 raise RuntimeError("simulated metadata database failure")
-            return await original_upsert(cursor, **kwargs)
+            return await original_upsert(self, cursor, **kwargs)
 
-        monkeypatch.setattr(repository, "upsert_value", fail_status)
+        monkeypatch.setattr(FileMetadataValueRepository, "upsert_value", fail_status)
         database_failure = _update_file(
             client,
             kb_code=kb_code,
@@ -1665,6 +1668,13 @@ def test_import_metadata_failure_rolls_back_entry_storage_and_values(
     monkeypatch, tmp_path
 ):
     """A metadata repository failure compensates storage and rolls back the entry."""
+    from by_qa.knowledge_base.infrastructure.storage_s3 import (
+        S3KnowledgeStorageProvider,
+    )
+    from by_qa.knowledge_base.repositories.file_metadata_value_repository import (
+        FileMetadataValueRepository,
+    )
+
     settings = _kb_settings(agent_data_path=tmp_path)
     _reset_runtime(monkeypatch, settings)
 
@@ -1676,24 +1686,21 @@ def test_import_metadata_failure_rolls_back_entry_storage_and_values(
             file_path="/seed.md",
             file_content=b"# Seed\n",
         )
-        service = main_module._knowledge_item_ingestion_service
-        assert service is not None
-        repository = service.file_metadata_value_repository
-        original_upsert = repository.upsert_value
-        original_delete = service.storage_provider.delete_quietly
+        original_upsert = FileMetadataValueRepository.upsert_value
+        original_delete = S3KnowledgeStorageProvider.delete_quietly
         compensated_locations = []
 
-        async def record_delete(location):
+        async def record_delete(self, location):
             compensated_locations.append(location)
-            return await original_delete(location)
+            return await original_delete(self, location)
 
-        async def fail_owner(cursor, **kwargs):
+        async def fail_owner(self, cursor, **kwargs):
             if kwargs["property_name"] == "owner":
                 raise RuntimeError("simulated metadata write failure")
-            return await original_upsert(cursor, **kwargs)
+            return await original_upsert(self, cursor, **kwargs)
 
-        monkeypatch.setattr(repository, "upsert_value", fail_owner)
-        monkeypatch.setattr(service.storage_provider, "delete_quietly", record_delete)
+        monkeypatch.setattr(FileMetadataValueRepository, "upsert_value", fail_owner)
+        monkeypatch.setattr(S3KnowledgeStorageProvider, "delete_quietly", record_delete)
         failed = client.post(
             "/api/v1/knowledgeItems/import",
             data={

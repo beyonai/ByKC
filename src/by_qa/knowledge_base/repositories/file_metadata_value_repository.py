@@ -180,6 +180,34 @@ class FileMetadataValueRepository:
             )
         return await cursor.fetchall()
 
+    async def get_entries_metadata(
+        self,
+        cursor: Any,
+        *,
+        fs_entry_ids: list[int],
+        property_names: list[str],
+    ) -> list[dict[str, Any]]:
+        """Fetch selected custom metadata for multiple filesystem entries."""
+        if not fs_entry_ids or not property_names:
+            return []
+        await cursor.execute(
+            """
+            SELECT v.fs_entry_id, v.property_name, v.value_type,
+                   v.value_string, v.value_number, v.value_boolean,
+                   v.value_datetime, v.value_string_list
+            FROM knowledge_file_metadata_value v
+            WHERE v.fs_entry_id = ANY(%(fs_entry_ids)s)
+              AND v.property_name = ANY(%(property_names)s)
+              AND v.is_deleted = false
+            ORDER BY v.fs_entry_id, v.kid
+            """,
+            {
+                "fs_entry_ids": fs_entry_ids,
+                "property_names": property_names,
+            },
+        )
+        return await cursor.fetchall()
+
     async def list_used_properties(
         self,
         cursor: Any,

@@ -37,6 +37,10 @@ from by_qa.knowledge_base.api.schemas import (
 )
 from by_qa.knowledge_base.build_status import STATUS_DICT, STEP_DICT
 from by_qa.knowledge_base.infrastructure.storage import StorageLocation
+from by_qa.knowledge_base.metadata_types import (
+    SYSTEM_FIELD_VALUE_TYPES,
+    extract_system_metadata,
+)
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
 from by_qa.knowledge_base.services.markdown_front_matter import split_front_matter
 
@@ -940,6 +944,11 @@ class KnowledgeBaseService:
                 page_size=request.page_size,
             )
             latest_builds = await self._latest_browse_builds(cursor, child_rows)
+            metadata_by_entry = await self._browse_metadata(
+                cursor,
+                rows=child_rows,
+                property_names=request.metadata_field_list,
+            )
             items = [
                 KnowledgeItemListDirItem(
                     kb_code=request.kb_code,
@@ -953,6 +962,7 @@ class KnowledgeBaseService:
                     build_current_step=(latest_builds.get(int(row["kid"])) or {}).get(
                         "current_step"
                     ),
+                    metadata=metadata_by_entry.get(int(row["kid"]), {}),
                 )
                 for row in child_rows
             ]
@@ -1262,6 +1272,7 @@ class KnowledgeBaseService:
                 pattern_segments=pattern_segments,
                 page_num=request.effective_page_num,
                 page_size=request.page_size,
+                metadata_field_list=request.metadata_field_list,
             )
             logger.info(
                 "knowledge_base_service.glob finished: path_rule=%s, item_count=%s",
@@ -1663,6 +1674,7 @@ class KnowledgeBaseService:
         pattern_segments: list[str],
         page_num: int | None,
         page_size: int | None,
+        metadata_field_list: list[str] | None,
     ) -> tuple[list[KnowledgeItemListDirItem], int]:
         current_matches: list[tuple[int | None, str, str, int, Any]] = [
             (None, "", "directory", 0, None)
@@ -1715,6 +1727,20 @@ class KnowledgeBaseService:
                 if row_id is not None
             ],
         )
+        metadata_by_entry = await self._browse_metadata(
+            cursor,
+            rows=[
+                {
+                    "kid": row_id,
+                    "type": item_type,
+                    "size": item_size,
+                    "virtual_path": matched_path,
+                }
+                for row_id, matched_path, item_type, item_size, _ in current_matches
+                if row_id is not None
+            ],
+            property_names=metadata_field_list,
+        )
         return (
             [
                 KnowledgeItemListDirItem(
@@ -1727,6 +1753,7 @@ class KnowledgeBaseService:
                     build_current_step=(latest_builds.get(int(row_id)) or {}).get(
                         "current_step"
                     ),
+                    metadata=metadata_by_entry.get(int(row_id), {}),
                 )
                 for (
                     row_id,
@@ -1783,6 +1810,69 @@ class KnowledgeBaseService:
             )
         )
         return {int(row["fs_entry_id"]): row for row in build_rows}
+
+    async def _browse_metadata(
+        self,
+        cursor: Any,
+        *,
+        rows: list[dict[str, Any]],
+        property_names: list[str] | None,
+    ) -> dict[int, dict[str, Any]]:
+        """Batch selected system and custom metadata for current browse rows."""
+        if not property_names or not rows:
+            return {}
+        fs_entry_ids = [int(row["kid"]) for row in rows]
+        result: dict[int, dict[str, Any]] = {}
+        system_names = [
+            name for name in property_names if name in SYSTEM_FIELD_VALUE_TYPES
+        ]
+        if system_names:
+            entry_rows = await self.knowledge_fs_entry_repository.get_entries_by_ids(
+                cursor,
+                fs_entry_ids=fs_entry_ids,
+            )
+            for entry in entry_rows:
+                if entry.get("entry_type") == "DIRECTORY":
+                    entry = {**entry, "file_size": 0}
+                result[int(entry["kid"])] = extract_system_metadata(
+                    entry,
+                    system_names,
+                )
+
+        custom_names = [
+            name for name in property_names if name not in SYSTEM_FIELD_VALUE_TYPES
+        ]
+        if self.file_metadata_value_repository is None or not custom_names:
+            return result
+        metadata_rows = await self.file_metadata_value_repository.get_entries_metadata(
+            cursor,
+            fs_entry_ids=fs_entry_ids,
+            property_names=custom_names,
+        )
+        for metadata_row in metadata_rows:
+            entry_id = int(metadata_row["fs_entry_id"])
+            result.setdefault(entry_id, {})[metadata_row["property_name"]] = {
+                "valueType": metadata_row["value_type"],
+                "value": self._stored_metadata_value(metadata_row),
+            }
+        return result
+
+    def _stored_metadata_value(self, row: dict[str, Any]) -> Any:
+        value_type = row["value_type"]
+        value = row.get(
+            {
+                "string": "value_string",
+                "number": "value_number",
+                "boolean": "value_boolean",
+                "datetime": "value_datetime",
+                "stringList": "value_string_list",
+            }[value_type]
+        )
+        if value_type == "number" and isinstance(value, Decimal):
+            return int(value) if value == value.to_integral_value() else float(value)
+        if value_type == "datetime" and hasattr(value, "isoformat"):
+            return value.isoformat()
+        return value
 
     def _segment_matches_path_rule(self, name: str, pattern: str) -> bool:
         return fnmatch.fnmatchcase(name, pattern)

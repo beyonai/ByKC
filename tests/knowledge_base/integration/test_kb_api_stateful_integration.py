@@ -2440,6 +2440,133 @@ def test_browse_optional_pagination_preserves_unpaged_shape_and_stable_order(
 
 
 @pytest.mark.integration
+def test_browse_metadata_field_list_returns_selected_nested_metadata(
+    monkeypatch, tmp_path
+):
+    """Browse metadata matches search-style selection and stays nested per item."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Browse metadata {uuid4().hex[:12]}")
+        _create_directory(client, kb_code=kb_code, directory_path="/metadata")
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/metadata/a.md",
+            file_content=b"# A\n",
+        )
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/metadata/b.md",
+            file_content=b"# B\n",
+        )
+        updated = _update_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/metadata/a.md",
+            operation_list=[
+                {
+                    "propertyName": "owner",
+                    "operation": "set",
+                    "valueType": "string",
+                    "value": "Alice",
+                },
+                {
+                    "propertyName": "amount",
+                    "operation": "set",
+                    "valueType": "number",
+                    "value": 3.5,
+                },
+                {
+                    "propertyName": "active",
+                    "operation": "set",
+                    "valueType": "boolean",
+                    "value": True,
+                },
+                {
+                    "propertyName": "publishedAt",
+                    "operation": "set",
+                    "valueType": "datetime",
+                    "value": "2026-08-30T01:02:03Z",
+                },
+                {
+                    "propertyName": "tags",
+                    "operation": "set",
+                    "valueType": "stringList",
+                    "value": ["one", "two"],
+                },
+            ],
+        )
+        assert updated.json()["resultCode"] == "0"
+
+        fields = [
+            "owner",
+            "amount",
+            "active",
+            "publishedAt",
+            "tags",
+            "updatedAt",
+            "fileSize",
+            "filePath",
+        ]
+        listed = client.post(
+            "/api/v1/listDir",
+            json={
+                "knCode": kb_code,
+                "directoryPath": "/metadata",
+                "metadataFieldList": fields,
+            },
+        ).json()["resultObject"]["data"]
+        globbed = client.post(
+            "/api/v1/glob",
+            json={
+                "knCode": kb_code,
+                "pathRule": "/metadata/*",
+                "metadataFieldList": fields,
+            },
+        ).json()["resultObject"]["data"]
+        unknown = client.post(
+            "/api/v1/listDir",
+            json={
+                "knCode": kb_code,
+                "directoryPath": "/metadata",
+                "metadataFieldList": ["doesNotExist"],
+                "pageSize": 1,
+            },
+        ).json()["resultObject"]
+
+    assert listed == globbed
+    by_name = {item["name"]: item for item in listed}
+    metadata = by_name["/metadata/a.md"]["metadata"]
+    assert metadata["owner"] == {"valueType": "string", "value": "Alice"}
+    assert metadata["amount"] == {"valueType": "number", "value": 3.5}
+    assert metadata["active"] == {"valueType": "boolean", "value": True}
+    assert metadata["publishedAt"]["valueType"] == "datetime"
+    assert metadata["publishedAt"]["value"].endswith("+08:00")
+    assert metadata["tags"] == {
+        "valueType": "stringList",
+        "value": ["one", "two"],
+    }
+    assert metadata["updatedAt"]["value"] == by_name["/metadata/a.md"]["updatedAt"]
+    assert metadata["fileSize"]["value"] == by_name["/metadata/a.md"]["size"]
+    assert metadata["filePath"]["value"] == "/metadata/a.md"
+    assert by_name["/metadata/b.md"]["metadata"] == {
+        "updatedAt": {
+            "valueType": "datetime",
+            "value": by_name["/metadata/b.md"]["updatedAt"],
+        },
+        "fileSize": {
+            "valueType": "number",
+            "value": by_name["/metadata/b.md"]["size"],
+        },
+        "filePath": {"valueType": "string", "value": "/metadata/b.md"},
+    }
+    assert unknown["data"][0]["metadata"] == {}
+
+
+@pytest.mark.integration
 async def test_directory_rename_updates_parent_and_child_queries(monkeypatch, tmp_path):
     """Renaming a directory should update browse, match, and read behavior together."""
     settings = _kb_settings(agent_data_path=tmp_path)

@@ -28,6 +28,7 @@
 | --- | --- | --- | --- |
 | `knCode` | string | 是 | 知识库编码 |
 | `directoryPath` | string | 是 | 目录路径，以 `/` 开头，不包括知识库名称 |
+| `metadataFieldList` | array[string] | 否 | 需要返回的元数据字段，支持自定义元数据和系统元数据 |
 | `pageNum` | integer | 否 | 页码，从 1 开始；传入 `pageSize` 但未传本字段时默认为 1 |
 | `pageSize` | integer | 否 | 每页条数，范围 1 到 10000；与 `pageNum` 均未传时保持全量返回 |
 
@@ -91,7 +92,8 @@
 - 只传 `pageNum` 不传 `pageSize` 时请求校验失败。
 - `updatedAt` 使用 ISO 8601 格式。
 - `buildStatus`、`buildCurrentStep` 返回文件最新构建任务的状态；目录或尚未创建构建任务的文件返回 `null`。
-- `metadata` 始终返回对象；当前未指定元数据字段时返回空对象 `{}`。
+- `metadata` 始终返回对象。未传或传入空 `metadataFieldList` 时不查询元数据并返回 `{}`；传入时只返回列表中实际存在的字段，全部不存在时仍返回 `{}`。
+- 元数据值保持统一的 `{valueType, value}` 结构，不平铺到条目顶层。
 
 ## 路径与定位规则
 

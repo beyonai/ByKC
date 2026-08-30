@@ -397,6 +397,10 @@ class KnowledgeItemListDirRequest(BaseModel):
         min_length=1,
         validation_alias=AliasChoices("directoryPath", "directory_path"),
     )
+    metadata_field_list: list[str] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("metadataFieldList", "metadata_field_list"),
+    )
     page_num: int | None = Field(
         default=None,
         ge=1,
@@ -463,6 +467,10 @@ class KnowledgeItemGlobRequest(BaseModel):
     path_rule: str = Field(
         min_length=1,
         validation_alias=AliasChoices("pathRule", "path_rule"),
+    )
+    metadata_field_list: list[str] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("metadataFieldList", "metadata_field_list"),
     )
     page_num: int | None = Field(
         default=None,

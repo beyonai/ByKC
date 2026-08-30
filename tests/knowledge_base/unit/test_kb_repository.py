@@ -556,6 +556,30 @@ async def test_list_children_by_parent_entry_id_uses_current_fs_entry_columns():
     assert params == {"knowledge_base_id": 7, "parent_entry_id": 80}
 
 
+async def test_get_entries_by_ids_fetches_system_metadata_columns_in_one_query():
+    repo = KnowledgeFsEntryRepository()
+    expected = [{"kid": 81, "name": "doc.md", "virtual_path": "/docs/doc.md"}]
+    cursor = FakeCursor(fetchall_results=[expected])
+
+    rows = await repo.get_entries_by_ids(cursor, fs_entry_ids=[81, 82])
+
+    assert rows == expected
+    sql, params = cursor.executed[0]
+    lowered = sql.lower()
+    for column in (
+        "name",
+        "entry_type",
+        "file_size",
+        "mime_type",
+        "checksum",
+        "virtual_path",
+        "created_at",
+        "updated_at",
+    ):
+        assert column in lowered
+    assert params == {"fs_entry_ids": [81, 82]}
+
+
 async def test_update_file_entry_storage_updates_new_storage_columns():
     """File upload should persist object-storage metadata on the fs entry row."""
     repo = KnowledgeFsEntryRepository()

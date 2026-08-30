@@ -138,6 +138,51 @@ async def test_get_file_metadata_returns_all():
 
 
 @pytest.mark.asyncio
+async def test_get_entries_metadata_batches_selected_fields():
+    repo = FileMetadataValueRepository()
+    expected = [
+        {
+            "fs_entry_id": 10,
+            "property_name": "status",
+            "value_type": "string",
+            "value_string": "active",
+        }
+    ]
+    cursor = FakeCursor(fetchall_results=[expected])
+
+    rows = await repo.get_entries_metadata(
+        cursor,
+        fs_entry_ids=[10, 11],
+        property_names=["status"],
+    )
+
+    assert rows == expected
+    sql, params = cursor.executed[0]
+    assert "fs_entry_id = any" in sql.lower()
+    assert "property_name = any" in sql.lower()
+    assert params == {
+        "fs_entry_ids": [10, 11],
+        "property_names": ["status"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_entries_metadata_skips_empty_selection():
+    repo = FileMetadataValueRepository()
+    cursor = FakeCursor()
+
+    assert (
+        await repo.get_entries_metadata(
+            cursor,
+            fs_entry_ids=[10],
+            property_names=[],
+        )
+        == []
+    )
+    assert cursor.executed == []
+
+
+@pytest.mark.asyncio
 async def test_list_used_properties():
     repo = FileMetadataValueRepository()
     cursor = FakeCursor(

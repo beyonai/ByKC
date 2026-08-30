@@ -643,6 +643,35 @@ class KnowledgeFsEntryRepository:
             )
         return await self._fetchall(cursor)
 
+    async def get_entries_by_ids(
+        self,
+        cursor: Any,
+        *,
+        fs_entry_ids: list[int],
+    ) -> list[dict[str, Any]]:
+        """Fetch live filesystem entries used for batched metadata projection."""
+        if not fs_entry_ids:
+            return []
+        await cursor.execute(
+            """
+            SELECT
+                kid,
+                name,
+                entry_type,
+                file_size,
+                mime_type,
+                checksum,
+                virtual_path,
+                created_at,
+                updated_at
+            FROM knowledge_fs_entry
+            WHERE kid = ANY(%(fs_entry_ids)s)
+              AND is_deleted = false
+            """,
+            {"fs_entry_ids": fs_entry_ids},
+        )
+        return await self._fetchall(cursor)
+
     async def _get_entry_by_id(
         self, cursor: Any, *, entry_id: int, for_update: bool = False
     ) -> dict[str, Any] | None:

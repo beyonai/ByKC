@@ -69,6 +69,7 @@
 | `POST` | `/api/v1/knowledgeItems/metadataSearch` | [knowledgeItems-metadataSearch](interfaces/knowledgeItems-metadataSearch.md) |
 | `POST` | `/api/v1/knowledgeItems/metadata/update` | [knowledgeItems-metadata-update](interfaces/knowledgeItems-metadata-update.md) |
 | `POST` | `/api/v1/knowledgeItems/metadata/get` | [knowledgeItems-metadata-get](interfaces/knowledgeItems-metadata-get.md) |
+| `POST` | `/api/v1/knowledgeItems/metadataFields/list` | [knowledgeItems-metadataFields-list](interfaces/knowledgeItems-metadataFields-list.md) |
 
 ### KnowledgeEntity
 

@@ -2885,6 +2885,16 @@ def test_directory_create_and_rename_share_entry_metadata_lifecycle(
             "tags": {"valueType": "stringList", "value": ["policy", "draft"]},
         }
         assert parent == {}
+        field_list = client.post(
+            "/api/v1/knowledgeItems/metadataFields/list",
+            json={"knCodeList": [kb_code]},
+        ).json()
+        assert field_list["resultCode"] == "0", field_list
+        fields_by_name = {
+            item["propertyName"]: item for item in field_list["resultObject"]["data"]
+        }
+        assert fields_by_name["owner"]["valueType"] == "string"
+        assert fields_by_name["priority"]["valueType"] == "number"
 
         listed = client.post(
             "/api/v1/listDir",

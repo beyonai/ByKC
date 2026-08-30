@@ -9,7 +9,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from by_qa.knowledge_base.api import routes
-from by_qa.knowledge_base.api.metadata_schemas import MetadataSearchHit, SearchFileHit
+from by_qa.knowledge_base.api.metadata_schemas import (
+    MetadataPropertyResponse,
+    MetadataSearchHit,
+    SearchFileHit,
+)
 from by_qa.knowledge_base.api.schemas import (
     CreateKnowledgeBaseResponse,
     KnowledgeItemListDirItem,
@@ -273,6 +277,15 @@ class FakeKBService:
             },
         }
 
+    async def list_metadata_fields(self, request):
+        assert request.kb_code_list == ["1"]
+        return [
+            MetadataPropertyResponse(
+                property_name="directoryOnly",
+                value_type="string",
+            )
+        ]
+
 
 class FakeRouteDocumentChunkingService:
     """Document conversion double used by route tests."""
@@ -378,6 +391,31 @@ def test_metadata_get_route_returns_file_metadata(monkeypatch):
     }
     assert service.metadata_get_requests[0].kb_code == "1"
     assert service.metadata_get_requests[0].file_path == "/1.md"
+
+
+def test_metadata_fields_list_route_returns_used_entry_fields(monkeypatch):
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/knowledgeItems/metadataFields/list",
+        json={"knCodeList": ["1"]},
+    )
+
+    assert response.json() == {
+        "resultCode": "0",
+        "resultMsg": "success",
+        "resultObject": {
+            "data": [
+                {
+                    "propertyName": "directoryOnly",
+                    "valueType": "string",
+                    "description": None,
+                    "extParams": None,
+                }
+            ]
+        },
+    }
 
 
 def test_metadata_update_route_applies_single_file_batch(monkeypatch):

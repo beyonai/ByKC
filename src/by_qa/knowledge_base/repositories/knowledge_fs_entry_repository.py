@@ -18,6 +18,7 @@ class KnowledgeFsEntryRepository:
         knowledge_base_id: int,
         full_path: str,
         directory_description: str | None = None,
+        created_parent_entries: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
         """Create one directory node within one knowledge base path tree."""
         normalized_path = full_path.strip("/")
@@ -48,7 +49,7 @@ class KnowledgeFsEntryRepository:
                 current_virtual_path = self._row_value(existing, "virtual_path")
                 continue
 
-            parent_directory = await self._insert_directory_entry(
+            parent_directory, created = await self._insert_directory_entry(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
                 parent_entry_id=current_parent_id,
@@ -58,6 +59,8 @@ class KnowledgeFsEntryRepository:
                 depth=index,
                 description=None,
             )
+            if created and created_parent_entries is not None:
+                created_parent_entries.append(parent_directory)
             current_parent_id = self._row_id(parent_directory)
             current_path_ltree = self._row_value(parent_directory, "path_ltree")
             current_virtual_path = self._row_value(parent_directory, "virtual_path")
@@ -73,7 +76,7 @@ class KnowledgeFsEntryRepository:
                 return existing_directory
             raise ValueError(f"directory path already exists: {normalized_path}")
 
-        return await self._insert_directory_entry(
+        directory, _ = await self._insert_directory_entry(
             cursor,
             knowledge_base_id=knowledge_base_id,
             parent_entry_id=current_parent_id,
@@ -83,6 +86,7 @@ class KnowledgeFsEntryRepository:
             depth=len(path_segments),
             description=directory_description,
         )
+        return directory
 
     async def create_file_entry(
         self,
@@ -91,6 +95,7 @@ class KnowledgeFsEntryRepository:
         knowledge_base_id: int,
         full_path: str,
         file_description: str | None = None,
+        created_parent_entries: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
         """Create one file entry under an existing parent directory."""
         normalized_path = full_path.strip("/")
@@ -121,7 +126,7 @@ class KnowledgeFsEntryRepository:
                 current_virtual_path = self._row_value(existing, "virtual_path")
                 continue
 
-            parent_directory = await self._insert_directory_entry(
+            parent_directory, created = await self._insert_directory_entry(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
                 parent_entry_id=current_parent_id,
@@ -131,6 +136,8 @@ class KnowledgeFsEntryRepository:
                 depth=index,
                 description=None,
             )
+            if created and created_parent_entries is not None:
+                created_parent_entries.append(parent_directory)
             current_parent_id = self._row_id(parent_directory)
             current_path_ltree = self._row_value(parent_directory, "path_ltree")
             current_virtual_path = self._row_value(parent_directory, "virtual_path")
@@ -318,7 +325,7 @@ class KnowledgeFsEntryRepository:
         name: str,
         depth: int,
         description: str | None,
-    ) -> dict[str, Any] | None:
+    ) -> tuple[dict[str, Any], bool]:
         """Insert one directory node under an existing parent."""
         label = self._path_label("d", depth, name)
         path_ltree = (
@@ -378,26 +385,28 @@ class KnowledgeFsEntryRepository:
             await cursor.execute(f"RELEASE SAVEPOINT {savepoint_name}")
             if not self._is_unique_violation(exc):
                 raise
-            return await self._get_existing_directory_after_conflict(
+            existing = await self._get_existing_directory_after_conflict(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
                 parent_entry_id=parent_entry_id,
                 name=name,
                 virtual_path=virtual_path,
             )
+            return existing, False
 
         created = await cursor.fetchone()
         await cursor.execute(f"RELEASE SAVEPOINT {savepoint_name}")
         if created is not None:
-            return created
+            return created, True
 
-        return await self._get_existing_directory_after_conflict(
+        existing = await self._get_existing_directory_after_conflict(
             cursor,
             knowledge_base_id=knowledge_base_id,
             parent_entry_id=parent_entry_id,
             name=name,
             virtual_path=virtual_path,
         )
+        return existing, False
 
     async def _get_existing_directory_after_conflict(
         self,
@@ -407,7 +416,7 @@ class KnowledgeFsEntryRepository:
         parent_entry_id: int | None,
         name: str,
         virtual_path: str,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, Any]:
         existing = await self._get_child_entry(
             cursor,
             knowledge_base_id=knowledge_base_id,

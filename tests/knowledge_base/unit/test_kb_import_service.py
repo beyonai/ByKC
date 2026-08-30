@@ -137,6 +137,7 @@ class FakeKnowledgeFsEntryRepository:
     def __init__(self):
         self.calls = []
         self.raise_missing_parent_directory = False
+        self.auto_created_parent_entries = []
         self.root_entry = {"kid": 70, "is_root": True, "full_path": "人力制度知识库"}
         self.file_entry = {"kid": 71, "entry_type": "FILE", "full_path": "item-1"}
         self.file_entry_by_path = {}
@@ -360,7 +361,13 @@ class FakeKnowledgeFsEntryRepository:
             entry["name"] = new_name
 
     async def create_directory_entry(
-        self, cursor, *, knowledge_base_id, full_path, directory_description=None
+        self,
+        cursor,
+        *,
+        knowledge_base_id,
+        full_path,
+        directory_description=None,
+        created_parent_entries=None,
     ):
         self.calls.append(
             (
@@ -375,6 +382,8 @@ class FakeKnowledgeFsEntryRepository:
         if self.raise_missing_parent_directory:
             parent_path = full_path.strip("/").rsplit("/", 1)[0]
             raise ValueError(f"parent directory not found: {parent_path}")
+        if created_parent_entries is not None:
+            created_parent_entries.extend(self.auto_created_parent_entries)
         return {
             "kid": 81,
             "knowledge_base_id": knowledge_base_id,
@@ -391,7 +400,13 @@ class FakeKnowledgeFsEntryRepository:
         self.calls.append(("lock_checksum_scope", kwargs))
 
     async def create_file_entry(
-        self, cursor, *, knowledge_base_id, full_path, file_description=None
+        self,
+        cursor,
+        *,
+        knowledge_base_id,
+        full_path,
+        file_description=None,
+        created_parent_entries=None,
     ):
         self.calls.append(
             (
@@ -406,6 +421,8 @@ class FakeKnowledgeFsEntryRepository:
         if self.raise_missing_parent_directory:
             parent_path = full_path.strip("/").rsplit("/", 1)[0]
             raise ValueError(f"parent directory not found: {parent_path}")
+        if created_parent_entries is not None:
+            created_parent_entries.extend(self.auto_created_parent_entries)
         return {
             "kid": 71,
             "knowledge_base_id": knowledge_base_id,

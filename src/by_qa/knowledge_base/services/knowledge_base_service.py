@@ -276,6 +276,7 @@ class KnowledgeBaseService:
                     f"knowledge base not found: {request.kb_code}"
                 )
             knowledge_base_id = self._row_id(kb_row)
+            created_parent_entries: list[dict[str, Any]] = []
 
             try:
                 directory_row = (
@@ -284,18 +285,20 @@ class KnowledgeBaseService:
                         knowledge_base_id=knowledge_base_id,
                         full_path=normalized_directory_path,
                         directory_description=request.directory_description,
+                        created_parent_entries=created_parent_entries,
                     )
                 )
             except ValueError as exc:
                 raise KnowledgeBaseValidationError(str(exc)) from exc
             if request.metadata is not None:
-                await upsert_entry_metadata(
-                    cursor,
-                    metadata_repository=self.file_metadata_value_repository,
-                    fs_entry_id=self._row_id(directory_row),
-                    knowledge_base_id=knowledge_base_id,
-                    metadata=request.metadata,
-                )
+                for entry in [*created_parent_entries, directory_row]:
+                    await upsert_entry_metadata(
+                        cursor,
+                        metadata_repository=self.file_metadata_value_repository,
+                        fs_entry_id=self._row_id(entry),
+                        knowledge_base_id=knowledge_base_id,
+                        metadata=request.metadata,
+                    )
             await connection.commit()
         except Exception:
             await connection.rollback()

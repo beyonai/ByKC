@@ -41,6 +41,8 @@
 - 当 `processFrontMatter` 为 `false` 时，跳过 YAML front matter 解析，不做元数据自动录入。
 - 可通过 multipart `metadata` JSON object 为文件显式设置元数据。该参数独立于 `processFrontMatter`，即使关闭 front matter 处理仍然生效。
 - 请求 `metadata` 与 Markdown YAML front matter 先合并再写入；同名字段冲突时以文件自身的 front matter 为准。
+- 文件路径中不存在的父目录会自动创建，并继承请求 `metadata`；已存在的父目录不会被修改。
+- 自动创建的父目录不解析、不合并文件的 YAML front matter；因此冲突字段在父目录上保留请求值，front matter 独有字段也不会写入父目录。
 - zip 批量导入时，请求 `metadata` 是所有真实文件条目的公共基础元数据；每个 Markdown 条目可用自己的 front matter 覆盖同名字段。
 
 YAML front matter header 示例：
@@ -76,7 +78,7 @@ module: karpathy
 | `fileContent` | file | 是 | 文件二进制内容；文件名以 `.zip` 结尾且为合法 zip 时触发批量上传 |
 | `processFrontMatter` | boolean | 否 | 是否解析 YAML front matter 并自动录入元数据，默认 `true` |
 | `skipIfDuplicate` | boolean | 否 | 是否检查同一知识库内的文件 checksum；默认 `false`。为 `true` 且已存在相同 checksum 时跳过导入，并在错误信息中返回已存在文件路径 |
-| `metadata` | string(JSON object) | 否 | 显式文件元数据；顶层必须是 JSON object，值使用与 YAML front matter 相同的类型推断规则 |
+| `metadata` | string(JSON object) | 否 | 文件及本次自动创建父目录的基础元数据；顶层必须是 JSON object，值使用与 YAML front matter 相同的类型推断规则 |
 
 `metadata` 和 YAML front matter 均不允许写入 `fileName`、`filePath`、`fileSize`、`fileType`、`mimeType`、`fileSignature`、`createdAt`、`updatedAt` 等只读系统字段。
 

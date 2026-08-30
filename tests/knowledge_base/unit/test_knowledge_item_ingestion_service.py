@@ -47,9 +47,16 @@ class FakeFsEntryRepository:
     def __init__(self, calls, *, duplicate_path=None):
         self.calls = calls
         self.duplicate_path = duplicate_path
+        self.auto_created_parent_entries = []
 
     async def create_file_entry(
-        self, cursor, *, knowledge_base_id, full_path, file_description=None
+        self,
+        cursor,
+        *,
+        knowledge_base_id,
+        full_path,
+        file_description=None,
+        created_parent_entries=None,
     ):
         self.calls.append(
             (
@@ -61,6 +68,8 @@ class FakeFsEntryRepository:
                 },
             )
         )
+        if created_parent_entries is not None:
+            created_parent_entries.extend(self.auto_created_parent_entries)
         return {
             "kid": 71,
             "knowledge_base_id": knowledge_base_id,

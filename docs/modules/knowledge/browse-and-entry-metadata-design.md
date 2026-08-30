@@ -265,6 +265,7 @@ Markdown YAML front matter
 - 同名冲突时，以文件 YAML front matter 为准。
 - `processFrontMatter=false` 时不解析 front matter，但仍处理请求 metadata。
 - 非 Markdown 文件忽略 front matter，仅处理请求 metadata。
+- 导入路径中本次自动创建的父目录仅写入请求 metadata；不合并文件 front matter，也不修改已存在父目录。
 - 修改文件时，只 upsert 本次有效元数据中的字段；未出现的既有元数据继续保留。
 - 元数据转换复用现有 front matter 类型推断与标准化规则。
 - 文件记录、文件派生数据清理和元数据写入处于同一数据库事务。
@@ -289,7 +290,7 @@ zip 导入时，请求 metadata 是每个真实文件条目的公共基础元数
 }
 ```
 
-当完整路径包含需要递归创建的中间目录时，metadata 只应用于 `directoryPath` 指定的最终目录，不应用于自动创建的中间目录。
+当完整路径包含需要递归创建的中间目录时，请求 metadata 同时应用于 `directoryPath` 指定的最终目录和本次自动创建的中间目录。已存在的父目录不会被修改。
 
 目标目录已存在时保持现有幂等成功语义，并对传入 metadata 执行幂等 upsert，使请求重试能得到一致结果。
 
@@ -696,6 +697,7 @@ feat(knowledge): include directories in metadata search
 | FI8 | zip 公共元数据 | zip 中包含多个文件并传 metadata | 每个成功文件获得公共元数据 |
 | FI9 | zip 单文件覆盖 | zip 中 Markdown front matter 与公共字段冲突 | 该 Markdown 使用 front matter，其他文件使用公共值 |
 | FI10 | 原子回滚 | 注入元数据写入失败 | 文件记录、存储对象和元数据均不留下半成功状态 |
+| FI11 | 导入自动创建父目录 | 向不存在的多层路径导入 Markdown，请求 metadata 与 front matter 冲突 | 新建父目录只获得请求 metadata；文件获得合并结果且 front matter 优先；已存在父目录不变 |
 
 ### 15.5 提交 5：文件修改 metadata
 
@@ -716,7 +718,7 @@ feat(knowledge): include directories in metadata search
 | 编号 | 场景 | 操作 | 核心断言 |
 | --- | --- | --- | --- |
 | DM1 | 创建目录 metadata | directories/create 传 metadata | metadata/get、listDir、glob 均可读取 |
-| DM2 | 递归创建目标范围 | 创建多层路径并传 metadata | 只有最终目录具有 metadata，中间目录为空 |
+| DM2 | 递归创建目标范围 | 创建多层路径并传 metadata | 最终目录和本次自动创建的中间目录均具有请求 metadata，已存在父目录不变 |
 | DM3 | 幂等创建 | 对已存在目录重复 create 并传相同 metadata | 不产生重复值，结果保持一致 |
 | DM4 | 创建时更新 metadata | 对已存在目录 create 并传新值 | 指定字段按 upsert 语义更新 |
 | DM5 | 目录 metadata/get | 使用目录路径查询部分和全部字段 | 返回目录自定义及系统元数据 |

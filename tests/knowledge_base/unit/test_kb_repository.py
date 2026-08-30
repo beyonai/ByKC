@@ -248,11 +248,13 @@ async def test_create_directory_entry_recursively_creates_missing_parents():
         ]
     )
 
+    created_parent_entries = []
     await repo.create_directory_entry(
         cursor,
         knowledge_base_id=7,
         full_path="考勤制度/归档",
         directory_description="递归创建目录",
+        created_parent_entries=created_parent_entries,
     )
 
     insert_statements = [
@@ -266,6 +268,7 @@ async def test_create_directory_entry_recursively_creates_missing_parents():
     assert insert_statements[0][1]["path_ltree"].startswith("d1_")
     assert insert_statements[1][1]["name"] == "归档"
     assert insert_statements[1][1]["parent_entry_id"] == 80
+    assert [entry["kid"] for entry in created_parent_entries] == [80]
 
 
 async def test_create_directory_entry_returns_existing_directory_for_duplicate_path():
@@ -448,11 +451,13 @@ async def test_create_file_entry_recursively_creates_missing_parents():
         ]
     )
 
+    created_parent_entries = []
     await repo.create_file_entry(
         cursor,
         knowledge_base_id=7,
         full_path="考勤制度/归档/考勤制度.pdf",
         file_description="原始文件",
+        created_parent_entries=created_parent_entries,
     )
 
     insert_statements = [
@@ -465,6 +470,7 @@ async def test_create_file_entry_recursively_creates_missing_parents():
     assert insert_statements[1][1]["name"] == "归档"
     assert insert_statements[2][1]["name"] == "考勤制度.pdf"
     assert insert_statements[2][1]["parent_entry_id"] == 81
+    assert [entry["kid"] for entry in created_parent_entries] == [80, 81]
 
 
 async def test_get_file_by_path_resolves_file_under_current_path_model():

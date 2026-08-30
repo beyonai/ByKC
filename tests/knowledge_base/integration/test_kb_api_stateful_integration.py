@@ -1555,11 +1555,17 @@ frontOnly: 7
 
     with TestClient(main_module.app) as client:
         kb_code = _create_kb(client, f"Import metadata {uuid4().hex[:12]}")
+        _create_directory(
+            client,
+            kb_code=kb_code,
+            directory_path="/existing",
+            metadata={"owner": "existing"},
+        )
         merged_response = client.post(
             "/api/v1/knowledgeItems/import",
             data={
                 "knCode": kb_code,
-                "filePath": "/merged.md",
+                "filePath": "/existing/auto/merged.md",
                 "metadata": (
                     '{"owner":"request","requestOnly":true,"tags":["a","b"],'
                     '"publishedAt":"2026-08-30T01:02:03Z"}'
@@ -1616,7 +1622,7 @@ frontOnly: 7
         merged = _get_file_metadata(
             client,
             kb_code=kb_code,
-            file_path="/merged.md",
+            file_path="/existing/auto/merged.md",
             field_names=[
                 "owner",
                 "requestOnly",
@@ -1624,6 +1630,24 @@ frontOnly: 7
                 "tags",
                 "publishedAt",
             ],
+        )
+        auto_parent = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/existing/auto",
+            field_names=[
+                "owner",
+                "requestOnly",
+                "frontOnly",
+                "tags",
+                "publishedAt",
+            ],
+        )
+        existing_parent = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/existing",
+            field_names=["owner", "requestOnly", "frontOnly"],
         )
         disabled = _get_file_metadata(
             client,
@@ -1659,6 +1683,16 @@ frontOnly: 7
             "value": "2026-08-30T09:02:03+08:00",
         },
     }
+    assert auto_parent == {
+        "owner": {"valueType": "string", "value": "request"},
+        "requestOnly": {"valueType": "boolean", "value": True},
+        "tags": {"valueType": "stringList", "value": ["a", "b"]},
+        "publishedAt": {
+            "valueType": "datetime",
+            "value": "2026-08-30T09:02:03+08:00",
+        },
+    }
+    assert existing_parent == {"owner": {"valueType": "string", "value": "existing"}}
     assert disabled == {
         "owner": {"valueType": "string", "value": "request"},
         "requestOnly": {"valueType": "boolean", "value": True},
@@ -3395,7 +3429,7 @@ def test_qa_browse_tool_contract_forwards_selected_metadata_to_live_api(
 def test_directory_create_and_rename_share_entry_metadata_lifecycle(
     monkeypatch, tmp_path
 ):
-    """Only the final directory receives metadata, which survives and updates on rename."""
+    """New parent directories inherit request metadata, which survives renames."""
     settings = _kb_settings(agent_data_path=tmp_path)
     _reset_runtime(monkeypatch, settings)
 
@@ -3431,7 +3465,12 @@ def test_directory_create_and_rename_share_entry_metadata_lifecycle(
             "active": {"valueType": "boolean", "value": True},
             "tags": {"valueType": "stringList", "value": ["policy", "draft"]},
         }
-        assert parent == {}
+        assert parent == {
+            "owner": {"valueType": "string", "value": "hr"},
+            "priority": {"valueType": "number", "value": 2.0},
+            "active": {"valueType": "boolean", "value": True},
+            "tags": {"valueType": "stringList", "value": ["policy", "draft"]},
+        }
         all_child = client.post(
             "/api/v1/knowledgeItems/metadata/get",
             json={"knCode": kb_code, "filePath": "/parent/child"},

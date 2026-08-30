@@ -211,6 +211,7 @@ class KnowledgeItemIngestionService:
                         f"{duplicate['virtual_path']}"
                     )
 
+            created_parent_entries: list[dict[str, Any]] = []
             try:
                 file_entry_row = (
                     await self.knowledge_fs_entry_repository.create_file_entry(
@@ -218,6 +219,7 @@ class KnowledgeItemIngestionService:
                         knowledge_base_id=knowledge_base_id,
                         full_path=normalized_object_path,
                         file_description=request.file_description,
+                        created_parent_entries=created_parent_entries,
                     )
                 )
             except ValueError as exc:
@@ -264,6 +266,15 @@ class KnowledgeItemIngestionService:
                 normalized_object_path, mime_type
             ):
                 front_matter = parse_front_matter(request.file_content)
+            if request.metadata is not None:
+                for parent_entry in created_parent_entries:
+                    await upsert_entry_metadata(
+                        cursor,
+                        metadata_repository=self.file_metadata_value_repository,
+                        fs_entry_id=self._row_id(parent_entry),
+                        knowledge_base_id=knowledge_base_id,
+                        metadata=request.metadata,
+                    )
             await upsert_entry_metadata(
                 cursor,
                 metadata_repository=self.file_metadata_value_repository,

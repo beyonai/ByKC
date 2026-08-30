@@ -29,7 +29,7 @@
 | `knCode` | string | 是 | 知识库编码 |
 | `directoryPath` | string | 是 | 需创建的目录路径，以 `/` 开头，不包括知识库名称，支持递归创建 |
 | `directoryDescription` | string | 否 | 目录描述 |
-| `metadata` | object | 否 | 写入最终目录的自定义元数据，值类型按 Markdown YAML front matter 规则推断 |
+| `metadata` | object | 否 | 写入最终目录及本次递归自动创建的父目录，值类型按 Markdown YAML front matter 规则推断 |
 
 ## 请求示例
 
@@ -76,7 +76,7 @@
 ## 特殊逻辑
 
 - 父目录不存在时递归创建。
-- `metadata` 只应用于 `directoryPath` 指定的最终目录，不应用于递归自动创建的中间目录。
+- `metadata` 应用于 `directoryPath` 指定的最终目录，也应用于本次递归自动创建的中间目录；已存在的父目录不会被修改。
 - 目标目录已存在时不创建重复记录；如传入 `metadata`，仍对指定字段执行幂等 upsert。
 - `metadata` 不允许写入 `fileName`、`filePath`、`fileSize`、`fileType`、`mimeType`、`fileSignature`、`createdAt`、`updatedAt` 等只读系统字段。
 - 目录创建和元数据写入在同一数据库事务中提交或回滚。

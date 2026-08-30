@@ -31,6 +31,7 @@
 | `sourcePath` | array[string] | 是 | 源路径列表，不能为空；每个路径以 `/` 开头，不包括知识库名称，可指向文件或目录 |
 | `targetDirectoryPath` | string | 否 | 目标目录路径，以 `/` 开头，不包括知识库名称；不存在时自动创建。与 `targetFilePath` 二选一 |
 | `targetFilePath` | string | 否 | 目标文件路径，以 `/` 开头，不包括知识库名称；仅 `sourcePath` 为单个文件时可用，父目录不存在时自动创建。与 `targetDirectoryPath` 二选一 |
+| `metadata` | object | 否 | 仅写入本次自动创建的目标目录；不修改已存在目标目录、源文件、源目录及其后代元数据 |
 | `overwrite` | boolean | 否 | 是否覆盖已存在目标。默认 `false`；当前版本仅支持 `false`，目标已存在时该移动项失败 |
 
 行为说明：
@@ -45,6 +46,8 @@
   - 将源文件移动或重命名为 `targetFilePath`。
   - `targetFilePath` 的父目录不存在时，服务端自动创建。
 - 目录移动时，目录下所有子目录和文件随目录一起移动。
+- `metadata` 按与 YAML front matter 相同的类型推断规则写入本次自动创建的每一层目标目录。移动不解析、不合并任何源文件的 YAML front matter。
+- 已存在的目标目录不会因 `metadata` 而变更；被移动条目继续使用原 `fs_entry_id`，其自身及子树元数据均保留原值。
 - 同一请求内每个源路径独立执行；单个源移动失败不影响其它源，失败原因写入 `data[].error`。
 - 结构性错误会导致整请求失败，包含：`sourcePath` 为空、路径不以 `/` 开头、路径含 `..` 跨界段、移动知识库根目录 `/`、同一批次内 `sourcePath` 重复、`targetDirectoryPath` 与 `targetFilePath` 同时填写或同时缺失、目录移动到自身或子目录下、`targetFilePath` 用于多源或目录源。
 - 目标路径或最终落点已存在时，该源移动失败；当前版本不覆盖已有文件或目录。
@@ -71,7 +74,11 @@
     "/制度/人事/考勤制度.pdf",
     "/制度/人事/图片"
   ],
-  "targetDirectoryPath": "/归档/人事"
+  "targetDirectoryPath": "/归档/人事",
+  "metadata": {
+    "owner": "Archives",
+    "status": "active"
+  }
 }
 ```
 

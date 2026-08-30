@@ -138,6 +138,7 @@ class FakeKnowledgeFsEntryRepository:
         self.calls = []
         self.raise_missing_parent_directory = False
         self.auto_created_parent_entries = []
+        self.auto_created_directory_entries = []
         self.root_entry = {"kid": 70, "is_root": True, "full_path": "人力制度知识库"}
         self.file_entry = {"kid": 71, "entry_type": "FILE", "full_path": "item-1"}
         self.file_entry_by_path = {}
@@ -368,6 +369,7 @@ class FakeKnowledgeFsEntryRepository:
         full_path,
         directory_description=None,
         created_parent_entries=None,
+        created_directory_entries=None,
     ):
         self.calls.append(
             (
@@ -384,6 +386,8 @@ class FakeKnowledgeFsEntryRepository:
             raise ValueError(f"parent directory not found: {parent_path}")
         if created_parent_entries is not None:
             created_parent_entries.extend(self.auto_created_parent_entries)
+        if created_directory_entries is not None:
+            created_directory_entries.extend(self.auto_created_directory_entries)
         return {
             "kid": 81,
             "knowledge_base_id": knowledge_base_id,

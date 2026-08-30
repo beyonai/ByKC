@@ -311,7 +311,17 @@ zip 导入时，请求 metadata 是每个真实文件条目的公共基础元数
 
 目录重命名和 metadata upsert 在同一事务中执行。未传 metadata 时保留全部既有元数据；传入时只 upsert 本次字段。
 
-### 7.3 目录删除
+### 7.3 移动自动创建目标目录
+
+`POST /api/v1/knowledgeItems/move` 增加可选 object 字段 `metadata`。该字段只应用于本次移动中递归自动创建的目标目录：
+
+- `targetDirectoryPath` 不存在时，本次新建的每层目录都写入请求 metadata。
+- `targetFilePath` 的父目录不存在时，本次新建的每层父目录都写入请求 metadata。
+- 已存在的目标目录不执行 metadata upsert。
+- 被移动的源文件、源目录及目录子树保留原元数据，不合并请求 metadata，也不解析文件 YAML front matter。
+- 目标目录创建、metadata 写入和单个源条目移动在同一事务中提交或回滚。
+
+### 7.4 目录删除
 
 目录删除继续使用子树软删除语义：
 
@@ -729,6 +739,7 @@ feat(knowledge): include directories in metadata search
 | DM10 | 移动目录 | knowledgeItems/move 移动目录子树 | 目录和后代的 metadata 均跟随 fs_entry 保留 |
 | DM11 | 删除空目录 | 删除带 metadata 的空目录 | get/update/listDir/glob 均不可再访问该目录及元数据 |
 | DM12 | 删除目录子树 | 删除含目录和文件 metadata 的父目录 | 子树所有元数据被软删除且不可召回 |
+| DM13 | 移动目标目录 metadata | 通过 targetDirectoryPath 和 targetFilePath 移动到部分不存在的路径并传 metadata | 仅本次新建的各层目标目录获得请求 metadata；已存在目标目录和源子树不变；失败时一起回滚 |
 
 ### 15.7 提交 7：metadataSearch 与跨接口一致性
 

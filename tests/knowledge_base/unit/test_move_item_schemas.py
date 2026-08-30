@@ -18,13 +18,17 @@ def _payload(**overrides):
 
 def test_move_request_accepts_multiple_sources_to_target_directory():
     request = MoveKnowledgeItemsRequest.model_validate(
-        _payload(sourcePath=["/docs/a.md", "/docs/b.md"])
+        _payload(
+            sourcePath=["/docs/a.md", "/docs/b.md"],
+            metadata={"owner": "operations"},
+        )
     )
 
     assert request.kb_code == "1"
     assert request.source_path == ["/docs/a.md", "/docs/b.md"]
     assert request.target_directory_path == "/archive"
     assert request.target_file_path is None
+    assert request.metadata == {"owner": "operations"}
     assert request.overwrite is False
 
 

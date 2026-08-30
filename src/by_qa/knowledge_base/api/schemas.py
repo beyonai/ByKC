@@ -172,6 +172,7 @@ class MoveKnowledgeItemsRequest(BaseModel):
         default=None,
         validation_alias=AliasChoices("targetFilePath", "target_file_path"),
     )
+    metadata: dict[str, Any] | None = None
     overwrite: bool = False
 
     @model_validator(mode="after")

@@ -704,6 +704,7 @@ class KnowledgeBaseService:
             cursor,
             knowledge_base_id=knowledge_base_id,
             directory_path=target_parent_path,
+            metadata=request.metadata,
         )
 
         existing = await self.knowledge_fs_entry_repository.get_child_entry(
@@ -840,15 +841,18 @@ class KnowledgeBaseService:
         *,
         knowledge_base_id: int,
         directory_path: str,
+        metadata: dict[str, Any] | None,
     ) -> int | None:
         if directory_path == "/":
             return None
+        created_directory_entries: list[dict[str, Any]] = []
         try:
             directory = await self.knowledge_fs_entry_repository.create_directory_entry(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
                 full_path=directory_path.strip("/"),
                 directory_description=None,
+                created_directory_entries=created_directory_entries,
             )
         except ValueError as exc:
             raise KnowledgeBaseValidationError(str(exc)) from exc
@@ -856,6 +860,15 @@ class KnowledgeBaseService:
             raise KnowledgeBaseValidationError(
                 f"failed to create target directory: {directory_path}"
             )
+        if metadata is not None:
+            for created_directory in created_directory_entries:
+                await upsert_entry_metadata(
+                    cursor,
+                    metadata_repository=self.file_metadata_value_repository,
+                    fs_entry_id=self._row_id(created_directory),
+                    knowledge_base_id=knowledge_base_id,
+                    metadata=metadata,
+                )
         return int(directory["kid"])
 
     async def _get_entry_by_virtual_path(

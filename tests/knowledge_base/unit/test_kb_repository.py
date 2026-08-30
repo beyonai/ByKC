@@ -249,12 +249,14 @@ async def test_create_directory_entry_recursively_creates_missing_parents():
     )
 
     created_parent_entries = []
+    created_directory_entries = []
     await repo.create_directory_entry(
         cursor,
         knowledge_base_id=7,
         full_path="考勤制度/归档",
         directory_description="递归创建目录",
         created_parent_entries=created_parent_entries,
+        created_directory_entries=created_directory_entries,
     )
 
     insert_statements = [
@@ -269,6 +271,7 @@ async def test_create_directory_entry_recursively_creates_missing_parents():
     assert insert_statements[1][1]["name"] == "归档"
     assert insert_statements[1][1]["parent_entry_id"] == 80
     assert [entry["kid"] for entry in created_parent_entries] == [80]
+    assert [entry["kid"] for entry in created_directory_entries] == [80, 81]
 
 
 async def test_create_directory_entry_returns_existing_directory_for_duplicate_path():

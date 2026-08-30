@@ -314,11 +314,15 @@ def _upload_file(
     file_path: str,
     file_content: bytes,
     content_type: str = "text/markdown",
+    metadata: dict | None = None,
 ) -> None:
     """Upload a file via the multipart /api/v1/knowledgeItems/import endpoint."""
+    data = {"knCode": kb_code, "filePath": file_path}
+    if metadata is not None:
+        data["metadata"] = json.dumps(metadata, ensure_ascii=False)
     response = client.post(
         "/api/v1/knowledgeItems/import",
-        data={"knCode": kb_code, "filePath": file_path},
+        data=data,
         files={"fileContent": (file_path.split("/")[-1], file_content, content_type)},
     )
     assert response.status_code == 200, response.text
@@ -1463,12 +1467,15 @@ def _move_items(
     source_path: list[str],
     target_directory_path: str | None = None,
     target_file_path: str | None = None,
+    metadata: dict | None = None,
 ) -> list[dict]:
     body = {"knCode": kb_code, "sourcePath": source_path}
     if target_directory_path is not None:
         body["targetDirectoryPath"] = target_directory_path
     if target_file_path is not None:
         body["targetFilePath"] = target_file_path
+    if metadata is not None:
+        body["metadata"] = metadata
     response = client.post("/api/v1/knowledgeItems/move", json=body)
     assert response.status_code == 200, response.text
     payload = response.json()
@@ -3806,6 +3813,94 @@ async def test_directory_metadata_follows_move_and_is_removed_with_subtree(
     assert all(item["resultCode"] == "-1" for item in deleted_gets)
     assert listed == []
     assert globbed == []
+
+
+@pytest.mark.integration
+def test_move_metadata_applies_only_to_new_target_directories(monkeypatch, tmp_path):
+    """Move metadata initializes new targets without mutating sources or ancestors."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Move target metadata {uuid4().hex[:12]}")
+        _create_directory(
+            client,
+            kb_code=kb_code,
+            directory_path="/existing",
+            metadata={"scope": "existing"},
+        )
+        _create_directory(
+            client,
+            kb_code=kb_code,
+            directory_path="/source-dir",
+            metadata={"scope": "source-directory"},
+        )
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/source-dir/child.md",
+            file_content=b"# Child\n",
+            metadata={"scope": "source-child"},
+        )
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/source-file.md",
+            file_content=b"# File\n",
+            metadata={"scope": "source-file"},
+        )
+
+        moved_directory = _move_items(
+            client,
+            kb_code=kb_code,
+            source_path=["/source-dir"],
+            target_directory_path="/new/branch",
+            metadata={"scope": "directory-target"},
+        )
+        moved_file = _move_items(
+            client,
+            kb_code=kb_code,
+            source_path=["/source-file.md"],
+            target_file_path="/existing/new-parent/renamed.md",
+            metadata={"scope": "file-target"},
+        )
+        metadata_by_path = {
+            path: _get_file_metadata(
+                client,
+                kb_code=kb_code,
+                file_path=path,
+                field_names=["scope"],
+            )
+            for path in (
+                "/new",
+                "/new/branch",
+                "/new/branch/source-dir",
+                "/new/branch/source-dir/child.md",
+                "/existing",
+                "/existing/new-parent",
+                "/existing/new-parent/renamed.md",
+            )
+        }
+
+    assert moved_directory[0]["targetPath"] == "/new/branch/source-dir"
+    assert moved_file[0]["targetPath"] == "/existing/new-parent/renamed.md"
+    assert metadata_by_path == {
+        "/new": {"scope": {"valueType": "string", "value": "directory-target"}},
+        "/new/branch": {"scope": {"valueType": "string", "value": "directory-target"}},
+        "/new/branch/source-dir": {
+            "scope": {"valueType": "string", "value": "source-directory"}
+        },
+        "/new/branch/source-dir/child.md": {
+            "scope": {"valueType": "string", "value": "source-child"}
+        },
+        "/existing": {"scope": {"valueType": "string", "value": "existing"}},
+        "/existing/new-parent": {
+            "scope": {"valueType": "string", "value": "file-target"}
+        },
+        "/existing/new-parent/renamed.md": {
+            "scope": {"valueType": "string", "value": "source-file"}
+        },
+    }
 
 
 @pytest.mark.integration

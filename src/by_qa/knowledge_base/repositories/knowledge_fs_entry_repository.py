@@ -19,6 +19,7 @@ class KnowledgeFsEntryRepository:
         full_path: str,
         directory_description: str | None = None,
         created_parent_entries: list[dict[str, Any]] | None = None,
+        created_directory_entries: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any] | None:
         """Create one directory node within one knowledge base path tree."""
         normalized_path = full_path.strip("/")
@@ -61,6 +62,8 @@ class KnowledgeFsEntryRepository:
             )
             if created and created_parent_entries is not None:
                 created_parent_entries.append(parent_directory)
+            if created and created_directory_entries is not None:
+                created_directory_entries.append(parent_directory)
             current_parent_id = self._row_id(parent_directory)
             current_path_ltree = self._row_value(parent_directory, "path_ltree")
             current_virtual_path = self._row_value(parent_directory, "virtual_path")
@@ -76,7 +79,7 @@ class KnowledgeFsEntryRepository:
                 return existing_directory
             raise ValueError(f"directory path already exists: {normalized_path}")
 
-        directory, _ = await self._insert_directory_entry(
+        directory, created = await self._insert_directory_entry(
             cursor,
             knowledge_base_id=knowledge_base_id,
             parent_entry_id=current_parent_id,
@@ -86,6 +89,8 @@ class KnowledgeFsEntryRepository:
             depth=len(path_segments),
             description=directory_description,
         )
+        if created and created_directory_entries is not None:
+            created_directory_entries.append(directory)
         return directory
 
     async def create_file_entry(

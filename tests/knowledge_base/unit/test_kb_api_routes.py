@@ -569,6 +569,7 @@ def test_move_knowledge_items_route_delegates_to_service(monkeypatch):
             "knCode": "1",
             "sourcePath": ["/docs/a.md/"],
             "targetFilePath": "/archive/a.md",
+            "metadata": {"owner": "archives"},
         },
     )
 
@@ -590,6 +591,7 @@ def test_move_knowledge_items_route_delegates_to_service(monkeypatch):
     }
     assert service.move_requests[0].source_path == ["/docs/a.md"]
     assert service.move_requests[0].target_file_path == "/archive/a.md"
+    assert service.move_requests[0].metadata == {"owner": "archives"}
 
 
 def test_move_knowledge_items_route_maps_validation_error(monkeypatch):

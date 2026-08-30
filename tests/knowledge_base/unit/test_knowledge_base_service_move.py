@@ -57,6 +57,14 @@ class FakeRetrievalProjectionRepository:
         )
 
 
+class FakeMetadataRepository:
+    def __init__(self):
+        self.upserts = []
+
+    async def upsert_value(self, cursor, **kwargs):
+        self.upserts.append(kwargs)
+
+
 class FakeStorageProvider:
     storage_path_bound_to_logical_path = True
 
@@ -99,7 +107,13 @@ class FakeFsEntryRepository:
         return self._get_by_path(full_path, "DIRECTORY")
 
     async def create_directory_entry(
-        self, cursor, *, knowledge_base_id, full_path, directory_description
+        self,
+        cursor,
+        *,
+        knowledge_base_id,
+        full_path,
+        directory_description,
+        created_directory_entries=None,
     ):
         path = "/" + full_path.strip("/")
         existing = self._get_by_path(full_path, "DIRECTORY")
@@ -115,6 +129,8 @@ class FakeFsEntryRepository:
         }
         self.created_directories.append(path)
         self.add_entry(row)
+        if created_directory_entries is not None:
+            created_directory_entries.append(row)
         return row
 
     async def get_child_entry(
@@ -195,6 +211,7 @@ def _make_service(
     storage_provider=None,
     fetch_cache_repo=None,
     retrieval_projection_repo=None,
+    metadata_repo=None,
 ):
     async def connection_factory():
         return connection
@@ -206,6 +223,7 @@ def _make_service(
         retrieval_projection_repository=retrieval_projection_repo,
         knowledge_fetch_cache_repository=fetch_cache_repo,
         storage_provider=storage_provider,
+        file_metadata_value_repository=metadata_repo,
     )
 
 
@@ -232,11 +250,13 @@ async def test_move_multiple_files_to_auto_created_directory():
     fs_repo.add_entry(_file(11, "/docs/b.md"))
     cache_repo = FakeFetchCacheRepository()
     projection_repo = FakeRetrievalProjectionRepository()
+    metadata_repo = FakeMetadataRepository()
     service = _make_service(
         connection,
         fs_repo,
         fetch_cache_repo=cache_repo,
         retrieval_projection_repo=projection_repo,
+        metadata_repo=metadata_repo,
     )
 
     result = await service.move_knowledge_items(
@@ -245,6 +265,7 @@ async def test_move_multiple_files_to_auto_created_directory():
                 "knCode": "kb",
                 "sourcePath": ["/docs/a.md", "/docs/b.md"],
                 "targetDirectoryPath": "/archive/new",
+                "metadata": {"owner": "operations", "priority": 2},
             }
         )
     )
@@ -261,6 +282,13 @@ async def test_move_multiple_files_to_auto_created_directory():
         {"knowledge_base_id": 1, "fs_entry_ids": [11]},
     ]
     assert cache_repo.delete_calls == [[10], [11]]
+    assert [
+        (item["fs_entry_id"], item["property_name"], item["value"])
+        for item in metadata_repo.upserts
+    ] == [
+        (1000, "owner", "operations"),
+        (1000, "priority", 2),
+    ]
     assert connection.committed == 2
 
 
@@ -307,7 +335,8 @@ async def test_move_file_to_target_file_auto_creates_parent_directory():
     connection = FakeConnection()
     fs_repo = FakeFsEntryRepository()
     fs_repo.add_entry(_file(10, "/docs/a.md"))
-    service = _make_service(connection, fs_repo)
+    metadata_repo = FakeMetadataRepository()
+    service = _make_service(connection, fs_repo, metadata_repo=metadata_repo)
 
     result = await service.move_knowledge_items(
         MoveKnowledgeItemsRequest.model_validate(
@@ -315,6 +344,7 @@ async def test_move_file_to_target_file_auto_creates_parent_directory():
                 "knCode": "kb",
                 "sourcePath": ["/docs/a.md"],
                 "targetFilePath": "/archive/renamed.md",
+                "metadata": {"owner": "legal"},
             }
         )
     )
@@ -322,6 +352,41 @@ async def test_move_file_to_target_file_auto_creates_parent_directory():
     assert result.data[0].target_path == "/archive/renamed.md"
     assert fs_repo.created_directories == ["/archive"]
     assert fs_repo.move_calls == [(10, 1000, "renamed.md")]
+    assert [item["fs_entry_id"] for item in metadata_repo.upserts] == [1000]
+
+
+@pytest.mark.asyncio
+async def test_move_metadata_does_not_modify_existing_target_or_source_entries():
+    connection = FakeConnection()
+    fs_repo = FakeFsEntryRepository()
+    fs_repo.add_entry(_file(10, "/docs/a.md"))
+    fs_repo.add_entry(
+        {
+            "kid": 30,
+            "name": "archive",
+            "entry_type": "DIRECTORY",
+            "virtual_path": "/archive",
+            "parent_entry_id": None,
+        }
+    )
+    metadata_repo = FakeMetadataRepository()
+    service = _make_service(connection, fs_repo, metadata_repo=metadata_repo)
+
+    result = await service.move_knowledge_items(
+        MoveKnowledgeItemsRequest.model_validate(
+            {
+                "knCode": "kb",
+                "sourcePath": ["/docs/a.md"],
+                "targetDirectoryPath": "/archive",
+                "metadata": {"owner": "must-not-apply"},
+            }
+        )
+    )
+
+    assert result.data[0].target_path == "/archive/a.md"
+    assert fs_repo.created_directories == []
+    assert fs_repo.move_calls == [(10, 30, "a.md")]
+    assert metadata_repo.upserts == []
 
 
 @pytest.mark.asyncio
@@ -361,7 +426,13 @@ async def test_move_rolls_back_storage_moves_when_db_move_fails():
     fs_repo.add_entry(_file(10, "/docs/a.md"))
     fs_repo.fail_move_entry = True
     storage = FakeStorageProvider()
-    service = _make_service(connection, fs_repo, storage_provider=storage)
+    metadata_repo = FakeMetadataRepository()
+    service = _make_service(
+        connection,
+        fs_repo,
+        storage_provider=storage,
+        metadata_repo=metadata_repo,
+    )
 
     with pytest.raises(FailingMoveEntryRepositoryError):
         await service.move_knowledge_items(
@@ -370,11 +441,13 @@ async def test_move_rolls_back_storage_moves_when_db_move_fails():
                     "knCode": "kb",
                     "sourcePath": ["/docs/a.md"],
                     "targetFilePath": "/archive/a.md",
+                    "metadata": {"owner": "archives"},
                 }
             )
         )
 
     assert connection.rolled_back == 1
+    assert [item["fs_entry_id"] for item in metadata_repo.upserts] == [1000]
     forward_original = (
         StorageLocation("bucket", "/kb/raw/docs/a.md"),
         StorageLocation("bucket", "/kb/raw/archive/a.md"),

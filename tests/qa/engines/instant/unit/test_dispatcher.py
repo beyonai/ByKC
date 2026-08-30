@@ -7,7 +7,12 @@ import pytest
 
 from by_qa.qa.common.config import KnowledgeBaseConfig, QARetrievalConfig
 from by_qa.qa.common.context import QARuntimeContext
-from by_qa.qa.common.operation_registry import OPERATION_REGISTRY, OperationType
+from by_qa.qa.common.operation_registry import (
+    OPERATION_REGISTRY,
+    GlobInput,
+    ListDirInput,
+    OperationType,
+)
 from by_qa.qa.tools.knowledge_tools import ServiceToolDispatcher
 
 
@@ -37,6 +42,17 @@ def test_build_tools_returns_one_tool_per_supported_op():
         OPERATION_REGISTRY[OperationType.KNOWLEDGE_SEARCH].tool_name,
         OPERATION_REGISTRY[OperationType.LIST_DIR].tool_name,
     }
+    list_tool = next(tool for tool in tools if tool.name == "list_directory")
+    assert {
+        "metadata_field_list",
+        "page_num",
+        "page_size",
+    }.issubset(list_tool.args_schema.model_fields)
+    assert {
+        "metadataFieldList",
+        "pageNum",
+        "pageSize",
+    }.issubset(list_tool.args_schema.model_json_schema()["properties"])
 
 
 def test_build_tools_empty_when_no_kbs():
@@ -66,6 +82,81 @@ def test_build_tools_does_not_include_dsl_guide_when_search_supported():
     assert tool_names == {
         OPERATION_REGISTRY[OperationType.KNOWLEDGE_SEARCH].tool_name,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operation_type", "input_schema", "api_path", "path_field", "path_value"),
+    [
+        (
+            OperationType.LIST_DIR,
+            ListDirInput,
+            "/api/v1/listDir",
+            "directoryPath",
+            "/docs",
+        ),
+        (OperationType.GLOB, GlobInput, "/api/v1/glob", "pathRule", "/docs/*"),
+    ],
+)
+async def test_browse_tool_contract_forwards_metadata_field_list(
+    operation_type, input_schema, api_path, path_field, path_value
+):
+    """Agent input validation and remote dispatch preserve metadata selection."""
+    kb = _kb("kb1", "svc-a", {operation_type: api_path})
+    ctx = _make_context(kb)
+    dispatcher = ServiceToolDispatcher([kb])
+    request = input_schema.model_validate(
+        {
+            "knCode": "kb1",
+            path_field: path_value,
+            "metadataFieldList": ["owner", "updatedAt"],
+            "pageSize": 10,
+        }
+    ).model_dump(by_alias=True, exclude_none=True)
+    calls = []
+
+    async def fake_post(*, service_name, path, json, headers=None):  # pylint: disable=unused-argument
+        calls.append({"service_name": service_name, "path": path, "json": json})
+        return {
+            "resultCode": "0",
+            "resultMsg": "success",
+            "resultObject": {
+                "data": [
+                    {
+                        "knCode": "kb1",
+                        "name": "/docs/a.md",
+                        "type": "file",
+                        "size": 12,
+                        "updatedAt": "2026-08-30T10:00:00+08:00",
+                        "buildStatus": None,
+                        "buildCurrentStep": None,
+                        "metadata": {
+                            "owner": {"valueType": "string", "value": "Alice"}
+                        },
+                    }
+                ]
+            },
+        }
+
+    with patch(
+        "by_qa.qa.tools.knowledge_tools.post_discovered_json",
+        side_effect=fake_post,
+    ):
+        response = await dispatcher.dispatch(operation_type, request, ctx)
+
+    assert calls == [
+        {
+            "service_name": "svc-a",
+            "path": api_path,
+            "json": {
+                "knCode": "kb1",
+                path_field: path_value,
+                "metadataFieldList": ["owner", "updatedAt"],
+                "pageSize": 10,
+            },
+        }
+    ]
+    assert response["resultObject"]["data"][0]["metadata"]["owner"]["value"] == "Alice"
 
 
 @pytest.mark.asyncio

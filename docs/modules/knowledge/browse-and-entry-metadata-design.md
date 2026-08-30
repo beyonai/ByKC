@@ -418,7 +418,10 @@ metadataSearch 分页和稳定排序继续沿用其既有规则，文件和目�
 - `knowledge_base/repositories/file_metadata_value_repository.py`
   - 批量获取多个 fs-entry 的指定元数据。
 - `knowledge_base/repositories/metadata_search_repository.py`
-  - 按资源类型过滤。
+  - 不增加资源类型入参或类型过滤，统一查询有效文件和目录，并向上层返回条目类型。
+- `qa/common/operation_registry.py`
+  - Agent 侧 `listDir`/`glob` 工具入参同步暴露 `metadataFieldList`、`pageNum`、`pageSize`，并以 camelCase 原样转发。
+  - 工具输出模型包含 `updatedAt`、`buildStatus`、`buildCurrentStep` 和 `metadata`，不能停留在旧版字段集。
 
 原则上不新增 SQL migration。如果实现过程中发现生产旧版本 schema 对目录元数据存在数据库约束，需单独增加幂等迁移并纳入 schema bootstrap 集成测试，不能在业务代码中规避。
 
@@ -681,6 +684,7 @@ feat(knowledge): include directories in metadata search
 | BM6 | 系统元数据 | 请求 updatedAt、fileSize、filePath | 嵌套 metadata 返回标准结构，顶层固定字段仍存在 |
 | BM7 | 分页后回填 | 分页浏览且每页条目元数据不同 | 当前页只出现当前页条目的元数据，无串值 |
 | BM8 | listDir/glob 一致 | 对同一资源使用相同 metadataFieldList | 两接口返回的 metadata 完全一致 |
+| BM9 | QA 工具转发 | Agent 通过 listDir/glob 工具传 metadataFieldList 和分页参数 | 远程 HTTP JSON 保留全部 camelCase 字段，响应 metadata 不被工具模型丢弃 |
 
 ### 15.4 提交 4：文件导入 metadata
 

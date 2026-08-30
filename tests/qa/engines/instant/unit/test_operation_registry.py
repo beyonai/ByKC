@@ -1,8 +1,12 @@
+import pytest
+from pydantic import ValidationError
+
 from by_qa.qa.common.operation_registry import (
     OPERATION_REGISTRY,
     DslGuideInput,
     GlobInput,
     ListDirInput,
+    ListDirItem,
     OperationType,
     ReadFileInput,
     SearchInput,
@@ -38,14 +42,78 @@ def test_search_input_accepts_camel_alias():
 
 
 def test_list_dir_input_accepts_camel_alias():
-    obj = ListDirInput.model_validate({"knCode": "kb1", "directoryPath": "/src"})
+    obj = ListDirInput.model_validate(
+        {
+            "knCode": "kb1",
+            "directoryPath": "/src",
+            "metadataFieldList": ["owner", "updatedAt"],
+            "pageNum": 2,
+            "pageSize": 10,
+        }
+    )
     assert obj.kn_code == "kb1"
     assert obj.directory_path == "/src"
+    assert obj.metadata_field_list == ["owner", "updatedAt"]
+    assert obj.model_dump(by_alias=True, exclude_none=True) == {
+        "knCode": "kb1",
+        "directoryPath": "/src",
+        "metadataFieldList": ["owner", "updatedAt"],
+        "pageNum": 2,
+        "pageSize": 10,
+    }
 
 
 def test_glob_input_accepts_camel_alias():
-    obj = GlobInput.model_validate({"knCode": "kb1", "pathRule": "**/*.py"})
+    obj = GlobInput.model_validate(
+        {
+            "knCode": "kb1",
+            "pathRule": "**/*.py",
+            "metadataFieldList": ["owner"],
+        }
+    )
     assert obj.path_rule == "**/*.py"
+    assert obj.metadata_field_list == ["owner"]
+
+
+def test_browse_inputs_default_to_no_metadata_and_no_pagination():
+    list_input = ListDirInput.model_validate({"knCode": "kb1", "directoryPath": "/src"})
+    glob_input = GlobInput.model_validate({"knCode": "kb1", "pathRule": "/*.md"})
+    assert list_input.metadata_field_list is None
+    assert glob_input.metadata_field_list is None
+    assert list_input.page_num is None
+    assert glob_input.page_size is None
+
+
+def test_browse_inputs_reject_page_num_without_page_size():
+    with pytest.raises(ValidationError, match="pageNum requires pageSize"):
+        ListDirInput.model_validate(
+            {"knCode": "kb1", "directoryPath": "/src", "pageNum": 2}
+        )
+
+
+def test_list_dir_item_preserves_browse_metadata_fields():
+    item = ListDirItem.model_validate(
+        {
+            "knCode": "kb1",
+            "name": "/src/a.md",
+            "type": "file",
+            "size": 12,
+            "updatedAt": "2026-08-30T10:00:00+08:00",
+            "buildStatus": "complete",
+            "buildCurrentStep": "complete",
+            "metadata": {"owner": {"valueType": "string", "value": "Alice"}},
+        }
+    )
+    assert item.model_dump(by_alias=True) == {
+        "knCode": "kb1",
+        "name": "/src/a.md",
+        "type": "file",
+        "size": 12,
+        "updatedAt": "2026-08-30T10:00:00+08:00",
+        "buildStatus": "complete",
+        "buildCurrentStep": "complete",
+        "metadata": {"owner": {"valueType": "string", "value": "Alice"}},
+    }
 
 
 def test_read_file_input_accepts_camel_alias():

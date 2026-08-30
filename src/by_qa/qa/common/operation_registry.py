@@ -4,12 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-
-# Previous DSL-enabled SearchInput used `Any` for `where: dict[str, Any]`.
-# from typing import Any, Literal
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class OperationType(str, Enum):
@@ -98,7 +95,40 @@ class DslGuideInput(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
-class ListDirInput(BaseModel):
+class _BrowseInput(BaseModel):
+    """Shared optional browse controls forwarded to knowledge-base APIs."""
+
+    model_config = ConfigDict(populate_by_name=True)
+    metadata_field_list: list[str] | None = Field(
+        default=None,
+        alias="metadataFieldList",
+        serialization_alias="metadataFieldList",
+        description="Metadata field names to include in each result item",
+    )
+    page_num: int | None = Field(
+        default=None,
+        ge=1,
+        alias="pageNum",
+        serialization_alias="pageNum",
+        description="Page number; requires pageSize",
+    )
+    page_size: int | None = Field(
+        default=None,
+        ge=1,
+        le=10000,
+        alias="pageSize",
+        serialization_alias="pageSize",
+        description="Page size; omitted together with pageNum to disable pagination",
+    )
+
+    @model_validator(mode="after")
+    def validate_pagination(self) -> "_BrowseInput":
+        if self.page_num is not None and self.page_size is None:
+            raise ValueError("pageNum requires pageSize")
+        return self
+
+
+class ListDirInput(_BrowseInput):
     model_config = ConfigDict(populate_by_name=True)
     kn_code: str = Field(
         alias="knCode", serialization_alias="knCode", description="Knowledge base code"
@@ -110,7 +140,7 @@ class ListDirInput(BaseModel):
     )
 
 
-class GlobInput(BaseModel):
+class GlobInput(_BrowseInput):
     model_config = ConfigDict(populate_by_name=True)
     kn_code: str = Field(
         alias="knCode", serialization_alias="knCode", description="Knowledge base code"
@@ -152,6 +182,10 @@ class ListDirItem(BaseModel):
     name: str
     type: Literal["file", "directory"]
     size: int = 0
+    updated_at: str | None = Field(default=None, alias="updatedAt")
+    build_status: str | None = Field(default=None, alias="buildStatus")
+    build_current_step: str | None = Field(default=None, alias="buildCurrentStep")
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ReadFileOutput(BaseModel):
@@ -201,14 +235,14 @@ OPERATION_REGISTRY: dict[OperationType, OperationSpec] = {
     OperationType.LIST_DIR: OperationSpec(
         operation_type=OperationType.LIST_DIR,
         tool_name="list_directory",
-        description="List files and subdirectories under a given path in a knowledge base",
+        description="List files and subdirectories, optionally returning selected metadata fields",
         input_schema=ListDirInput,
         output_schema=ListDirItem,
     ),
     OperationType.GLOB: OperationSpec(
         operation_type=OperationType.GLOB,
         tool_name="glob_search",
-        description="Match files in a knowledge base using a glob pattern, e.g. **/*.py",
+        description="Match entries using a glob pattern and optionally return selected metadata fields",
         input_schema=GlobInput,
         output_schema=ListDirItem,
     ),

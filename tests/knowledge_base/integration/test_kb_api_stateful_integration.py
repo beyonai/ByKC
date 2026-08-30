@@ -2845,6 +2845,71 @@ def test_browse_metadata_field_list_returns_selected_nested_metadata(
 
 
 @pytest.mark.integration
+def test_qa_browse_tool_contract_forwards_selected_metadata_to_live_api(
+    monkeypatch, tmp_path
+):
+    """QA tool schemas serialize metadataFieldList accepted by both live browse APIs."""
+    from by_qa.qa.common.operation_registry import OPERATION_REGISTRY, OperationType
+
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"QA browse metadata {uuid4().hex[:12]}")
+        _create_directory(client, kb_code=kb_code, directory_path="/tool")
+        _create_directory(
+            client,
+            kb_code=kb_code,
+            directory_path="/tool/child",
+            metadata={"owner": "Alice", "hidden": "must-not-return"},
+        )
+
+        cases = [
+            (
+                OperationType.LIST_DIR,
+                "/api/v1/listDir",
+                {
+                    "knCode": kb_code,
+                    "directoryPath": "/tool",
+                    "metadataFieldList": ["owner"],
+                    "pageSize": 10,
+                },
+            ),
+            (
+                OperationType.GLOB,
+                "/api/v1/glob",
+                {
+                    "knCode": kb_code,
+                    "pathRule": "/tool/*",
+                    "metadataFieldList": ["owner"],
+                    "pageSize": 10,
+                },
+            ),
+        ]
+        results = []
+        for operation_type, endpoint, tool_arguments in cases:
+            request_body = (
+                OPERATION_REGISTRY[operation_type]
+                .input_schema.model_validate(tool_arguments)
+                .model_dump(
+                    by_alias=True,
+                    exclude_none=True,
+                )
+            )
+            response = client.post(endpoint, json=request_body).json()
+            assert response["resultCode"] == "0", response
+            results.append(response["resultObject"])
+
+    assert results[0] == results[1]
+    assert results[0]["pageNum"] == 1
+    assert results[0]["pageSize"] == 10
+    assert results[0]["total"] == 1
+    assert results[0]["data"][0]["metadata"] == {
+        "owner": {"valueType": "string", "value": "Alice"}
+    }
+
+
+@pytest.mark.integration
 def test_directory_create_and_rename_share_entry_metadata_lifecycle(
     monkeypatch, tmp_path
 ):

@@ -290,16 +290,21 @@ def _create_directory(
     *,
     kb_code: str,
     directory_path: str,
+    metadata: dict | None = None,
 ) -> None:
+    body = {
+        "knCode": kb_code,
+        "directoryPath": directory_path,
+        "directoryDescription": f"{directory_path} description",
+    }
+    if metadata is not None:
+        body["metadata"] = metadata
     response = client.post(
         "/api/v1/directories/create",
-        json={
-            "knCode": kb_code,
-            "directoryPath": directory_path,
-            "directoryDescription": f"{directory_path} description",
-        },
+        json=body,
     )
     assert response.status_code == 200, response.text
+    assert response.json()["resultCode"] == "0", response.json()
 
 
 def _upload_file(
@@ -1787,7 +1792,7 @@ def test_metadata_update_rejects_invalid_requests_and_missing_resources(monkeypa
                 kb_code,
                 "/missing.md",
                 [{"propertyName": "status", "operation": "unset"}],
-                "file not found",
+                "entry not found",
             ),
             (
                 "read-only field",
@@ -2837,6 +2842,315 @@ def test_browse_metadata_field_list_returns_selected_nested_metadata(
         "filePath": {"valueType": "string", "value": "/metadata/b.md"},
     }
     assert unknown["data"][0]["metadata"] == {}
+
+
+@pytest.mark.integration
+def test_directory_create_and_rename_share_entry_metadata_lifecycle(
+    monkeypatch, tmp_path
+):
+    """Only the final directory receives metadata, which survives and updates on rename."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Directory metadata {uuid4().hex[:12]}")
+        _create_directory(
+            client,
+            kb_code=kb_code,
+            directory_path="/parent/child",
+            metadata={
+                "owner": "hr",
+                "priority": 2,
+                "active": True,
+                "tags": ["policy", "draft"],
+            },
+        )
+
+        child = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/parent/child",
+            field_names=["owner", "priority", "active", "tags"],
+        )
+        parent = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/parent",
+            field_names=["owner", "priority", "active", "tags"],
+        )
+        assert child == {
+            "owner": {"valueType": "string", "value": "hr"},
+            "priority": {"valueType": "number", "value": 2.0},
+            "active": {"valueType": "boolean", "value": True},
+            "tags": {"valueType": "stringList", "value": ["policy", "draft"]},
+        }
+        assert parent == {}
+
+        listed = client.post(
+            "/api/v1/listDir",
+            json={
+                "knCode": kb_code,
+                "directoryPath": "/parent",
+                "metadataFieldList": ["owner"],
+            },
+        ).json()["resultObject"]["data"]
+        globbed = client.post(
+            "/api/v1/glob",
+            json={
+                "knCode": kb_code,
+                "pathRule": "/parent/*",
+                "metadataFieldList": ["owner"],
+            },
+        ).json()["resultObject"]["data"]
+        assert listed == globbed
+        assert listed[0]["type"] == "directory"
+        assert listed[0]["metadata"] == {
+            "owner": {"valueType": "string", "value": "hr"}
+        }
+
+        # Existing-directory create remains idempotent while applying the upsert.
+        _create_directory(
+            client,
+            kb_code=kb_code,
+            directory_path="/parent/child",
+            metadata={"owner": "operations", "createdAgain": True},
+        )
+        rename = client.post(
+            "/api/v1/directories/update",
+            json={
+                "knCode": kb_code,
+                "directoryPath": "/parent/child",
+                "directoryName": "renamed",
+                "metadata": {"owner": "legal", "retention": 7},
+            },
+        ).json()
+        old_path = client.post(
+            "/api/v1/knowledgeItems/metadata/get",
+            json={
+                "knCode": kb_code,
+                "filePath": "/parent/child",
+                "metadataFieldList": ["owner"],
+            },
+        ).json()
+        renamed = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/parent/renamed",
+            field_names=["owner", "retention", "tags", "createdAgain"],
+        )
+
+    assert rename["resultCode"] == "0"
+    assert old_path["resultCode"] == "-1"
+    assert old_path["resultMsg"] == "entry not found: /parent/child"
+    assert renamed == {
+        "owner": {"valueType": "string", "value": "legal"},
+        "retention": {"valueType": "number", "value": 7.0},
+        "tags": {"valueType": "stringList", "value": ["policy", "draft"]},
+        "createdAgain": {"valueType": "boolean", "value": True},
+    }
+
+
+@pytest.mark.integration
+def test_directory_metadata_update_operations_are_atomic(monkeypatch, tmp_path):
+    """Directory paths support every metadata operation and whole-batch rollback."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Directory operations {uuid4().hex[:12]}")
+        _create_directory(
+            client,
+            kb_code=kb_code,
+            directory_path="/docs",
+            metadata={
+                "status": "draft",
+                "owner": "Alice",
+                "tags": ["existing", "contract"],
+                "removeTags": ["existing", "keep"],
+                "toClear": ["one"],
+            },
+        )
+        updated = _update_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/docs",
+            operation_list=[
+                {
+                    "propertyName": "status",
+                    "operation": "set",
+                    "valueType": "string",
+                    "value": "active",
+                },
+                {
+                    "propertyName": "tags",
+                    "operation": "append",
+                    "value": ["contract", "renewal"],
+                },
+                {
+                    "propertyName": "removeTags",
+                    "operation": "remove",
+                    "value": ["existing"],
+                },
+                {"propertyName": "toClear", "operation": "clear"},
+                {"propertyName": "owner", "operation": "unset"},
+            ],
+        ).json()
+        metadata = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/docs",
+            field_names=["status", "owner", "tags", "removeTags", "toClear"],
+        )
+        failed = _update_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/docs",
+            operation_list=[
+                {
+                    "propertyName": "status",
+                    "operation": "set",
+                    "valueType": "string",
+                    "value": "must-rollback",
+                },
+                {
+                    "propertyName": "missingTags",
+                    "operation": "append",
+                    "value": ["new"],
+                },
+            ],
+        ).json()
+        after_failure = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/docs",
+            field_names=["status"],
+        )
+
+    assert updated["resultCode"] == "0"
+    assert metadata == {
+        "status": {"valueType": "string", "value": "active"},
+        "tags": {
+            "valueType": "stringList",
+            "value": ["existing", "contract", "renewal"],
+        },
+        "removeTags": {"valueType": "stringList", "value": ["keep"]},
+        "toClear": {"valueType": "stringList", "value": []},
+    }
+    assert failed["resultCode"] == "-1"
+    assert after_failure == {"status": {"valueType": "string", "value": "active"}}
+
+
+@pytest.mark.integration
+async def test_directory_metadata_follows_move_and_is_removed_with_subtree(
+    monkeypatch, tmp_path
+):
+    """Directory and descendant metadata follow stable entries, then soft-delete together."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Directory move metadata {uuid4().hex[:12]}")
+        _create_directory(client, kb_code=kb_code, directory_path="/archive")
+        _create_directory(
+            client,
+            kb_code=kb_code,
+            directory_path="/tree",
+            metadata={"scope": "root"},
+        )
+        _create_directory(
+            client,
+            kb_code=kb_code,
+            directory_path="/tree/child",
+            metadata={"scope": "child"},
+        )
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/tree/child/a.md",
+            file_content=b"# A\n",
+        )
+        assert (
+            _update_file_metadata(
+                client,
+                kb_code=kb_code,
+                file_path="/tree/child/a.md",
+                operation_list=[
+                    {
+                        "propertyName": "scope",
+                        "operation": "set",
+                        "valueType": "string",
+                        "value": "file",
+                    }
+                ],
+            ).json()["resultCode"]
+            == "0"
+        )
+
+        moved = _move_items(
+            client,
+            kb_code=kb_code,
+            source_path=["/tree"],
+            target_directory_path="/archive",
+        )
+        root_metadata = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/archive/tree",
+            field_names=["scope"],
+        )
+        child_metadata = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/archive/tree/child",
+            field_names=["scope"],
+        )
+        file_metadata = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/archive/tree/child/a.md",
+            field_names=["scope"],
+        )
+        before_counts = await _metadata_row_counts(settings, kb_code=kb_code)
+        deleted = client.post(
+            "/api/v1/directories/delete",
+            json={"knCode": kb_code, "directoryPath": "/archive/tree"},
+        ).json()
+        after_counts = await _metadata_row_counts(settings, kb_code=kb_code)
+        deleted_gets = [
+            client.post(
+                "/api/v1/knowledgeItems/metadata/get",
+                json={
+                    "knCode": kb_code,
+                    "filePath": path,
+                    "metadataFieldList": ["scope"],
+                },
+            ).json()
+            for path in (
+                "/archive/tree",
+                "/archive/tree/child",
+                "/archive/tree/child/a.md",
+            )
+        ]
+        listed = client.post(
+            "/api/v1/listDir",
+            json={"knCode": kb_code, "directoryPath": "/archive"},
+        ).json()["resultObject"]["data"]
+        globbed = client.post(
+            "/api/v1/glob",
+            json={"knCode": kb_code, "pathRule": "/archive/*"},
+        ).json()["resultObject"]["data"]
+
+    assert moved[0]["targetPath"] == "/archive/tree"
+    assert root_metadata["scope"]["value"] == "root"
+    assert child_metadata["scope"]["value"] == "child"
+    assert file_metadata["scope"]["value"] == "file"
+    assert before_counts[0] >= 3
+    assert deleted["resultCode"] == "0"
+    assert after_counts[0] == 0
+    assert after_counts[1] >= before_counts[0]
+    assert all(item["resultCode"] == "-1" for item in deleted_gets)
+    assert listed == []
+    assert globbed == []
 
 
 @pytest.mark.integration

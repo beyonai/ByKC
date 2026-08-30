@@ -2,7 +2,7 @@
 
 ## 功能描述
 
-批量新增、修改或删除指定知识文件的元数据字段。接口对整批变更执行类型及字段约束校验，并以原子方式提交有效更新。
+批量新增、修改或删除指定知识文件或目录的元数据字段。接口对整批变更执行类型及字段约束校验，并以原子方式提交有效更新。
 
 ## 接口信息
 
@@ -20,14 +20,14 @@
 
 > 服务本身未定义额外的业务认证 Header；如由网关统一认证，按部署环境要求携带。
 
-文件元数据的唯一写接口。同一个请求只操作一个文件，可批量执行多个元数据操作，统一覆盖新增、修改和删除场景。
+文件和目录元数据的统一写接口。同一个请求只操作一个条目，可批量执行多个元数据操作，统一覆盖新增、修改和删除场景。
 
 请求体：`application/json`
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `knCode` | string | 是 | 知识库编码 |
-| `filePath` | string | 是 | 知识库内文件路径，以 `/` 开头 |
+| `filePath` | string | 是 | 知识库内文件或目录路径，以 `/` 开头；字段名为兼容旧接口而保留 |
 | `operationList` | array[object] | 是 | 非空元数据操作列表 |
 
 `operationList` 单项字段：
@@ -90,7 +90,7 @@
 ### 批量规则
 
 - `operationList` 按整体原子处理，任一操作失败时，本次请求不会保留部分更改。
-- `filePath` 必须存在、属于 `knCode` 对应知识库且类型为文件。
+- `filePath` 必须存在且属于 `knCode` 对应知识库，可以指向文件或目录。
 - 所有操作都定义为幂等操作，相同请求可安全重试。
 - 更新后的元数据可通过元数据查看、检索和 Markdown 文件下载接口获取。
 
@@ -120,7 +120,7 @@
 
 - `request validation failed`：请求字段缺失、类型错误或 `operationList` 为空。
 - `knowledge base not found: {knCode}`：知识库不存在。
-- `file not found: {filePath}`：文件不存在。
+- `entry not found: {filePath}`：文件或目录不存在。
 - `duplicate metadata operation: {propertyName}`：同一属性在 `operationList` 中出现多次。
 - `metadata field is read-only: {propertyName}`：尝试修改系统文件属性。
 - `metadata value type mismatch: {propertyName}`：`value` 与 `valueType` 不匹配。
@@ -135,7 +135,7 @@
 ## 路径与定位规则
 
 - `knCode` 是知识库编码，HTTP 请求中使用字符串。
-- `filePath` 必须以 `/` 开头，表示知识库内完整文件路径，不允许使用 `..` 越界。
+- `filePath` 必须以 `/` 开头，表示知识库内完整文件或目录路径，不允许使用 `..` 越界。
 
 ---
 

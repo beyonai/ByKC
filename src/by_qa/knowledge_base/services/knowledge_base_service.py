@@ -41,6 +41,7 @@ from by_qa.knowledge_base.metadata_types import (
     SYSTEM_FIELD_VALUE_TYPES,
     extract_system_metadata,
 )
+from by_qa.knowledge_base.services.entry_metadata import upsert_entry_metadata
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
 from by_qa.knowledge_base.services.markdown_front_matter import split_front_matter
 
@@ -277,14 +278,24 @@ class KnowledgeBaseService:
             knowledge_base_id = self._row_id(kb_row)
 
             try:
-                await self.knowledge_fs_entry_repository.create_directory_entry(
-                    cursor,
-                    knowledge_base_id=knowledge_base_id,
-                    full_path=normalized_directory_path,
-                    directory_description=request.directory_description,
+                directory_row = (
+                    await self.knowledge_fs_entry_repository.create_directory_entry(
+                        cursor,
+                        knowledge_base_id=knowledge_base_id,
+                        full_path=normalized_directory_path,
+                        directory_description=request.directory_description,
+                    )
                 )
             except ValueError as exc:
                 raise KnowledgeBaseValidationError(str(exc)) from exc
+            if request.metadata is not None:
+                await upsert_entry_metadata(
+                    cursor,
+                    metadata_repository=self.file_metadata_value_repository,
+                    fs_entry_id=self._row_id(directory_row),
+                    knowledge_base_id=knowledge_base_id,
+                    metadata=request.metadata,
+                )
             await connection.commit()
         except Exception:
             await connection.rollback()
@@ -520,6 +531,14 @@ class KnowledgeBaseService:
                 entry_id=fs_entry_id,
                 new_name=request.directory_name,
             )
+            if request.metadata is not None:
+                await upsert_entry_metadata(
+                    cursor,
+                    metadata_repository=self.file_metadata_value_repository,
+                    fs_entry_id=fs_entry_id,
+                    knowledge_base_id=knowledge_base_id,
+                    metadata=request.metadata,
+                )
             for upd in locator_updates:
                 await self.knowledge_fs_entry_repository.update_file_entry_locations(
                     cursor, **upd

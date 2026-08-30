@@ -38,7 +38,7 @@ class FileMetadataUpdateService:
 
             knowledge_base_id = knowledge_base["kid"]
             file_entry = (
-                await self.knowledge_fs_entry_repository.get_file_by_path_for_update(
+                await self.knowledge_fs_entry_repository.get_entry_by_path_for_update(
                     cursor,
                     knowledge_base_id=knowledge_base_id,
                     full_path=request.file_path.strip("/"),
@@ -46,7 +46,7 @@ class FileMetadataUpdateService:
             )
             if file_entry is None:
                 raise KnowledgeBaseValidationError(
-                    f"file not found: {request.file_path}"
+                    f"entry not found: {request.file_path}"
                 )
 
             for operation in request.operation_list:

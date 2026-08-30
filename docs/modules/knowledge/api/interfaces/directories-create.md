@@ -29,6 +29,7 @@
 | `knCode` | string | 是 | 知识库编码 |
 | `directoryPath` | string | 是 | 需创建的目录路径，以 `/` 开头，不包括知识库名称，支持递归创建 |
 | `directoryDescription` | string | 否 | 目录描述 |
+| `metadata` | object | 否 | 写入最终目录的自定义元数据，值类型按 Markdown YAML front matter 规则推断 |
 
 ## 请求示例
 
@@ -36,7 +37,11 @@
 {
   "knCode": "1",
   "directoryPath": "/制度/人事/考勤",
-  "directoryDescription": "考勤制度目录"
+  "directoryDescription": "考勤制度目录",
+  "metadata": {
+    "owner": "HR",
+    "tags": ["制度", "考勤"]
+  }
 }
 ```
 
@@ -63,7 +68,9 @@
 ## 特殊逻辑
 
 - 父目录不存在时递归创建。
-- 目标目录已存在时按幂等成功处理，不创建重复记录。
+- `metadata` 只应用于 `directoryPath` 指定的最终目录，不应用于递归自动创建的中间目录。
+- 目标目录已存在时不创建重复记录；如传入 `metadata`，仍对指定字段执行幂等 upsert。
+- 目录创建和元数据写入在同一数据库事务中提交或回滚。
 
 ## 路径与定位规则
 

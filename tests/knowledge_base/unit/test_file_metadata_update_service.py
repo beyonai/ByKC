@@ -42,7 +42,7 @@ class FakeFsEntryRepository:
     def __init__(self):
         self.paths: list[str] = []
 
-    async def get_file_by_path_for_update(
+    async def get_entry_by_path_for_update(
         self, cursor: Any, *, knowledge_base_id: int, full_path: str
     ):
         self.paths.append(full_path)
@@ -246,3 +246,31 @@ async def test_update_metadata_rejects_read_only_system_field():
         )
 
     assert connection.rolled_back is True
+
+
+@pytest.mark.asyncio
+async def test_update_metadata_supports_directory_path():
+    connection = FakeConnection()
+    repository = FakeMetadataRepository()
+    service = _service(connection, repository)
+
+    await service.update_metadata(
+        UpdateFileMetadataRequest.model_validate(
+            {
+                "knCode": "2",
+                "filePath": "/docs",
+                "operationList": [
+                    {
+                        "propertyName": "owner",
+                        "operation": "set",
+                        "valueType": "string",
+                        "value": "platform",
+                    }
+                ],
+            }
+        )
+    )
+
+    assert connection.committed is True
+    assert repository.upserts[0]["fs_entry_id"] == 10
+    assert repository.upserts[0]["value"] == "platform"

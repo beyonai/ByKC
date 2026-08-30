@@ -514,6 +514,17 @@ class KnowledgeFsEntryRepository:
         self, cursor: Any, *, knowledge_base_id: int, full_path: str
     ) -> dict[str, Any] | None:
         """Look up one file entry by its knowledge-base-relative path."""
+        current = await self.get_entry_by_path(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            full_path=full_path,
+        )
+        return current if current and current.get("entry_type") == "FILE" else None
+
+    async def get_entry_by_path(
+        self, cursor: Any, *, knowledge_base_id: int, full_path: str
+    ) -> dict[str, Any] | None:
+        """Look up one live file or directory by knowledge-base-relative path."""
         path_segments = [
             segment for segment in full_path.strip("/").split("/") if segment
         ]
@@ -531,7 +542,7 @@ class KnowledgeFsEntryRepository:
             if current is None:
                 return None
             current_parent_id = self._row_id(current)
-        if current is None or current.get("entry_type") != "FILE":
+        if current is None:
             return None
         return await self._get_entry_by_id(cursor, entry_id=self._row_id(current))
 
@@ -539,6 +550,17 @@ class KnowledgeFsEntryRepository:
         self, cursor: Any, *, knowledge_base_id: int, full_path: str
     ) -> dict[str, Any] | None:
         """Look up and lock one live file row by knowledge-base-relative path."""
+        current = await self.get_entry_by_path_for_update(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            full_path=full_path,
+        )
+        return current if current and current.get("entry_type") == "FILE" else None
+
+    async def get_entry_by_path_for_update(
+        self, cursor: Any, *, knowledge_base_id: int, full_path: str
+    ) -> dict[str, Any] | None:
+        """Look up and lock one live file or directory by relative path."""
         path_segments = [
             segment for segment in full_path.strip("/").split("/") if segment
         ]
@@ -556,7 +578,7 @@ class KnowledgeFsEntryRepository:
             if current is None:
                 return None
             current_parent_id = self._row_id(current)
-        if current is None or current.get("entry_type") != "FILE":
+        if current is None:
             return None
         return await self._get_entry_by_id(
             cursor, entry_id=self._row_id(current), for_update=True

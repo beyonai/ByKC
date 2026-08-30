@@ -39,6 +39,7 @@ class FakeKBService:
     def __init__(self):
         self.created_requests = []
         self.created_directory_requests = []
+        self.updated_directory_requests = []
         self.import_calls = []
         self.metadata_get_requests = []
         self.metadata_update_requests = []
@@ -64,6 +65,7 @@ class FakeKBService:
         return None
 
     async def update_directory(self, request):
+        self.updated_directory_requests.append(request)
         return None
 
     async def delete_knowledge_base(self, request):
@@ -739,6 +741,7 @@ def test_create_directory_route_returns_business_response(monkeypatch):
             "knCode": "hr-policy",
             "directoryPath": "/考勤制度/归档",
             "directoryDescription": "考勤制度归档目录",
+            "metadata": {"owner": "hr"},
         },
     )
 
@@ -748,6 +751,7 @@ def test_create_directory_route_returns_business_response(monkeypatch):
         "resultMsg": "success",
         "resultObject": {},
     }
+    assert service.created_directory_requests[0].metadata == {"owner": "hr"}
 
 
 def test_delete_directory_route_returns_business_response(monkeypatch):
@@ -808,6 +812,7 @@ def test_update_directory_route_returns_business_response(monkeypatch):
             "knCode": "hr-policy",
             "directoryPath": "/考勤制度/归档",
             "directoryName": "历史归档",
+            "metadata": {"retention": 7},
         },
     )
 
@@ -817,6 +822,7 @@ def test_update_directory_route_returns_business_response(monkeypatch):
         "resultMsg": "success",
         "resultObject": {},
     }
+    assert service.updated_directory_requests[0].metadata == {"retention": 7}
 
 
 def test_update_directory_route_maps_name_conflict_to_documented_error(monkeypatch):

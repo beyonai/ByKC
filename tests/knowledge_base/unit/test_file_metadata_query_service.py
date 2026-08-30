@@ -27,7 +27,7 @@ class FakeKnowledgeBaseRepository:
 
 
 class FakeFsEntryRepository:
-    async def get_file_by_path(
+    async def get_entry_by_path(
         self, cursor: Any, *, knowledge_base_id: int, full_path: str
     ):
         return {
@@ -38,6 +38,7 @@ class FakeFsEntryRepository:
             "checksum": "abc123",
             "created_at": datetime(2026, 5, 1),
             "updated_at": datetime(2026, 5, 25),
+            "entry_type": "DIRECTORY" if full_path.endswith("docs") else "FILE",
         }
 
 
@@ -145,3 +146,29 @@ async def test_get_metadata_returns_system_file_signature_and_times_without_eav_
         "fileSignature": {"valueType": "string", "value": "abc123"},
     }
     assert metadata_repo.calls == []
+
+
+@pytest.mark.asyncio
+async def test_get_metadata_supports_directory_entries():
+    metadata_repo = FakeFileMetadataValueRepository()
+
+    async def connection_factory():
+        return FakeConnection()
+
+    service = FileMetadataQueryService(
+        connection_factory=connection_factory,
+        knowledge_base_repository=FakeKnowledgeBaseRepository(),
+        knowledge_fs_entry_repository=FakeFsEntryRepository(),
+        file_metadata_value_repository=metadata_repo,
+    )
+
+    result = await service.get_metadata(
+        GetFileMetadataRequest(
+            kb_code="1",
+            file_path="/docs",
+            metadata_field_list=["会议主题"],
+        )
+    )
+
+    assert result["会议主题"]["value"] == "DataCloud平台需求确认会"
+    assert metadata_repo.calls == [{"fs_entry_id": 10, "property_names": ["会议主题"]}]

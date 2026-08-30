@@ -90,6 +90,7 @@ class CreateDirectoryRequest(BaseModel):
         default=None,
         validation_alias=AliasChoices("directoryDescription", "directory_description"),
     )
+    metadata: dict[str, Any] | None = None
 
 
 class DeleteDirectoryRequest(BaseModel):
@@ -124,6 +125,7 @@ class UpdateDirectoryRequest(BaseModel):
         min_length=1,
         validation_alias=AliasChoices("directoryName", "directory_name"),
     )
+    metadata: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def validate_directory_name(self) -> "UpdateDirectoryRequest":

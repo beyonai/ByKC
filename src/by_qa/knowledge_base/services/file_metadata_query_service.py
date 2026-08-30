@@ -43,14 +43,14 @@ class FileMetadataQueryService:
                     f"knowledge base not found: {request.kb_code}"
                 )
 
-            file_entry = await self.knowledge_fs_entry_repository.get_file_by_path(
+            file_entry = await self.knowledge_fs_entry_repository.get_entry_by_path(
                 cursor,
                 knowledge_base_id=kb["kid"],
                 full_path=request.file_path,
             )
             if file_entry is None:
                 raise KnowledgeBaseValidationError(
-                    f"file not found: {request.file_path}"
+                    f"entry not found: {request.file_path}"
                 )
 
             custom_names = (

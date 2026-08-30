@@ -61,6 +61,7 @@
 ## 特殊逻辑
 
 - 目录删除是子树删除，会处理其下文件、子目录、索引、引用和存储对象。
+- 目标目录以及所有后代文件、目录的自定义元数据一并软删除；删除后不能再通过 metadata get/update、listDir、glob 或 metadataSearch 访问。
 - 子树中的文件若是规范实体锚点，同一事务只清空对应 `knowledge_entity.fs_entry_id`；实体、alias 和实体向量继续保留。
 - 删除根目录或使用越界路径会被拒绝。
 

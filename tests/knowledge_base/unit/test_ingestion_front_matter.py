@@ -11,6 +11,7 @@ from by_qa.knowledge_base.services.entry_metadata import (
     merge_entry_metadata,
     upsert_entry_metadata,
 )
+from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
 from by_qa.knowledge_base.services.markdown_front_matter import (
     parse_front_matter,
     split_front_matter,
@@ -139,3 +140,29 @@ def test_request_metadata_is_merged_before_front_matter():
         "requestOnly": True,
         "frontOnly": 1,
     }
+
+
+@pytest.mark.asyncio
+async def test_shared_entry_metadata_rejects_read_only_system_fields_before_writes():
+    class MetadataRepository:
+        def __init__(self):
+            self.calls = []
+
+        async def upsert_value(self, cursor, **kwargs):
+            self.calls.append(kwargs)
+
+    repository = MetadataRepository()
+
+    with pytest.raises(
+        KnowledgeBaseValidationError,
+        match="metadata field is read-only: fileName",
+    ):
+        await upsert_entry_metadata(
+            object(),
+            metadata_repository=repository,
+            fs_entry_id=11,
+            knowledge_base_id=7,
+            metadata={"owner": "Alice", "fileName": "forged.md"},
+        )
+
+    assert repository.calls == []

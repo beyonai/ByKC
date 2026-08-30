@@ -45,7 +45,14 @@ async def test_upsert_string_value():
         value="active",
     )
 
-    sql = cursor.executed[0][0].lower()
+    cleanup_sql, cleanup_params = cursor.executed[0]
+    assert "value_type <>" in cleanup_sql.lower()
+    assert cleanup_params == {
+        "fs_entry_id": 10,
+        "property_name": "status",
+        "value_type": "string",
+    }
+    sql = cursor.executed[1][0].lower()
     assert "knowledge_file_metadata_value" in sql
     assert "property_name" in sql
     assert "value_type" in sql
@@ -67,7 +74,7 @@ async def test_upsert_string_list_value():
         value=["hr", "contract"],
     )
 
-    sql = cursor.executed[0][0].lower()
+    sql = cursor.executed[1][0].lower()
     assert "value_string_list" in sql
 
 
@@ -85,7 +92,7 @@ async def test_upsert_string_list_none_uses_sql_null():
         value=None,
     )
 
-    _, params = cursor.executed[0]
+    _, params = cursor.executed[1]
     assert params["value"] is None
 
 

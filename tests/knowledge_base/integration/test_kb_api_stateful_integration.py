@@ -1507,6 +1507,134 @@ frontOnly: 7
 
 
 @pytest.mark.integration
+def test_entry_metadata_replaces_changed_types_and_rejects_system_fields(
+    monkeypatch, tmp_path
+):
+    """All direct metadata writers share one value and read-only-field contract."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Metadata contract {uuid4().hex[:12]}")
+        _create_directory(
+            client,
+            kb_code=kb_code,
+            directory_path="/typed",
+            metadata={"directoryValue": 1},
+        )
+        _create_directory(
+            client,
+            kb_code=kb_code,
+            directory_path="/typed",
+            metadata={"directoryValue": "ready"},
+        )
+        imported = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={
+                "knCode": kb_code,
+                "filePath": "/typed/file.md",
+                "metadata": '{"fileValue":1}',
+            },
+            files={"fileContent": ("file.md", b"# Old\n", "text/markdown")},
+        )
+        assert imported.json()["resultCode"] == "0", imported.json()
+        updated = _update_file(
+            client,
+            kb_code=kb_code,
+            file_path="/typed/file.md",
+            file_content=b"# Updated\n",
+            metadata={"fileValue": "ready"},
+        )
+        assert updated.json()["resultCode"] == "0", updated.json()
+
+        directory_metadata = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/typed",
+            field_names=["directoryValue"],
+        )
+        file_metadata = _get_file_metadata(
+            client,
+            kb_code=kb_code,
+            file_path="/typed/file.md",
+            field_names=["fileValue"],
+        )
+        field_rows = client.post(
+            "/api/v1/knowledgeItems/metadataFields/list",
+            json={"knCodeList": [kb_code]},
+        ).json()["resultObject"]["data"]
+
+        rejected_import = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={
+                "knCode": kb_code,
+                "filePath": "/forbidden.md",
+                "metadata": '{"fileName":"forged.md"}',
+            },
+            files={"fileContent": ("forbidden.md", b"# Forbidden\n", "text/markdown")},
+        ).json()
+        rejected_create = client.post(
+            "/api/v1/directories/create",
+            json={
+                "knCode": kb_code,
+                "directoryPath": "/forbidden",
+                "metadata": {"filePath": "/forged"},
+            },
+        ).json()
+        rejected_update = _update_file(
+            client,
+            kb_code=kb_code,
+            file_path="/typed/file.md",
+            file_content=b"# Rejected\n",
+            metadata={"updatedAt": "2026-08-30T00:00:00Z"},
+        ).json()
+        rejected_rename = client.post(
+            "/api/v1/directories/update",
+            json={
+                "knCode": kb_code,
+                "directoryPath": "/typed",
+                "directoryName": "renamed",
+                "metadata": {"fileSize": 999},
+            },
+        ).json()
+        root_items = client.post(
+            "/api/v1/listDir",
+            json={"knCode": kb_code, "directoryPath": "/"},
+        ).json()["resultObject"]["data"]
+        typed_items = client.post(
+            "/api/v1/listDir",
+            json={"knCode": kb_code, "directoryPath": "/typed"},
+        ).json()["resultObject"]["data"]
+        downloaded = _download_file_bytes(
+            client,
+            kb_code=kb_code,
+            file_path="/typed/file.md",
+        )
+
+    assert directory_metadata == {
+        "directoryValue": {"valueType": "string", "value": "ready"}
+    }
+    assert file_metadata == {"fileValue": {"valueType": "string", "value": "ready"}}
+    assert [
+        (row["propertyName"], row["valueType"])
+        for row in field_rows
+        if row["propertyName"] in {"directoryValue", "fileValue"}
+    ] == [("directoryValue", "string"), ("fileValue", "string")]
+    for rejected in (
+        rejected_import,
+        rejected_create,
+        rejected_update,
+        rejected_rename,
+    ):
+        assert rejected["resultCode"] == "-1"
+        assert "metadata field is read-only" in rejected["resultMsg"]
+    assert {item["name"] for item in root_items} == {"/typed"}
+    assert {item["name"] for item in typed_items} == {"/typed/file.md"}
+    assert b"# Updated" in downloaded
+    assert b"# Rejected" not in downloaded
+
+
+@pytest.mark.integration
 def test_zip_import_applies_common_metadata_before_each_markdown_front_matter(
     monkeypatch,
 ):

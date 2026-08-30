@@ -37,6 +37,24 @@ class FileMetadataValueRepository:
         ]
         clear_sql = ",\n                ".join(clear_assignments)
 
+        # One property has one active logical value. A value-type change must
+        # retire the previous typed row before the new value is upserted.
+        await cursor.execute(
+            """
+            UPDATE knowledge_file_metadata_value
+            SET is_deleted = true, updated_at = NOW()
+            WHERE fs_entry_id = %(fs_entry_id)s
+              AND property_name = %(property_name)s
+              AND value_type <> %(value_type)s
+              AND is_deleted = false
+            """,
+            {
+                "fs_entry_id": fs_entry_id,
+                "property_name": property_name,
+                "value_type": value_type,
+            },
+        )
+
         # Try UPDATE first (portable approach that works with OpenGauss)
         await cursor.execute(
             f"""

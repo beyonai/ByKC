@@ -28,6 +28,8 @@
 | --- | --- | --- | --- |
 | `knCode` | string | 是 | 知识库编码 |
 | `pathRule` | string | 是 | 匹配模式规则，以 `/` 开头，不包括知识库名称；`*` 仅匹配单层路径段，不支持 `**` 多层目录匹配 |
+| `pageNum` | integer | 否 | 页码，从 1 开始；传入 `pageSize` 但未传本字段时默认为 1 |
+| `pageSize` | integer | 否 | 每页条数，范围 1 到 10000；与 `pageNum` 均未传时保持全量返回 |
 
 匹配规则：
 
@@ -91,6 +93,9 @@
 
 - `*` 仅匹配单层路径段，当前不支持 `**`。
 - 返回项的 `name` 是知识库内完整路径。
+- 全部匹配完成后按目录优先、完整 `name` 不区分大小写升序排列；名称相同时使用原始名称和内部条目 ID 保证稳定顺序。
+- `pageNum` 和 `pageSize` 均未传时不分页，响应保持只有 `data` 的旧结构。分页时响应额外包含 `total`、`pageNum`、`pageSize`。
+- 只传 `pageNum` 不传 `pageSize` 时请求校验失败。
 - `updatedAt` 使用 ISO 8601 格式。
 - `buildStatus`、`buildCurrentStep` 返回文件最新构建任务的状态；目录或尚未创建构建任务的文件返回 `null`。
 - `metadata` 始终返回对象；当前未指定元数据字段时返回空对象 `{}`。

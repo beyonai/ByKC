@@ -925,6 +925,20 @@ class KnowledgeBaseService:
                 knowledge_base_id=knowledge_base_id,
                 parent_entry_id=parent_entry_id,
             )
+            child_rows = sorted(
+                child_rows,
+                key=lambda row: self._browse_sort_key(
+                    item_type=str(row["type"]),
+                    name=f"{output_prefix}/{row['name']}",
+                    fs_entry_id=int(row["kid"]),
+                ),
+            )
+            total = len(child_rows)
+            child_rows = self._browse_page(
+                child_rows,
+                page_num=request.effective_page_num,
+                page_size=request.page_size,
+            )
             latest_builds = await self._latest_browse_builds(cursor, child_rows)
             items = [
                 KnowledgeItemListDirItem(
@@ -947,7 +961,12 @@ class KnowledgeBaseService:
                 request.directory_path,
                 len(items),
             )
-            return KnowledgeItemListDirResponse(data=items)
+            return KnowledgeItemListDirResponse(
+                data=items,
+                total=total if request.page_size is not None else None,
+                page_num=request.effective_page_num,
+                page_size=request.page_size,
+            )
         finally:
             await connection.close()
 
@@ -1236,18 +1255,25 @@ class KnowledgeBaseService:
                 raise KnowledgeBaseValidationError(
                     "pathRule does not support ** multi-level matching"
                 )
-            items = await self._glob_relative_path_segments(
+            items, total = await self._glob_relative_path_segments(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
                 kb_code=request.kb_code,
                 pattern_segments=pattern_segments,
+                page_num=request.effective_page_num,
+                page_size=request.page_size,
             )
             logger.info(
                 "knowledge_base_service.glob finished: path_rule=%s, item_count=%s",
                 request.path_rule,
                 len(items),
             )
-            return KnowledgeItemListDirResponse(data=items)
+            return KnowledgeItemListDirResponse(
+                data=items,
+                total=total if request.page_size is not None else None,
+                page_num=request.effective_page_num,
+                page_size=request.page_size,
+            )
         finally:
             await connection.close()
 
@@ -1635,7 +1661,9 @@ class KnowledgeBaseService:
         knowledge_base_id: int,
         kb_code: str,
         pattern_segments: list[str],
-    ) -> list[KnowledgeItemListDirItem]:
+        page_num: int | None,
+        page_size: int | None,
+    ) -> tuple[list[KnowledgeItemListDirItem], int]:
         current_matches: list[tuple[int | None, str, str, int, Any]] = [
             (None, "", "directory", 0, None)
         ]
@@ -1665,7 +1693,20 @@ class KnowledgeBaseService:
                     )
             current_matches = next_matches
             if not current_matches:
-                return []
+                return [], 0
+        current_matches.sort(
+            key=lambda match: self._browse_sort_key(
+                item_type=match[2],
+                name=match[1],
+                fs_entry_id=int(match[0]) if match[0] is not None else 0,
+            )
+        )
+        total = len(current_matches)
+        current_matches = self._browse_page(
+            current_matches,
+            page_num=page_num,
+            page_size=page_size,
+        )
         latest_builds = await self._latest_browse_builds(
             cursor,
             [
@@ -1674,21 +1715,57 @@ class KnowledgeBaseService:
                 if row_id is not None
             ],
         )
-        return [
-            KnowledgeItemListDirItem(
-                kb_code=kb_code,
-                name=matched_path,
-                type=item_type,
-                size=item_size,
-                updated_at=self._isoformat(updated_at),
-                build_status=(latest_builds.get(int(row_id)) or {}).get("status"),
-                build_current_step=(latest_builds.get(int(row_id)) or {}).get(
-                    "current_step"
-                ),
-            )
-            for row_id, matched_path, item_type, item_size, updated_at in current_matches
-            if row_id is not None
-        ]
+        return (
+            [
+                KnowledgeItemListDirItem(
+                    kb_code=kb_code,
+                    name=matched_path,
+                    type=item_type,
+                    size=item_size,
+                    updated_at=self._isoformat(updated_at),
+                    build_status=(latest_builds.get(int(row_id)) or {}).get("status"),
+                    build_current_step=(latest_builds.get(int(row_id)) or {}).get(
+                        "current_step"
+                    ),
+                )
+                for (
+                    row_id,
+                    matched_path,
+                    item_type,
+                    item_size,
+                    updated_at,
+                ) in current_matches
+                if row_id is not None
+            ],
+            total,
+        )
+
+    def _browse_sort_key(
+        self,
+        *,
+        item_type: str,
+        name: str,
+        fs_entry_id: int,
+    ) -> tuple[int, str, str, int]:
+        return (
+            0 if item_type == "directory" else 1,
+            name.casefold(),
+            name,
+            fs_entry_id,
+        )
+
+    def _browse_page(
+        self,
+        rows: list[Any],
+        *,
+        page_num: int | None,
+        page_size: int | None,
+    ) -> list[Any]:
+        if page_size is None:
+            return rows
+        assert page_num is not None
+        offset = (page_num - 1) * page_size
+        return rows[offset : offset + page_size]
 
     async def _latest_browse_builds(
         self,

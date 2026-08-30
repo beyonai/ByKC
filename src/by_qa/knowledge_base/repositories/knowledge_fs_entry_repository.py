@@ -603,7 +603,9 @@ class KnowledgeFsEntryRepository:
                   AND fs.is_deleted = FALSE
                 ORDER BY
                     CASE WHEN fs.entry_type = 'DIRECTORY' THEN 0 ELSE 1 END,
-                    lower(fs.name)
+                    lower(fs.name),
+                    fs.name,
+                    fs.kid
                 """,
                 {"knowledge_base_id": knowledge_base_id},
             )
@@ -630,7 +632,9 @@ class KnowledgeFsEntryRepository:
                   AND fs.is_deleted = FALSE
                 ORDER BY
                     CASE WHEN fs.entry_type = 'DIRECTORY' THEN 0 ELSE 1 END,
-                    lower(fs.name)
+                    lower(fs.name),
+                    fs.name,
+                    fs.kid
                 """,
                 {
                     "knowledge_base_id": knowledge_base_id,

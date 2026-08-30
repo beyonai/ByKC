@@ -2092,9 +2092,9 @@ async def test_list_dir_directory_path_returns_direct_children_only():
     assert response.model_dump()["data"] == [
         {
             "kb_code": "hr-policy",
-            "name": "/dir1/doc.md",
-            "type": "file",
-            "size": 128,
+            "name": "/dir1/subdir",
+            "type": "directory",
+            "size": 0,
             "updated_at": None,
             "build_status": None,
             "build_current_step": None,
@@ -2102,9 +2102,9 @@ async def test_list_dir_directory_path_returns_direct_children_only():
         },
         {
             "kb_code": "hr-policy",
-            "name": "/dir1/subdir",
-            "type": "directory",
-            "size": 0,
+            "name": "/dir1/doc.md",
+            "type": "file",
+            "size": 128,
             "updated_at": None,
             "build_status": None,
             "build_current_step": None,

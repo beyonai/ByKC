@@ -397,6 +397,29 @@ class KnowledgeItemListDirRequest(BaseModel):
         min_length=1,
         validation_alias=AliasChoices("directoryPath", "directory_path"),
     )
+    page_num: int | None = Field(
+        default=None,
+        ge=1,
+        validation_alias=AliasChoices("pageNum", "page_num"),
+    )
+    page_size: int | None = Field(
+        default=None,
+        ge=1,
+        le=10000,
+        validation_alias=AliasChoices("pageSize", "page_size"),
+    )
+
+    @model_validator(mode="after")
+    def validate_pagination(self) -> "KnowledgeItemListDirRequest":
+        if self.page_num is not None and self.page_size is None:
+            raise ValueError("pageSize is required when pageNum is provided")
+        return self
+
+    @property
+    def effective_page_num(self) -> int | None:
+        return (
+            1 if self.page_size is not None and self.page_num is None else self.page_num
+        )
 
 
 class KnowledgeItemListDirItem(BaseModel):
@@ -420,7 +443,12 @@ class KnowledgeItemListDirItem(BaseModel):
 class KnowledgeItemListDirResponse(BaseModel):
     """Business response for list_dir and glob."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     data: list[KnowledgeItemListDirItem]
+    total: int | None = None
+    page_num: int | None = Field(default=None, serialization_alias="pageNum")
+    page_size: int | None = Field(default=None, serialization_alias="pageSize")
 
 
 class KnowledgeItemGlobRequest(BaseModel):
@@ -436,6 +464,29 @@ class KnowledgeItemGlobRequest(BaseModel):
         min_length=1,
         validation_alias=AliasChoices("pathRule", "path_rule"),
     )
+    page_num: int | None = Field(
+        default=None,
+        ge=1,
+        validation_alias=AliasChoices("pageNum", "page_num"),
+    )
+    page_size: int | None = Field(
+        default=None,
+        ge=1,
+        le=10000,
+        validation_alias=AliasChoices("pageSize", "page_size"),
+    )
+
+    @model_validator(mode="after")
+    def validate_pagination(self) -> "KnowledgeItemGlobRequest":
+        if self.page_num is not None and self.page_size is None:
+            raise ValueError("pageSize is required when pageNum is provided")
+        return self
+
+    @property
+    def effective_page_num(self) -> int | None:
+        return (
+            1 if self.page_size is not None and self.page_num is None else self.page_num
+        )
 
 
 class KnowledgeItemReferenceQueryRequest(BaseModel):

@@ -139,6 +139,54 @@ def test_glob_request_accepts_documented_fields():
     assert request.path_rule == "/制度/*/*.pdf"
 
 
+@pytest.mark.parametrize(
+    "request_type,path_fields",
+    [
+        ("list", {"directoryPath": "/制度"}),
+        ("glob", {"pathRule": "/制度/*"}),
+    ],
+)
+def test_browse_requests_accept_optional_pagination(request_type, path_fields):
+    from by_qa.knowledge_base.api.schemas import (
+        KnowledgeItemGlobRequest,
+        KnowledgeItemListDirRequest,
+    )
+
+    model = (
+        KnowledgeItemListDirRequest
+        if request_type == "list"
+        else KnowledgeItemGlobRequest
+    )
+    request = model.model_validate(
+        {"knCode": "hr-policy", **path_fields, "pageSize": 20}
+    )
+
+    assert request.effective_page_num == 1
+    assert request.page_size == 20
+
+
+@pytest.mark.parametrize(
+    "request_type,path_fields",
+    [
+        ("list", {"directoryPath": "/制度"}),
+        ("glob", {"pathRule": "/制度/*"}),
+    ],
+)
+def test_browse_requests_reject_page_num_without_page_size(request_type, path_fields):
+    from by_qa.knowledge_base.api.schemas import (
+        KnowledgeItemGlobRequest,
+        KnowledgeItemListDirRequest,
+    )
+
+    model = (
+        KnowledgeItemListDirRequest
+        if request_type == "list"
+        else KnowledgeItemGlobRequest
+    )
+    with pytest.raises(ValidationError):
+        model.model_validate({"knCode": "hr-policy", **path_fields, "pageNum": 2})
+
+
 def test_download_request_accepts_documented_fields():
     """Download requests should accept knCode and filePath."""
     from by_qa.knowledge_base.api.schemas import KnowledgeItemDownloadRequest

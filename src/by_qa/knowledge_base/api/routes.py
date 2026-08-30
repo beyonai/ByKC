@@ -1448,11 +1448,18 @@ def register_routes(
             "list_dir response ready: code=200, item_count=%s",
             len(result.data),
         )
-        return _documented_success_response(
-            result_object={
-                "data": [item.model_dump(by_alias=True) for item in result.data]
-            }
-        )
+        result_object = {
+            "data": [item.model_dump(by_alias=True) for item in result.data]
+        }
+        if result.page_size is not None:
+            result_object.update(
+                {
+                    "total": result.total,
+                    "pageNum": result.page_num,
+                    "pageSize": result.page_size,
+                }
+            )
+        return _documented_success_response(result_object=result_object)
 
     @app.post("/api/v1/glob")
     async def glob(body: dict[str, Any] = Body(...)):
@@ -1520,11 +1527,18 @@ def register_routes(
             "glob response ready: code=200, item_count=%s",
             len(result.data),
         )
-        return _documented_success_response(
-            result_object={
-                "data": [item.model_dump(by_alias=True) for item in result.data]
-            }
-        )
+        result_object = {
+            "data": [item.model_dump(by_alias=True) for item in result.data]
+        }
+        if result.page_size is not None:
+            result_object.update(
+                {
+                    "total": result.total,
+                    "pageNum": result.page_num,
+                    "pageSize": result.page_size,
+                }
+            )
+        return _documented_success_response(result_object=result_object)
 
     @app.post("/api/v1/readFile")
     async def read_file(body: dict[str, Any] = Body(...)):

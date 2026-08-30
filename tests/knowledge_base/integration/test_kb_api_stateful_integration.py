@@ -2359,6 +2359,87 @@ async def test_browse_returns_each_latest_terminal_or_running_build_state(
 
 
 @pytest.mark.integration
+def test_browse_optional_pagination_preserves_unpaged_shape_and_stable_order(
+    monkeypatch, tmp_path
+):
+    """Pagination is opt-in and slices one directory-first global ordering."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Browse pagination {uuid4().hex[:12]}")
+        _create_directory(client, kb_code=kb_code, directory_path="/entries")
+        _create_directory(client, kb_code=kb_code, directory_path="/entries/Zulu")
+        _create_directory(client, kb_code=kb_code, directory_path="/entries/alpha")
+        for name in ("z.md", "Beta.md", "a.md"):
+            _upload_file(
+                client,
+                kb_code=kb_code,
+                file_path=f"/entries/{name}",
+                file_content=name.encode(),
+            )
+
+        unpaged_list = client.post(
+            "/api/v1/listDir",
+            json={"knCode": kb_code, "directoryPath": "/entries"},
+        ).json()["resultObject"]
+        unpaged_glob = client.post(
+            "/api/v1/glob",
+            json={"knCode": kb_code, "pathRule": "/entries/*"},
+        ).json()["resultObject"]
+        list_pages = [
+            client.post(
+                "/api/v1/listDir",
+                json={
+                    "knCode": kb_code,
+                    "directoryPath": "/entries",
+                    "pageNum": page_num,
+                    "pageSize": 2,
+                },
+            ).json()["resultObject"]
+            for page_num in range(1, 5)
+        ]
+        glob_first_page = client.post(
+            "/api/v1/glob",
+            json={
+                "knCode": kb_code,
+                "pathRule": "/entries/*",
+                "pageSize": 2,
+            },
+        ).json()["resultObject"]
+        invalid = client.post(
+            "/api/v1/listDir",
+            json={
+                "knCode": kb_code,
+                "directoryPath": "/entries",
+                "pageNum": 2,
+            },
+        ).json()
+
+    expected_names = [
+        "/entries/alpha",
+        "/entries/Zulu",
+        "/entries/a.md",
+        "/entries/Beta.md",
+        "/entries/z.md",
+    ]
+    assert set(unpaged_list) == {"data"}
+    assert set(unpaged_glob) == {"data"}
+    assert [item["name"] for item in unpaged_list["data"]] == expected_names
+    assert unpaged_glob["data"] == unpaged_list["data"]
+
+    assert [page["total"] for page in list_pages] == [5, 5, 5, 5]
+    assert [page["pageNum"] for page in list_pages] == [1, 2, 3, 4]
+    assert [page["pageSize"] for page in list_pages] == [2, 2, 2, 2]
+    combined_names = [item["name"] for page in list_pages[:3] for item in page["data"]]
+    assert combined_names == expected_names
+    assert list_pages[3]["data"] == []
+    assert glob_first_page == list_pages[0]
+    assert invalid["resultCode"] == "-1"
+    assert invalid["resultMsg"] == "request validation failed"
+
+
+@pytest.mark.integration
 async def test_directory_rename_updates_parent_and_child_queries(monkeypatch, tmp_path):
     """Renaming a directory should update browse, match, and read behavior together."""
     settings = _kb_settings(agent_data_path=tmp_path)

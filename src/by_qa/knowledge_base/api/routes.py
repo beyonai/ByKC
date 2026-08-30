@@ -28,7 +28,6 @@ from by_qa.knowledge_base.api.knowledge_entity_schemas import (
 )
 from by_qa.knowledge_base.api.metadata_schemas import (
     GetFileMetadataRequest,
-    ListMetadataFieldsRequest,
     MetadataSearchRequest,
     SearchFileRequest,
     UpdateFileMetadataRequest,
@@ -2120,32 +2119,6 @@ def register_routes(
                 result_msg=str(exc) or "internal error", result_object={}
             )
         return _documented_success_response(result_object={"metadata": metadata})
-
-    @app.post("/api/v1/knowledgeItems/metadataFields/list")
-    async def list_metadata_fields(body: dict[str, Any] = Body(...)):
-        try:
-            request = ListMetadataFieldsRequest.model_validate(body)
-        except ValidationError as exc:
-            return _documented_error_response(
-                result_msg="request validation failed",
-                result_object={"errors": json.loads(exc.json())},
-                status_code=422,
-            )
-        try:
-            service = await get_file_metadata_query_service()
-            results = await service.list_metadata_fields(request)
-        except KnowledgeBaseValidationError as exc:
-            return _documented_error_response(result_msg=str(exc), result_object={})
-        except Exception as exc:
-            logger.exception("list_metadata_fields error: %s", exc)
-            return _documented_error_response(
-                result_msg=str(exc) or "internal error", result_object={}
-            )
-        return _documented_success_response(
-            result_object={
-                "data": [result.model_dump(by_alias=True) for result in results]
-            }
-        )
 
     @app.post("/api/v1/knowledgeItems/searchFile")
     async def search_file(body: dict[str, Any] = Body(...)):

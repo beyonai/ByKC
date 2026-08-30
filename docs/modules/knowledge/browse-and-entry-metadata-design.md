@@ -335,11 +335,7 @@ zip 导入时，请求 metadata 是每个真实文件条目的公共基础元数
 
 元数据批量操作的 `set`、`unset`、`append`、`remove`、`clear`、只读系统字段和事务原子性规则对文件与目录完全一致。
 
-### 8.2 listMetadataFields
-
-现有字段枚举基于知识库内实际使用的元数据值，不限制 `entry_type`。目录元数据写入后应自然出现在字段枚举结果中，不需要新增请求参数。
-
-### 8.3 metadataSearch
+### 8.2 metadataSearch
 
 metadataSearch 的请求契约保持不变。入参不区分文件或目录，本次不向请求模型、请求 JSON 或 DSL 增加任何资源类型字段：
 
@@ -635,7 +631,7 @@ feat(knowledge): include directories in metadata search
 - 文件请求 metadata 与 front matter 正确合并，冲突时 front matter 优先。
 - 文件和目录元数据写入具备原子性。
 - 目录元数据在重命名、移动后保留，在删除后不可访问。
-- metadata get/update/list fields/metadataSearch 对目录行为明确且有集成测试。
+- metadata get/update/metadataSearch 对目录行为明确且有集成测试。
 - 不产生逐条构建状态或逐条元数据查询。
 - 每个实施步骤均为可独立审查、独立运行集成测试的完整提交。
 
@@ -731,7 +727,6 @@ feat(knowledge): include directories in metadata search
 | DM10 | 移动目录 | knowledgeItems/move 移动目录子树 | 目录和后代的 metadata 均跟随 fs_entry 保留 |
 | DM11 | 删除空目录 | 删除带 metadata 的空目录 | get/update/listDir/glob 均不可再访问该目录及元数据 |
 | DM12 | 删除目录子树 | 删除含目录和文件 metadata 的父目录 | 子树所有元数据被软删除且不可召回 |
-| DM13 | 字段枚举 | 只在目录写入一个新字段 | listMetadataFields 能返回该字段 |
 
 ### 15.7 提交 7：metadataSearch 与跨接口一致性
 

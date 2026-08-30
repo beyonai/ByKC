@@ -7,10 +7,7 @@ from typing import Any
 
 import pytest
 
-from by_qa.knowledge_base.api.metadata_schemas import (
-    GetFileMetadataRequest,
-    ListMetadataFieldsRequest,
-)
+from by_qa.knowledge_base.api.metadata_schemas import GetFileMetadataRequest
 from by_qa.knowledge_base.services.file_metadata_query_service import (
     FileMetadataQueryService,
 )
@@ -78,16 +75,6 @@ class FakeFileMetadataValueRepository:
                 "value_datetime": datetime(2026, 5, 25),
                 "value_string_list": None,
             },
-        ]
-
-    async def list_used_properties(self, cursor: Any, *, knowledge_base_ids: list[int]):
-        self.calls.append({"knowledge_base_ids": knowledge_base_ids})
-        return [
-            {
-                "property_name": "directoryOnly",
-                "value_type": "string",
-                "description": None,
-            }
         ]
 
 
@@ -185,32 +172,3 @@ async def test_get_metadata_supports_directory_entries():
 
     assert result["会议主题"]["value"] == "DataCloud平台需求确认会"
     assert metadata_repo.calls == [{"fs_entry_id": 10, "property_names": ["会议主题"]}]
-
-
-@pytest.mark.asyncio
-async def test_list_metadata_fields_includes_fields_used_by_any_entry_type():
-    metadata_repo = FakeFileMetadataValueRepository()
-
-    async def connection_factory():
-        return FakeConnection()
-
-    service = FileMetadataQueryService(
-        connection_factory=connection_factory,
-        knowledge_base_repository=FakeKnowledgeBaseRepository(),
-        knowledge_fs_entry_repository=FakeFsEntryRepository(),
-        file_metadata_value_repository=metadata_repo,
-    )
-
-    result = await service.list_metadata_fields(
-        ListMetadataFieldsRequest(kb_code_list=["1"])
-    )
-
-    assert [item.model_dump(by_alias=True) for item in result] == [
-        {
-            "propertyName": "directoryOnly",
-            "valueType": "string",
-            "description": None,
-            "extParams": None,
-        }
-    ]
-    assert metadata_repo.calls == [{"knowledge_base_ids": [2]}]

@@ -5,11 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from by_qa.knowledge_base.api.metadata_schemas import (
-    GetFileMetadataRequest,
-    ListMetadataFieldsRequest,
-    MetadataPropertyResponse,
-)
+from by_qa.knowledge_base.api.metadata_schemas import GetFileMetadataRequest
 from by_qa.knowledge_base.metadata_types import (
     SYSTEM_FIELD_VALUE_TYPES,
     extract_system_metadata,
@@ -77,39 +73,6 @@ class FileMetadataQueryService:
                 **extract_system_metadata(file_entry, request.metadata_field_list),
                 **_format_metadata(rows),
             }
-        finally:
-            await connection.close()
-
-    async def list_metadata_fields(
-        self, request: ListMetadataFieldsRequest
-    ) -> list[MetadataPropertyResponse]:
-        """List custom metadata fields used by files or directories in the KBs."""
-        connection = await self.connection_factory()
-        try:
-            cursor = connection.cursor()
-            knowledge_base_ids: list[int] = []
-            for kb_code in request.kb_code_list:
-                knowledge_base = await self.knowledge_base_repository.get_by_code(
-                    cursor, kb_code
-                )
-                if knowledge_base is None:
-                    raise KnowledgeBaseValidationError(
-                        f"knowledge base not found: {kb_code}"
-                    )
-                knowledge_base_ids.append(int(knowledge_base["kid"]))
-
-            rows = await self.file_metadata_value_repository.list_used_properties(
-                cursor,
-                knowledge_base_ids=knowledge_base_ids,
-            )
-            return [
-                MetadataPropertyResponse(
-                    property_name=row["property_name"],
-                    value_type=row["value_type"],
-                    description=row.get("description"),
-                )
-                for row in rows
-            ]
         finally:
             await connection.close()
 

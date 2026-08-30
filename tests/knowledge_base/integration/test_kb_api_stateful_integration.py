@@ -1730,14 +1730,9 @@ def test_import_metadata_failure_rolls_back_entry_storage_and_values(
             "/api/v1/listDir",
             json={"knCode": kb_code, "directoryPath": "/"},
         ).json()["resultObject"]["data"]
-        metadata_fields = client.post(
-            "/api/v1/knowledgeItems/metadataFields/list",
-            json={"knCodeList": [kb_code]},
-        ).json()["resultObject"]["data"]
 
     assert failed["resultCode"] == "-1"
     assert "/rollback.md" not in {item["name"] for item in listed}
-    assert "owner" not in {item["propertyName"] for item in metadata_fields}
     assert len(compensated_locations) == 1
 
 
@@ -1794,10 +1789,26 @@ def test_entry_metadata_replaces_changed_types_and_rejects_system_fields(
             file_path="/typed/file.md",
             field_names=["fileValue"],
         )
-        field_rows = client.post(
-            "/api/v1/knowledgeItems/metadataFields/list",
-            json={"knCodeList": [kb_code]},
-        ).json()["resultObject"]["data"]
+        stale_type_searches = [
+            client.post(
+                "/api/v1/knowledgeItems/metadataSearch",
+                json={
+                    "knCodeList": [kb_code],
+                    "where": {"eq": {"fieldName": field_name, "value": 1}},
+                },
+            ).json()["resultObject"]
+            for field_name in ("directoryValue", "fileValue")
+        ]
+        current_type_searches = [
+            client.post(
+                "/api/v1/knowledgeItems/metadataSearch",
+                json={
+                    "knCodeList": [kb_code],
+                    "where": {"eq": {"fieldName": field_name, "value": "ready"}},
+                },
+            ).json()["resultObject"]
+            for field_name in ("directoryValue", "fileValue")
+        ]
 
         rejected_import = client.post(
             "/api/v1/knowledgeItems/import",
@@ -1850,11 +1861,8 @@ def test_entry_metadata_replaces_changed_types_and_rejects_system_fields(
         "directoryValue": {"valueType": "string", "value": "ready"}
     }
     assert file_metadata == {"fileValue": {"valueType": "string", "value": "ready"}}
-    assert [
-        (row["propertyName"], row["valueType"])
-        for row in field_rows
-        if row["propertyName"] in {"directoryValue", "fileValue"}
-    ] == [("directoryValue", "string"), ("fileValue", "string")]
+    assert [result["total"] for result in stale_type_searches] == [0, 0]
+    assert [result["total"] for result in current_type_searches] == [1, 1]
     for rejected in (
         rejected_import,
         rejected_create,
@@ -3437,17 +3445,6 @@ def test_directory_create_and_rename_share_entry_metadata_lifecycle(
         assert all_child["fileSignature"]["value"] is None
         assert all_child["createdAt"]["value"]
         assert all_child["updatedAt"]["value"]
-        field_list = client.post(
-            "/api/v1/knowledgeItems/metadataFields/list",
-            json={"knCodeList": [kb_code]},
-        ).json()
-        assert field_list["resultCode"] == "0", field_list
-        fields_by_name = {
-            item["propertyName"]: item for item in field_list["resultObject"]["data"]
-        }
-        assert fields_by_name["owner"]["valueType"] == "string"
-        assert fields_by_name["priority"]["valueType"] == "number"
-
         listed = client.post(
             "/api/v1/listDir",
             json={
@@ -3561,17 +3558,12 @@ def test_empty_directory_metadata_disappears_from_every_entry_interface(
             "/api/v1/glob",
             json={"knCode": kb_code, "pathRule": "/*"},
         ).json()["resultObject"]["data"]
-        fields = client.post(
-            "/api/v1/knowledgeItems/metadataFields/list",
-            json={"knCodeList": [kb_code]},
-        ).json()["resultObject"]["data"]
 
     assert deleted["resultCode"] == "0"
     assert metadata_get["resultCode"] == "-1"
     assert metadata_update["resultCode"] == "-1"
     assert listed == []
     assert globbed == []
-    assert "emptyOnly" not in {item["propertyName"] for item in fields}
 
 
 @pytest.mark.integration

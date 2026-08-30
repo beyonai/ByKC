@@ -70,6 +70,7 @@
 - 只修改最后一级目录名，不改变父目录。
 - 重命名会同步更新整个子树的逻辑路径及相关引用。
 - 传入 `metadata` 时只 upsert 本次字段，未指定字段保留原值。
+- `metadata` 不允许写入 `fileName`、`filePath`、`fileSize`、`fileType`、`mimeType`、`fileSignature`、`createdAt`、`updatedAt` 等只读系统字段。
 - 重命名与元数据写入在同一数据库事务中提交或回滚。
 
 ## 路径与定位规则

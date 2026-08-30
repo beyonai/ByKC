@@ -43,9 +43,13 @@
 ```json
 {
   "knCode": "1",
-  "pathRule": "/制度/*/*.pdf"
+  "pathRule": "/制度/*/*.pdf",
+  "metadataFieldList": ["owner", "status", "filePath"],
+  "pageSize": 20
 }
 ```
+
+`metadataFieldList` 只决定每个匹配条目的 `metadata` 对象返回哪些字段，不参与 Glob 路径过滤。本例仅传 `pageSize`，因此服务端使用 `pageNum=1`。
 
 ## 成功响应示例
 
@@ -63,7 +67,20 @@
         "updatedAt": "2026-08-30T10:20:30+08:00",
         "buildStatus": "complete",
         "buildCurrentStep": "complete",
-        "metadata": {}
+        "metadata": {
+          "owner": {
+            "valueType": "string",
+            "value": "Alice"
+          },
+          "status": {
+            "valueType": "string",
+            "value": "active"
+          },
+          "filePath": {
+            "valueType": "string",
+            "value": "/制度/人事/请假制度.pdf"
+          }
+        }
       },
       {
         "knCode": "1",
@@ -73,9 +90,25 @@
         "updatedAt": "2026-08-30T10:21:00+08:00",
         "buildStatus": null,
         "buildCurrentStep": null,
-        "metadata": {}
+        "metadata": {
+          "owner": {
+            "valueType": "string",
+            "value": "Legal"
+          },
+          "status": {
+            "valueType": "string",
+            "value": "review"
+          },
+          "filePath": {
+            "valueType": "string",
+            "value": "/制度/法务/合同规范.pdf"
+          }
+        }
       }
-    ]
+    ],
+    "total": 2,
+    "pageNum": 1,
+    "pageSize": 20
   }
 }
 ```

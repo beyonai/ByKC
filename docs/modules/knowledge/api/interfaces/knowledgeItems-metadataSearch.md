@@ -26,7 +26,7 @@ Agent DSL 版纯元数据检索，同一份请求同时查询文件和目录。�
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `knCodeList` | array[string] | 否 | 知识库范围 |
+| `knCodeList` | array[string] | 是 | 非空知识库编码列表 |
 | `where` | object | 是 | Agent DSL 过滤 AST |
 | `metadataFieldList` | array[string] | 否 | 需要返回的元数据字段 |
 | `topK` | integer | 否 | 兼容参数；未传 `pageSize` 时作为每页条数，默认 500，最大 10000 |
@@ -70,6 +70,10 @@ Agent DSL 版纯元数据检索，同一份请求同时查询文件和目录。�
           "tags": {
             "valueType": "stringList",
             "value": ["hr", "contract"]
+          },
+          "fileSignature": {
+            "valueType": "string",
+            "value": "b6f1d2c3..."
           }
         }
       }

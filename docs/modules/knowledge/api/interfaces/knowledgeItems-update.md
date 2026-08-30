@@ -98,6 +98,8 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/update \
 
 常见失败原因包括目标文件或知识库不存在、上传文件扩展名不匹配、上传 zip、路径非法，以及该文件存在运行中的构建任务。
 
+`metadata` 和 YAML front matter 均不允许写入 `fileName`、`filePath`、`fileSize`、`fileType`、`mimeType`、`fileSignature`、`createdAt`、`updatedAt` 等只读系统字段；校验失败时文件内容和既有元数据均保持原值。
+
 ## 请求示例
 
 ```bash

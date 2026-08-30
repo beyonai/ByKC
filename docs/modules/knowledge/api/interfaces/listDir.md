@@ -37,9 +37,14 @@
 ```json
 {
   "knCode": "1",
-  "directoryPath": "/制度/人事"
+  "directoryPath": "/制度/人事",
+  "metadataFieldList": ["owner", "status", "filePath"],
+  "pageNum": 1,
+  "pageSize": 20
 }
 ```
+
+`metadataFieldList` 只决定每个条目的 `metadata` 对象返回哪些字段，不会过滤目录或文件，也不会移除顶层固定字段。
 
 ## 成功响应示例
 
@@ -57,7 +62,16 @@
         "updatedAt": "2026-08-30T10:00:00+08:00",
         "buildStatus": null,
         "buildCurrentStep": null,
-        "metadata": {}
+        "metadata": {
+          "owner": {
+            "valueType": "string",
+            "value": "HR"
+          },
+          "filePath": {
+            "valueType": "string",
+            "value": "/制度/人事/考勤"
+          }
+        }
       },
       {
         "knCode": "1",
@@ -67,9 +81,25 @@
         "updatedAt": "2026-08-30T10:20:30+08:00",
         "buildStatus": "complete",
         "buildCurrentStep": "complete",
-        "metadata": {}
+        "metadata": {
+          "owner": {
+            "valueType": "string",
+            "value": "Alice"
+          },
+          "status": {
+            "valueType": "string",
+            "value": "active"
+          },
+          "filePath": {
+            "valueType": "string",
+            "value": "/制度/人事/请假制度.pdf"
+          }
+        }
       }
-    ]
+    ],
+    "total": 2,
+    "pageNum": 1,
+    "pageSize": 20
   }
 }
 ```

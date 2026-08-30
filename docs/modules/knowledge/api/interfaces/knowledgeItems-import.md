@@ -78,6 +78,8 @@ module: karpathy
 | `skipIfDuplicate` | boolean | 否 | 是否检查同一知识库内的文件 checksum；默认 `false`。为 `true` 且已存在相同 checksum 时跳过导入，并在错误信息中返回已存在文件路径 |
 | `metadata` | string(JSON object) | 否 | 显式文件元数据；顶层必须是 JSON object，值使用与 YAML front matter 相同的类型推断规则 |
 
+`metadata` 和 YAML front matter 均不允许写入 `fileName`、`filePath`、`fileSize`、`fileType`、`mimeType`、`fileSignature`、`createdAt`、`updatedAt` 等只读系统字段。
+
 表单示例（单文件）：
 
 ```bash

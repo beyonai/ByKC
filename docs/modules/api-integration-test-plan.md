@@ -231,6 +231,21 @@
 | MD2 | 目录管理员 | 删除目录后子树元数据失效 | `import multiple files with front matter -> directories/delete` | 子树文件的元数据全部失效 | 已写 |
 | MD3 | 知识库管理员 | 删除知识库后元数据失效 | `import(front matter) -> knowledgeBases/delete` | 知识库下不再存在有效元数据 | 已写 |
 
+### 浏览、分页与条目元数据扩展
+
+详细单场景编号和断言见 `docs/modules/knowledge/browse-and-entry-metadata-design.md` 第 15 节。以下是实施测试与设计清单的对照索引。
+
+| 设计编号 | 覆盖范围 | 主要集成测试 | 状态 |
+| --- | --- | --- | --- |
+| BR1–BR9 | listDir/glob 固定字段、最新构建状态、文件更新后失效 | `test_list_dir_and_glob_return_timestamps_latest_build_state_and_empty_metadata`、`test_browse_returns_each_latest_terminal_or_running_build_state`、`test_document_update_metadata_merges_preserves_and_rolls_back_with_content` | 已写 |
+| PG1–PG10 | 兼容不分页、默认首页、越界页、目录优先、大小写边界、glob 全局排序和非法值 | `test_browse_optional_pagination_preserves_unpaged_shape_and_stable_order`、`test_browse_validates_page_edges_and_globally_pages_selected_metadata` | 已写 |
+| BM1–BM9 | 空/未传/未知字段、多类型、系统字段、分页后回填、QA 工具转发 | `test_browse_metadata_field_list_returns_selected_nested_metadata`、`test_browse_validates_page_edges_and_globally_pages_selected_metadata`、`test_qa_browse_tool_contract_forwards_selected_metadata_to_live_api` | 已写 |
+| FI1–FI10 | 文件导入显式 metadata、front matter 合并、zip 公共值、参数校验和事务回滚 | `test_import_metadata_merges_with_front_matter_and_can_disable_it`、`test_zip_import_applies_common_metadata_before_each_markdown_front_matter`、`test_import_metadata_failure_rolls_back_entry_storage_and_values` | 已写 |
+| FU1–FU9 | 文件修改 metadata 合并、保留、构建失效、乐观锁/重复/存储/数据库失败回滚 | `test_document_update_metadata_merges_preserves_and_rolls_back_with_content`、`test_document_update_failures_preserve_content_and_metadata` | 已写 |
+| DM1–DM13 | 目录创建、更新、get/update、幂等、重命名/移动保留、空目录/子树删除、字段枚举 | `test_directory_create_and_rename_share_entry_metadata_lifecycle`、`test_directory_metadata_update_operations_are_atomic`、`test_directory_metadata_follows_move_and_is_removed_with_subtree`、`test_empty_directory_metadata_disappears_from_every_entry_interface` | 已写 |
+| MS1–MS12 | metadataSearch 混合资源、响应 type、自定义/系统字段、混合分页、同时间 kid 稳定排序、改名和删除 | `test_metadata_search_uses_unchanged_request_for_files_and_directories`、`test_metadata_search_uses_entry_id_to_break_equal_timestamp_ties`、`test_metadata_search_paginates_and_sorts_by_updated_at_ascending` | 已写 |
+| EW1 | 文件/目录直接 metadata 写入的系统字段只读和类型切换 | `test_entry_metadata_replaces_changed_types_and_rejects_system_fields` | 已写 |
+
 ### metadataSearch 接口约束
 
 | 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |

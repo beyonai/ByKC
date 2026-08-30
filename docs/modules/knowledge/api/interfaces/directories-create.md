@@ -70,6 +70,7 @@
 - 父目录不存在时递归创建。
 - `metadata` 只应用于 `directoryPath` 指定的最终目录，不应用于递归自动创建的中间目录。
 - 目标目录已存在时不创建重复记录；如传入 `metadata`，仍对指定字段执行幂等 upsert。
+- `metadata` 不允许写入 `fileName`、`filePath`、`fileSize`、`fileType`、`mimeType`、`fileSignature`、`createdAt`、`updatedAt` 等只读系统字段。
 - 目录创建和元数据写入在同一数据库事务中提交或回滚。
 
 ## 路径与定位规则

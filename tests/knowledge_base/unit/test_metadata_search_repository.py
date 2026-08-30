@@ -32,12 +32,17 @@ async def test_search_without_where():
     cursor = FakeCursor(
         fetchall_results=[
             [
-                {"kid": 10, "kb_code": "2", "full_path": "docs/test.md"},
+                {
+                    "kid": 10,
+                    "kb_code": "2",
+                    "entry_type": "FILE",
+                    "full_path": "docs/test.md",
+                },
             ]
         ]
     )
 
-    results = await repo.search_files(
+    results = await repo.search_entries(
         cursor,
         kb_ids=[2],
         where_sql="",
@@ -51,6 +56,7 @@ async def test_search_without_where():
     assert "ltrim(fe.virtual_path, '/') as full_path" in sql
     assert "limit" in sql
     assert "order by fe.updated_at asc, fe.kid asc" in sql
+    assert "fe.entry_type = 'file'" not in sql
 
 
 @pytest.mark.asyncio
@@ -59,12 +65,17 @@ async def test_search_with_where_clause():
     cursor = FakeCursor(
         fetchall_results=[
             [
-                {"kid": 10, "kb_code": "2", "full_path": "docs/test.md"},
+                {
+                    "kid": 10,
+                    "kb_code": "2",
+                    "entry_type": "DIRECTORY",
+                    "full_path": "docs",
+                },
             ]
         ]
     )
 
-    results = await repo.search_files(
+    results = await repo.search_entries(
         cursor,
         kb_ids=[2],
         where_sql="EXISTS (SELECT 1 FROM knowledge_file_metadata_value mv WHERE mv.fs_entry_id = fe.kid AND mv.property_name = %(dsl_p1)s AND mv.value_type = %(dsl_p2)s AND mv.is_deleted = false AND mv.value_string = %(dsl_p3)s)",
@@ -82,7 +93,7 @@ async def test_search_with_like_escape_clause_keeps_sql_intact():
     repo = MetadataSearchRepository()
     cursor = FakeCursor(fetchall_results=[[]])
 
-    await repo.search_files(
+    await repo.search_entries(
         cursor,
         kb_ids=[2],
         where_sql="(fe.virtual_path LIKE %(dsl_p1)s ESCAPE '!')",
@@ -100,7 +111,14 @@ async def test_search_returns_metadata_fields():
     repo = MetadataSearchRepository()
     cursor = FakeCursor(
         fetchall_results=[
-            [{"kid": 10, "kb_code": "2", "full_path": "docs/test.md"}],
+            [
+                {
+                    "kid": 10,
+                    "kb_code": "2",
+                    "entry_type": "FILE",
+                    "full_path": "docs/test.md",
+                }
+            ],
             [
                 {
                     "fs_entry_id": 10,
@@ -116,7 +134,7 @@ async def test_search_returns_metadata_fields():
         ]
     )
 
-    results = await repo.search_files(
+    results = await repo.search_entries(
         cursor,
         kb_ids=[2],
         where_sql="",
@@ -279,13 +297,13 @@ async def test_search_applies_page_offset_and_counts_matches():
     cursor.fetchone = _async_return_once({"total": 42})
     repo = MetadataSearchRepository()
 
-    total = await repo.count_files(
+    total = await repo.count_entries(
         cursor,
         kb_ids=[2],
         where_sql="fe.checksum = %(dsl_p1)s",
         where_params={"dsl_p1": "abc"},
     )
-    await repo.search_files(
+    await repo.search_entries(
         cursor,
         kb_ids=[2],
         where_sql="",
@@ -344,3 +362,38 @@ async def test_backfill_metadata_returns_requested_system_values():
         },
         "fileSignature": {"valueType": "string", "value": "abc123"},
     }
+
+
+@pytest.mark.asyncio
+async def test_backfill_metadata_returns_directory_system_values():
+    repo = MetadataSearchRepository()
+    cursor = FakeCursor(
+        fetchall_results=[
+            [
+                {
+                    "kid": 20,
+                    "name": "docs",
+                    "file_size": None,
+                    "mime_type": None,
+                    "checksum": None,
+                    "virtual_path": "/docs",
+                    "created_at": FakeDateTime("2026-01-01T00:00:00+00:00"),
+                    "updated_at": FakeDateTime("2026-02-01T00:00:00+00:00"),
+                }
+            ]
+        ]
+    )
+
+    result = await repo.backfill_metadata(
+        cursor,
+        fs_entry_ids=[20],
+        property_names=["fileType", "fileSize", "mimeType", "fileSignature"],
+    )
+
+    assert result[20] == {
+        "fileType": {"valueType": "string", "value": ""},
+        "fileSize": {"valueType": "number", "value": 0},
+        "mimeType": {"valueType": "string", "value": None},
+        "fileSignature": {"valueType": "string", "value": None},
+    }
+    assert "entry_type = 'file'" not in cursor.executed[0][0].lower()

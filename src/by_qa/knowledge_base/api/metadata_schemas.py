@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
@@ -307,6 +307,7 @@ class MetadataSearchHit(BaseModel):
 
     kb_code: str = Field(serialization_alias="knCode")
     file_path: str = Field(serialization_alias="filePath")
+    type: Literal["file", "directory"]
     metadata: dict[str, Any] | None = None
 
 

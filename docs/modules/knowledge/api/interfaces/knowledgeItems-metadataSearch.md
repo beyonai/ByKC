@@ -2,7 +2,7 @@
 
 ## 功能描述
 
-仅依据文件路径、系统字段和业务元数据筛选知识文件，不执行正文语义召回。接口适合精确查询满足 Agent DSL 条件的文件集合。
+仅依据路径、系统字段和业务元数据筛选知识库中的文件和目录，不执行正文语义召回。接口适合精确查询满足 Agent DSL 条件的条目集合。
 
 ## 接口信息
 
@@ -20,7 +20,7 @@
 
 > 服务本身未定义额外的业务认证 Header；如由网关统一认证，按部署环境要求携带。
 
-Agent DSL 版纯元数据检索，只返回文件级结果。
+Agent DSL 版纯元数据检索，同一份请求同时查询文件和目录。请求模型不定义任何资源类型参数；资源类型仅由响应项的 `type` 字段标识。
 
 请求体：`application/json`
 
@@ -61,6 +61,7 @@ Agent DSL 版纯元数据检索，只返回文件级结果。
       {
         "knCode": "2",
         "filePath": "/制度/人事/续签流程.md",
+        "type": "file",
         "metadata": {
           "status": {
             "valueType": "string",
@@ -80,7 +81,9 @@ Agent DSL 版纯元数据检索，只返回文件级结果。
 }
 ```
 
-结果固定按 `knowledge_fs_entry.updated_at` 从旧到新排序；更新时间相同时按文件 `kid` 从小到大排序，确保分页稳定。
+`type` 是纯出参字段，值为 `file` 或 `directory`。为保持响应兼容，文件和目录的路径均继续使用 `filePath` 字段。
+
+结果固定按 `knowledge_fs_entry.updated_at` 从旧到新排序；更新时间相同时按条目 `kid` 从小到大排序，确保文件和目录共同分页时稳定。`total` 是两类条目的匹配总数。
 
 完整的系统文件属性清单见“系统文件属性”章节。所有系统文件属性均可用于 `where` 过滤，也可通过 `metadataFieldList` 获取值。
 
@@ -106,6 +109,8 @@ Agent DSL 版纯元数据检索，只返回文件级结果。
 ## 特殊逻辑
 
 - 该接口只执行结构化过滤，不调用全文或向量检索。
+- 请求结构不区分文件和目录，不增加 `resourceType`、`entryType` 或 `isDirectory` 等参数。
+- 目录的 `fileSize`、`mimeType`、`fileSignature`、`fileType` 分别为 `0`、`null`、`null`、空字符串；其他系统字段按目录条目的实际值返回。
 - `pageSize` 优先于兼容参数 `topK`；二者均不传时使用默认值。
 
 ## 路径与定位规则

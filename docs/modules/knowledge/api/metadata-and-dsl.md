@@ -14,7 +14,7 @@
 
 ## 系统文件属性
 
-系统文件属性由服务根据 `knowledge_fs_entry` 文件记录提供，不需要通过元数据属性管理接口注册。调用方应将这些名称视为保留字段，避免在 Markdown front matter 等自定义元数据中复用。当前共有以下 8 个字段：
+系统属性由服务根据 `knowledge_fs_entry` 文件或目录记录提供，不需要通过元数据属性管理接口注册。调用方应将这些名称视为保留字段，避免在 Markdown front matter 等自定义元数据中复用。当前共有以下 8 个字段：
 
 | 属性名 | 元数据类型 | 来源 | 含义 |
 | --- | --- | --- | --- |
@@ -26,6 +26,8 @@
 | `updatedAt` | `datetime` | `knowledge_fs_entry.updated_at` | 文件记录最近更新时间 |
 | `fileSignature` | `string` | `knowledge_fs_entry.checksum` | 原始文件内容的 SHA-256 校验值 |
 | `filePath` | `string` | `knowledge_fs_entry.virtual_path` | 文件在知识库内的完整路径，以 `/` 开头 |
+
+目录沿用上述字段名以保持接口兼容。其 `fileSize` 为 `0`，`mimeType` 和 `fileSignature` 为 `null`，`fileType` 为空字符串，其他字段取目录条目的实际值。
 
 使用约定：
 

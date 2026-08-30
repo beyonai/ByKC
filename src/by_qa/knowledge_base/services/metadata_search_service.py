@@ -35,7 +35,7 @@ class MetadataSearchPage:
 
 @dataclass
 class MetadataSearchService:
-    """Pure metadata search: filter files by metadata, no semantic retrieval."""
+    """Pure metadata search: filter filesystem entries, no semantic retrieval."""
 
     connection_factory: Callable[[], Any]
     knowledge_base_repository: KnowledgeBaseRepository
@@ -71,14 +71,14 @@ class MetadataSearchService:
                 request.where, property_map=property_map
             )
 
-            total = await self.metadata_search_repository.count_files(
+            total = await self.metadata_search_repository.count_entries(
                 cursor,
                 kb_ids=kb_ids,
                 where_sql=where_sql,
                 where_params=where_params,
             )
             page_size = request.effective_page_size
-            file_rows = await self.metadata_search_repository.search_files(
+            entry_rows = await self.metadata_search_repository.search_entries(
                 cursor,
                 kb_ids=kb_ids,
                 where_sql=where_sql,
@@ -88,27 +88,29 @@ class MetadataSearchService:
             )
 
             results: list[MetadataSearchHit] = []
-            if file_rows and request.metadata_field_list:
-                fs_entry_ids = [row["kid"] for row in file_rows]
+            if entry_rows and request.metadata_field_list:
+                fs_entry_ids = [row["kid"] for row in entry_rows]
                 metadata_map = await self.metadata_search_repository.backfill_metadata(
                     cursor,
                     fs_entry_ids=fs_entry_ids,
                     property_names=request.metadata_field_list,
                 )
-                for row in file_rows:
+                for row in entry_rows:
                     results.append(
                         MetadataSearchHit(
                             kb_code=row["kb_code"],
                             file_path="/" + row["full_path"],
+                            type=str(row["entry_type"]).lower(),
                             metadata=metadata_map.get(row["kid"]),
                         )
                     )
             else:
-                for row in file_rows:
+                for row in entry_rows:
                     results.append(
                         MetadataSearchHit(
                             kb_code=row["kb_code"],
                             file_path="/" + row["full_path"],
+                            type=str(row["entry_type"]).lower(),
                             metadata=None,
                         )
                     )

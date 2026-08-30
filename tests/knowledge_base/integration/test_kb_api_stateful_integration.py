@@ -6666,6 +6666,126 @@ async def test_metadata_pagination_system_signatures_and_file_guards(
 
 
 @pytest.mark.integration
+def test_metadata_search_uses_unchanged_request_for_files_and_directories(
+    monkeypatch, tmp_path
+):
+    """One existing request shape returns mixed entries and response-only type labels."""
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Metadata mixed {uuid4().hex[:12]}")
+        _create_directory(
+            client,
+            kb_code=kb_code,
+            directory_path="/catalog",
+            metadata={"scope": "shared", "directoryOnly": "yes"},
+        )
+        _upload_file(
+            client,
+            kb_code=kb_code,
+            file_path="/catalog/item.md",
+            file_content=b"# Item\n",
+        )
+        assert (
+            _update_file_metadata(
+                client,
+                kb_code=kb_code,
+                file_path="/catalog/item.md",
+                operation_list=[
+                    {
+                        "propertyName": "scope",
+                        "operation": "set",
+                        "valueType": "string",
+                        "value": "shared",
+                    }
+                ],
+            ).json()["resultCode"]
+            == "0"
+        )
+
+        def search(where: dict, *, page_num: int = 1, page_size: int = 20) -> dict:
+            payload = client.post(
+                "/api/v1/knowledgeItems/metadataSearch",
+                json={
+                    "knCodeList": [kb_code],
+                    "where": where,
+                    "metadataFieldList": [
+                        "scope",
+                        "fileName",
+                        "fileType",
+                        "fileSize",
+                        "mimeType",
+                        "fileSignature",
+                        "filePath",
+                    ],
+                    "pageNum": page_num,
+                    "pageSize": page_size,
+                },
+            ).json()
+            assert payload["resultCode"] == "0", payload
+            return payload["resultObject"]
+
+        mixed = search({"eq": {"fieldName": "scope", "value": "shared"}})
+        first_page = search(
+            {"eq": {"fieldName": "scope", "value": "shared"}}, page_size=1
+        )
+        second_page = search(
+            {"eq": {"fieldName": "scope", "value": "shared"}},
+            page_num=2,
+            page_size=1,
+        )
+        directory_only = search({"eq": {"fieldName": "directoryOnly", "value": "yes"}})
+        exact_directory = search({"eq": {"fieldName": "filePath", "value": "/catalog"}})
+
+        renamed = client.post(
+            "/api/v1/directories/update",
+            json={
+                "knCode": kb_code,
+                "directoryPath": "/catalog",
+                "directoryName": "renamed",
+            },
+        ).json()
+        after_rename = search({"eq": {"fieldName": "scope", "value": "shared"}})
+        deleted = client.post(
+            "/api/v1/directories/delete",
+            json={"knCode": kb_code, "directoryPath": "/renamed"},
+        ).json()
+        after_delete = search({"eq": {"fieldName": "scope", "value": "shared"}})
+
+    assert mixed["total"] == 2
+    by_type = {item["type"]: item for item in mixed["data"]}
+    assert set(by_type) == {"directory", "file"}
+    assert by_type["directory"]["filePath"] == "/catalog"
+    assert by_type["file"]["filePath"] == "/catalog/item.md"
+    assert by_type["directory"]["metadata"] == {
+        "scope": {"valueType": "string", "value": "shared"},
+        "fileName": {"valueType": "string", "value": "catalog"},
+        "fileType": {"valueType": "string", "value": ""},
+        "fileSize": {"valueType": "number", "value": 0},
+        "mimeType": {"valueType": "string", "value": None},
+        "fileSignature": {"valueType": "string", "value": None},
+        "filePath": {"valueType": "string", "value": "/catalog"},
+    }
+    assert first_page["total"] == second_page["total"] == 2
+    paged = first_page["data"] + second_page["data"]
+    assert paged == mixed["data"]
+    assert {item["type"] for item in paged} == {"directory", "file"}
+    assert directory_only["total"] == 1
+    assert directory_only["data"][0]["type"] == "directory"
+    assert exact_directory["total"] == 1
+    assert exact_directory["data"][0]["type"] == "directory"
+    assert renamed["resultCode"] == "0"
+    assert {item["filePath"] for item in after_rename["data"]} == {
+        "/renamed",
+        "/renamed/item.md",
+    }
+    assert deleted["resultCode"] == "0"
+    assert after_delete["total"] == 0
+    assert after_delete["data"] == []
+
+
+@pytest.mark.integration
 async def test_metadata_search_paginates_and_sorts_by_updated_at_ascending(
     monkeypatch, tmp_path
 ):

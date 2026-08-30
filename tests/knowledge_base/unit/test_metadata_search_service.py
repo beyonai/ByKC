@@ -55,8 +55,15 @@ async def test_metadata_search_no_where():
             {"total": 1},  # count
         ],
         fetchall_results=[
-            # search_files result
-            [{"kid": 10, "kb_code": "2", "full_path": "docs/test.md"}],
+            # search_entries result
+            [
+                {
+                    "kid": 10,
+                    "kb_code": "2",
+                    "entry_type": "DIRECTORY",
+                    "full_path": "docs",
+                }
+            ],
             # backfill metadata
             [
                 {
@@ -100,6 +107,7 @@ async def test_metadata_search_no_where():
 
     assert len(page.data) == 1
     assert page.data[0].kb_code == "2"
+    assert page.data[0].type == "directory"
     assert page.total == 1
     assert page.page_num == 1
     assert page.page_size == 20
@@ -111,6 +119,14 @@ def test_metadata_search_request_requires_where():
 
     with pytest.raises(ValidationError):
         MetadataSearchRequest(kb_code_list=["1"], top_k=10)
+
+
+def test_metadata_search_request_does_not_define_entry_type_input():
+    """Resource kind remains response-only; the existing request model is unchanged."""
+    assert "type" not in MetadataSearchRequest.model_fields
+    assert "resource_type" not in MetadataSearchRequest.model_fields
+    assert "entry_type" not in MetadataSearchRequest.model_fields
+    assert "is_directory" not in MetadataSearchRequest.model_fields
 
 
 def test_metadata_search_request_requires_kb_code_list():

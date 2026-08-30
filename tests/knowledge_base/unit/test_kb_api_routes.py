@@ -438,6 +438,7 @@ def test_metadata_search_route_returns_pagination_metadata():
                     MetadataSearchHit(
                         kb_code="1",
                         file_path="/docs/old.md",
+                        type="file",
                         metadata={
                             "fileSignature": {
                                 "valueType": "string",
@@ -482,6 +483,7 @@ def test_metadata_search_route_returns_pagination_metadata():
             {
                 "knCode": "1",
                 "filePath": "/docs/old.md",
+                "type": "file",
                 "metadata": {"fileSignature": {"valueType": "string", "value": "abc"}},
             }
         ],

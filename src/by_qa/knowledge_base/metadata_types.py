@@ -57,7 +57,7 @@ SYSTEM_FIELD_TO_FE_EXPR: Final[dict[str, tuple[str, str]]] = {
         ")",
         "string",
     ),
-    "fileSize": ("fe.file_size", "number"),
+    "fileSize": ("COALESCE(fe.file_size, 0)", "number"),
     "mimeType": ("fe.mime_type", "string"),
     "createdAt": ("fe.created_at", "datetime"),
     "updatedAt": ("fe.updated_at", "datetime"),
@@ -112,6 +112,8 @@ def extract_system_metadata(
             value = file_name.rsplit(".", 1)[1].lower() if "." in file_name else ""
         else:
             value = entry.get(SYSTEM_FIELD_TO_ENTRY_KEY[name])
+            if name == "fileSize" and value is None:
+                value = 0
         if value_type == "datetime" and hasattr(value, "isoformat"):
             value = value.isoformat()
         metadata[name] = {"valueType": value_type, "value": value}

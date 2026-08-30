@@ -35,9 +35,9 @@ def _extract_value(row: dict[str, Any]) -> Any:
 
 
 class MetadataSearchRepository:
-    """SQL queries for metadata-filtered file search and metadata backfill."""
+    """SQL queries for metadata-filtered entry search and metadata backfill."""
 
-    async def search_files(
+    async def search_entries(
         self,
         cursor: Any,
         *,
@@ -49,7 +49,6 @@ class MetadataSearchRepository:
     ) -> list[dict[str, Any]]:
         conditions = [
             "fe.knowledge_base_id = ANY(%(kb_ids)s)",
-            "fe.entry_type = 'FILE'",
             "fe.is_deleted = false",
         ]
         if where_sql:
@@ -60,6 +59,7 @@ class MetadataSearchRepository:
             SELECT fe.kid,
                    kb.kid AS kb_id,
                    CAST(kb.kid AS text) AS kb_code,
+                   fe.entry_type,
                    ltrim(fe.virtual_path, '/') AS full_path
             FROM knowledge_fs_entry fe
             JOIN knowledge_base kb ON kb.kid = fe.knowledge_base_id
@@ -77,7 +77,7 @@ class MetadataSearchRepository:
         await cursor.execute(sql, params)
         return await cursor.fetchall()
 
-    async def count_files(
+    async def count_entries(
         self,
         cursor: Any,
         *,
@@ -85,10 +85,9 @@ class MetadataSearchRepository:
         where_sql: str,
         where_params: dict[str, Any],
     ) -> int:
-        """Count live matching files for stable pagination metadata."""
+        """Count live matching files and directories for stable pagination."""
         conditions = [
             "fe.knowledge_base_id = ANY(%(kb_ids)s)",
-            "fe.entry_type = 'FILE'",
             "fe.is_deleted = false",
         ]
         if where_sql:
@@ -130,7 +129,6 @@ class MetadataSearchRepository:
                        created_at, updated_at
                 FROM knowledge_fs_entry
                 WHERE kid = ANY(%(entry_ids)s)
-                  AND entry_type = 'FILE'
                   AND is_deleted = false
                 """,
                 {"entry_ids": fs_entry_ids},

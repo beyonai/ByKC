@@ -6,6 +6,7 @@ import zipfile
 import pytest
 
 from by_qa.knowledge_base.api.schemas import (
+    CreateDirectoryRequest,
     DeleteKnowledgeItemRequest,
     KnowledgeItemUploadRequest,
 )
@@ -20,9 +21,11 @@ class FakeIngestion:
         self,
         *,
         fail_upload_for: str | None = None,
+        fail_directory_for: str | None = None,
         fail_batch_reference_compensation: bool = False,
     ):
         self.uploads: list[tuple[int, KnowledgeItemUploadRequest]] = []
+        self.directories: list[tuple[int, CreateDirectoryRequest]] = []
         self.deletes: list[tuple[int, str]] = []
         self.batch_reference_compensations: list[
             tuple[str, tuple[str, ...], tuple[tuple[int, str], ...]]
@@ -31,6 +34,9 @@ class FakeIngestion:
         self._seq = 0
         self.fail_upload_for = (
             "/" + fail_upload_for.strip("/") if fail_upload_for else None
+        )
+        self.fail_directory_for = (
+            "/" + fail_directory_for.strip("/") if fail_directory_for else None
         )
         self.fail_batch_reference_compensation = fail_batch_reference_compensation
 
@@ -52,6 +58,11 @@ class FakeIngestion:
             "knowledge_base_id": 7,
             "virtual_path": normalized,
         }
+
+    async def create_directory(self, request: CreateDirectoryRequest) -> None:
+        self.directories.append((self._next(), request))
+        if request.directory_path == self.fail_directory_for:
+            raise RuntimeError(f"forced directory failure for {request.directory_path}")
 
     async def file_exists(self, kb_code: str, full_path: str) -> bool:  # pylint: disable=unused-argument
         return full_path in self.files
@@ -424,7 +435,7 @@ async def test_import_zip_skips_unsafe_path_and_records_failure():
     assert item.error  # non-empty reason
 
 
-async def test_import_zip_skips_macosx_and_directories():
+async def test_import_zip_skips_macosx_and_imports_directories():
     ingestion = FakeIngestion()
     zip_bytes = _make_zip({"__MACOSX/._doc.md": b"x", "sub/": b"", "real.md": b"# h\n"})
     svc = ZipBatchImportService(ingestion_service=ingestion)
@@ -432,7 +443,130 @@ async def test_import_zip_skips_macosx_and_directories():
         kb_code="kb1", target_dir="/target", zip_bytes=zip_bytes
     )
     assert [req.file_path for _, req in ingestion.uploads] == ["/target/real.md"]
-    assert result.summary.total == 1
+    assert [req.directory_path for _, req in ingestion.directories] == ["/target/sub"]
+    assert result.summary.total == 2
+    assert result.summary.succeeded == 2
+    assert [item.resource_type for item in result.data] == ["directory", "file"]
+    assert all("resource_type" not in item.model_dump() for item in result.data)
+    assert ingestion.batch_reference_compensations[0][1] == ("/target/real.md",)
+
+
+async def test_import_zip_records_unsafe_empty_directory_as_failure():
+    ingestion = FakeIngestion()
+    svc = ZipBatchImportService(ingestion_service=ingestion)
+
+    result = await svc.import_zip(
+        kb_code="kb1",
+        target_dir="/target",
+        zip_bytes=_make_zip({"../../escape/": b""}),
+    )
+
+    assert ingestion.directories == []
+    assert result.summary.model_dump() == {"total": 1, "succeeded": 0, "failed": 1}
+    assert result.data[0].error == "unsafe path"
+
+
+async def test_import_zip_creates_nested_empty_directories_shallow_to_deep():
+    ingestion = FakeIngestion()
+    zip_bytes = _make_zip(
+        {
+            "level1/level2/level3/": b"",
+            "level1/": b"",
+            "level1/level2/": b"",
+        }
+    )
+    svc = ZipBatchImportService(ingestion_service=ingestion)
+
+    result = await svc.import_zip(
+        kb_code="kb1", target_dir="/target", zip_bytes=zip_bytes
+    )
+
+    assert [req.directory_path for _, req in ingestion.directories] == [
+        "/target/level1/level2/level3"
+    ]
+    assert [item.file_path for item in result.data] == [
+        "/target/level1",
+        "/target/level1/level2",
+        "/target/level1/level2/level3",
+    ]
+    assert result.summary.model_dump() == {"total": 3, "succeeded": 3, "failed": 0}
+
+
+async def test_import_zip_creates_only_directory_leaves_for_branched_tree():
+    ingestion = FakeIngestion()
+    svc = ZipBatchImportService(ingestion_service=ingestion)
+
+    result = await svc.import_zip(
+        kb_code="kb1",
+        target_dir="/target",
+        zip_bytes=_make_zip({"root/": b"", "root/left/": b"", "root/right/": b""}),
+    )
+
+    assert [req.directory_path for _, req in ingestion.directories] == [
+        "/target/root/left",
+        "/target/root/right",
+    ]
+    assert [item.file_path for item in result.data] == [
+        "/target/root",
+        "/target/root/left",
+        "/target/root/right",
+    ]
+    assert all(item.success for item in result.data)
+
+
+async def test_import_zip_falls_back_to_branch_when_leaf_creation_fails():
+    ingestion = FakeIngestion(fail_directory_for="/target/root/leaf")
+    svc = ZipBatchImportService(ingestion_service=ingestion)
+
+    result = await svc.import_zip(
+        kb_code="kb1",
+        target_dir="/target",
+        zip_bytes=_make_zip({"root/": b"", "root/leaf/": b""}),
+    )
+
+    assert [req.directory_path for _, req in ingestion.directories] == [
+        "/target/root/leaf",
+        "/target/root",
+        "/target/root/leaf",
+    ]
+    assert [(item.file_path, item.success) for item in result.data] == [
+        ("/target/root", True),
+        ("/target/root/leaf", False),
+    ]
+
+
+async def test_import_zip_applies_common_fields_to_empty_directory():
+    ingestion = FakeIngestion()
+    svc = ZipBatchImportService(ingestion_service=ingestion)
+
+    await svc.import_zip(
+        kb_code="kb1",
+        target_dir="/target",
+        zip_bytes=_make_zip({"empty/": b""}),
+        file_description="archive entry",
+        metadata={"source": "zip"},
+    )
+
+    request = ingestion.directories[0][1]
+    assert request.directory_description == "archive entry"
+    assert request.metadata == {"source": "zip"}
+
+
+async def test_import_zip_does_not_prune_ancestors_with_common_metadata():
+    ingestion = FakeIngestion()
+    svc = ZipBatchImportService(ingestion_service=ingestion)
+
+    await svc.import_zip(
+        kb_code="kb1",
+        target_dir="/target",
+        zip_bytes=_make_zip({"root/": b"", "root/leaf/": b""}),
+        metadata={"source": "zip"},
+    )
+
+    assert [req.directory_path for _, req in ingestion.directories] == [
+        "/target/root",
+        "/target/root/leaf",
+    ]
 
 
 async def test_import_zip_rejects_non_zip():

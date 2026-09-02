@@ -29,9 +29,9 @@
 - Markdown 引用处理（默认动作，无论是否 zip 包）：上传 Markdown 文件时，服务端解析其中的图片引用 `![]()` 与链接引用 `[]()`，将相对路径按当前文件所在目录解析为知识库绝对路径（消除 `.`、`..`；越过知识库根的引用保持不变），并为可管理的文件引用登记稳定引用关系。Markdown 入库内容会保存为内部 `byqa-ref://<id>` token；面向用户的读取、Markdown 下载和知识检索会在输出时解析为目标文件当前路径。未解析或目标已删除的引用回退为用户原始写法。URL（带协议头）与锚点（`#anchor`）保留不变。
 - zip 包批量上传：当 `fileContent` 文件名以 `.zip` 结尾且为合法 zip 时，按批量导入处理：
   - 解压后并发上传：非 Markdown 文件先上传，Markdown 文件最后上传，保证 Markdown 引用登记时图片与被引用文档已就位；仍未就位的引用会保留为待解析状态，后续同路径文件上传后自动绑定。
-  - zip 内文件上传到 `filePath` 指定的目标目录下，保留 zip 内相对目录结构。
+  - zip 内文件上传到 `filePath` 指定的目标目录下，保留 zip 内相对目录结构，包括多层空目录。
   - 若 zip 内文件在知识库中已存在，则先软删除原文件再上传（覆盖语义）。
-  - 自动跳过 macOS 元数据（`__MACOSX`、以 `.` 开头的隐藏条目）与目录条目。
+  - 自动跳过 macOS 元数据（`__MACOSX`、以 `.` 开头的隐藏条目）；目录条目按层级由浅到深创建。
   - 文件名编码兼容：自动识别 zip 条目的 UTF-8 标志位，未设置时按 GBK 还原中文文件名，兼容中文 Windows 资源管理器 / WinRAR / 好压 生成的 zip。
   - 安全限制：单条目解压上限 64 MiB、全部条目解压上限 256 MiB、条目数上限 10000，超出返回失败；越过目标目录或知识库根的路径（含 `..` 跨界）记为失败；解析后同路径的重复条目记为失败。
 - 当上传文件为 Markdown 且 `processFrontMatter` 为 `true` 时，服务端会额外解析文档开头的 YAML front matter header。
@@ -127,17 +127,17 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
 | `resultCode` | string | 是 | 业务结果码；整批请求被正常处理时为 `0` |
 | `resultMsg` | string | 是 | 业务结果说明 |
 | `resultObject` | object | 是 | 批量导入结果；单文件上传也使用相同结构 |
-| `resultObject.data` | array[object] | 是 | 逐文件导入结果 |
-| `resultObject.data[].filePath` | string | 是 | 该文件入库后的完整路径 |
-| `resultObject.data[].success` | boolean | 是 | 该文件是否导入成功 |
+| `resultObject.data` | array[object] | 是 | 逐文件或显式目录 entry 导入结果 |
+| `resultObject.data[].filePath` | string | 是 | 该文件或目录入库后的完整路径 |
+| `resultObject.data[].success` | boolean | 是 | 该文件或目录是否导入成功 |
 | `resultObject.data[].error` | string \| null | 是 | 失败原因；成功时为 `null` |
 | `resultObject.summary` | object | 是 | 本次上传的汇总统计 |
-| `resultObject.summary.total` | integer | 是 | 本次上传处理的文件总数 |
+| `resultObject.summary.total` | integer | 是 | 本次上传处理的文件和显式目录 entry 总数 |
 | `resultObject.summary.succeeded` | integer | 是 | 成功数 |
 | `resultObject.summary.failed` | integer | 是 | 失败数 |
 | `resultObject.postProcessErrors` | array[string] | 否 | 文件入库后的批后处理错误；不计入 `summary` |
 
-zip 批量上传可能包含可选字段 `postProcessErrors`（string 数组），用于返回文件入库完成后的批后处理错误（例如 Markdown 引用批量补偿失败）。该字段不属于 `data` 文件结果列表，且不计入 `summary.total` / `summary.succeeded` / `summary.failed`；`data` 和 `summary` 只统计真实 zip entry / 知识库路径。
+zip 批量上传可能包含可选字段 `postProcessErrors`（string 数组），用于返回文件入库完成后的批后处理错误（例如 Markdown 引用批量补偿失败）。该字段不属于 `data` entry 结果列表，且不计入 `summary.total` / `summary.succeeded` / `summary.failed`；`data` 和 `summary` 只统计真实 zip entry / 知识库路径。
 
 补偿失败时响应示例片段：
 

@@ -1838,8 +1838,9 @@ def test_upload_file_route_rejects_non_object_metadata(monkeypatch, metadata):
 
 def test_upload_zip_route_includes_post_process_errors(monkeypatch):
     class FakeZipBatchImportService:
-        def __init__(self, *, ingestion_service):
+        def __init__(self, *, ingestion_service, directory_service):
             self.ingestion_service = ingestion_service
+            self.directory_service = directory_service
 
         async def import_zip(self, **_kwargs):
             return ZipBatchImportResult(

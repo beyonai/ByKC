@@ -749,7 +749,11 @@ def register_routes(
                         result_object={},
                         status_code=422,
                     )
-                batch_service = ZipBatchImportService(ingestion_service=service)
+                directory_service = await get_knowledge_base_service()
+                batch_service = ZipBatchImportService(
+                    ingestion_service=service,
+                    directory_service=directory_service,
+                )
                 result = await batch_service.import_zip(
                     kb_code=request.kb_code,
                     target_dir=request.file_path,
@@ -779,7 +783,7 @@ def register_routes(
                                     "targetPath": (
                                         item.file_path if item.success else None
                                     ),
-                                    "resourceType": "file",
+                                    "resourceType": item.resource_type,
                                     "success": item.success,
                                     "error": item.error,
                                 }

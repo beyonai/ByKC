@@ -16,11 +16,12 @@ import logging
 import zipfile
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from by_qa.knowledge_base.api.schemas import (
+    CreateDirectoryRequest,
     DeleteKnowledgeItemRequest,
     KnowledgeItemUploadRequest,
 )
@@ -44,6 +45,7 @@ class ImportItem(BaseModel):
     file_path: str = Field(serialization_alias="filePath")
     success: bool
     error: str | None = None
+    resource_type: Literal["file", "directory"] = Field(default="file", exclude=True)
 
 
 class ImportSummary(BaseModel):
@@ -65,6 +67,13 @@ class ZipBatchImportResult:
 class _ImportedItem:
     item: ImportItem
     upload_row: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class _ZipEntry:
+    name: str
+    data: bytes | None
+    is_directory: bool
 
 
 def _is_junk_segment(seg: str) -> bool:
@@ -116,6 +125,7 @@ def _resolve_within_target(target_dir: str, name: str) -> str | None:
 @dataclass
 class ZipBatchImportService:
     ingestion_service: Any
+    directory_service: Any | None = None
     max_concurrency: int = 8
 
     async def import_zip(
@@ -136,27 +146,45 @@ class ZipBatchImportService:
         # Dedup entries by resolved KB path: keep the first occurrence of each
         # resolved path; later duplicates are recorded as failures and skipped.
         # Unsafe entries (resolved is None) are NOT duplicates — they still go
-        # through _import_one to be recorded as unsafe (preserve behavior).
+        # through their importer to be recorded as unsafe.
         seen: set[str] = set()
+        directories: list[_ZipEntry] = []
         non_md: list[tuple[str, bytes]] = []
         md: list[tuple[str, bytes]] = []
         duplicate_results: list[ImportItem] = []
-        for name, data in entries:
-            resolved = _resolve_within_target(normalized_target, name)
+        for entry in entries:
+            resolved = _resolve_within_target(normalized_target, entry.name)
             if resolved is None:
-                (md if name.lower().endswith(_MD_SUFFIXES) else non_md).append(
-                    (name, data)
-                )
+                if entry.is_directory:
+                    directories.append(entry)
+                else:
+                    group = md if entry.name.lower().endswith(_MD_SUFFIXES) else non_md
+                    group.append((entry.name, entry.data or b""))
                 continue
             if resolved in seen:
                 duplicate_results.append(
                     ImportItem(
-                        file_path=resolved, success=False, error="duplicate path in zip"
+                        file_path=resolved,
+                        success=False,
+                        error="duplicate path in zip",
+                        resource_type=("directory" if entry.is_directory else "file"),
                     )
                 )
                 continue
             seen.add(resolved)
-            (md if name.lower().endswith(_MD_SUFFIXES) else non_md).append((name, data))
+            if entry.is_directory:
+                directories.append(entry)
+            else:
+                group = md if entry.name.lower().endswith(_MD_SUFFIXES) else non_md
+                group.append((entry.name, entry.data or b""))
+
+        directory_imports = await self._import_directories(
+            directories,
+            kb_code=kb_code,
+            target_dir=normalized_target,
+            directory_description=file_description,
+            metadata=metadata,
+        )
 
         limit = max(1, max_concurrency or self.max_concurrency)
         sem = asyncio.Semaphore(limit)
@@ -185,7 +213,8 @@ class ZipBatchImportService:
             metadata=metadata,
         )
 
-        imports = list(non_md_imports) + list(md_imports)
+        file_imports = list(non_md_imports) + list(md_imports)
+        imports = directory_imports + file_imports
         results = [uploaded.item for uploaded in imports] + duplicate_results
         upload_rows = [
             uploaded.upload_row
@@ -195,7 +224,11 @@ class ZipBatchImportService:
         post_process_errors: list[str] = []
         compensation_failure = await self._resolve_pending_references_after_batch(
             kb_code=kb_code,
-            file_paths=[item.file_path for item in results if item.success],
+            file_paths=[
+                imported.item.file_path
+                for imported in file_imports
+                if imported.item.success
+            ],
             uploaded_rows=upload_rows,
         )
         if compensation_failure is not None:
@@ -260,22 +293,23 @@ class ZipBatchImportService:
             return f"batch reference compensation failed: {exc}"
         return None
 
-    def _extract_entries(self, zip_bytes: bytes) -> list[tuple[str, bytes]]:
+    def _extract_entries(self, zip_bytes: bytes) -> list[_ZipEntry]:
         try:
             zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
         except zipfile.BadZipFile as exc:
             raise ValueError("invalid zip file") from exc
         total = 0
-        out: list[tuple[str, bytes]] = []
+        out: list[_ZipEntry] = []
         for info in zf.infolist():
-            if info.is_dir():
-                continue
             name = _decode_zip_name(info)
             segments = name.split("/")
             if any(_is_junk_segment(seg) for seg in segments):
                 continue
             if len(out) >= _MAX_ENTRIES:
                 raise ValueError("zip too large")
+            if info.is_dir():
+                out.append(_ZipEntry(name=name, data=None, is_directory=True))
+                continue
             # Stream-decompress and cap ACTUAL uncompressed bytes, not the
             # (spoofable) header-declared file_size, to defend against zip
             # bombs that declare small sizes but decompress to gigabytes.
@@ -296,8 +330,164 @@ class ZipBatchImportService:
                         raise ValueError("zip too large")
                     if total > _MAX_TOTAL_UNCOMPRESSED:
                         raise ValueError("zip too large")
-            out.append((name, bytes(buf)))
+            out.append(_ZipEntry(name=name, data=bytes(buf), is_directory=False))
         return out
+
+    async def _import_directories(
+        self,
+        entries: list[_ZipEntry],
+        *,
+        kb_code: str,
+        target_dir: str,
+        directory_description: str | None,
+        metadata: dict[str, Any] | None,
+    ) -> list[_ImportedItem]:
+        """Create explicit directories, using leaf paths on the common fast path."""
+        ordered = sorted(entries, key=lambda item: item.name.count("/"))
+        if directory_description is not None or metadata is not None:
+            return [
+                await self._import_directory(
+                    kb_code=kb_code,
+                    target_dir=target_dir,
+                    name=entry.name,
+                    directory_description=directory_description,
+                    metadata=metadata,
+                )
+                for entry in ordered
+            ]
+
+        resolved_entries = [
+            (entry, _resolve_within_target(target_dir, entry.name)) for entry in ordered
+        ]
+        valid = [(entry, path) for entry, path in resolved_entries if path is not None]
+        entries_by_path = {path: entry for entry, path in valid}
+        non_leaves: set[str] = set()
+        for path in entries_by_path:
+            parent = path.rpartition("/")[0]
+            while parent:
+                if parent in entries_by_path:
+                    non_leaves.add(parent)
+                parent = parent.rpartition("/")[0]
+        leaves = [(entry, path) for entry, path in valid if path not in non_leaves]
+        outcomes: dict[str, _ImportedItem] = {}
+
+        def explicit_branch(path: str) -> list[tuple[_ZipEntry, str]]:
+            branch: list[tuple[_ZipEntry, str]] = []
+            current = path
+            while current:
+                entry = entries_by_path.get(current)
+                if entry is not None:
+                    branch.append((entry, current))
+                current = current.rpartition("/")[0]
+            branch.reverse()
+            return branch
+
+        for entry, path in leaves:
+            leaf_result = await self._import_directory(
+                kb_code=kb_code,
+                target_dir=target_dir,
+                name=entry.name,
+                directory_description=None,
+                metadata=None,
+            )
+            if leaf_result.item.success:
+                for _, ancestor_path in explicit_branch(path):
+                    outcomes.setdefault(
+                        ancestor_path,
+                        _ImportedItem(
+                            item=ImportItem(
+                                file_path=ancestor_path,
+                                success=True,
+                                error=None,
+                                resource_type="directory",
+                            )
+                        ),
+                    )
+                continue
+
+            # A failed recursive leaf transaction may still have valid explicit
+            # ancestors. Re-run that branch shallow-to-deep so successful
+            # parents retain the same partial-success semantics as before.
+            for branch_entry, branch_path in explicit_branch(path):
+                if branch_path in outcomes:
+                    continue
+                outcomes[branch_path] = await self._import_directory(
+                    kb_code=kb_code,
+                    target_dir=target_dir,
+                    name=branch_entry.name,
+                    directory_description=None,
+                    metadata=None,
+                )
+
+        imports: list[_ImportedItem] = []
+        for entry, path in resolved_entries:
+            if path is None:
+                imports.append(
+                    await self._import_directory(
+                        kb_code=kb_code,
+                        target_dir=target_dir,
+                        name=entry.name,
+                        directory_description=None,
+                        metadata=None,
+                    )
+                )
+            else:
+                imports.append(outcomes[path])
+        return imports
+
+    async def _import_directory(
+        self,
+        *,
+        kb_code: str,
+        target_dir: str,
+        name: str,
+        directory_description: str | None,
+        metadata: dict[str, Any] | None,
+    ) -> _ImportedItem:
+        resolved = _resolve_within_target(target_dir, name)
+        if resolved is None:
+            reported = "/" + "/".join(
+                p for p in (target_dir.split("/") + name.split("/")) if p
+            )
+            return _ImportedItem(
+                item=ImportItem(
+                    file_path=reported,
+                    success=False,
+                    error="unsafe path",
+                    resource_type="directory",
+                )
+            )
+
+        service = self.directory_service or self.ingestion_service
+        try:
+            await service.create_directory(
+                CreateDirectoryRequest(
+                    kb_code=kb_code,
+                    directory_path=resolved,
+                    directory_description=directory_description,
+                    metadata=metadata,
+                )
+            )
+            return _ImportedItem(
+                item=ImportItem(
+                    file_path=resolved,
+                    success=True,
+                    error=None,
+                    resource_type="directory",
+                )
+            )
+        except Exception as exc:
+            logger.warning(
+                "zip batch directory import failed: path=%s error=%s", resolved, exc
+            )
+            return _ImportedItem(
+                item=ImportItem(
+                    file_path=resolved,
+                    success=False,
+                    error=str(exc),
+                    resource_type="directory",
+                )
+            )
 
     async def _import_one(
         self,

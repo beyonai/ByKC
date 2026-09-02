@@ -1983,6 +1983,62 @@ def test_zip_import_applies_common_metadata_before_each_markdown_front_matter(
 
 
 @pytest.mark.integration
+def test_zip_import_persists_nested_empty_directory_entry(monkeypatch):
+    """One deep empty-directory entry creates every missing parent directory."""
+    import io
+    import zipfile
+
+    settings = _kb_settings()
+    _reset_runtime(monkeypatch, settings)
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr("outer/inner/deep/", b"")
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Zip empty dirs {uuid4().hex[:12]}")
+        response = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/zip-empty"},
+            files={
+                "fileContent": (
+                    "empty-directories.zip",
+                    archive.getvalue(),
+                    "application/zip",
+                )
+            },
+        )
+        listings = [
+            client.post(
+                "/api/v1/listDir",
+                json={"knCode": kb_code, "directoryPath": path},
+            ).json()["resultObject"]["data"]
+            for path in (
+                "/",
+                "/zip-empty",
+                "/zip-empty/outer",
+                "/zip-empty/outer/inner",
+            )
+        ]
+
+    assert response.json()["resultObject"] == {
+        "data": [
+            {
+                "filePath": "/zip-empty/outer/inner/deep",
+                "success": True,
+                "error": None,
+            }
+        ],
+        "summary": {"total": 1, "succeeded": 1, "failed": 0},
+    }
+    assert [[(item["name"], item["type"]) for item in rows] for rows in listings] == [
+        [("/zip-empty", "directory")],
+        [("/zip-empty/outer", "directory")],
+        [("/zip-empty/outer/inner", "directory")],
+        [("/zip-empty/outer/inner/deep", "directory")],
+    ]
+
+
+@pytest.mark.integration
 def test_metadata_update_is_atomic_and_downloads_current_front_matter(monkeypatch):
     settings = _kb_settings()
     _reset_runtime(monkeypatch, settings)

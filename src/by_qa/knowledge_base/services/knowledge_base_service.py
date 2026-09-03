@@ -1217,7 +1217,9 @@ class KnowledgeBaseService:
         finally:
             await connection.close()
 
-        markdown_available = bool(file_row.get("markdown_object_key"))
+        markdown_available = bool(
+            file_row.get("markdown_bucket_name") and file_row.get("markdown_object_key")
+        )
         markdown_text: str | None = None
         if request.include_markdown and markdown_available:
             if self.storage_provider is None:
@@ -1267,8 +1269,24 @@ class KnowledgeBaseService:
         line_count = int(file_row.get("line_count") or 0)
         if markdown_text is not None and line_count <= 0:
             line_count = markdown_text.count("\n") + (1 if markdown_text else 0)
+        current_checksum = str(file_row.get("checksum") or "")
+        input_checksum = str(latest_task.get("input_checksum") or "")
+        is_built = bool(
+            str(latest_task.get("status") or "").lower() == "succeeded"
+            and input_checksum
+            and input_checksum == current_checksum
+            and not bool(file_row.get("is_deleted"))
+            and markdown_available
+            and chunk_count > 0
+            and embedded_chunk_count == chunk_count
+            and indexed_chunk_count == chunk_count
+        )
+        build_profile = latest_task.get("build_profile")
+        if isinstance(build_profile, str):
+            build_profile = json.loads(build_profile)
         result = {
             "knCode": request.kb_code,
+            "fileId": str(fs_entry_id),
             "filePath": request.file_path,
             "fileName": str(
                 file_row.get("name") or PurePosixPath(request.file_path).name
@@ -1276,9 +1294,19 @@ class KnowledgeBaseService:
             "fileType": PurePosixPath(request.file_path).suffix.lower().lstrip("."),
             "fileSize": int(file_row.get("file_size") or 0),
             "mimeType": file_row.get("mime_type"),
+            "currentChecksum": current_checksum,
+            "isBuilt": is_built,
             "build": {
                 "taskId": str(self._row_id(latest_task)),
-                "fileId": str(fs_entry_id),
+                "batchId": (
+                    str(latest_task["batch_id"])
+                    if latest_task.get("batch_id") is not None
+                    else None
+                ),
+                "origin": str(latest_task.get("origin") or "API").upper(),
+                "executionMode": str(
+                    latest_task.get("execution_mode") or "BACKGROUND"
+                ).upper(),
                 "status": legacy_build_status(latest_task.get("status")),
                 "currentStep": legacy_build_step(
                     status=latest_task.get("status"),
@@ -1287,6 +1315,10 @@ class KnowledgeBaseService:
                 ),
                 "errorCode": latest_task.get("error_code"),
                 "errorMessage": latest_task.get("error_message"),
+                "inputChecksum": input_checksum,
+                "inputIsDeleted": bool(latest_task.get("input_is_deleted")),
+                "buildProfile": build_profile or {},
+                "buildProfileHash": str(latest_task.get("build_profile_hash") or ""),
                 "startedAt": self._isoformat(latest_task.get("started_at")),
                 "finishedAt": self._isoformat(latest_task.get("finished_at")),
                 "durationMs": duration_ms,

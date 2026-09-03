@@ -37,6 +37,8 @@ class FakeFsEntryRepository:
             "markdown_bucket_name": "kb",
             "markdown_object_key": "demo.md",
             "line_count": 4,
+            "checksum": "current-checksum",
+            "is_deleted": False,
         }
 
 
@@ -46,8 +48,18 @@ class FakeBuildTaskRepository:
         started = datetime(2026, 8, 3, 12, 0, tzinfo=timezone.utc)
         return {
             "kid": 9001,
-            "status": "complete",
+            "status": "succeeded",
             "current_step": "complete",
+            "batch_id": "fb-1",
+            "origin": "API",
+            "execution_mode": "BACKGROUND",
+            "input_checksum": "current-checksum",
+            "input_is_deleted": False,
+            "build_profile": {
+                "profileVersion": 1,
+                "embedding": {"model": "bge-m3", "dimension": 1024},
+            },
+            "build_profile_hash": "a" * 64,
             "error_message": None,
             "started_at": started,
             "finished_at": started + timedelta(milliseconds=1250),
@@ -94,6 +106,17 @@ class FakeStorageProvider:
         return b"# Demo\nFirst\nSecond\nEnd"
 
 
+class CompleteChunkRepository(FakeChunkRepository):
+    async def get_build_result_summary(self, cursor, *, fs_entry_id):
+        del cursor
+        assert fs_entry_id == 71
+        return {
+            "chunk_count": 3,
+            "embedded_chunk_count": 3,
+            "indexed_chunk_count": 3,
+        }
+
+
 @pytest.mark.asyncio
 async def test_build_result_aggregates_markdown_chunks_and_index_coverage():
     connection = FakeConnection()
@@ -117,7 +140,13 @@ async def test_build_result_aggregates_markdown_chunks_and_index_coverage():
     )
 
     assert result["fileType"] == "pptx"
+    assert result["fileId"] == "71"
+    assert result["currentChecksum"] == "current-checksum"
+    assert result["isBuilt"] is False
     assert result["build"]["durationMs"] == 1250
+    assert result["build"]["batchId"] == "fb-1"
+    assert result["build"]["inputChecksum"] == "current-checksum"
+    assert result["build"]["buildProfileHash"] == "a" * 64
     assert result["markdown"] == {
         "available": True,
         "data": "# Demo\nFirst\nSecond\nEnd",
@@ -138,6 +167,34 @@ async def test_build_result_aggregates_markdown_chunks_and_index_coverage():
         "coverageRate": 66.67,
     }
     assert connection.closed is True
+
+
+@pytest.mark.asyncio
+async def test_build_result_is_built_requires_matching_checksum_and_full_artifacts():
+    connection = FakeConnection()
+    service = KnowledgeBaseService(
+        connection_factory=lambda: _async_return(connection),
+        knowledge_base_repository=FakeKnowledgeBaseRepository(),
+        knowledge_fs_entry_repository=FakeFsEntryRepository(),
+        knowledge_build_task_repository=FakeBuildTaskRepository(),
+        knowledge_item_chunk_repository=CompleteChunkRepository(),
+        embedding_dimension=1024,
+        storage_provider=FakeStorageProvider(),
+    )
+
+    result = await service.build_result(
+        BuildResultRequest(
+            knCode="7",
+            filePath="/slides/demo.pptx",
+            chunkPage=1,
+            chunkPageSize=2,
+            includeMarkdown=False,
+        )
+    )
+
+    assert result["isBuilt"] is True
+    assert result["markdown"]["available"] is True
+    assert result["markdown"]["data"] is None
 
 
 async def _async_return(value):

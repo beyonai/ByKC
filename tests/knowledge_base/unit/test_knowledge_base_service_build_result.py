@@ -45,6 +45,7 @@ class FakeBuildTaskRepository:
         assert fs_entry_id == 71
         started = datetime(2026, 8, 3, 12, 0, tzinfo=timezone.utc)
         return {
+            "kid": 9001,
             "status": "complete",
             "current_step": "complete",
             "error_message": None,

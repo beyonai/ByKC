@@ -535,6 +535,30 @@ class KnowledgeFsEntryRepository:
         )
         return current if current and current.get("entry_type") == "FILE" else None
 
+    async def get_file_by_id(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        fs_entry_id: int,
+    ) -> dict[str, Any] | None:
+        """Look up one live file by stable identity within its knowledge base."""
+        await cursor.execute(
+            """
+            SELECT *
+            FROM knowledge_fs_entry
+            WHERE kid = %(fs_entry_id)s
+              AND knowledge_base_id = %(knowledge_base_id)s
+              AND entry_type = 'FILE'
+              AND is_deleted = FALSE
+            """,
+            {
+                "fs_entry_id": fs_entry_id,
+                "knowledge_base_id": knowledge_base_id,
+            },
+        )
+        return await cursor.fetchone()
+
     async def get_entry_by_path(
         self, cursor: Any, *, knowledge_base_id: int, full_path: str
     ) -> dict[str, Any] | None:

@@ -35,7 +35,12 @@ from by_qa.knowledge_base.api.schemas import (
     UpdateDirectoryRequest,
     UpdateKnowledgeBaseRequest,
 )
-from by_qa.knowledge_base.build_status import STATUS_DICT, STEP_DICT
+from by_qa.knowledge_base.build_status import (
+    STATUS_DICT,
+    STEP_DICT,
+    legacy_build_status,
+    legacy_build_step,
+)
 from by_qa.knowledge_base.infrastructure.storage import StorageLocation
 from by_qa.knowledge_base.metadata_types import (
     SYSTEM_FIELD_VALUE_TYPES,
@@ -1065,8 +1070,15 @@ class KnowledgeBaseService:
                     f"build task not found: {request.file_path}"
                 )
             result = {
-                "status": latest_task.get("status"),
-                "currentStep": latest_task.get("current_step"),
+                "taskId": str(self._row_id(latest_task)),
+                "fileId": str(self._row_id(file_row)),
+                "status": legacy_build_status(latest_task.get("status")),
+                "currentStep": legacy_build_step(
+                    status=latest_task.get("status"),
+                    current_step=latest_task.get("current_step"),
+                    current_stage=latest_task.get("current_stage"),
+                ),
+                "errorCode": latest_task.get("error_code"),
                 "statusDict": STATUS_DICT,
                 "stepDict": STEP_DICT,
             }
@@ -1215,8 +1227,15 @@ class KnowledgeBaseService:
             "fileSize": int(file_row.get("file_size") or 0),
             "mimeType": file_row.get("mime_type"),
             "build": {
-                "status": latest_task.get("status"),
-                "currentStep": latest_task.get("current_step"),
+                "taskId": str(self._row_id(latest_task)),
+                "fileId": str(fs_entry_id),
+                "status": legacy_build_status(latest_task.get("status")),
+                "currentStep": legacy_build_step(
+                    status=latest_task.get("status"),
+                    current_step=latest_task.get("current_step"),
+                    current_stage=latest_task.get("current_stage"),
+                ),
+                "errorCode": latest_task.get("error_code"),
                 "errorMessage": latest_task.get("error_message"),
                 "startedAt": self._isoformat(latest_task.get("started_at")),
                 "finishedAt": self._isoformat(latest_task.get("finished_at")),

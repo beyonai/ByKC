@@ -29,6 +29,12 @@ from by_qa.knowledge_base.repositories.file_metadata_value_repository import (
 from by_qa.knowledge_base.repositories.knowledge_base_repository import (
     KnowledgeBaseRepository,
 )
+from by_qa.knowledge_base.repositories.knowledge_build_acceptance_repository import (
+    KnowledgeBuildAcceptanceRepository,
+)
+from by_qa.knowledge_base.repositories.knowledge_build_batch_repository import (
+    KnowledgeBuildBatchRepository,
+)
 from by_qa.knowledge_base.repositories.knowledge_build_task_repository import (
     KnowledgeBuildTaskRepository,
 )
@@ -65,6 +71,9 @@ from by_qa.knowledge_base.repositories.knowledge_semantic_processing_task_reposi
 from by_qa.knowledge_base.repositories.metadata_search_repository import (
     MetadataSearchRepository,
 )
+from by_qa.knowledge_base.repositories.processing_task_query_repository import (
+    ProcessingTaskQueryRepository,
+)
 from by_qa.knowledge_base.repositories.retrieval_projection_repository import (
     RetrievalProjectionRepository,
 )
@@ -75,6 +84,13 @@ from by_qa.knowledge_base.services.bootstrap_service import (
 from by_qa.knowledge_base.services.document_update_service import DocumentUpdateService
 from by_qa.knowledge_base.services.embedding_query_service import EmbeddingQueryService
 from by_qa.knowledge_base.services.errors import KnowledgeBaseConfigurationError
+from by_qa.knowledge_base.services.file_build_models import (
+    EmbeddingBuildProfile,
+    FileBuildProfile,
+)
+from by_qa.knowledge_base.services.file_build_processing_service import (
+    FileBuildProcessingService,
+)
 from by_qa.knowledge_base.services.file_metadata_query_service import (
     FileMetadataQueryService,
 )
@@ -312,11 +328,38 @@ async def build_knowledge_item_ingestion_service(
         dimension = settings.embedding_dimension
     validate_knowledge_base_settings(settings, embedding_config=embedding_config)
     bootstrap = await build_bootstrap_service(settings, provider=provider)
+    connection_factory = build_connection_factory(settings)
+    knowledge_base_repository = KnowledgeBaseRepository()
+    knowledge_fs_entry_repository = KnowledgeFsEntryRepository()
+    knowledge_build_task_repository = KnowledgeBuildTaskRepository()
+    knowledge_build_batch_repository = KnowledgeBuildBatchRepository()
+    build_profile = FileBuildProfile(
+        embedding=EmbeddingBuildProfile(
+            model=(
+                embedding_config.model_name
+                if embedding_config is not None
+                else settings.embedding_model_name
+            ),
+            dimension=dimension,
+        )
+    )
+    file_build_processing_service = FileBuildProcessingService(
+        connection_factory=connection_factory,
+        knowledge_base_repository=knowledge_base_repository,
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        acceptance_repository=KnowledgeBuildAcceptanceRepository(
+            bootstrap.embedding_table_name
+        ),
+        batch_repository=knowledge_build_batch_repository,
+        task_repository=knowledge_build_task_repository,
+        build_profile=build_profile,
+        unified_task_repository=ProcessingTaskQueryRepository(),
+    )
     return KnowledgeItemIngestionService(
-        connection_factory=build_connection_factory(settings),
-        knowledge_base_repository=KnowledgeBaseRepository(),
-        knowledge_fs_entry_repository=KnowledgeFsEntryRepository(),
-        knowledge_build_task_repository=KnowledgeBuildTaskRepository(),
+        connection_factory=connection_factory,
+        knowledge_base_repository=knowledge_base_repository,
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        knowledge_build_task_repository=knowledge_build_task_repository,
         knowledge_item_chunk_repository=KnowledgeItemChunkRepository(
             bootstrap.embedding_table_name
         ),
@@ -332,6 +375,7 @@ async def build_knowledge_item_ingestion_service(
         file_metadata_value_repository=FileMetadataValueRepository(),
         knowledge_file_reference_repository=KnowledgeFileReferenceRepository(),
         markdown_reference_rewriter=MarkdownReferenceRewriter(),
+        file_build_processing_service=file_build_processing_service,
         event_publisher_invoker=event_publisher_invoker
         or KnowledgeEventPublisherInvoker(
             publisher=load_knowledge_event_publisher(

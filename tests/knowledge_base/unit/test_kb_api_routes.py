@@ -48,6 +48,9 @@ class FakeKBService:
         self.file_build_task_runs = []
         self.move_requests = []
         self.document_update_requests: list[object] = []
+        self.processing_status_requests = []
+        self.processing_batch_requests = []
+        self.file_build_processing_service = self
 
     async def create_knowledge_base(self, request):
         self.created_requests.append(request)
@@ -120,6 +123,31 @@ class FakeKBService:
     async def create_file_to_markdown_index_task(self, request):
         self.file_build_task_requests.append(request)
         return 9901
+
+    async def accept_file_to_markdown_index(self, request):
+        self.file_build_task_requests.append(request)
+        return {
+            "batchId": "fb-test",
+            "scope": "SINGLE_FILE",
+            "targetPath": request.file_path,
+            "taskType": "FILE_BUILD",
+            "candidateCount": 1,
+            "eligibleCount": 1,
+            "acceptedCount": 1,
+            "reusedCount": 0,
+            "skippedCount": 0,
+            "returnedTaskCount": 1,
+            "tasksTruncated": False,
+            "tasks": [
+                {
+                    "taskId": "9901",
+                    "status": "PENDING",
+                    "fileId": "42",
+                    "filePathSnapshot": request.file_path,
+                    "reused": False,
+                }
+            ],
+        }
 
     async def execute_file_to_markdown_index_task(  # pylint: disable=unused-argument
         self, request, *, document_chunking_service, build_task_id
@@ -198,6 +226,35 @@ class FakeKBService:
             },
             "embedding": {"dimension": 1024, "embeddedChunkCount": 1},
             "retrieval": {"indexedChunkCount": 1},
+        }
+
+    async def get_unified_processing_task_status(self, request):
+        self.processing_status_requests.append(request)
+        return {
+            "knowledgeBaseId": "11",
+            "knCode": request.kb_code,
+            "total": 1,
+            "pageNum": request.page_num,
+            "pageSize": request.page_size,
+            "data": [
+                {
+                    "taskId": "9901",
+                    "taskType": "FILE_BUILD",
+                    "status": "PENDING",
+                    "fileId": "42",
+                }
+            ],
+        }
+
+    async def get_processing_batch_status(self, request):
+        self.processing_batch_requests.append(request)
+        return {
+            "batchId": request.batch_id,
+            "taskType": "FILE_BUILD",
+            "status": "PENDING",
+            "totalCount": 1,
+            "completedCount": 0,
+            "data": [],
         }
 
     async def build_preview(self, request):
@@ -2310,7 +2367,7 @@ def test_search_route_rejects_non_positive_top_k(monkeypatch):
 
 
 def test_file_to_markdown_index_success(monkeypatch):
-    """POST /api/v1/fileToMarkdownIndex returns success and schedules background work."""
+    """POST /api/v1/fileToMarkdownIndex returns a durable batch summary."""
     service = FakeKBService()
     client = make_test_client(monkeypatch, service)
     response = client.post(
@@ -2320,17 +2377,18 @@ def test_file_to_markdown_index_success(monkeypatch):
     assert response.status_code == 200
     body = response.json()
     assert body["resultCode"] == "0"
-    assert body["resultMsg"] == "success"
+    assert body["resultMsg"] == "accepted"
+    assert body["resultObject"]["batchId"] == "fb-test"
+    assert body["resultObject"]["acceptedCount"] == 1
     assert len(service.file_build_task_requests) == 1
-    assert len(service.file_build_task_runs) == 1
-    assert service.file_build_task_runs[0][1] == 9901
+    assert service.file_build_task_runs == []
 
 
 def test_file_to_markdown_index_kb_not_found(monkeypatch):
     """POST /api/v1/fileToMarkdownIndex returns error when KB not found."""
 
     class FailingService(FakeKBService):
-        async def create_file_to_markdown_index_task(self, request):
+        async def accept_file_to_markdown_index(self, request):
             raise KnowledgeBaseValidationError(
                 f"knowledge base not found: {request.kb_code}"
             )
@@ -2360,27 +2418,48 @@ def test_file_to_markdown_index_validation_error(monkeypatch):
     assert body["resultMsg"] == "request validation failed"
 
 
-def test_file_to_markdown_index_running_task_returns_error(monkeypatch):
-    """POST /api/v1/fileToMarkdownIndex returns an error when a running task exists."""
-
-    class FailingService(FakeKBService):
-        async def create_file_to_markdown_index_task(self, request):
-            raise KnowledgeBaseValidationError(
-                f"build task already exists for file: {request.file_path}"
-            )
-
-    client = make_test_client(monkeypatch, FailingService())
+def test_file_to_markdown_index_passes_force_for_active_task_reuse(monkeypatch):
+    """force is accepted but active work remains a reuse hit."""
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
     response = client.post(
         "/api/v1/fileToMarkdownIndex",
-        json={"knCode": "1", "filePath": "/制度/人事/请假制度.pdf"},
+        json={
+            "knCode": "1",
+            "filePath": "/制度/人事/请假制度.pdf",
+            "force": True,
+        },
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["resultCode"] == "-1"
-    assert (
-        body["resultMsg"]
-        == "build task already exists for file: /制度/人事/请假制度.pdf"
+    assert body["resultCode"] == "0"
+    assert service.file_build_task_requests[0].force is True
+
+
+def test_processing_task_status_uses_unified_file_build_read_model(monkeypatch):
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/knowledgeItems/processingTaskStatus",
+        json={"knCode": "1", "taskType": "FILE_BUILD", "fileId": "42"},
     )
+
+    assert response.json()["resultObject"]["data"][0]["status"] == "PENDING"
+    assert service.processing_status_requests[0].file_id == 42
+
+
+def test_processing_batch_status_routes_file_build_batch_by_id(monkeypatch):
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/knowledgeItems/processingBatchStatus",
+        json={"knCode": "1", "batchId": "fb-123"},
+    )
+
+    assert response.json()["resultObject"]["taskType"] == "FILE_BUILD"
+    assert service.processing_batch_requests[0].batch_id == "fb-123"
 
 
 def test_file_build_status_success(monkeypatch):

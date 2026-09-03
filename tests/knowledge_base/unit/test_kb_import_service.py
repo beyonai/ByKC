@@ -2335,8 +2335,11 @@ async def test_file_build_status_returns_latest_task_for_file():
     )
 
     assert response == {
+        "taskId": "9001",
+        "fileId": "71",
         "status": "running",
         "currentStep": "chunking",
+        "errorCode": None,
         "statusDict": [
             {
                 "standCode": "complete",
@@ -2352,6 +2355,11 @@ async def test_file_build_status_returns_latest_task_for_file():
                 "standCode": "running",
                 "standDisplayValue": "构建中",
                 "standDisplayValueEn": "running",
+            },
+            {
+                "standCode": "skipped",
+                "standDisplayValue": "已跳过",
+                "standDisplayValueEn": "skipped",
             },
             {
                 "standCode": "unsupported",

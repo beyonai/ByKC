@@ -240,7 +240,7 @@ class MoveKnowledgeItemsResponse(BaseModel):
 
 
 class FileToMarkdownIndexRequest(BaseModel):
-    """Request body for triggering knowledge build on an uploaded file."""
+    """Request body for accepting a file or directory build batch."""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -252,6 +252,7 @@ class FileToMarkdownIndexRequest(BaseModel):
         min_length=1,
         validation_alias=AliasChoices("filePath", "file_path"),
     )
+    force: bool = False
 
 
 class FileBuildStatusRequest(BaseModel):

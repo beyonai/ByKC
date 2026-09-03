@@ -141,9 +141,20 @@ class KnowledgeItemIngestionService:
     file_metadata_value_repository: Any | None = None
     knowledge_file_reference_repository: Any | None = None
     markdown_reference_rewriter: Any | None = None
+    file_build_processing_service: Any | None = None
     event_publisher_invoker: KnowledgeEventPublisherInvoker = field(
         default_factory=KnowledgeEventPublisherInvoker
     )
+
+    async def accept_file_to_markdown_index(
+        self, request: FileToMarkdownIndexRequest
+    ) -> dict[str, Any]:
+        """Accept a durable external file or directory Build batch."""
+        if self.file_build_processing_service is None:
+            raise KnowledgeBaseValidationError(
+                "file build processing service is not configured"
+            )
+        return await self.file_build_processing_service.accept(request)
 
     async def convert_uploaded_file_to_markdown(
         self,

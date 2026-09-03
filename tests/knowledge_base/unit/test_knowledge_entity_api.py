@@ -386,6 +386,25 @@ def test_status_route_queries_by_kb_and_optional_path():
     assert request.task_type.value == "ENTITY_DISCOVERY"
 
 
+def test_task_status_requires_type_for_exact_id_and_accepts_stable_file_id():
+    with pytest.raises(ValidationError):
+        ProcessingTaskStatusRequest.model_validate({"knCode": "1", "taskId": "42"})
+
+    request = ProcessingTaskStatusRequest.model_validate(
+        {
+            "knCode": "1",
+            "taskId": "42",
+            "taskType": "FILE_BUILD",
+            "fileId": "2048",
+            "statusList": ["UNSUPPORTED"],
+        }
+    )
+
+    assert request.task_id == 42
+    assert request.file_id == 2048
+    assert request.task_type.value == "FILE_BUILD"
+
+
 def test_batch_status_route_returns_progress_without_extra_params():
     service = FakeKnowledgeEntityService()
     response = make_client(service).post(

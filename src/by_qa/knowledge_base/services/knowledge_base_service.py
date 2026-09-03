@@ -81,6 +81,8 @@ class KnowledgeBaseService:
     knowledge_file_reference_repository: Any | None = None
     file_metadata_value_repository: Any | None = None
     knowledge_entity_asset_repository: Any | None = None
+    file_build_mutation_service: Any | None = None
+    semantic_task_mutation_service: Any | None = None
     cache_root: Path | None = None
     cache_ttl_seconds: int = 24 * 60 * 60
 
@@ -141,6 +143,12 @@ class KnowledgeBaseService:
             request.kb_code,
         )
         connection = await self.connection_factory()
+        terminated_build_tasks: list[dict[str, Any]] = []
+        completed_build_batch_ids: list[str] = []
+        terminated_semantic_tasks: list[dict[str, Any]] = []
+        completed_semantic_batches: dict[
+            str, tuple[dict[str, Any], dict[str, int]]
+        ] = {}
         try:
             cursor = connection.cursor()
             kb_row = await self.knowledge_base_repository.get_by_code(
@@ -151,6 +159,23 @@ class KnowledgeBaseService:
                     f"knowledge base not found: {request.kb_code}"
                 )
             knowledge_base_id = self._row_id(kb_row)
+            if self.file_build_mutation_service is not None:
+                (
+                    terminated_build_tasks,
+                    completed_build_batch_ids,
+                ) = await self.file_build_mutation_service.terminate_active(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    error_code="KNOWLEDGE_BASE_DELETED",
+                    error_message="Knowledge base was deleted",
+                )
+            if self.semantic_task_mutation_service is not None:
+                (
+                    terminated_semantic_tasks,
+                    completed_semantic_batches,
+                ) = await self.semantic_task_mutation_service.terminate_for_knowledge_base(
+                    cursor, knowledge_base_id=knowledge_base_id
+                )
             file_locator_rows = []
             if (
                 self.storage_provider is not None
@@ -196,6 +221,14 @@ class KnowledgeBaseService:
                 {"knowledge_base_id": knowledge_base_id},
             )
             await connection.commit()
+            if self.file_build_mutation_service is not None:
+                await self.file_build_mutation_service.publish(
+                    terminated_build_tasks, completed_build_batch_ids
+                )
+            if self.semantic_task_mutation_service is not None:
+                await self.semantic_task_mutation_service.publish(
+                    terminated_semantic_tasks, completed_semantic_batches
+                )
             if file_locator_rows:
                 for row in file_locator_rows:
                     original = _optional_location(
@@ -320,6 +353,8 @@ class KnowledgeBaseService:
         )
 
         connection = await self.connection_factory()
+        terminated_build_tasks: list[dict[str, Any]] = []
+        completed_build_batch_ids: list[str] = []
         try:
             cursor = connection.cursor()
             kb_row = await self.knowledge_base_repository.get_by_code(
@@ -350,6 +385,17 @@ class KnowledgeBaseService:
                     root_fs_entry_id=root_fs_entry_id,
                 )
             )
+            if self.file_build_mutation_service is not None:
+                (
+                    terminated_build_tasks,
+                    completed_build_batch_ids,
+                ) = await self.file_build_mutation_service.terminate_active(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    fs_entry_ids=fs_entry_ids,
+                    error_code="SOURCE_DELETED",
+                    error_message="Source directory was deleted",
+                )
             if self.knowledge_entity_asset_repository is not None:
                 await self.knowledge_entity_asset_repository.clear_fs_entry_ids(
                     cursor,
@@ -419,6 +465,10 @@ class KnowledgeBaseService:
                     fs_entry_ids=fs_entry_ids,
                 )
             await connection.commit()
+            if self.file_build_mutation_service is not None:
+                await self.file_build_mutation_service.publish(
+                    terminated_build_tasks, completed_build_batch_ids
+                )
             if path_bound_storage and file_locator_rows:
                 for row in file_locator_rows:
                     original = _optional_location(

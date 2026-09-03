@@ -46,6 +46,7 @@ class SemanticEventType(StrEnum):
 
 class BuildEventType(StrEnum):
     FILE_COMPLETED = "build.file.completed"
+    BATCH_COMPLETED = "build.batch.completed"
 
 
 class _StrictEventModel(BaseModel):
@@ -198,6 +199,46 @@ class BuildFileCompletedPayload(_StrictEventModel):
         return self
 
 
+class FileBuildTerminalPayload(_StrictEventModel):
+    batch_id: str = Field(alias="batchId")
+    task_id: str = Field(alias="taskId")
+    task_type: Literal["FILE_BUILD"] = Field(default="FILE_BUILD", alias="taskType")
+    file_id: str = Field(alias="fileId")
+    file_path_snapshot: str = Field(alias="filePathSnapshot")
+    status: Literal["SUCCEEDED", "FAILED", "SKIPPED", "UNSUPPORTED"]
+    stage: Literal["ACCEPTED", "EXTRACTING", "CHUNKING", "EMBEDDING", "COMMITTING"]
+    progress: Literal[100] = 100
+    result: BuildFileCompletedResult | None
+    error: BuildProcessingError | None
+
+    @model_validator(mode="after")
+    def _validate_terminal_shape(self) -> FileBuildTerminalPayload:
+        if self.status == "SUCCEEDED":
+            if self.result is None or self.error is not None:
+                raise ValueError("successful file build requires result only")
+        elif self.result is not None or self.error is None:
+            raise ValueError("non-successful file build requires error only")
+        return self
+
+
+class FileBuildBatchTerminalPayload(_StrictEventModel):
+    batch_id: str = Field(alias="batchId")
+    task_type: Literal["FILE_BUILD"] = Field(default="FILE_BUILD", alias="taskType")
+    scope: Literal["SINGLE_FILE", "DIRECTORY"]
+    target_path: str = Field(alias="targetPath")
+    candidate_count: int = Field(ge=0, alias="candidateCount")
+    eligible_count: int = Field(ge=0, alias="eligibleCount")
+    accepted_count: int = Field(ge=0, alias="acceptedCount")
+    reused_count: int = Field(ge=0, alias="reusedCount")
+    acceptance_skipped_count: int = Field(ge=0, alias="acceptanceSkippedCount")
+    total_count: int = Field(ge=0, alias="totalCount")
+    completed_count: int = Field(ge=0, alias="completedCount")
+    succeeded_count: int = Field(ge=0, alias="succeededCount")
+    failed_count: int = Field(ge=0, alias="failedCount")
+    skipped_count: int = Field(ge=0, alias="skippedCount")
+    unsupported_count: int = Field(ge=0, alias="unsupportedCount")
+
+
 class _KnowledgeEventBase(_StrictEventModel):
     event_id: str = Field(alias="eventId")
     event_version: Literal[1] = Field(default=EVENT_VERSION, alias="eventVersion")
@@ -282,11 +323,29 @@ class EnrichBatchCompletedEvent(_KnowledgeEventBase):
     payload: SemanticBatchCompletedPayload
 
 
-class BuildFileCompletedEvent(_KnowledgeEventBase):
+class BuildFileCompletedEvent(_StrictEventModel):
+    event_id: str = Field(alias="eventId")
+    event_version: Literal[1, 2] = Field(default=1, alias="eventVersion")
+    kb_code: str = Field(alias="knCode")
+    occurred_at: datetime = Field(alias="occurredAt")
     event_type: Literal["build.file.completed"] = Field(
         default=BuildEventType.FILE_COMPLETED.value, alias="eventType"
     )
-    payload: BuildFileCompletedPayload
+    payload: BuildFileCompletedPayload | FileBuildTerminalPayload
+
+
+class _KnowledgeEventV2Base(_StrictEventModel):
+    event_id: str = Field(alias="eventId")
+    event_version: Literal[2] = Field(default=2, alias="eventVersion")
+    kb_code: str = Field(alias="knCode")
+    occurred_at: datetime = Field(alias="occurredAt")
+
+
+class FileBuildBatchTerminalEvent(_KnowledgeEventV2Base):
+    event_type: Literal["build.batch.completed"] = Field(
+        default=BuildEventType.BATCH_COMPLETED.value, alias="eventType"
+    )
+    payload: FileBuildBatchTerminalPayload
 
 
 _KnowledgeEventUnion: TypeAlias = (
@@ -302,6 +361,7 @@ _KnowledgeEventUnion: TypeAlias = (
     | EnrichFileCompletedEvent
     | EnrichBatchCompletedEvent
     | BuildFileCompletedEvent
+    | FileBuildBatchTerminalEvent
 )
 KnowledgeEvent: TypeAlias = Annotated[
     _KnowledgeEventUnion, Field(discriminator="event_type")
@@ -481,6 +541,71 @@ def build_file_completed_event(
             current_step=current_step,
             result=result,
             error=error,
+        ),
+    )
+
+
+def build_file_build_terminal_event(
+    task: Mapping[str, Any],
+) -> BuildFileCompletedEvent:
+    """Build the eventVersion 2 terminal event for an external Build task."""
+    status = str(task["status"]).upper()
+    result_payload = normalize_json_mapping(task.get("result_payload"))
+    result = None
+    error = None
+    if status == "SUCCEEDED":
+        result = BuildFileCompletedResult(
+            chunk_count=int((result_payload or {}).get("chunkCount") or 0),
+            line_count=int((result_payload or {}).get("lineCount") or 0),
+        )
+    else:
+        error = BuildProcessingError(
+            code=str(task.get("error_code") or "BUILD_FAILED"),
+            message=str(task.get("error_message") or "file build did not succeed"),
+        )
+    return BuildFileCompletedEvent(
+        **_event_fields(
+            kb_code=str(task.get("kb_code") or task["knowledge_base_id"]),
+            occurred_at=task.get("finished_at"),
+        ),
+        event_version=2,
+        payload=FileBuildTerminalPayload(
+            batch_id=str(task["batch_id"]),
+            task_id=str(task["kid"]),
+            file_id=str(task["fs_entry_id"]),
+            file_path_snapshot=str(task["file_path_snapshot"]),
+            status=status,
+            stage=str(task["current_stage"]).upper(),
+            result=result,
+            error=error,
+        ),
+    )
+
+
+def build_file_build_batch_terminal_event(
+    batch: Mapping[str, Any], counts: Mapping[str, int]
+) -> FileBuildBatchTerminalEvent:
+    """Build the eventVersion 2 aggregate event for a completed Build batch."""
+    return FileBuildBatchTerminalEvent(
+        **_event_fields(
+            kb_code=str(batch.get("kb_code") or batch["knowledge_base_id"]),
+            occurred_at=batch.get("completed_at"),
+        ),
+        payload=FileBuildBatchTerminalPayload(
+            batch_id=str(batch["batch_id"]),
+            scope=str(batch["scope"]).upper(),
+            target_path=str(batch["target_path_snapshot"]),
+            candidate_count=int(batch["candidate_count"]),
+            eligible_count=int(batch["eligible_count"]),
+            accepted_count=int(batch["accepted_count"]),
+            reused_count=int(batch["reused_count"]),
+            acceptance_skipped_count=int(batch["acceptance_skipped_count"]),
+            total_count=int(batch["accepted_count"]),
+            completed_count=int(batch["completed_count"]),
+            succeeded_count=int(counts.get("succeeded", 0)),
+            failed_count=int(counts.get("failed", 0)),
+            skipped_count=int(counts.get("skipped", 0)),
+            unsupported_count=int(counts.get("unsupported", 0)),
         ),
     )
 

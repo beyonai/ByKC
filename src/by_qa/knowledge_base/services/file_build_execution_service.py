@@ -48,6 +48,7 @@ class FileBuildExecutionService:
     storage_provider: Any
     document_chunking_service: Any
     embedding_dimension: int
+    terminal_event_service: Any | None = None
 
     async def execute_claimed(self, task: dict[str, Any]) -> dict[str, Any]:
         return await self._execute(task, lease_token=str(task["lease_token"]))
@@ -167,8 +168,18 @@ class FileBuildExecutionService:
             if finished is None:
                 await connection.rollback()
                 return None
-            await self._advance_batch(cursor, finished)
+            batch = await self._advance_batch(cursor, finished)
             await connection.commit()
+            if self.terminal_event_service is not None:
+                await self.terminal_event_service.publish_tasks(
+                    [finished],
+                    completed_batch_ids=(
+                        [str(batch["batch_id"])]
+                        if batch is not None
+                        and str(batch["status"]).lower() == "completed"
+                        else []
+                    ),
+                )
             return finished
         except Exception:
             await connection.rollback()
@@ -190,8 +201,18 @@ class FileBuildExecutionService:
             if finished is None:
                 await connection.rollback()
                 return None
-            await self._advance_batch(cursor, finished)
+            batch = await self._advance_batch(cursor, finished)
             await connection.commit()
+            if self.terminal_event_service is not None:
+                await self.terminal_event_service.publish_tasks(
+                    [finished],
+                    completed_batch_ids=(
+                        [str(batch["batch_id"])]
+                        if batch is not None
+                        and str(batch["status"]).lower() == "completed"
+                        else []
+                    ),
+                )
             return finished
         except Exception:
             await connection.rollback()
@@ -367,8 +388,18 @@ class FileBuildExecutionService:
                 )
             if finished is None:
                 raise FileBuildLeaseLostError("lease lost during commit")
-            await self._advance_batch(cursor, finished)
+            batch = await self._advance_batch(cursor, finished)
             await connection.commit()
+            if self.terminal_event_service is not None:
+                await self.terminal_event_service.publish_tasks(
+                    [finished],
+                    completed_batch_ids=(
+                        [str(batch["batch_id"])]
+                        if batch is not None
+                        and str(batch["status"]).lower() == "completed"
+                        else []
+                    ),
+                )
             return finished
         except Exception:
             await connection.rollback()
@@ -434,15 +465,18 @@ class FileBuildExecutionService:
                 message="Source checksum changed after task acceptance",
             )
 
-    async def _advance_batch(self, cursor: Any, task: dict[str, Any]) -> None:
+    async def _advance_batch(
+        self, cursor: Any, task: dict[str, Any]
+    ) -> dict[str, Any] | None:
         batch_id = task.get("batch_id")
         if batch_id is None:
-            return
+            return None
         batch = await self.batch_repository.advance_batch(
             cursor, batch_id=str(batch_id)
         )
         if batch is None:
             raise RuntimeError(f"failed to advance build batch: {batch_id}")
+        return batch
 
     def _validate_embedding_dimensions(self, chunks: list[Any]) -> None:
         for chunk in chunks:

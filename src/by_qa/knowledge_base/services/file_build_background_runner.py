@@ -192,6 +192,7 @@ class FileBuildBackgroundRunner:
             worker_task.cancel()
             raise
         except Exception as exc:
+            logger.exception("file_build task execution failed: task_id=%s", task_id)
             await self.execution_service.finish_claimed(
                 row,
                 status="failed",

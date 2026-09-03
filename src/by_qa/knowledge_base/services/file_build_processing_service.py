@@ -28,6 +28,7 @@ class FileBuildProcessingService:
     build_profile: FileBuildProfile
     unified_task_repository: Any | None = None
     background_runner: Any | None = None
+    terminal_event_service: Any | None = None
 
     async def start(self) -> None:
         if self.background_runner is not None:
@@ -88,8 +89,19 @@ class FileBuildProcessingService:
                 force=request.force,
                 priority=100 if scope == "SINGLE_FILE" else 0,
             )
-            await connection.commit()
             batch = accepted["batch"]
+            await connection.commit()
+            if self.terminal_event_service is not None:
+                completed_batch_ids = [
+                    str(row["batch_id"])
+                    for row in accepted.get("completed_superseded_batches", [])
+                ]
+                await self.terminal_event_service.publish_tasks(
+                    accepted.get("superseded_tasks", []),
+                    completed_batch_ids=completed_batch_ids,
+                )
+                if str(batch["status"]) == "completed":
+                    await self.terminal_event_service.publish_completed_batch(batch_id)
             tasks = [self._acceptance_item(row) for row in accepted["preview"]]
             accepted_count = int(batch["accepted_count"])
             reused_count = int(batch["reused_count"])

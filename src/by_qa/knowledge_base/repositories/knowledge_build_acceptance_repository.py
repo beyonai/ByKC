@@ -231,8 +231,10 @@ class KnowledgeBuildAcceptanceRepository:
             WHERE snapshot.acceptance = 'ACCEPTED'
               AND snapshot.active_task_id = task.kid
               AND task.status IN ('pending', 'running')
+            RETURNING task.*
             """
         )
+        superseded_tasks = list(await cursor.fetchall())
         await cursor.execute(
             """
             CREATE TEMP TABLE file_build_superseded_batches ON COMMIT DELETE ROWS AS
@@ -266,8 +268,14 @@ class KnowledgeBuildAcceptanceRepository:
                 updated_at = NOW()
             FROM file_build_superseded_batches source
             WHERE batch.batch_id = source.batch_id
+            RETURNING batch.*
             """
         )
+        completed_superseded_batches = [
+            row
+            for row in await cursor.fetchall()
+            if str(row.get("status")) == "completed"
+        ]
 
         await cursor.execute(
             """
@@ -331,7 +339,12 @@ class KnowledgeBuildAcceptanceRepository:
             params,
         )
         preview = list(await cursor.fetchall())
-        return {"batch": batch, "preview": preview}
+        return {
+            "batch": batch,
+            "preview": preview,
+            "superseded_tasks": superseded_tasks,
+            "completed_superseded_batches": completed_superseded_batches,
+        }
 
     @staticmethod
     def _canonical_json(value: Mapping[str, Any]) -> str:

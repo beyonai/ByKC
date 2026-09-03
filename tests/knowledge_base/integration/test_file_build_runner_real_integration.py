@@ -10,6 +10,7 @@ from psycopg import sql
 
 from by_qa.config import get_settings
 from by_qa.knowledge_base.api.schemas import FileToMarkdownIndexRequest
+from by_qa.knowledge_base.events import KnowledgeEventPublisherInvoker
 from by_qa.knowledge_base.infrastructure.database import build_connection_factory
 from by_qa.knowledge_base.infrastructure.storage_s3 import build_s3_storage_provider
 from by_qa.knowledge_base.repositories.knowledge_base_repository import (
@@ -33,6 +34,12 @@ from by_qa.knowledge_base.repositories.knowledge_fs_entry_repository import (
 from by_qa.knowledge_base.repositories.knowledge_item_chunk_repository import (
     KnowledgeItemChunkRepository,
 )
+from by_qa.knowledge_base.repositories.knowledge_semantic_processing_batch_repository import (
+    KnowledgeSemanticProcessingBatchRepository,
+)
+from by_qa.knowledge_base.repositories.knowledge_semantic_processing_task_repository import (
+    KnowledgeSemanticProcessingTaskRepository,
+)
 from by_qa.knowledge_base.repositories.retrieval_projection_repository import (
     RetrievalProjectionRepository,
 )
@@ -49,8 +56,17 @@ from by_qa.knowledge_base.services.file_build_models import (
     EmbeddingBuildProfile,
     FileBuildProfile,
 )
+from by_qa.knowledge_base.services.file_build_mutation_service import (
+    FileBuildMutationService,
+)
 from by_qa.knowledge_base.services.file_build_processing_service import (
     FileBuildProcessingService,
+)
+from by_qa.knowledge_base.services.file_build_terminal_event_service import (
+    FileBuildTerminalEventService,
+)
+from by_qa.knowledge_base.services.semantic_task_mutation_service import (
+    SemanticTaskMutationService,
 )
 from by_qa.knowledge_common.schemas import KnowledgeItemChunkPayload
 
@@ -78,6 +94,14 @@ class DeterministicChunkingService:
         ]
 
 
+class RecordingPublisher:
+    def __init__(self):
+        self.events = []
+
+    async def publish(self, event):
+        self.events.append(event)
+
+
 async def test_runner_claims_and_commits_complete_file_build():
     base_settings = get_settings()
     if not base_settings.resolved_kb_opengauss_dsn:
@@ -93,6 +117,12 @@ async def test_runner_claims_and_commits_complete_file_build():
     batch_repository = KnowledgeBuildBatchRepository()
     fs_repository = KnowledgeFsEntryRepository()
     chunk_repository = KnowledgeItemChunkRepository(embedding_table_name)
+    publisher = RecordingPublisher()
+    terminal_event_service = FileBuildTerminalEventService(
+        connection_factory=connection_factory,
+        batch_repository=batch_repository,
+        event_publisher_invoker=KnowledgeEventPublisherInvoker(publisher=publisher),
+    )
     processing_service = FileBuildProcessingService(
         connection_factory=connection_factory,
         knowledge_base_repository=KnowledgeBaseRepository(),
@@ -103,6 +133,7 @@ async def test_runner_claims_and_commits_complete_file_build():
         build_profile=FileBuildProfile(
             embedding=EmbeddingBuildProfile(model="file-build-runner", dimension=3)
         ),
+        terminal_event_service=terminal_event_service,
     )
     execution_service = FileBuildExecutionService(
         connection_factory=connection_factory,
@@ -115,6 +146,7 @@ async def test_runner_claims_and_commits_complete_file_build():
         storage_provider=storage,
         document_chunking_service=DeterministicChunkingService(),
         embedding_dimension=3,
+        terminal_event_service=terminal_event_service,
     )
     runner = FileBuildBackgroundRunner(
         connection_factory=connection_factory,
@@ -125,6 +157,18 @@ async def test_runner_claims_and_commits_complete_file_build():
         concurrency=16,
         lease_seconds=30,
         heartbeat_seconds=5,
+    )
+    mutation_service = FileBuildMutationService(
+        task_repository=task_repository,
+        batch_repository=batch_repository,
+        terminal_event_service=terminal_event_service,
+    )
+    semantic_task_repository = KnowledgeSemanticProcessingTaskRepository()
+    semantic_batch_repository = KnowledgeSemanticProcessingBatchRepository()
+    semantic_mutation_service = SemanticTaskMutationService(
+        task_repository=semantic_task_repository,
+        batch_repository=semantic_batch_repository,
+        event_publisher_invoker=KnowledgeEventPublisherInvoker(publisher=publisher),
     )
     original_location = None
     markdown_location = None
@@ -252,6 +296,37 @@ async def test_runner_claims_and_commits_complete_file_build():
             "retrieval_count": 1,
         }
         assert await storage.read(markdown_location) == b"Runner content\nSecond line"
+        assert [event.event_type for event in publisher.events] == [
+            "build.file.completed",
+            "build.batch.completed",
+        ]
+        assert publisher.events[0].event_version == 2
+        assert publisher.events[0].payload.file_id == str(file_id)
+
+        connection = await connection_factory()
+        try:
+            await connection.execute(
+                """
+                INSERT INTO knowledge_fs_entry (
+                    knowledge_base_id, entry_type, is_root, name, path_ltree,
+                    depth, virtual_path
+                )
+                VALUES (
+                    %(knowledge_base_id)s, 'DIRECTORY', FALSE, 'empty',
+                    'd1_empty'::ltree, 1, '/empty'
+                )
+                """,
+                {"knowledge_base_id": knowledge_base_id},
+            )
+            await connection.commit()
+        finally:
+            await connection.close()
+        empty_acceptance = await processing_service.accept(
+            FileToMarkdownIndexRequest(knCode=str(knowledge_base_id), filePath="/empty")
+        )
+        assert empty_acceptance["acceptedCount"] == 0
+        assert len(publisher.events) == 3
+        assert publisher.events[-1].event_type == "build.batch.completed"
 
         connection = await connection_factory()
         try:
@@ -333,12 +408,13 @@ async def test_runner_claims_and_commits_complete_file_build():
             "batch_id": None,
             "result_payload": {"lineCount": 2, "chunkCount": 1},
         }
+        assert len(publisher.events) == 3
 
         async def add_source(name: str, checksum: str):
             connection = await connection_factory()
             try:
                 cursor = connection.cursor()
-                label = name.replace(".", "_")
+                label = name.replace(".", "_").replace("-", "_")
                 await cursor.execute(
                     """
                     INSERT INTO knowledge_fs_entry (
@@ -388,6 +464,43 @@ async def test_runner_claims_and_commits_complete_file_build():
                 return source_id
             finally:
                 await connection.close()
+
+        mutation_file_id = await add_source("mutation.txt", "mutation-sha")
+        mutation_acceptance = await processing_service.accept(
+            FileToMarkdownIndexRequest(
+                knCode=str(knowledge_base_id), filePath="/mutation.txt"
+            )
+        )
+        event_count_before_mutation = len(publisher.events)
+        connection = await connection_factory()
+        try:
+            cursor = connection.cursor()
+            terminated, completed_batches = await mutation_service.terminate_active(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                fs_entry_ids=[mutation_file_id],
+                error_code="INPUT_STALE",
+                error_message="Source checksum changed during file update",
+            )
+            await connection.commit()
+        finally:
+            await connection.close()
+        await mutation_service.publish(terminated, completed_batches)
+        assert len(publisher.events) == event_count_before_mutation + 2
+        assert publisher.events[-2].payload.status == "SKIPPED"
+        assert publisher.events[-2].payload.error.code == "INPUT_STALE"
+        assert publisher.events[-1].event_type == "build.batch.completed"
+        connection = await connection_factory()
+        try:
+            cursor = connection.cursor()
+            await cursor.execute(
+                "SELECT status, error_code FROM knowledge_build_task WHERE kid = %(kid)s",
+                {"kid": int(mutation_acceptance["tasks"][0]["taskId"])},
+            )
+            mutation_task = await cursor.fetchone()
+        finally:
+            await connection.close()
+        assert mutation_task == {"status": "skipped", "error_code": "INPUT_STALE"}
 
         stale_file_id = await add_source("stale.txt", "stale-sha")
         stale_acceptance = await processing_service.accept(
@@ -456,6 +569,86 @@ async def test_runner_claims_and_commits_complete_file_build():
             await connection.close()
         assert lease_task == {"status": "failed", "error_code": "WORKER_LOST"}
         assert lease_file_id > 0
+
+        kb_delete_file_id = await add_source("kb-delete.txt", "kb-delete-sha")
+        kb_delete_acceptance = await processing_service.accept(
+            FileToMarkdownIndexRequest(
+                knCode=str(knowledge_base_id), filePath="/kb-delete.txt"
+            )
+        )
+        connection = await connection_factory()
+        try:
+            cursor = connection.cursor()
+            semantic_batch_id = f"kb-delete-semantic-{uuid4().hex}"
+            await semantic_batch_repository.create_batch(
+                cursor,
+                batch_id=semantic_batch_id,
+                knowledge_base_id=knowledge_base_id,
+                task_type="ENTITY_DISCOVERY",
+                scope="SINGLE_FILE",
+                total_count=1,
+            )
+            semantic_task = await semantic_task_repository.create_processing_task(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                fs_entry_id=kb_delete_file_id,
+                task_type="ENTITY_DISCOVERY",
+                batch_id=semantic_batch_id,
+                file_path_snapshot="/kb-delete.txt",
+                status="pending",
+                progress=0,
+            )
+            terminated_build, completed_build = await mutation_service.terminate_active(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                error_code="KNOWLEDGE_BASE_DELETED",
+                error_message="Knowledge base was deleted",
+            )
+            (
+                terminated_semantic,
+                completed_semantic,
+            ) = await semantic_mutation_service.terminate_for_knowledge_base(
+                cursor, knowledge_base_id=knowledge_base_id
+            )
+            await connection.commit()
+        finally:
+            await connection.close()
+        await mutation_service.publish(terminated_build, completed_build)
+        await semantic_mutation_service.publish(terminated_semantic, completed_semantic)
+        assert semantic_task is not None
+        connection = await connection_factory()
+        try:
+            cursor = connection.cursor()
+            await cursor.execute(
+                """
+                SELECT status, error_code FROM knowledge_build_task
+                WHERE kid = %(build_task_id)s
+                """,
+                {"build_task_id": int(kb_delete_acceptance["tasks"][0]["taskId"])},
+            )
+            deleted_build_task = await cursor.fetchone()
+            await cursor.execute(
+                """
+                SELECT status, error_code FROM knowledge_semantic_processing_task
+                WHERE kid = %(semantic_task_id)s
+                """,
+                {"semantic_task_id": int(semantic_task["kid"])},
+            )
+            deleted_semantic_task = await cursor.fetchone()
+        finally:
+            await connection.close()
+        assert deleted_build_task == {
+            "status": "skipped",
+            "error_code": "KNOWLEDGE_BASE_DELETED",
+        }
+        assert deleted_semantic_task == {
+            "status": "skipped",
+            "error_code": "KNOWLEDGE_BASE_DELETED",
+        }
+        assert any(
+            event.event_type == "semantic.discovery.batch.completed"
+            for event in publisher.events
+        )
     finally:
         if original_location is not None:
             await storage.delete_quietly(original_location)

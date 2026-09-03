@@ -151,17 +151,19 @@ class KnowledgeBuildBatchRepository:
         batch_id: str,
         knowledge_base_id: int | None = None,
     ) -> dict[str, Any] | None:
+        knowledge_base_filter = ""
+        params: dict[str, Any] = {"batch_id": batch_id}
+        if knowledge_base_id is not None:
+            knowledge_base_filter = "AND knowledge_base_id = %(knowledge_base_id)s"
+            params["knowledge_base_id"] = knowledge_base_id
         await cursor.execute(
-            """
+            f"""
             SELECT *
             FROM knowledge_build_batch
             WHERE batch_id = %(batch_id)s
-              AND (
-                    %(knowledge_base_id)s IS NULL
-                    OR knowledge_base_id = %(knowledge_base_id)s
-              )
+              {knowledge_base_filter}
             """,
-            {"batch_id": batch_id, "knowledge_base_id": knowledge_base_id},
+            params,
         )
         return await cursor.fetchone()
 

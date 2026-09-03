@@ -444,6 +444,51 @@ class KnowledgeBuildTaskRepository:
         )
         return await cursor.fetchone()
 
+    async def terminate_active_tasks(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        error_code: str,
+        error_message: str,
+        fs_entry_ids: Sequence[int] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fence active Build tasks for a committed resource mutation."""
+        if fs_entry_ids is not None and not fs_entry_ids:
+            return []
+        await cursor.execute(
+            """
+            UPDATE knowledge_build_task
+            SET status = 'skipped',
+                progress = 100,
+                error_code = %(error_code)s,
+                error_message = %(error_message)s,
+                failure_kind = NULL,
+                outcome_uncertain = (status = 'running'),
+                worker_id = NULL,
+                lease_token = NULL,
+                heartbeat_at = NULL,
+                lease_expires_at = NULL,
+                finished_at = NOW(),
+                updated_at = NOW()
+            WHERE knowledge_base_id = %(knowledge_base_id)s
+              AND status IN ('pending', 'running')
+              AND (
+                    %(all_files)s::boolean
+                    OR fs_entry_id = ANY(%(fs_entry_ids)s::bigint[])
+              )
+            RETURNING *
+            """,
+            {
+                "knowledge_base_id": knowledge_base_id,
+                "error_code": error_code,
+                "error_message": self._truncate_error(error_message),
+                "all_files": fs_entry_ids is None,
+                "fs_entry_ids": list(fs_entry_ids or []),
+            },
+        )
+        return list(await cursor.fetchall())
+
     async def claim_next_task(
         self,
         cursor: Any,

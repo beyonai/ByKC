@@ -129,6 +129,24 @@ class BuildTasks:
         self.calls.append(("delete_tasks", kwargs))
 
 
+class BuildMutation:
+    def __init__(self, calls):
+        self.calls = calls
+
+    async def terminate_active(self, cursor, **kwargs):
+        del cursor
+        self.calls.append(("terminate_build", kwargs))
+        return ([{"kid": 17}], ["batch-1"])
+
+    async def publish(self, tasks, completed_batch_ids):
+        self.calls.append(
+            (
+                "publish_build",
+                {"tasks": tasks, "completed_batch_ids": completed_batch_ids},
+            )
+        )
+
+
 class Chunks:
     def __init__(self, calls):
         self.calls = calls
@@ -253,6 +271,7 @@ def build_service(
     task_status=None,
     duplicate_path=None,
     metadata_rows=None,
+    with_build_mutation=False,
 ):
     connection, storage = (
         Connection(calls, fail_commit, fail_rollback),
@@ -274,6 +293,9 @@ def build_service(
         storage_provider=storage,
         update_timeline_repository=Timeline(calls),
         markdown_update_summary_service=Summary(),
+        file_build_mutation_service=(
+            BuildMutation(calls) if with_build_mutation else None
+        ),
     )
     return service, connection, storage
 
@@ -289,16 +311,18 @@ def request(content=b"---\ntitle: New\n---\n# New\n![n](./new.png)\n", **kwargs)
     )
 
 
-async def test_update_rejects_running_build_task_before_storage_mutation():
+async def test_update_terminates_active_build_and_preserves_history():
     calls = []
-    service, connection, _ = build_service(calls, task_status="running")
-    with pytest.raises(
-        KnowledgeBaseValidationError,
-        match="File is being built and cannot be updated",
-    ):
-        await service.update_file(request())
-    assert not any(name == "write" for name, _ in calls)
-    assert connection.rolled_back
+    service, connection, _ = build_service(
+        calls, task_status="running", with_build_mutation=True
+    )
+    await service.update_file(request())
+    names = [name for name, _ in calls]
+    assert "terminate_build" in names
+    assert "write" in names
+    assert "delete_tasks" not in names
+    assert names.index("commit") < names.index("publish_build")
+    assert not connection.rolled_back
 
 
 async def test_update_rejects_stale_refer_signature_before_storage_mutation():

@@ -146,6 +146,7 @@ class KnowledgeItemIngestionService:
     markdown_reference_rewriter: Any | None = None
     file_build_processing_service: Any | None = None
     file_build_execution_service: Any | None = None
+    file_build_mutation_service: Any | None = None
     event_publisher_invoker: KnowledgeEventPublisherInvoker = field(
         default_factory=KnowledgeEventPublisherInvoker
     )
@@ -1025,6 +1026,8 @@ class KnowledgeItemIngestionService:
             request.file_path,
         )
         connection = await self.connection_factory()
+        terminated_build_tasks: list[dict[str, Any]] = []
+        completed_build_batch_ids: list[str] = []
         try:
             cursor = connection.cursor()
             kb_row = await self.knowledge_base_repository.get_by_code(
@@ -1045,6 +1048,17 @@ class KnowledgeItemIngestionService:
                     f"knowledge item not found: {request.file_path}"
                 )
             fs_entry_id = int(file_row["kid"])
+            if self.file_build_mutation_service is not None:
+                (
+                    terminated_build_tasks,
+                    completed_build_batch_ids,
+                ) = await self.file_build_mutation_service.terminate_active(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    fs_entry_ids=[fs_entry_id],
+                    error_code="SOURCE_DELETED",
+                    error_message="Source file was deleted",
+                )
             if self.knowledge_entity_asset_repository is not None:
                 await self.knowledge_entity_asset_repository.clear_fs_entry_ids(
                     cursor,
@@ -1097,6 +1111,10 @@ class KnowledgeItemIngestionService:
                 },
             )
             await connection.commit()
+            if self.file_build_mutation_service is not None:
+                await self.file_build_mutation_service.publish(
+                    terminated_build_tasks, completed_build_batch_ids
+                )
             if self.storage_provider.storage_path_bound_to_logical_path:
                 original_location = _build_optional_location(
                     file_row,

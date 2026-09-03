@@ -1945,7 +1945,18 @@ class KnowledgeBaseService:
                 fs_entry_ids=file_ids,
             )
         )
-        return {int(row["fs_entry_id"]): row for row in build_rows}
+        return {
+            int(row["fs_entry_id"]): {
+                **row,
+                "status": legacy_build_status(row.get("status")),
+                "current_step": legacy_build_step(
+                    status=row.get("status"),
+                    current_step=row.get("current_step"),
+                    current_stage=row.get("current_stage"),
+                ),
+            }
+            for row in build_rows
+        }
 
     async def _browse_metadata(
         self,

@@ -6,6 +6,7 @@ import asyncio
 import concurrent.futures
 import json
 import os
+import time
 from uuid import uuid4
 
 import pytest
@@ -14,7 +15,6 @@ from fastapi.testclient import TestClient
 import by_qa.main as main_module
 from by_qa.config import Settings
 from by_qa.core.model_config import ModelConfig
-from by_qa.knowledge_base.api.schemas import FileToMarkdownIndexRequest
 from by_qa.knowledge_base.events import (
     KnowledgeEventPublisherInvoker,
     serialize_knowledge_event,
@@ -266,6 +266,17 @@ async def _set_search_service(
 def _disable_kb_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
     """Disable startup/shutdown runtime initialization for route-level failure tests."""
 
+    monkeypatch.setattr(
+        main_module,
+        "settings",
+        main_module.settings.model_copy(
+            update={
+                "knowledge_entity_worker_enabled": False,
+                "knowledge_build_worker_enabled": False,
+            }
+        ),
+    )
+
     async def _noop(enabled_modules):  # pylint: disable=unused-argument
         pass
 
@@ -354,6 +365,40 @@ def _upload_and_build_file(
         },
     )
     assert build_response.status_code == 200, build_response.text
+    payload = build_response.json()
+    assert payload["resultCode"] == "0", payload
+    _wait_for_processing_batch(
+        client,
+        kb_code=kb_code,
+        batch_id=payload["resultObject"]["batchId"],
+    )
+
+
+def _wait_for_processing_batch(
+    client: TestClient,
+    *,
+    kb_code: str,
+    batch_id: str,
+    timeout_seconds: float = 15.0,
+) -> dict:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        response = client.post(
+            "/api/v1/knowledgeItems/processingBatchStatus",
+            json={
+                "knCode": kb_code,
+                "batchId": batch_id,
+                "includeDetails": True,
+            },
+        )
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["resultCode"] == "0", payload
+        result = payload["resultObject"]
+        if result["status"] == "COMPLETED":
+            return result
+        time.sleep(0.05)
+    pytest.fail(f"file Build batch did not complete: {batch_id}")
 
 
 def _file_build_status(
@@ -701,13 +746,14 @@ def test_async_file_build_publishes_strict_event_after_terminal_commit(
     ]
     assert len(build_events) == 1
     event = build_events[0]
+    assert event.event_version == 2
     assert event.kb_code == kb_code
-    assert event.payload.status == "complete"
-    assert event.payload.file_path == "docs/a.md"
-    assert event.payload.current_step == "complete"
+    assert event.payload.status == "SUCCEEDED"
+    assert event.payload.file_path_snapshot == "/docs/a.md"
+    assert event.payload.stage == "COMMITTING"
     assert event.payload.result.chunk_count == 1
     assert event.payload.error is None
-    assert publisher.persisted_statuses == ["complete"]
+    assert publisher.persisted_statuses == ["succeeded"]
     serialized = next(
         item
         for item in publisher.serialized_events
@@ -722,10 +768,14 @@ def test_async_file_build_publishes_strict_event_after_terminal_commit(
         "payload",
     }
     assert serialized["payload"] == {
+        "batchId": event.payload.batch_id,
         "taskId": event.payload.task_id,
-        "status": "complete",
-        "filePath": "docs/a.md",
-        "currentStep": "complete",
+        "taskType": "FILE_BUILD",
+        "fileId": event.payload.file_id,
+        "filePathSnapshot": "/docs/a.md",
+        "status": "SUCCEEDED",
+        "stage": "COMMITTING",
+        "progress": 100,
         "result": {"chunkCount": 1, "lineCount": 2},
         "error": None,
     }
@@ -767,6 +817,13 @@ def test_async_file_build_publishes_unsupported_terminal_event(monkeypatch, tmp_
             "/api/v1/fileToMarkdownIndex",
             json={"knCode": kb_code, "filePath": "/images/a.png"},
         )
+        response_payload = response.json()
+        assert response_payload["resultCode"] == "0"
+        _wait_for_processing_batch(
+            client,
+            kb_code=kb_code,
+            batch_id=response_payload["resultObject"]["batchId"],
+        )
         status = _file_build_status(
             client,
             kb_code=kb_code,
@@ -782,8 +839,9 @@ def test_async_file_build_publishes_unsupported_terminal_event(monkeypatch, tmp_
     ]
     assert len(build_events) == 1
     event = build_events[0]
-    assert event.payload.status == "unsupported"
-    assert event.payload.current_step == "markdown"
+    assert event.event_version == 2
+    assert event.payload.status == "UNSUPPORTED"
+    assert event.payload.stage == "EXTRACTING"
     assert event.payload.result is None
     assert event.payload.error.code == "UNSUPPORTED_FILE_TYPE"
     assert event.payload.error.message == "unsupported file type: png"
@@ -966,6 +1024,11 @@ def test_document_update_metadata_merges_preserves_and_rolls_back_with_content(
             json={"knCode": kb_code, "filePath": "/docs/a.md"},
         )
         assert built.json()["resultCode"] == "0"
+        _wait_for_processing_batch(
+            client,
+            kb_code=kb_code,
+            batch_id=built.json()["resultObject"]["batchId"],
+        )
         before_update_browse = client.post(
             "/api/v1/listDir",
             json={"knCode": kb_code, "directoryPath": "/docs"},
@@ -1052,8 +1115,8 @@ def test_document_update_metadata_merges_preserves_and_rolls_back_with_content(
     assert browse["metadata"] == expected
     assert glob_browse == browse
     assert browse["updatedAt"] > before_update_browse["updatedAt"]
-    assert browse["buildStatus"] is None
-    assert browse["buildCurrentStep"] is None
+    assert browse["buildStatus"] == "complete"
+    assert browse["buildCurrentStep"] == "complete"
     assert stale.json()["resultCode"] == "-1"
     assert after_stale == expected
     assert disabled.json()["resultCode"] == "0"
@@ -1378,9 +1441,17 @@ async def _create_running_build_task(
         await cursor.execute(
             """
             INSERT INTO knowledge_build_task (
-                knowledge_base_id, fs_entry_id, status, current_step, started_at
+                knowledge_base_id, fs_entry_id, status, current_step, started_at,
+                origin, execution_mode, file_path_snapshot, input_checksum,
+                input_is_deleted, build_profile, build_profile_hash,
+                current_stage, worker_id, lease_token, heartbeat_at,
+                lease_expires_at
             )
-            SELECT %(kb_code)s::bigint, kid, 'running', 'extract_text', NOW()
+            SELECT %(kb_code)s::bigint, kid, 'running', 'extract_text', NOW(),
+                   'API', 'BACKGROUND', virtual_path, checksum, false,
+                   '{"legacy":true}'::jsonb, repeat('0', 64), 'extracting',
+                   'stateful-integration', 'stateful-integration-lease', NOW(),
+                   NOW() + INTERVAL '5 minutes'
             FROM knowledge_fs_entry
             WHERE knowledge_base_id = %(kb_code)s::bigint
               AND name = %(name)s
@@ -2715,11 +2786,16 @@ def test_file_build_status_returns_complete_result_after_successful_build(
 
 
 @pytest.mark.integration
-def test_file_to_markdown_index_rejects_duplicate_request_while_running(
+def test_file_to_markdown_index_reuses_duplicate_request_while_pending(
     monkeypatch, tmp_path
 ):
-    """A second build request should be rejected while the latest task is still running."""
-    settings = _kb_settings(agent_data_path=tmp_path)
+    """A second request reuses the same active task without joining its batch."""
+    settings = _kb_settings(agent_data_path=tmp_path).model_copy(
+        update={
+            "knowledge_build_worker_enabled": False,
+            "knowledge_entity_worker_enabled": False,
+        }
+    )
     _reset_runtime(monkeypatch, settings)
 
     class RecordingPublisher:
@@ -2747,37 +2823,36 @@ def test_file_to_markdown_index_rejects_duplicate_request_while_running(
             file_content=b"alpha\nbeta\n",
         )
 
-        ingestion_service = asyncio.run(
-            main_module._get_or_build_knowledge_item_ingestion_service()
-        )
-        build_task_id = asyncio.run(
-            ingestion_service.create_file_to_markdown_index_task(
-                FileToMarkdownIndexRequest(kb_code=kb_code, file_path=file_path)
-            )
-        )
-
-        running_status = _file_build_status(
-            client,
-            kb_code=kb_code,
-            file_path=file_path,
+        first_response = client.post(
+            "/api/v1/fileToMarkdownIndex",
+            json={"knCode": kb_code, "filePath": file_path},
         )
         duplicate_response = client.post(
             "/api/v1/fileToMarkdownIndex",
             json={"knCode": kb_code, "filePath": file_path},
         )
-        assert build_task_id > 0
+        cleanup_response = client.post(
+            "/api/v1/knowledgeBases/delete", json={"knCode": kb_code}
+        )
 
-    running_payload = running_status.json()
-    assert running_payload["resultCode"] == "0"
-    assert running_payload["resultObject"]["status"] == "running"
-    assert running_payload["resultObject"]["currentStep"] == "markdown"
-
+    first_payload = first_response.json()
+    assert first_payload["resultCode"] == "0"
+    assert first_payload["resultObject"]["acceptedCount"] == 1
+    assert first_payload["resultObject"]["reusedCount"] == 0
     duplicate_payload = duplicate_response.json()
-    assert duplicate_payload["resultCode"] == "-1"
-    assert "build task already exists" in duplicate_payload["resultMsg"]
+    assert duplicate_payload["resultCode"] == "0"
+    assert duplicate_payload["resultObject"]["acceptedCount"] == 0
+    assert duplicate_payload["resultObject"]["reusedCount"] == 1
+    assert duplicate_payload["resultObject"]["tasks"][0] == {
+        **duplicate_payload["resultObject"]["tasks"][0],
+        "taskId": first_payload["resultObject"]["tasks"][0]["taskId"],
+        "status": "PENDING",
+        "reused": True,
+    }
     assert not any(
         event.event_type == "build.file.completed" for event in publisher.events
     )
+    assert cleanup_response.json()["resultCode"] == "0"
 
 
 @pytest.mark.integration
@@ -2819,6 +2894,13 @@ def test_failed_build_status_can_be_retried_to_complete(monkeypatch, tmp_path):
             "/api/v1/fileToMarkdownIndex",
             json={"knCode": kb_code, "filePath": file_path},
         )
+        first_payload = first_build.json()
+        assert first_payload["resultCode"] == "0"
+        failed_batch = _wait_for_processing_batch(
+            client,
+            kb_code=kb_code,
+            batch_id=first_payload["resultObject"]["batchId"],
+        )
         failed_status = _file_build_status(
             client,
             kb_code=kb_code,
@@ -2829,6 +2911,13 @@ def test_failed_build_status_can_be_retried_to_complete(monkeypatch, tmp_path):
             "/api/v1/fileToMarkdownIndex",
             json={"knCode": kb_code, "filePath": file_path},
         )
+        second_payload = second_build.json()
+        assert second_payload["resultCode"] == "0"
+        complete_batch = _wait_for_processing_batch(
+            client,
+            kb_code=kb_code,
+            batch_id=second_payload["resultObject"]["batchId"],
+        )
         complete_status = _file_build_status(
             client,
             kb_code=kb_code,
@@ -2836,12 +2925,12 @@ def test_failed_build_status_can_be_retried_to_complete(monkeypatch, tmp_path):
         )
 
     assert first_build.status_code == 200
-    assert first_build.json()["resultCode"] == "0"
+    assert failed_batch["failedCount"] == 1
     assert failed_status.json()["resultObject"]["status"] == "failed"
     assert failed_status.json()["resultObject"]["currentStep"] == "markdown"
 
     assert second_build.status_code == 200
-    assert second_build.json()["resultCode"] == "0"
+    assert complete_batch["succeededCount"] == 1
     assert complete_status.json()["resultObject"]["status"] == "complete"
     assert complete_status.json()["resultObject"]["currentStep"] == "complete"
     build_events = [
@@ -2849,7 +2938,7 @@ def test_failed_build_status_can_be_retried_to_complete(monkeypatch, tmp_path):
         for event in publisher.events
         if event.event_type == "build.file.completed"
     ]
-    assert [event.payload.status for event in build_events] == ["failed", "complete"]
+    assert [event.payload.status for event in build_events] == ["FAILED", "SUCCEEDED"]
     assert build_events[0].payload.error.code == "BUILD_FAILED"
     assert build_events[0].payload.result is None
     assert build_events[1].payload.error is None
@@ -3043,14 +3132,44 @@ async def test_browse_returns_each_latest_terminal_or_running_build_state(
                             fs_entry_id,
                             status,
                             current_step,
+                            origin,
+                            execution_mode,
+                            file_path_snapshot,
+                            input_is_deleted,
+                            build_profile,
+                            build_profile_hash,
+                            current_stage,
+                            worker_id,
+                            lease_token,
+                            heartbeat_at,
+                            lease_expires_at,
                             created_at,
                             updated_at
                         )
                         SELECT
                             %(knowledge_base_id)s,
                             kid,
-                            %(status)s,
-                            %(current_step)s,
+                            %(status)s::varchar(32),
+                            %(current_step)s::varchar(32),
+                            'API',
+                            'BACKGROUND',
+                            virtual_path,
+                            false,
+                            '{"legacy":true}'::jsonb,
+                            repeat('0', 64),
+                            CASE %(current_step)s::varchar(32)
+                                WHEN 'markdown' THEN 'extracting'
+                                WHEN 'chunking' THEN 'chunking'
+                                ELSE 'committing'
+                            END,
+                            CASE WHEN %(status)s::varchar(32) = 'running'
+                                THEN 'stateful-browse' ELSE NULL END,
+                            CASE WHEN %(status)s::varchar(32) = 'running'
+                                THEN 'stateful-browse-' || kid::text ELSE NULL END,
+                            CASE WHEN %(status)s::varchar(32) = 'running'
+                                THEN NOW() ELSE NULL END,
+                            CASE WHEN %(status)s::varchar(32) = 'running'
+                                THEN NOW() + INTERVAL '5 minutes' ELSE NULL END,
                             NOW(),
                             NOW()
                         FROM knowledge_fs_entry
@@ -6375,6 +6494,13 @@ def test_zip_references_and_directory_delete_update_inbound_reference_state(
             "/api/v1/fileToMarkdownIndex",
             json={"knCode": kb_code, "filePath": "/zip/a.md"},
         )
+        build_zip_payload = build_zip_a.json()
+        assert build_zip_payload["resultCode"] == "0"
+        _wait_for_processing_batch(
+            client,
+            kb_code=kb_code,
+            batch_id=build_zip_payload["resultObject"]["batchId"],
+        )
         zip_read = _read_file_data(client, kb_code=kb_code, file_path="/zip/a.md")
         zip_refs = _reference_rows(client, kb_code=kb_code, target_path="/zip/b.md")
 
@@ -6515,6 +6641,13 @@ def test_build_unsupported_file_type_sets_unsupported_status(monkeypatch, tmp_pa
         build = client.post(
             "/api/v1/fileToMarkdownIndex",
             json={"knCode": kb_code, "filePath": "/img/x.png"},
+        )
+        build_payload = build.json()
+        assert build_payload["resultCode"] == "0"
+        _wait_for_processing_batch(
+            client,
+            kb_code=kb_code,
+            batch_id=build_payload["resultObject"]["batchId"],
         )
         status_response = _file_build_status(
             client, kb_code=kb_code, file_path="/img/x.png"
@@ -7138,8 +7271,8 @@ async def test_document_update_markdown_replaces_content_and_invalidates_derived
         "documentKind": "original",
     }
     assert downloaded_body == b"# After\nnew-only-token\n"
-    assert build_status.json()["resultCode"] == "-1"
-    assert "build task not found" in build_status.json()["resultMsg"]
+    assert build_status.json()["resultCode"] == "0"
+    assert build_status.json()["resultObject"]["status"] == "complete"
     assert search_after == []
     assert metadata.json()["resultObject"]["metadata"] == {
         "title": {"valueType": "string", "value": "After"},
@@ -7220,7 +7353,8 @@ async def test_document_update_markdown_reregisters_stable_source_references_and
             "status": "resolved",
         }
     ]
-    assert build_status.json()["resultCode"] == "-1"
+    assert build_status.json()["resultCode"] == "0"
+    assert build_status.json()["resultObject"]["status"] == "complete"
     assert timeline["old_file_size"] > 0
     assert timeline["new_file_size"] > 0
     assert timeline["summary_source"] in {"RULE_BASED", "LLM"}
@@ -7230,7 +7364,7 @@ async def test_document_update_markdown_reregisters_stable_source_references_and
 async def test_document_update_non_markdown_and_validation_errors_use_http_200_envelope(
     monkeypatch, tmp_path
 ):
-    """Non-Markdown updates avoid LLM work; malformed updates retain the public error envelope."""
+    """Non-Markdown updates supersede builds; malformed input keeps the error envelope."""
     settings = _kb_settings(agent_data_path=tmp_path)
     _reset_runtime(monkeypatch, settings)
     _set_document_chunking_service(monkeypatch, EchoDocumentChunkingService())
@@ -7301,17 +7435,19 @@ async def test_document_update_non_markdown_and_validation_errors_use_http_200_e
         logo_bytes = _download_file_bytes(
             client, kb_code=kb_code, file_path="/assets/logo.png"
         )
+        superseded_build = _file_build_status(
+            client, kb_code=kb_code, file_path="/assets/logo.png"
+        )
 
     assert success.status_code == 200
     assert success.json()["resultCode"] == "0"
-    assert logo_bytes == b"new-png"
+    assert logo_bytes == b"blocked"
     assert llm_calls == []
-    for response in (zip_error, suffix_error, missing_error, running_error):
+    for response in (zip_error, suffix_error, missing_error):
         assert response.status_code == 200
         assert response.json()["resultCode"] == "-1"
-    assert (
-        "File is being built and cannot be updated" in running_error.json()["resultMsg"]
-    )
+    assert running_error.json()["resultCode"] == "0"
+    assert superseded_build.json()["resultObject"]["status"] == "skipped"
 
 
 @pytest.mark.integration

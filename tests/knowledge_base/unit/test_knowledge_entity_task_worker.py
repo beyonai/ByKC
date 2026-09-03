@@ -235,9 +235,16 @@ class FakeIngestion:
         }
 
     async def file_to_markdown_index(
-        self, request, *, document_chunking_service
+        self,
+        request,
+        *,
+        document_chunking_service,
+        parent_semantic_task_id=None,
+        origin=None,
     ) -> None:
         assert document_chunking_service == "chunker"
+        assert parent_semantic_task_id is not None
+        assert origin in {"ENTITY_DISCOVERY", "ENTITY_ENRICH"}
         self.indexed_paths.append(request.file_path)
         row = next(
             row

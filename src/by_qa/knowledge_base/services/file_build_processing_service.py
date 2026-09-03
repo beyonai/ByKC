@@ -27,6 +27,15 @@ class FileBuildProcessingService:
     task_repository: Any
     build_profile: FileBuildProfile
     unified_task_repository: Any | None = None
+    background_runner: Any | None = None
+
+    async def start(self) -> None:
+        if self.background_runner is not None:
+            await self.background_runner.start()
+
+    async def stop(self) -> None:
+        if self.background_runner is not None:
+            await self.background_runner.stop()
 
     async def accept(self, request: FileToMarkdownIndexRequest) -> dict[str, Any]:
         target_path = self._normalize_target_path(request.file_path)

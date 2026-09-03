@@ -516,6 +516,8 @@ class KnowledgeEntityTaskWorker:
                 file_path=context.file_path,
             ),
             document_chunking_service=self._chunker,
+            parent_semantic_task_id=int(context.task_id),
+            origin="ENTITY_ENRICH",
         )
         logger.info(
             "knowledge_entity_enrich persistence completed: batch_id=%s task_id=%s "
@@ -704,6 +706,8 @@ class KnowledgeEntityTaskWorker:
         await self._ingestion.file_to_markdown_index(
             FileToMarkdownIndexRequest(kb_code=context.kb_code, file_path=path),
             document_chunking_service=self._chunker,
+            parent_semantic_task_id=int(context.task_id),
+            origin="ENTITY_DISCOVERY",
         )
         created = await self._get_entity_by_path(context, path)
         if created is None:
@@ -784,6 +788,8 @@ class KnowledgeEntityTaskWorker:
         await self._ingestion.file_to_markdown_index(
             FileToMarkdownIndexRequest(kb_code=context.kb_code, file_path=path),
             document_chunking_service=self._chunker,
+            parent_semantic_task_id=int(context.task_id),
+            origin="ENTITY_DISCOVERY",
         )
 
     async def _persist_mentions(

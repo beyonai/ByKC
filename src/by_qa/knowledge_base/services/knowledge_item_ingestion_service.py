@@ -34,6 +34,9 @@ from by_qa.knowledge_base.services.entry_metadata import (
     upsert_entry_metadata,
 )
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
+from by_qa.knowledge_base.services.file_build_execution_service import (
+    FileBuildTerminalError,
+)
 from by_qa.knowledge_base.services.knowledge_document_metadata import (
     ensure_document_kind_metadata,
 )
@@ -142,6 +145,7 @@ class KnowledgeItemIngestionService:
     knowledge_file_reference_repository: Any | None = None
     markdown_reference_rewriter: Any | None = None
     file_build_processing_service: Any | None = None
+    file_build_execution_service: Any | None = None
     event_publisher_invoker: KnowledgeEventPublisherInvoker = field(
         default_factory=KnowledgeEventPublisherInvoker
     )
@@ -564,9 +568,21 @@ class KnowledgeItemIngestionService:
         return targets
 
     async def file_to_markdown_index(
-        self, request: FileToMarkdownIndexRequest, *, document_chunking_service: Any
+        self,
+        request: FileToMarkdownIndexRequest,
+        *,
+        document_chunking_service: Any,
+        parent_semantic_task_id: int | None = None,
+        origin: str | None = None,
     ) -> None:
         """Synchronously build for an internal caller without an API event."""
+        if parent_semantic_task_id is not None:
+            await self._file_to_markdown_index_inline(
+                request,
+                parent_semantic_task_id=parent_semantic_task_id,
+                origin=origin or "",
+            )
+            return
         build_task_id = await self.create_file_to_markdown_index_task(request)
         await self.execute_file_to_markdown_index_task(
             request,
@@ -574,6 +590,104 @@ class KnowledgeItemIngestionService:
             build_task_id=build_task_id,
             publish_event=False,
         )
+
+    async def _file_to_markdown_index_inline(
+        self,
+        request: FileToMarkdownIndexRequest,
+        *,
+        parent_semantic_task_id: int,
+        origin: str,
+    ) -> None:
+        """Persist and synchronously execute a file build owned by Entity work."""
+        if self.file_build_execution_service is None:
+            raise RuntimeError("inline file build execution service is not configured")
+        if self.file_build_processing_service is None:
+            raise RuntimeError("file build processing service is not configured")
+        normalized_file_path = request.file_path.strip("/")
+        if not normalized_file_path:
+            raise KnowledgeBaseValidationError("file_path must not be empty")
+
+        connection = await self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            kb_row = await self.knowledge_base_repository.get_by_code(
+                cursor, request.kb_code
+            )
+            if kb_row is None:
+                raise KnowledgeBaseValidationError(
+                    f"knowledge base not found: {request.kb_code}"
+                )
+            knowledge_base_id = self._row_id(kb_row)
+            file_row = (
+                await self.knowledge_fs_entry_repository.get_file_by_path_for_update(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    full_path=normalized_file_path,
+                )
+            )
+            if file_row is None:
+                raise KnowledgeBaseValidationError(
+                    f"file not found: {request.file_path}"
+                )
+            fs_entry_id = self._row_id(file_row)
+            checksum = str(file_row.get("checksum") or "")
+            if not checksum or not file_row.get("file_object_key"):
+                raise KnowledgeBaseValidationError(
+                    f"file has not been uploaded yet: {request.file_path}"
+                )
+            active = await self.knowledge_build_task_repository.get_active_for_update(
+                cursor, fs_entry_id=fs_entry_id
+            )
+            if active is not None:
+                await self.knowledge_build_task_repository.supersede_active_task(
+                    cursor, task_id=self._row_id(active)
+                )
+            profile = self.file_build_processing_service.build_profile
+            task = await self.knowledge_build_task_repository.create_inline_task(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                fs_entry_id=fs_entry_id,
+                origin=origin,
+                parent_semantic_task_id=parent_semantic_task_id,
+                file_path_snapshot=normalized_file_path,
+                input_checksum=checksum,
+                input_is_deleted=False,
+                build_profile=profile.storage_value(),
+                build_profile_hash=profile.sha256(),
+            )
+            if task is None:
+                raise RuntimeError("failed to create inline file build task")
+            await connection.commit()
+        except Exception:
+            await connection.rollback()
+            raise
+        finally:
+            await connection.close()
+
+        try:
+            await self.file_build_execution_service.execute_inline(task)
+        except FileBuildTerminalError as exc:
+            finished = await self.file_build_execution_service.finish_inline(
+                task,
+                status=exc.status,
+                error_code=exc.error_code,
+                error_message=str(exc),
+                failure_kind=exc.failure_kind,
+                outcome_uncertain=exc.outcome_uncertain,
+            )
+            if finished is None:
+                raise RuntimeError("inline file build was superseded") from exc
+            if exc.status != "unsupported":
+                raise
+        except Exception as exc:
+            await self.file_build_execution_service.finish_inline(
+                task,
+                status="failed",
+                error_code="BUILD_FAILED",
+                error_message=str(exc) or "internal error",
+                failure_kind="SYSTEM",
+            )
+            raise
 
     async def create_file_to_markdown_index_task(
         self, request: FileToMarkdownIndexRequest

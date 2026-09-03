@@ -225,6 +225,54 @@ class Settings(BaseSettings):
         ge=0,
         alias="KNOWLEDGE_ENTITY_SHUTDOWN_GRACE_SECONDS",
     )
+    knowledge_build_worker_enabled: bool = Field(
+        default=True,
+        alias="KNOWLEDGE_BUILD_WORKER_ENABLED",
+    )
+    knowledge_build_worker_id: str = Field(
+        default="",
+        alias="KNOWLEDGE_BUILD_WORKER_ID",
+    )
+    knowledge_build_worker_concurrency: int = Field(
+        default=16,
+        ge=1,
+        alias="KNOWLEDGE_BUILD_WORKER_CONCURRENCY",
+    )
+    knowledge_build_worker_poll_seconds: float = Field(
+        default=3.0,
+        gt=0,
+        alias="KNOWLEDGE_BUILD_WORKER_POLL_SECONDS",
+    )
+    knowledge_build_task_timeout_seconds: float = Field(
+        default=1200.0,
+        gt=0,
+        alias="KNOWLEDGE_BUILD_TASK_TIMEOUT_SECONDS",
+    )
+    knowledge_build_lease_seconds: int = Field(
+        default=180,
+        ge=2,
+        alias="KNOWLEDGE_BUILD_LEASE_SECONDS",
+    )
+    knowledge_build_heartbeat_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        alias="KNOWLEDGE_BUILD_HEARTBEAT_SECONDS",
+    )
+    knowledge_build_reaper_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        alias="KNOWLEDGE_BUILD_REAPER_SECONDS",
+    )
+    knowledge_build_worker_status_log_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        alias="KNOWLEDGE_BUILD_WORKER_STATUS_LOG_SECONDS",
+    )
+    knowledge_build_shutdown_grace_seconds: float = Field(
+        default=60.0,
+        ge=0,
+        alias="KNOWLEDGE_BUILD_SHUTDOWN_GRACE_SECONDS",
+    )
     entity_embedding_index_enabled: bool = Field(
         default=True,
         alias="ENTITY_EMBEDDING_INDEX_ENABLED",
@@ -295,6 +343,17 @@ class Settings(BaseSettings):
             raise ValueError(
                 "KNOWLEDGE_ENTITY_HEARTBEAT_SECONDS must be less than "
                 "KNOWLEDGE_ENTITY_LEASE_SECONDS"
+            )
+        return value
+
+    @field_validator("knowledge_build_heartbeat_seconds")
+    @classmethod
+    def _validate_knowledge_build_heartbeat_seconds(cls, value: float, info) -> float:
+        lease_seconds = info.data.get("knowledge_build_lease_seconds", 180)
+        if value >= lease_seconds:
+            raise ValueError(
+                "KNOWLEDGE_BUILD_HEARTBEAT_SECONDS must be less than "
+                "KNOWLEDGE_BUILD_LEASE_SECONDS"
             )
         return value
 

@@ -167,7 +167,7 @@ class KnowledgeBuildTaskRepository:
                 false,
                 %(build_profile)s::jsonb,
                 %(build_profile_hash)s,
-                %(status)s,
+                %(status)s::varchar(32),
                 %(current_step)s,
                 %(current_stage)s,
                 %(progress)s,
@@ -444,6 +444,300 @@ class KnowledgeBuildTaskRepository:
         )
         return await cursor.fetchone()
 
+    async def claim_next_task(
+        self,
+        cursor: Any,
+        *,
+        worker_id: str,
+        lease_token: str,
+        lease_seconds: int,
+    ) -> dict[str, Any] | None:
+        """Claim one background task with FIFO priority aging and fencing."""
+        await cursor.execute(
+            """
+            WITH candidate AS (
+                SELECT kid
+                FROM knowledge_build_task
+                WHERE status = 'pending'
+                  AND execution_mode = 'BACKGROUND'
+                ORDER BY
+                    priority
+                    + FLOOR(
+                        EXTRACT(EPOCH FROM (NOW() - created_at)) / 60
+                    ) DESC,
+                    created_at,
+                    kid
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+            )
+            UPDATE knowledge_build_task task
+            SET status = 'running',
+                worker_id = %(worker_id)s,
+                lease_token = %(lease_token)s,
+                heartbeat_at = NOW(),
+                lease_expires_at = NOW()
+                    + (%(lease_seconds)s * INTERVAL '1 second'),
+                started_at = COALESCE(started_at, NOW()),
+                updated_at = NOW()
+            FROM candidate
+            WHERE task.kid = candidate.kid
+              AND task.status = 'pending'
+            RETURNING task.*
+            """,
+            {
+                "worker_id": worker_id,
+                "lease_token": lease_token,
+                "lease_seconds": lease_seconds,
+            },
+        )
+        return await cursor.fetchone()
+
+    async def refresh_lease(
+        self,
+        cursor: Any,
+        *,
+        task_id: int,
+        worker_id: str,
+        lease_token: str,
+        lease_seconds: int,
+    ) -> bool:
+        await cursor.execute(
+            """
+            UPDATE knowledge_build_task
+            SET heartbeat_at = NOW(),
+                lease_expires_at = NOW()
+                    + (%(lease_seconds)s * INTERVAL '1 second'),
+                updated_at = NOW()
+            WHERE kid = %(task_id)s
+              AND status = 'running'
+              AND execution_mode = 'BACKGROUND'
+              AND worker_id = %(worker_id)s
+              AND lease_token = %(lease_token)s
+              AND lease_expires_at > clock_timestamp()
+            RETURNING kid
+            """,
+            {
+                "task_id": task_id,
+                "worker_id": worker_id,
+                "lease_token": lease_token,
+                "lease_seconds": lease_seconds,
+            },
+        )
+        return await cursor.fetchone() is not None
+
+    async def update_claimed_stage(
+        self,
+        cursor: Any,
+        *,
+        task_id: int,
+        lease_token: str,
+        current_stage: str,
+    ) -> dict[str, Any] | None:
+        normalized_stage = self._normalize_stage(current_stage)
+        await cursor.execute(
+            """
+            UPDATE knowledge_build_task
+            SET current_stage = %(current_stage)s,
+                current_step = %(current_step)s,
+                progress = %(progress)s,
+                updated_at = NOW()
+            WHERE kid = %(task_id)s
+              AND status = 'running'
+              AND execution_mode = 'BACKGROUND'
+              AND lease_token = %(lease_token)s
+              AND lease_expires_at > clock_timestamp()
+            RETURNING *
+            """,
+            {
+                "task_id": task_id,
+                "lease_token": lease_token,
+                "current_stage": normalized_stage,
+                "current_step": _STAGE_TO_LEGACY_STEP[normalized_stage],
+                "progress": _STAGE_PROGRESS[normalized_stage],
+            },
+        )
+        return await cursor.fetchone()
+
+    async def update_inline_stage(
+        self,
+        cursor: Any,
+        *,
+        task_id: int,
+        current_stage: str,
+    ) -> dict[str, Any] | None:
+        """Advance an Entity-owned synchronous task if it is still active."""
+        normalized_stage = self._normalize_stage(current_stage)
+        await cursor.execute(
+            """
+            UPDATE knowledge_build_task
+            SET current_stage = %(current_stage)s,
+                current_step = %(current_step)s,
+                progress = %(progress)s,
+                updated_at = NOW()
+            WHERE kid = %(task_id)s
+              AND status = 'running'
+              AND execution_mode = 'INLINE'
+            RETURNING *
+            """,
+            {
+                "task_id": task_id,
+                "current_stage": normalized_stage,
+                "current_step": _STAGE_TO_LEGACY_STEP[normalized_stage],
+                "progress": _STAGE_PROGRESS[normalized_stage],
+            },
+        )
+        return await cursor.fetchone()
+
+    async def finish_claimed_task(
+        self,
+        cursor: Any,
+        *,
+        task_id: int,
+        lease_token: str,
+        status: str,
+        result_payload: Mapping[str, Any] | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        failure_kind: str | None = None,
+        outcome_uncertain: bool = False,
+    ) -> dict[str, Any] | None:
+        normalized_status = self._normalize_status(status)
+        if normalized_status not in _TERMINAL_STATUSES:
+            raise ValueError("claimed task must finish in a terminal status")
+        await cursor.execute(
+            """
+            UPDATE knowledge_build_task
+            SET status = %(status)s::varchar(32),
+                progress = 100,
+                current_step = CASE
+                    WHEN %(status)s::varchar(32) = 'succeeded'::varchar(32)
+                        THEN 'complete'
+                    ELSE current_step
+                END,
+                result_payload = %(result_payload)s::jsonb,
+                error_code = %(error_code)s,
+                error_message = %(error_message)s,
+                failure_kind = %(failure_kind)s,
+                outcome_uncertain = %(outcome_uncertain)s,
+                worker_id = NULL,
+                lease_token = NULL,
+                heartbeat_at = NULL,
+                lease_expires_at = NULL,
+                finished_at = NOW(),
+                updated_at = NOW()
+            WHERE kid = %(task_id)s
+              AND status = 'running'
+              AND execution_mode = 'BACKGROUND'
+              AND lease_token = %(lease_token)s
+              AND lease_expires_at > clock_timestamp()
+            RETURNING *
+            """,
+            {
+                "task_id": task_id,
+                "lease_token": lease_token,
+                "status": normalized_status,
+                "result_payload": self._json_value(result_payload),
+                "error_code": error_code,
+                "error_message": self._truncate_error(error_message),
+                "failure_kind": failure_kind,
+                "outcome_uncertain": outcome_uncertain,
+            },
+        )
+        return await cursor.fetchone()
+
+    async def finish_inline_task(
+        self,
+        cursor: Any,
+        *,
+        task_id: int,
+        status: str,
+        result_payload: Mapping[str, Any] | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        failure_kind: str | None = None,
+        outcome_uncertain: bool = False,
+    ) -> dict[str, Any] | None:
+        """Finish an Entity-owned synchronous task unless it was superseded."""
+        normalized_status = self._normalize_status(status)
+        if normalized_status not in _TERMINAL_STATUSES:
+            raise ValueError("inline task must finish in a terminal status")
+        await cursor.execute(
+            """
+            UPDATE knowledge_build_task
+            SET status = %(status)s::varchar(32),
+                progress = 100,
+                current_step = CASE
+                    WHEN %(status)s::varchar(32) = 'succeeded'::varchar(32)
+                        THEN 'complete'
+                    ELSE current_step
+                END,
+                result_payload = %(result_payload)s::jsonb,
+                error_code = %(error_code)s,
+                error_message = %(error_message)s,
+                failure_kind = %(failure_kind)s,
+                outcome_uncertain = %(outcome_uncertain)s,
+                finished_at = NOW(),
+                updated_at = NOW()
+            WHERE kid = %(task_id)s
+              AND status = 'running'
+              AND execution_mode = 'INLINE'
+            RETURNING *
+            """,
+            {
+                "task_id": task_id,
+                "status": normalized_status,
+                "result_payload": self._json_value(result_payload),
+                "error_code": error_code,
+                "error_message": self._truncate_error(error_message),
+                "failure_kind": failure_kind,
+                "outcome_uncertain": outcome_uncertain,
+            },
+        )
+        return await cursor.fetchone()
+
+    async def lock_next_expired_task(self, cursor: Any) -> dict[str, Any] | None:
+        await cursor.execute(
+            """
+            SELECT *
+            FROM knowledge_build_task
+            WHERE status = 'running'
+              AND execution_mode = 'BACKGROUND'
+              AND lease_expires_at <= clock_timestamp()
+            ORDER BY lease_expires_at, kid
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+            """
+        )
+        return await cursor.fetchone()
+
+    async def fail_locked_expired_task(
+        self, cursor: Any, *, task_id: int
+    ) -> dict[str, Any] | None:
+        await cursor.execute(
+            """
+            UPDATE knowledge_build_task
+            SET status = 'failed',
+                progress = 100,
+                error_code = 'WORKER_LOST',
+                error_message = 'Build worker lease expired',
+                failure_kind = 'INFRASTRUCTURE',
+                outcome_uncertain = TRUE,
+                worker_id = NULL,
+                lease_token = NULL,
+                heartbeat_at = NULL,
+                lease_expires_at = NULL,
+                finished_at = NOW(),
+                updated_at = NOW()
+            WHERE kid = %(task_id)s
+              AND status = 'running'
+              AND execution_mode = 'BACKGROUND'
+              AND lease_expires_at <= clock_timestamp()
+            RETURNING *
+            """,
+            {"task_id": task_id},
+        )
+        return await cursor.fetchone()
+
     async def list_tasks(
         self,
         cursor: Any,
@@ -598,13 +892,17 @@ class KnowledgeBuildTaskRepository:
                 %(input_is_deleted)s,
                 %(build_profile)s::jsonb,
                 %(build_profile_hash)s,
-                %(status)s,
+                %(status)s::varchar(32),
                 %(current_step)s,
                 %(current_stage)s,
                 %(progress)s,
                 %(priority)s,
                 false,
-                CASE WHEN %(status)s = 'running' THEN NOW() ELSE NULL END,
+                CASE
+                    WHEN %(status)s::varchar(32) = 'running'::varchar(32)
+                        THEN NOW()
+                    ELSE NULL
+                END,
                 NOW(),
                 NOW()
             )
@@ -650,7 +948,9 @@ class KnowledgeBuildTaskRepository:
         return normalized
 
     @staticmethod
-    def _json_value(value: Mapping[str, Any]) -> str:
+    def _json_value(value: Mapping[str, Any] | None) -> str | None:
+        if value is None:
+            return None
         return json.dumps(
             dict(value),
             ensure_ascii=False,
@@ -658,6 +958,12 @@ class KnowledgeBuildTaskRepository:
             sort_keys=True,
             separators=(",", ":"),
         )
+
+    @staticmethod
+    def _truncate_error(value: str | None, *, limit: int = 2000) -> str | None:
+        if value is None:
+            return None
+        return value[:limit]
 
     def _filters(
         self,

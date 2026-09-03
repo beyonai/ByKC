@@ -6,7 +6,8 @@
 
 - [通用约定](common.md)：Base URL、请求格式、响应信封、HTTP 状态码和兼容路径。
 - [元数据与 Agent DSL](metadata-and-dsl.md)：元数据类型、系统字段、过滤表达式和检索模式。
-- [异步实体处理](entity-processing.md)：batch/task、状态、Worker、超时和 Callback 公共语义。
+- [异步实体处理](entity-processing.md)：Discovery/Enrich 的 batch/task、Worker、超时和 Callback 语义。
+- [文件与目录后台构建](../file-build-background-processing-design.md)：File Build 的批次、任务、复用、一致性、独立 Runner 和 Callback 语义。
 
 ## 接口导航
 
@@ -60,6 +61,13 @@
 | `POST` | `/api/v1/fileBuildStatus` | [fileBuildStatus](interfaces/fileBuildStatus.md) |
 | `POST` | `/api/v1/buildResult` | [buildResult](interfaces/buildResult.md) |
 
+### 统一异步任务状态
+
+| 方法 | 路径 | 文档 |
+| --- | --- | --- |
+| `POST` | `/api/v1/knowledgeItems/processingTaskStatus` | [processingTaskStatus](interfaces/processingTaskStatus.md) |
+| `POST` | `/api/v1/knowledgeItems/processingBatchStatus` | [processingBatchStatus](interfaces/processingBatchStatus.md) |
+
 ### 检索与元数据
 
 | 方法 | 路径 | 文档 |
@@ -77,8 +85,6 @@
 | `POST` | `/api/v1/knowledgeItems/processingEligibility` | [processingEligibility](interfaces/processingEligibility.md) |
 | `POST` | `/api/v1/knowledgeItems/entityDiscovery` | [entityDiscovery](interfaces/entityDiscovery.md) |
 | `POST` | `/api/v1/knowledgeItems/entityEnrich` | [entityEnrich](interfaces/entityEnrich.md) |
-| `POST` | `/api/v1/knowledgeItems/processingTaskStatus` | [processingTaskStatus](interfaces/processingTaskStatus.md) |
-| `POST` | `/api/v1/knowledgeItems/processingBatchStatus` | [processingBatchStatus](interfaces/processingBatchStatus.md) |
 | `POST` | `/api/v1/knowledgeItems/semanticRelations` | [semanticRelations](interfaces/semanticRelations.md) |
 | `POST` | `/api/v1/knowledgeEntities/delete` | [knowledgeEntities-delete](interfaces/knowledgeEntities-delete.md) |
 | `POST` | `/api/v1/knowledgeEntities/aliases/delete` | [knowledgeEntityAliases-delete](interfaces/knowledgeEntityAliases-delete.md) |

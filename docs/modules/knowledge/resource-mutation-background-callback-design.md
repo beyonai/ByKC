@@ -2,7 +2,7 @@
 
 ## 1. 文档目标
 
-本文定义文件、目录同步增删改接口的轻量事件通知方案。接口主业务仍在 HTTP 请求内同步完成；业务成功提交后，通过 FastAPI BackgroundTasks 在响应发送后调用统一的 KnowledgeEventPublisher，由部署方注入的 Publisher 实现向业务后端发送消息。
+本文定义文件、目录同步增删改接口的轻量事件通知方案，并统一约束文件后台构建与实体后台任务使用的事件投递层。同步资源接口在业务提交后通过 FastAPI BackgroundTasks 发布；文件构建由提交 task/batch 终态的组件在事务提交后发布，通常是独立 Build Runner，也可能是受理或资源 mutation 路径。部署方注入的 KnowledgeEventPublisher 负责向业务后端发送消息。
 
 目标：
 
@@ -12,7 +12,7 @@
 - 核心项目只定义通知时机、统一事件信封和 Publisher Protocol，不承接业务逻辑；
 - 与 KnowledgeEntity Discovery/Enrich 共用 Publisher、provider 加载、超时和异常隔离能力；
 - 保留同步资源变更与异步语义任务各自的触发机制和领域 payload；
-- 不新增表、不保存投递状态、不重试、不保证通知必达。
+- 不新增 Callback/outbox 表、不保存投递状态、不重试、不保证通知必达。
 
 本设计与 [KnowledgeEntity 后台处理与 Callback 简化设计](./knowledge-entity-background-processing-callback-design.md) 的职责边界一致：核心只定义 Protocol，HTTP、MQ 等传输方式由注入实现决定。在此基础上，本文进一步把新资源变更通知与 Discovery/Enrich 的投递层统一为 KnowledgeEventPublisher；Discovery/Enrich 的任务、批次语义和后台 runner 不变。
 
@@ -29,7 +29,8 @@
 | 文件 | 内容更新 | POST /api/v1/knowledgeItems/update | resource.file.updated |
 | 文件 | 删除 | POST /api/v1/knowledgeItems/delete | resource.file.deleted |
 | 文件/目录 | 移动或重命名 | POST /api/v1/knowledgeItems/move | resource.moved |
-| 文件 | 异步 Markdown/索引构建终态 | POST /api/v1/fileToMarkdownIndex | build.file.completed |
+| 文件 | 异步 Markdown/索引构建文件终态 | POST /api/v1/fileToMarkdownIndex | build.file.completed |
+| 文件/目录 | 异步 Markdown/索引构建批次终态 | POST /api/v1/fileToMarkdownIndex | build.batch.completed |
 
 knowledge-items 的 kebab-case 兼容路由与 knowledgeItems 路由视为同一个 eventType。
 
@@ -59,7 +60,7 @@ Callback 的语义是“文件树变更已经成功提交”，不是“HTTP 请
 
 业务后端因此可把收到的事件解释为已生效的资源变更。
 
-### 3.2 每次 API 调用最多发送一个事件
+### 3.2 同步资源变更每次 API 调用最多发送一个事件
 
 事件粒度是一次成功 API 变更，而不是每一条数据库记录：
 
@@ -69,6 +70,8 @@ Callback 的语义是“文件树变更已经成功提交”，不是“HTTP 请
 - 删除或重命名目录只通知根目录，不枚举子树节点。
 
 部分成功的 ZIP 或 move 只要至少一项实际成功，就发送一个事件；全部失败且无数据变更时不发送。
+
+该规则不适用于异步文件构建。Build 对本批次新建的每个文件 task 发布一个终态事件，并在 batch 完成时再发布一个批次终态事件。Reuse Hit 不属于当前 batch，不重发文件事件。
 
 ### 3.3 通知为 best-effort
 
@@ -99,10 +102,10 @@ Callback 的语义是“文件树变更已经成功提交”，不是“HTTP 请
 - 异步文件构建使用 build terminal payload；
 - Discovery/Enrich 使用 semantic task/batch payload；
 - 资源变更由 FastAPI BackgroundTasks 在同步接口响应后发布；
-- 异步文件构建由原 BackgroundTasks 执行，并在 build task 终态提交后直接发布；
+- 异步文件构建通常由独立、可恢复的 Build Runner 执行；受理、任务取代和资源 mutation 也可能直接提交终态，均由提交方在事务后发布；
 - Discovery/Enrich 由后台 runner/reaper 在任务或批次终态提交后发布。
 
-`build.file.completed` 仅对外部 `/api/v1/fileToMarkdownIndex` 调度的构建任务发布。Discovery/Enrich 内部复用构建 Service 时不额外发布 build 事件，仍以对应 semantic 终态事件表达整个接口结果。
+`build.file.completed` 和 `build.batch.completed` 仅对外部 `/api/v1/fileToMarkdownIndex` 调度的构建任务发布。Discovery/Enrich 内部通过共享 BuildExecutionService 同步构建时，只创建 `INLINE` Build task 记录，不创建 Build batch，也不发布 build 事件；对应 semantic 终态事件仍表达整个接口结果。
 
 统一后的 Publisher 只负责“发送一个事件”，不负责决定何时发送，也不解释 payload。禁止创建包含大量可空字段的万能领域模型。
 
@@ -195,6 +198,7 @@ class SemanticEventType(StrEnum):
 
 class BuildEventType(StrEnum):
     FILE_COMPLETED = "build.file.completed"
+    BATCH_COMPLETED = "build.batch.completed"
 ~~~
 
 eventType 是稳定外部合约。内部函数名、路由别名或 Service 结构变化不得改变已经发布的值。
@@ -212,14 +216,19 @@ class FileUpdatedEvent(KnowledgeEventBase):
     event_type: Literal["resource.file.updated"]
     payload: FileUpdatedPayload
 
-KnowledgeEvent = DirectoryCreatedEvent | ... | BuildFileCompletedEvent
+KnowledgeEvent = (
+    DirectoryCreatedEvent
+    | ...
+    | BuildFileCompletedEvent
+    | BuildBatchCompletedEvent
+)
 ~~~
 
 | 字段 | 说明 |
 | --- | --- |
 | event_id | 事件 UUID；业务后端可用于日志关联和幂等 |
 | event_type | 稳定的领域事件类型 |
-| event_version | 当前 eventType 的 payload schema 版本，初始为 1 |
+| event_version | 当前 eventType 的 payload schema 版本；资源与语义事件保持 1，Build 事件为 2 |
 | kb_code | 知识库编码 |
 | occurred_at | 领域事实成功提交的 UTC 时间 |
 | payload | 与 eventType 一对一绑定的严格 Pydantic 模型 |
@@ -272,11 +281,66 @@ class SemanticBatchCompletedPayload:
 
 knCode 和 completedAt 分别映射到通用信封的 kb_code 和 occurred_at，不在 payload 中重复。Discovery 和 Enrich 根据 taskType 选择各自的具体 Event 类型。
 
-异步文件构建终态使用 `BuildFileCompletedPayload`，固定包含 `taskId/status/filePath/currentStep/result/error`。`complete` 必须有严格的 `chunkCount/lineCount` result 且不能有 error；`failed` 和 `unsupported` 必须有 `code/message` error 且不能有 result。该约束由 Pydantic 模型校验，不是任意 Mapping。
+### 5.5 Build payload（eventVersion 2）
+
+Build 文件事件以 `fileId` 为稳定身份，不使用路径定位。`filePathSnapshot` 仅供审计和展示：
+
+~~~json
+{
+  "eventId": "82bbbd31-8d03-47af-bd4c-aec70062318f",
+  "eventType": "build.file.completed",
+  "eventVersion": 2,
+  "knCode": "1001",
+  "occurredAt": "2026-09-03T02:00:08Z",
+  "payload": {
+    "batchId": "fb-20260903-0001",
+    "taskId": "12001",
+    "taskType": "FILE_BUILD",
+    "fileId": "2048",
+    "filePathSnapshot": "/制度/人事/请假制度.pdf",
+    "status": "SUCCEEDED",
+    "stage": "COMMITTING",
+    "progress": 100,
+    "result": {"lineCount": 128, "chunkCount": 8},
+    "error": null
+  }
+}
+~~~
+
+Build batch 事件包含受理快照和终态聚合。为避免两个 `skippedCount` 混淆，`acceptanceSkippedCount` 表示受理前未建 task 的数量，`skippedCount` 表示已建 task 的 `SKIPPED` 终态数量：
+
+~~~json
+{
+  "eventId": "ad573be0-c8cf-4795-9ab4-a56dc94e7d4c",
+  "eventType": "build.batch.completed",
+  "eventVersion": 2,
+  "knCode": "1001",
+  "occurredAt": "2026-09-03T02:02:30Z",
+  "payload": {
+    "batchId": "fb-20260903-0001",
+    "taskType": "FILE_BUILD",
+    "scope": "DIRECTORY",
+    "targetPath": "/制度/人事",
+    "candidateCount": 80,
+    "eligibleCount": 78,
+    "acceptedCount": 60,
+    "reusedCount": 18,
+    "acceptanceSkippedCount": 2,
+    "totalCount": 60,
+    "completedCount": 60,
+    "succeededCount": 55,
+    "failedCount": 2,
+    "skippedCount": 2,
+    "unsupportedCount": 1
+  }
+}
+~~~
+
+文件事件的 `result` 与 `error` 互斥：`SUCCEEDED` 返回严格的结果；`FAILED`、`SKIPPED`、`UNSUPPORTED` 返回 `error.code/message`。纯复用、空目录或全部受理前跳过的 batch 立即完成，只发布 batch 事件；命中的旧 `PENDING/RUNNING` 任务完成时也不会为新 batch 补发文件事件。
 
 `KnowledgeEvent` 联合使用 Pydantic `TypeAdapter` 以 `event_type`/`eventType` 作为 discriminator。Publisher 对外发送时统一使用 `serialize_knowledge_event(event)` 得到 camelCase JSON；接收或测试外部事件时使用 `parse_knowledge_event(value)` 完成 discriminator 和 payload 联合校验。不允许 Publisher 自行拼接 payload 字段。
 
-### 5.5 Publisher 与 Noop
+### 5.6 Publisher 与 Noop
 
 ~~~python
 @runtime_checkable
@@ -291,7 +355,7 @@ class NoopKnowledgeEventPublisher:
 
 未配置 provider 时使用 Noop，资源接口和语义任务行为均与当前版本一致。
 
-### 5.6 统一 Invoker
+### 5.7 统一 Invoker
 
 ~~~python
 @dataclass(slots=True)
@@ -481,8 +545,11 @@ build_resource_moved_event
 ## 9. Service 返回值
 
 Callback 改造不改变原有 Service 返回契约。Route 使用已校验的请求路径和现有批量响应构造事件，不为通知查询或暴露内部 `kid`、`fs_entry_id` 等持久化标识。
-| KnowledgeItemIngestionService.delete_knowledge_item | 删除文件 ID、路径快照 |
-| KnowledgeBaseService.move_knowledge_items | 现有批量结果增量补充类型和 ID |
+
+| Service 方法 | Callback 所需已提交快照 |
+| --- | --- |
+| `KnowledgeItemIngestionService.delete_knowledge_item` | 删除文件路径快照 |
+| `KnowledgeBaseService.move_knowledge_items` | 现有批量结果增量补充资源类型 |
 
 这些返回值只是已提交事实的内存快照，不新增持久化。对外 API 响应可以保持现状。
 
@@ -542,12 +609,12 @@ def build_publisher() -> KnowledgeEventPublisher:
 ### 10.2 不统一调度机制
 
 - 资源变更：Route 注册 BackgroundTasks，响应后调用统一 Invoker；
-- 异步文件构建：原 BackgroundTasks 内执行构建，终态事务提交后调用统一 Invoker；
+- 异步文件构建：提交终态的组件在事务后调用统一 Invoker；正常执行由 Build Runner 发布，零任务 batch、任务取代和资源 mutation 终止由对应 API 成功路径在响应后发布；
 - Discovery/Enrich：runner/reaper 在终态提交后直接调用统一 Invoker；
 - Discovery/Enrich 不迁移到 BackgroundTasks；
 - 统一 Invoker 的超时只限制投递耗时，不改变语义任务状态和批次进度。
 
-## 11. BackgroundTasks 运行边界
+## 11. 同步资源事件的 BackgroundTasks 运行边界
 
 FastAPI BackgroundTasks 在响应发送后由当前 API 进程执行，不是独立队列或 worker：
 
@@ -557,6 +624,8 @@ FastAPI BackgroundTasks 在响应发送后由当前 API 进程执行，不是独
 - 慢 Publisher 仍会消耗 API 进程的连接池、内存和协程调度能力；
 - 服务关停宽限期结束后，未完成 publish 可以被取消；
 - 同一响应的多个 Background Task 不得互相依赖完成顺序。
+
+上述限制也适用于零任务 Build batch、任务取代和资源 mutation 终止时由 API 调度的 Build 事件。正常 Build 与 Discovery/Enrich 事件由各自 Runner 在终态提交后调用 Invoker，不依赖最初发起任务的 API 进程。
 
 ## 12. 异常、日志与安全
 
@@ -621,8 +690,14 @@ Publisher 异常不得修改响应、回滚主业务、改变资源状态、改�
 
 ### 13.5 异步文件构建事件回归
 
-- `complete`、`failed`、`unsupported` 每个终态只发布一个 `build.file.completed`；
+- `SUCCEEDED`、`FAILED`、`SKIPPED`、`UNSUPPORTED` 每个新建 task 的终态只发布一个 `build.file.completed`；
 - 事件发布时 `knowledge_build_task` 终态已经提交；
+- 全部新建 task 终结后只发布一个 `build.batch.completed`；
+- 空目录、纯复用和全部受理前跳过 batch 立即发布 batch 事件；
+- Reuse Hit 不进入当前 batch，不发布或补发当前 batch 的文件事件；
+- supersede、文件更新、文件/目录删除和知识库删除只由成功提交终态的路径发布一次对应事件；
+- 文件事件使用 `fileId`，路径只作为 `filePathSnapshot`；
+- 两类 Build 事件均固定 `eventVersion=2`；
 - Publisher 超时或异常不改变构建结果，不触发重建；
 - 事件不包含 `extraParams`、`resourceId` 或 requestId。
 
@@ -666,6 +741,8 @@ Publisher 异常不得修改响应、回滚主业务、改变资源状态、改�
 8. 未配置 provider 时使用 Noop，现有 API 行为不变。
 9. 旧 KnowledgeEntity Callback Protocol 和 provider 不再存在，只有一套统一发布协议。
 10. 进程崩溃、重启和目标不可用导致通知丢失符合预期，不做补偿。
+11. 外部 Build task 和 batch 在终态提交后分别发布 eventVersion 2 事件，Reuse Hit 不重发文件事件。
+12. Discovery/Enrich 的 INLINE Build 不发布 Build Callback，也不改变已有 semantic Callback。
 
 ## 16. 后续扩展
 

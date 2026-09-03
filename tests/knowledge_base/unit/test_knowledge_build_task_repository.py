@@ -1,4 +1,4 @@
-"""Regression tests keeping the historical build-task contract unchanged."""
+"""Tests for legacy-compatible and durable file-build task persistence."""
 
 from __future__ import annotations
 
@@ -67,13 +67,13 @@ async def test_build_task_repository_keeps_the_file_build_schema_contract():
         knowledge_base_id=7,
         fs_entry_id=11,
         status="running",
-        current_step="parse",
+        current_step="markdown",
     )
     await repo.update_task(
         cursor,
         task_id=2,
-        status="succeeded",
-        current_step="finished",
+        status="complete",
+        current_step="complete",
         finished=True,
     )
     await repo.delete_for_fs_entry_id(cursor, fs_entry_id=11)
@@ -103,3 +103,98 @@ def test_historical_build_task_sql_has_no_semantic_task_extensions():
     assert "task_type" not in indexes
     assert "knowledge_semantic_processing_task" not in schema
     assert "knowledge_semantic_processing_task" not in indexes
+
+
+async def test_create_background_task_persists_stable_input_and_profile():
+    repo = KnowledgeBuildTaskRepository()
+    cursor = FakeCursor(fetchone_results=[{"kid": 31}])
+
+    row = await repo.create_background_task(
+        cursor,
+        knowledge_base_id=7,
+        fs_entry_id=11,
+        batch_id="fb-31",
+        file_path_snapshot="/docs/a.pdf",
+        input_checksum="sha256:a",
+        input_is_deleted=False,
+        build_profile={"profileVersion": 1, "embedding": {"model": "m"}},
+        build_profile_hash="a" * 64,
+        priority=100,
+    )
+
+    assert row == {"kid": 31}
+    sql, params = cursor.executed[0]
+    assert "INSERT INTO knowledge_build_task" in sql
+    assert params["batch_id"] == "fb-31"
+    assert params["status"] == "pending"
+    assert params["current_stage"] == "accepted"
+    assert params["current_step"] == "markdown"
+    assert params["input_checksum"] == "sha256:a"
+    assert params["build_profile_hash"] == "a" * 64
+    assert params["priority"] == 100
+
+
+async def test_create_inline_task_requires_entity_origin_and_parent():
+    repo = KnowledgeBuildTaskRepository()
+    cursor = FakeCursor(fetchone_results=[{"kid": 32}])
+
+    row = await repo.create_inline_task(
+        cursor,
+        knowledge_base_id=7,
+        fs_entry_id=11,
+        origin="ENTITY_DISCOVERY",
+        parent_semantic_task_id=99,
+        file_path_snapshot="/KnowledgeEntity/a.md",
+        input_checksum="sha256:b",
+        input_is_deleted=False,
+        build_profile={"profileVersion": 1},
+        build_profile_hash="b" * 64,
+    )
+
+    assert row == {"kid": 32}
+    _, params = cursor.executed[0]
+    assert params["execution_mode"] == "INLINE"
+    assert params["origin"] == "ENTITY_DISCOVERY"
+    assert params["parent_semantic_task_id"] == 99
+    assert params["batch_id"] is None
+    assert params["status"] == "running"
+
+
+async def test_find_reusable_task_uses_only_stable_identity_fields():
+    repo = KnowledgeBuildTaskRepository()
+    cursor = FakeCursor(fetchone_results=[{"kid": 44}])
+
+    row = await repo.find_reusable_task(
+        cursor,
+        fs_entry_id=11,
+        input_checksum="sha256:c",
+        input_is_deleted=False,
+        build_profile_hash="c" * 64,
+        statuses=["PENDING", "SUCCEEDED"],
+    )
+
+    assert row == {"kid": 44}
+    sql, params = cursor.executed[0]
+    assert "file_path" not in sql.lower()
+    assert "name" not in sql.lower()
+    assert params == {
+        "fs_entry_id": 11,
+        "input_checksum": "sha256:c",
+        "input_is_deleted": False,
+        "build_profile_hash": "c" * 64,
+        "statuses": ["pending", "succeeded"],
+    }
+
+
+async def test_supersede_active_task_revokes_lease_and_returns_row():
+    repo = KnowledgeBuildTaskRepository()
+    cursor = FakeCursor(fetchone_results=[{"kid": 45, "status": "skipped"}])
+
+    row = await repo.supersede_active_task(cursor, task_id=45)
+
+    assert row == {"kid": 45, "status": "skipped"}
+    sql, params = cursor.executed[0]
+    assert "error_code = 'SUPERSEDED'" in sql
+    assert "lease_token = NULL" in sql
+    assert "status IN ('pending', 'running')" in sql
+    assert params == {"task_id": 45}

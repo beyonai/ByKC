@@ -357,6 +357,143 @@ def test_directory_build_runs_from_http_to_worker_and_reports_current_result(
         asyncio.run(_drop_schema(settings))
 
 
+def test_updated_file_returns_not_built_and_can_be_rebuilt(monkeypatch, tmp_path):
+    """Updating file content invalidates the current Build until a rebuild succeeds."""
+    base_settings = get_settings()
+    if not base_settings.resolved_kb_opengauss_dsn:
+        pytest.fail("real OpenGauss configuration is required", pytrace=False)
+    settings = base_settings.model_copy(
+        update={
+            "db_schema": f"file_build_update_it_{uuid4().hex[:16]}",
+            "agent_data_path": tmp_path,
+            "embedding_model_name": "file-build-api-integration",
+            "embedding_dimension": 3,
+            "knowledge_entity_worker_enabled": False,
+            "knowledge_build_worker_enabled": True,
+            "knowledge_build_worker_id": "file-build-update-test",
+            "knowledge_build_worker_poll_seconds": 0.05,
+            "knowledge_build_worker_concurrency": 16,
+            "knowledge_build_lease_seconds": 10,
+            "knowledge_build_heartbeat_seconds": 1.0,
+            "knowledge_build_reaper_seconds": 0.1,
+            "knowledge_build_worker_status_log_seconds": 60.0,
+            "knowledge_build_shutdown_grace_seconds": 2.0,
+        }
+    )
+    publisher = _RecordingPublisher()
+    _reset_main_runtime(monkeypatch, settings=settings, publisher=publisher)
+    kb_code = None
+    try:
+        with TestClient(main_module.app) as client:
+            kb_code = _assert_success(
+                client.post(
+                    "/api/v1/knowledgeBases/create",
+                    json={"knName": f"File Build Update {uuid4().hex}"},
+                )
+            )["knCode"]
+            file_path = "/docs/update.txt"
+            _assert_success(
+                client.post(
+                    "/api/v1/knowledgeItems/import",
+                    data={"knCode": kb_code, "filePath": file_path},
+                    files={
+                        "fileContent": ("update.txt", b"before update", "text/plain")
+                    },
+                )
+            )
+
+            first_acceptance = _assert_success(
+                client.post(
+                    "/api/v1/fileToMarkdownIndex",
+                    json={"knCode": kb_code, "filePath": file_path},
+                )
+            )
+            first_batch = _wait_for_batch(
+                client,
+                kb_code=kb_code,
+                batch_id=first_acceptance["batchId"],
+            )
+            assert first_batch["succeededCount"] == 1
+            before_update = _assert_success(
+                client.post(
+                    "/api/v1/buildResult",
+                    json={"knCode": kb_code, "filePath": file_path},
+                )
+            )
+            assert before_update["isBuilt"] is True
+            assert before_update["markdown"]["data"] == "before update"
+
+            _assert_success(
+                client.post(
+                    "/api/v1/knowledgeItems/update",
+                    data={"knCode": kb_code, "filePath": file_path},
+                    files={
+                        "fileContent": ("update.txt", b"after update", "text/plain")
+                    },
+                )
+            )
+            after_update = _assert_success(
+                client.post(
+                    "/api/v1/buildResult",
+                    json={"knCode": kb_code, "filePath": file_path},
+                )
+            )
+            assert after_update["fileId"] == before_update["fileId"]
+            assert after_update["currentChecksum"] != before_update["currentChecksum"]
+            assert after_update["isBuilt"] is False
+            assert after_update["build"]["taskId"] == before_update["build"]["taskId"]
+            assert (
+                after_update["build"]["inputChecksum"]
+                != after_update["currentChecksum"]
+            )
+            assert after_update["markdown"]["available"] is False
+            assert after_update["chunks"]["total"] == 0
+
+            rebuild_acceptance = _assert_success(
+                client.post(
+                    "/api/v1/fileToMarkdownIndex",
+                    json={"knCode": kb_code, "filePath": file_path},
+                )
+            )
+            assert rebuild_acceptance["acceptedCount"] == 1
+            assert rebuild_acceptance["reusedCount"] == 0
+            assert (
+                rebuild_acceptance["tasks"][0]["taskId"]
+                != before_update["build"]["taskId"]
+            )
+            rebuilt_batch = _wait_for_batch(
+                client,
+                kb_code=kb_code,
+                batch_id=rebuild_acceptance["batchId"],
+            )
+            assert rebuilt_batch["succeededCount"] == 1
+
+            rebuilt = _assert_success(
+                client.post(
+                    "/api/v1/buildResult",
+                    json={"knCode": kb_code, "filePath": file_path},
+                )
+            )
+            assert rebuilt["fileId"] == before_update["fileId"]
+            assert rebuilt["isBuilt"] is True
+            assert (
+                rebuilt["build"]["taskId"] == rebuild_acceptance["tasks"][0]["taskId"]
+            )
+            assert rebuilt["build"]["inputChecksum"] == rebuilt["currentChecksum"]
+            assert rebuilt["markdown"]["available"] is True
+            assert rebuilt["markdown"]["data"] == "after update"
+            assert rebuilt["chunks"]["total"] == 1
+    finally:
+        if kb_code is not None:
+            with TestClient(main_module.app) as cleanup_client:
+                _assert_success(
+                    cleanup_client.post(
+                        "/api/v1/knowledgeBases/delete", json={"knCode": kb_code}
+                    )
+                )
+        asyncio.run(_drop_schema(settings))
+
+
 def test_running_builds_follow_public_update_delete_move_and_kb_delete_routes(
     monkeypatch, tmp_path
 ):

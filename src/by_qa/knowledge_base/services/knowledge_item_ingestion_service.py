@@ -609,6 +609,8 @@ class KnowledgeItemIngestionService:
             raise KnowledgeBaseValidationError("file_path must not be empty")
 
         connection = await self.connection_factory()
+        superseded_tasks: list[dict[str, Any]] = []
+        completed_batch_ids: list[str] = []
         try:
             cursor = connection.cursor()
             kb_row = await self.knowledge_base_repository.get_by_code(
@@ -640,8 +642,17 @@ class KnowledgeItemIngestionService:
                 cursor, fs_entry_id=fs_entry_id
             )
             if active is not None:
-                await self.knowledge_build_task_repository.supersede_active_task(
-                    cursor, task_id=self._row_id(active)
+                if self.file_build_mutation_service is None:
+                    raise RuntimeError("file build mutation service is not configured")
+                (
+                    superseded_tasks,
+                    completed_batch_ids,
+                ) = await self.file_build_mutation_service.terminate_active(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    fs_entry_ids=[fs_entry_id],
+                    error_code="SUPERSEDED",
+                    error_message="Build superseded by an inline Entity build",
                 )
             profile = self.file_build_processing_service.build_profile
             task = await self.knowledge_build_task_repository.create_inline_task(
@@ -664,6 +675,11 @@ class KnowledgeItemIngestionService:
             raise
         finally:
             await connection.close()
+
+        if superseded_tasks:
+            await self.file_build_mutation_service.publish(
+                superseded_tasks, completed_batch_ids
+            )
 
         try:
             await self.file_build_execution_service.execute_inline(task)

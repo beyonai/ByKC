@@ -1113,6 +1113,15 @@ class KnowledgeBaseService:
                 cursor,
                 fs_entry_id=self._row_id(file_row),
             )
+            if (
+                latest_task is not None
+                and str(latest_task.get("status") or "").lower() == "succeeded"
+            ):
+                complete_ids = await self.knowledge_item_chunk_repository.get_complete_build_fs_entry_ids(
+                    cursor, fs_entry_ids=[self._row_id(file_row)]
+                )
+                if self._row_id(file_row) not in complete_ids:
+                    latest_task = None
             if latest_task is None:
                 raise KnowledgeBaseValidationError(
                     f"build task not found: {request.file_path}"
@@ -1941,6 +1950,24 @@ class KnowledgeBaseService:
             cursor,
             fs_entry_ids=file_ids,
         )
+        succeeded_ids = [
+            int(row["fs_entry_id"])
+            for row in build_rows
+            if str(row.get("status") or "").lower() == "succeeded"
+        ]
+        complete_ids = (
+            await self.knowledge_item_chunk_repository.get_complete_build_fs_entry_ids(
+                cursor, fs_entry_ids=succeeded_ids
+            )
+            if self.knowledge_item_chunk_repository is not None
+            else set()
+        )
+        build_rows = [
+            row
+            for row in build_rows
+            if str(row.get("status") or "").lower() != "succeeded"
+            or int(row["fs_entry_id"]) in complete_ids
+        ]
         return {
             int(row["fs_entry_id"]): {
                 **row,

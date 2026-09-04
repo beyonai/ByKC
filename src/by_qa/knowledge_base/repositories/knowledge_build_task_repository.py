@@ -126,10 +126,7 @@ class KnowledgeBuildTaskRepository:
                     SELECT 1
                     FROM knowledge_file_update_timeline update_event
                     WHERE update_event.fs_entry_id = task.fs_entry_id
-                      AND update_event.created_at > COALESCE(
-                            task.finished_at,
-                            task.created_at
-                      )
+                      AND update_event.created_at > task.created_at
                       AND update_event.old_checksum IS DISTINCT FROM
                           update_event.new_checksum
               )
@@ -165,10 +162,7 @@ class KnowledgeBuildTaskRepository:
                         SELECT 1
                         FROM knowledge_file_update_timeline update_event
                         WHERE update_event.fs_entry_id = task.fs_entry_id
-                          AND update_event.created_at > COALESCE(
-                                task.finished_at,
-                                task.created_at
-                          )
+                          AND update_event.created_at > task.created_at
                           AND update_event.old_checksum IS DISTINCT FROM
                               update_event.new_checksum
                   )

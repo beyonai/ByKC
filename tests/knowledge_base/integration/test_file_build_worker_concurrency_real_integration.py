@@ -291,8 +291,8 @@ async def test_two_workers_claim_uniquely_and_each_instance_admits_sixteen_tasks
             await cleanup.close()
 
 
-async def test_entity_inline_build_completes_while_background_build_remains_pending():
-    """The exact Entity call boundary bypasses the independent Build worker queue."""
+async def test_entity_inline_build_supersedes_same_file_background_and_closes_batch():
+    """Entity inline work fences same-file Build and closes its external batch."""
     base_settings = get_settings()
     if not base_settings.resolved_kb_opengauss_dsn:
         pytest.fail("real OpenGauss configuration is required", pytrace=False)
@@ -434,7 +434,7 @@ async def test_entity_inline_build_completes_while_background_build_remains_pend
 
         background = await ingestion.accept_file_to_markdown_index(
             FileToMarkdownIndexRequest(
-                knCode=str(knowledge_base_id), filePath="/backlog.txt"
+                knCode=str(knowledge_base_id), filePath="/entity.txt"
             )
         )
         assert background["acceptedCount"] == 1
@@ -460,16 +460,25 @@ async def test_entity_inline_build_completes_while_background_build_remains_pend
                 """
             )
             tasks = list(await cursor.fetchall())
+            await cursor.execute(
+                """
+                SELECT status, completed_count, accepted_count
+                FROM knowledge_build_batch
+                WHERE batch_id = %(batch_id)s
+                """,
+                {"batch_id": background["batchId"]},
+            )
+            background_batch = await cursor.fetchone()
         finally:
             await connection.close()
         assert tasks == [
             {
-                "fs_entry_id": file_ids["backlog.txt"],
+                "fs_entry_id": file_ids["entity.txt"],
                 "batch_id": background["batchId"],
                 "origin": "API",
                 "execution_mode": "BACKGROUND",
                 "parent_semantic_task_id": None,
-                "status": "pending",
+                "status": "skipped",
             },
             {
                 "fs_entry_id": file_ids["entity.txt"],
@@ -480,9 +489,20 @@ async def test_entity_inline_build_completes_while_background_build_remains_pend
                 "status": "succeeded",
             },
         ]
-        assert not [
+        assert background_batch == {
+            "status": "completed",
+            "completed_count": 1,
+            "accepted_count": 1,
+        }
+        build_events = [
             event for event in publisher.events if event.event_type.startswith("build.")
         ]
+        assert [event.event_type for event in build_events] == [
+            "build.file.completed",
+            "build.batch.completed",
+        ]
+        assert build_events[0].payload.status == "SKIPPED"
+        assert build_events[0].payload.error.code == "SUPERSEDED"
     finally:
         if ingestion is not None:
             for location in stored_locations:

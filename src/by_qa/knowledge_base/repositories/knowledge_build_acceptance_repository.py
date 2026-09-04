@@ -141,6 +141,14 @@ class KnowledgeBuildAcceptanceRepository:
                   AND task.input_checksum = candidate.input_checksum
                   AND task.input_is_deleted = candidate.input_is_deleted
                   AND task.build_profile_hash = %(build_profile_hash)s
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM knowledge_file_update_timeline update_event
+                      WHERE update_event.fs_entry_id = task.fs_entry_id
+                        AND update_event.created_at > task.created_at
+                        AND update_event.old_checksum IS DISTINCT FROM
+                            update_event.new_checksum
+                  )
                   AND (
                       task.status IN ('pending', 'running')
                       OR (

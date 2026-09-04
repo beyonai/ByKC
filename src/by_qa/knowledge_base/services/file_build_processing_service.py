@@ -309,7 +309,7 @@ class FileBuildProcessingService:
             if path_row is None:
                 raise KnowledgeBaseValidationError(f"file not found: {file_path}")
         if file_id is not None:
-            id_row = await self.knowledge_fs_entry_repository.get_file_by_id(
+            id_row = await self.knowledge_fs_entry_repository.get_file_by_id_including_deleted(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
                 fs_entry_id=file_id,

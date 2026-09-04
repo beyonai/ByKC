@@ -1,6 +1,5 @@
 # processingTaskStatus
 
-> 设计状态：`FILE_BUILD` 相关字段描述已经确认的目标契约，业务代码尚未切换到该实现。
 > 完整设计见 [文件与目录后台构建设计](../../file-build-background-processing-design.md)。
 
 ## 功能描述
@@ -15,6 +14,15 @@ Build 任务以 `fileId` 为稳定文件标识；`filePathSnapshot` 只记录受
 | --- | --- |
 | 方法 | `POST` |
 | 路径 | `/api/v1/knowledgeItems/processingTaskStatus` |
+
+## 请求 Header
+
+| Header | 必填 | 值 | 说明 |
+| --- | --- | --- | --- |
+| `Content-Type` | 是 | `application/json` | 请求体类型 |
+| `Accept` | 否 | `application/json` | 期望的成功响应类型 |
+
+> 服务本身未定义额外的业务认证 Header；如由网关统一认证，按部署环境要求携带。
 
 ## 请求参数
 

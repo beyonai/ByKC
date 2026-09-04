@@ -1,6 +1,5 @@
 # processingBatchStatus
 
-> 设计状态：`FILE_BUILD` 相关字段描述已经确认的目标契约，业务代码尚未切换到该实现。
 > 完整设计见 [文件与目录后台构建设计](../../file-build-background-processing-design.md)。
 
 ## 功能描述
@@ -13,6 +12,15 @@
 | --- | --- |
 | 方法 | `POST` |
 | 路径 | `/api/v1/knowledgeItems/processingBatchStatus` |
+
+## 请求 Header
+
+| Header | 必填 | 值 | 说明 |
+| --- | --- | --- | --- |
+| `Content-Type` | 是 | `application/json` | 请求体类型 |
+| `Accept` | 否 | `application/json` | 期望的成功响应类型 |
+
+> 服务本身未定义额外的业务认证 Header；如由网关统一认证，按部署环境要求携带。
 
 ## 请求参数
 
@@ -99,6 +107,7 @@
 | --- | --- | --- | --- |
 | `resultCode` | string | 是 | `0` 表示查询成功 |
 | `resultMsg` | string | 是 | 业务结果说明 |
+| `resultObject` | object | 是 | 批次聚合状态与本批次新建任务的分页结果 |
 | `resultObject.batchId` | string | 是 | 批次 ID |
 | `resultObject.knowledgeBaseId` | string | 是 | 内部知识库 ID |
 | `resultObject.knCode` | string | 是 | 知识库编码 |

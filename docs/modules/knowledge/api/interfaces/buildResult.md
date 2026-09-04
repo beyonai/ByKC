@@ -1,6 +1,5 @@
 # buildResult
 
-> 设计状态：本文包含后台构建改造后的兼容契约，业务代码尚未切换到该实现。
 > 精确任务历史应使用 [processingTaskStatus](processingTaskStatus.md)。
 
 ## 功能描述
@@ -15,6 +14,15 @@
 | --- | --- |
 | 方法 | `POST` |
 | 路径 | `/api/v1/buildResult` |
+
+## 请求 Header
+
+| Header | 必填 | 值 | 说明 |
+| --- | --- | --- | --- |
+| `Content-Type` | 是 | `application/json` | 请求体类型 |
+| `Accept` | 否 | `application/json` | 期望的成功响应类型 |
+
+> 服务本身未定义额外的业务认证 Header；如由网关统一认证，按部署环境要求携带。
 
 ## 请求参数
 
@@ -143,6 +151,7 @@
 | `resultObject.mimeType` | string \| null | 是 | 文件媒体类型 |
 | `resultObject.currentChecksum` | string | 是 | 当前数据库 checksum |
 | `resultObject.isBuilt` | boolean | 是 | 当前文件是否满足完整构建判定 |
+| `resultObject.build` | object | 是 | 最新 Build task 摘要 |
 | `resultObject.build.taskId` | string | 是 | 最新 Build task ID |
 | `resultObject.build.batchId` | string \| null | 是 | 外部 batch ID；INLINE Build 为 `null` |
 | `resultObject.build.origin` | string | 是 | `API`、`ENTITY_DISCOVERY` 或 `ENTITY_ENRICH` |
@@ -166,11 +175,13 @@
 | `resultObject.build.stepDict[].standCode` | string | 是 | 阶段代码 |
 | `resultObject.build.stepDict[].standDisplayValue` | string | 是 | 中文展示值 |
 | `resultObject.build.stepDict[].standDisplayValueEn` | string | 是 | 英文展示值 |
+| `resultObject.markdown` | object | 是 | Markdown 产物可用性与正文 |
 | `resultObject.markdown.available` | boolean | 是 | 当前 Markdown 对象与数据库引用是否可用 |
 | `resultObject.markdown.data` | string \| null | 是 | Markdown 正文；未请求或不可用时为 `null` |
 | `resultObject.markdown.lineCount` | integer | 是 | 行数；不可用时为 0 |
 | `resultObject.markdown.characterCount` | integer \| null | 是 | 字符数；未读取正文时为 `null` |
 | `resultObject.markdown.byteCount` | integer \| null | 是 | Markdown UTF-8 字节数；未读取时为 `null` |
+| `resultObject.chunks` | object | 是 | 分块分页结果 |
 | `resultObject.chunks.data` | array[object] | 是 | 当前页分块 |
 | `resultObject.chunks.data[].chunkNo` | integer | 是 | 分块序号 |
 | `resultObject.chunks.data[].startLine` | integer | 是 | 起始行 |
@@ -183,9 +194,11 @@
 | `resultObject.chunks.page` | integer | 是 | 当前页码 |
 | `resultObject.chunks.pageSize` | integer | 是 | 每页数量 |
 | `resultObject.chunks.reachedEof` | boolean | 是 | 是否到最后一页 |
+| `resultObject.embedding` | object | 是 | 向量构建统计 |
 | `resultObject.embedding.dimension` | integer | 是 | 向量维度 |
 | `resultObject.embedding.embeddedChunkCount` | integer | 是 | 已生成向量的分块数 |
 | `resultObject.embedding.coverageRate` | number | 是 | 向量覆盖率百分比 |
+| `resultObject.retrieval` | object | 是 | 检索投影统计 |
 | `resultObject.retrieval.indexedChunkCount` | integer | 是 | 已进入检索投影的分块数 |
 | `resultObject.retrieval.coverageRate` | number | 是 | 检索覆盖率百分比 |
 

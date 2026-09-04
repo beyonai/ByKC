@@ -1,6 +1,5 @@
 # fileBuildStatus
 
-> 设计状态：本文包含后台构建改造后的兼容契约，业务代码尚未切换到该实现。
 > 新调用方应优先使用带 `taskId` 的 [processingTaskStatus](processingTaskStatus.md)。
 
 ## 功能描述
@@ -15,6 +14,15 @@
 | --- | --- |
 | 方法 | `POST` |
 | 路径 | `/api/v1/fileBuildStatus` |
+
+## 请求 Header
+
+| Header | 必填 | 值 | 说明 |
+| --- | --- | --- | --- |
+| `Content-Type` | 是 | `application/json` | 请求体类型 |
+| `Accept` | 否 | `application/json` | 期望的成功响应类型 |
+
+> 服务本身未定义额外的业务认证 Header；如由网关统一认证，按部署环境要求携带。
 
 ## 请求参数
 
@@ -67,6 +75,7 @@
 | --- | --- | --- | --- |
 | `resultCode` | string | 是 | `0` 表示查询成功 |
 | `resultMsg` | string | 是 | 业务结果说明 |
+| `resultObject` | object | 是 | 与当前文件内容匹配的最新 Build task 摘要 |
 | `resultObject.taskId` | string | 是 | 最新 Build task ID |
 | `resultObject.fileId` | string | 是 | 稳定文件 ID |
 | `resultObject.status` | string | 是 | 兼容构建状态 |

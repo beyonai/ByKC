@@ -14,6 +14,15 @@
 | 路径 | `/api/v1/knowledgeEntities/delete` |
 | 兼容路径 | `/api/v1/knowledge-entities/delete` |
 
+## 请求 Header
+
+| Header | 必填 | 值 | 说明 |
+| --- | --- | --- | --- |
+| `Content-Type` | 是 | `application/json` | 请求体类型 |
+| `Accept` | 否 | `application/json` | 期望的成功响应类型 |
+
+> 服务本身未定义额外的业务认证 Header；如由网关统一认证，按部署环境要求携带。
+
 ## 请求
 
 请求体：`application/json`

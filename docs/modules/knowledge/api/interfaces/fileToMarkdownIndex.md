@@ -1,6 +1,5 @@
 # fileToMarkdownIndex
 
-> 设计状态：本文描述已经确认的目标契约，业务代码尚未切换到该实现。
 > 完整设计见 [文件与目录后台构建设计](../../file-build-background-processing-design.md)。
 
 ## 功能描述
@@ -119,6 +118,7 @@ HTTP 请求内执行构建。
 | --- | --- | --- | --- |
 | `resultCode` | string | 是 | `0` 表示已受理 |
 | `resultMsg` | string | 是 | 受理成功时为 `accepted` |
+| `resultObject` | object | 是 | 本次构建请求的批次受理摘要 |
 | `resultObject.batchId` | string | 是 | 本次请求的批次 ID |
 | `resultObject.scope` | string | 是 | `SINGLE_FILE` 或 `DIRECTORY` |
 | `resultObject.targetPath` | string | 是 | 请求路径快照，仅供审计和展示 |

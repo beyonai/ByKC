@@ -16,6 +16,22 @@ KNOWN_FIELDS = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _isolate_dsl_limits_from_local_env(monkeypatch):
+    from by_qa.config import Settings
+    from by_qa.knowledge_base.dsl import validator
+
+    monkeypatch.setattr(
+        validator,
+        "get_settings",
+        lambda: Settings(
+            _env_file=None,
+            DSL_MAX_DEPTH=3,
+            DSL_MAX_LEAF_COUNT=12,
+        ),
+    )
+
+
 def test_valid_simple_eq():
     where = {"eq": {"fieldName": "status", "value": "active"}}
     validate_where_clause(where, known_fields=KNOWN_FIELDS)

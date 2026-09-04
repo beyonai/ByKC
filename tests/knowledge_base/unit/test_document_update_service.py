@@ -82,9 +82,12 @@ class KBRepo:
 
 
 class FsRepo:
-    def __init__(self, calls, *, markdown=True, duplicate_path=None):
+    def __init__(
+        self, calls, *, markdown=True, duplicate_path=None, checksum="old-checksum"
+    ):
         self.calls, self.markdown = calls, markdown
         self.duplicate_path = duplicate_path
+        self.checksum = checksum
 
     async def get_file_by_path_for_update(
         self, cursor, *, knowledge_base_id, full_path
@@ -97,7 +100,7 @@ class FsRepo:
             "file_object_key": "existing-object",
             "markdown_bucket_name": "markdown" if self.markdown else None,
             "markdown_object_key": "old-sidecar" if self.markdown else None,
-            "checksum": "old-checksum",
+            "checksum": self.checksum,
             "file_size": 22,
         }
 
@@ -272,6 +275,7 @@ def build_service(
     duplicate_path=None,
     metadata_rows=None,
     with_build_mutation=False,
+    fs_checksum="old-checksum",
 ):
     connection, storage = (
         Connection(calls, fail_commit, fail_rollback),
@@ -281,7 +285,10 @@ def build_service(
         connection_factory=lambda: _return(connection),
         knowledge_base_repository=KBRepo(),
         knowledge_fs_entry_repository=FsRepo(
-            calls, markdown=markdown, duplicate_path=duplicate_path
+            calls,
+            markdown=markdown,
+            duplicate_path=duplicate_path,
+            checksum=fs_checksum,
         ),
         knowledge_item_chunk_repository=Chunks(calls),
         retrieval_projection_repository=Projection(calls),
@@ -343,6 +350,28 @@ async def test_update_accepts_matching_refer_signature():
     await service.update_file(request(referSignature="old-checksum"))
 
     assert any(name == "commit" for name, _ in calls)
+
+
+async def test_same_content_update_preserves_derived_build_state():
+    calls = []
+    content = b"# Old\n![x](./old.png)\n"
+    service, _, _ = build_service(
+        calls,
+        fs_checksum=hashlib.sha256(content).hexdigest(),
+        with_build_mutation=True,
+    )
+
+    await service.update_file(request(content))
+
+    names = [name for name, _ in calls]
+    assert "terminate_build" not in names
+    assert "delete_chunks" not in names
+    assert "delete_projection" not in names
+    assert "delete_cache" not in names
+    assert "clear_markdown" not in names
+    assert "delete_quietly" not in names
+    timeline = next(data for name, data in calls if name == "timeline")
+    assert timeline["old_checksum"] == timeline["new_checksum"]
 
 
 async def test_update_duplicate_guard_rejects_before_storage_write_and_rolls_back():

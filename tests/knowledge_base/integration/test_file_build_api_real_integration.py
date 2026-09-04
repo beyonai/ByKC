@@ -155,6 +155,72 @@ def _wait_for_batch(client: TestClient, *, kb_code: str, batch_id: str) -> dict:
     pytest.fail(f"file Build batch did not complete: {batch_id}")
 
 
+def _api_settings(tmp_path, *, schema_prefix: str, worker_id: str):
+    base_settings = get_settings()
+    if not base_settings.resolved_kb_opengauss_dsn:
+        pytest.fail("real OpenGauss configuration is required", pytrace=False)
+    return base_settings.model_copy(
+        update={
+            "db_schema": f"{schema_prefix}_{uuid4().hex[:16]}",
+            "agent_data_path": tmp_path,
+            "embedding_model_name": "file-build-api-integration",
+            "embedding_dimension": 3,
+            "knowledge_entity_worker_enabled": False,
+            "knowledge_build_worker_enabled": True,
+            "knowledge_build_worker_id": worker_id,
+            "knowledge_build_worker_poll_seconds": 0.05,
+            "knowledge_build_worker_concurrency": 16,
+            "knowledge_build_lease_seconds": 10,
+            "knowledge_build_heartbeat_seconds": 1.0,
+            "knowledge_build_reaper_seconds": 0.1,
+            "knowledge_build_worker_status_log_seconds": 60.0,
+            "knowledge_build_shutdown_grace_seconds": 2.0,
+        }
+    )
+
+
+def _upload_file(client: TestClient, *, kb_code: str, path: str, content: bytes):
+    return _assert_success(
+        client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": path},
+            files={"fileContent": (path.rsplit("/", 1)[-1], content, "text/plain")},
+        )
+    )
+
+
+def _update_file(client: TestClient, *, kb_code: str, path: str, content: bytes):
+    return _assert_success(
+        client.post(
+            "/api/v1/knowledgeItems/update",
+            data={"knCode": kb_code, "filePath": path},
+            files={"fileContent": (path.rsplit("/", 1)[-1], content, "text/plain")},
+        )
+    )
+
+
+def _build_file(client: TestClient, *, kb_code: str, path: str) -> dict:
+    acceptance = _assert_success(
+        client.post(
+            "/api/v1/fileToMarkdownIndex",
+            json={"knCode": kb_code, "filePath": path},
+        )
+    )
+    _wait_for_batch(client, kb_code=kb_code, batch_id=acceptance["batchId"])
+    return acceptance
+
+
+def _listed_file(client: TestClient, *, kb_code: str, path: str) -> dict:
+    parent_path = path.rsplit("/", 1)[0] or "/"
+    items = _assert_success(
+        client.post(
+            "/api/v1/listDir",
+            json={"knCode": kb_code, "directoryPath": parent_path},
+        )
+    )["data"]
+    return next(item for item in items if item["name"] == path)
+
+
 async def _drop_schema(settings) -> None:
     connection = await build_connection_factory(settings)()
     try:
@@ -515,6 +581,287 @@ def test_updated_file_returns_not_built_and_can_be_rebuilt(monkeypatch, tmp_path
             )
             assert status_after_rebuild["status"] == "complete"
             assert status_after_rebuild["taskId"] == rebuilt["build"]["taskId"]
+    finally:
+        if kb_code is not None:
+            with TestClient(main_module.app) as cleanup_client:
+                _assert_success(
+                    cleanup_client.post(
+                        "/api/v1/knowledgeBases/delete", json={"knCode": kb_code}
+                    )
+                )
+        asyncio.run(_drop_schema(settings))
+
+
+def test_same_content_update_preserves_complete_build_across_public_apis(
+    monkeypatch, tmp_path
+):
+    """A byte-identical update must not discard or contradict a valid Build."""
+    settings = _api_settings(
+        tmp_path,
+        schema_prefix="file_build_same_update_it",
+        worker_id="file-build-same-update-test",
+    )
+    publisher = _RecordingPublisher()
+    _reset_main_runtime(monkeypatch, settings=settings, publisher=publisher)
+    kb_code = None
+    try:
+        with TestClient(main_module.app) as client:
+            kb_code = _assert_success(
+                client.post(
+                    "/api/v1/knowledgeBases/create",
+                    json={"knName": f"Same Content Update {uuid4().hex}"},
+                )
+            )["knCode"]
+            path = "/same/content.txt"
+            content = b"same content"
+            _upload_file(client, kb_code=kb_code, path=path, content=content)
+            first = _build_file(client, kb_code=kb_code, path=path)
+            first_task_id = first["tasks"][0]["taskId"]
+
+            _update_file(client, kb_code=kb_code, path=path, content=content)
+
+            listed = _listed_file(client, kb_code=kb_code, path=path)
+            status = _assert_success(
+                client.post(
+                    "/api/v1/fileBuildStatus",
+                    json={"knCode": kb_code, "filePath": path},
+                )
+            )
+            result = _assert_success(
+                client.post(
+                    "/api/v1/buildResult",
+                    json={"knCode": kb_code, "filePath": path},
+                )
+            )
+            assert listed["buildStatus"] == "complete"
+            assert status["status"] == "complete"
+            assert status["taskId"] == first_task_id
+            assert result["isBuilt"] is True
+            assert result["markdown"]["data"] == content.decode()
+
+            reused = _assert_success(
+                client.post(
+                    "/api/v1/fileToMarkdownIndex",
+                    json={"knCode": kb_code, "filePath": path},
+                )
+            )
+            assert reused["acceptedCount"] == 0
+            assert reused["reusedCount"] == 1
+            assert reused["tasks"][0]["taskId"] == first_task_id
+    finally:
+        if kb_code is not None:
+            with TestClient(main_module.app) as cleanup_client:
+                _assert_success(
+                    cleanup_client.post(
+                        "/api/v1/knowledgeBases/delete", json={"knCode": kb_code}
+                    )
+                )
+        asyncio.run(_drop_schema(settings))
+
+
+def test_checksum_aba_does_not_resurrect_invalidated_build(monkeypatch, tmp_path):
+    """Changing A to B and back to A must not revive A's deleted artifacts."""
+    settings = _api_settings(
+        tmp_path,
+        schema_prefix="file_build_aba_it",
+        worker_id="file-build-aba-test",
+    )
+    publisher = _RecordingPublisher()
+    _reset_main_runtime(monkeypatch, settings=settings, publisher=publisher)
+    kb_code = None
+    try:
+        with TestClient(main_module.app) as client:
+            kb_code = _assert_success(
+                client.post(
+                    "/api/v1/knowledgeBases/create",
+                    json={"knName": f"Checksum ABA {uuid4().hex}"},
+                )
+            )["knCode"]
+            path = "/aba/file.txt"
+            _upload_file(client, kb_code=kb_code, path=path, content=b"content-a")
+            first = _build_file(client, kb_code=kb_code, path=path)
+            first_task_id = first["tasks"][0]["taskId"]
+
+            _update_file(client, kb_code=kb_code, path=path, content=b"content-b")
+            _update_file(client, kb_code=kb_code, path=path, content=b"content-a")
+
+            listed = _listed_file(client, kb_code=kb_code, path=path)
+            status = client.post(
+                "/api/v1/fileBuildStatus",
+                json={"knCode": kb_code, "filePath": path},
+            ).json()
+            result = _assert_success(
+                client.post(
+                    "/api/v1/buildResult",
+                    json={"knCode": kb_code, "filePath": path},
+                )
+            )
+            assert listed["buildStatus"] is None
+            assert status["resultCode"] == "-1"
+            assert "build task not found" in status["resultMsg"]
+            assert result["isBuilt"] is False
+            assert result["markdown"]["available"] is False
+            assert result["chunks"]["total"] == 0
+
+            rebuilt = _build_file(client, kb_code=kb_code, path=path)
+            assert rebuilt["acceptedCount"] == 1
+            assert rebuilt["reusedCount"] == 0
+            assert rebuilt["tasks"][0]["taskId"] != first_task_id
+            rebuilt_result = _assert_success(
+                client.post(
+                    "/api/v1/buildResult",
+                    json={"knCode": kb_code, "filePath": path},
+                )
+            )
+            assert rebuilt_result["isBuilt"] is True
+            assert rebuilt_result["markdown"]["data"] == "content-a"
+    finally:
+        if kb_code is not None:
+            with TestClient(main_module.app) as cleanup_client:
+                _assert_success(
+                    cleanup_client.post(
+                        "/api/v1/knowledgeBases/delete", json={"knCode": kb_code}
+                    )
+                )
+        asyncio.run(_drop_schema(settings))
+
+
+def test_delete_and_recreate_same_path_does_not_inherit_old_file_build(
+    monkeypatch, tmp_path
+):
+    """A replacement file at the same path must not inherit the deleted file's task."""
+    settings = _api_settings(
+        tmp_path,
+        schema_prefix="file_build_recreate_it",
+        worker_id="file-build-recreate-test",
+    )
+    publisher = _RecordingPublisher()
+    _reset_main_runtime(monkeypatch, settings=settings, publisher=publisher)
+    kb_code = None
+    try:
+        with TestClient(main_module.app) as client:
+            kb_code = _assert_success(
+                client.post(
+                    "/api/v1/knowledgeBases/create",
+                    json={"knName": f"Delete Recreate {uuid4().hex}"},
+                )
+            )["knCode"]
+            path = "/recreate/file.txt"
+            content = b"same bytes, different file identity"
+            _upload_file(client, kb_code=kb_code, path=path, content=content)
+            first = _build_file(client, kb_code=kb_code, path=path)
+            first_result = _assert_success(
+                client.post(
+                    "/api/v1/buildResult",
+                    json={"knCode": kb_code, "filePath": path},
+                )
+            )
+            _assert_success(
+                client.post(
+                    "/api/v1/knowledgeItems/delete",
+                    json={"knCode": kb_code, "filePath": path},
+                )
+            )
+            _upload_file(client, kb_code=kb_code, path=path, content=content)
+
+            listed = _listed_file(client, kb_code=kb_code, path=path)
+            assert listed["buildStatus"] is None
+            status = client.post(
+                "/api/v1/fileBuildStatus",
+                json={"knCode": kb_code, "filePath": path},
+            ).json()
+            assert status["resultCode"] == "-1"
+            assert "build task not found" in status["resultMsg"]
+
+            rebuilt = _build_file(client, kb_code=kb_code, path=path)
+            rebuilt_result = _assert_success(
+                client.post(
+                    "/api/v1/buildResult",
+                    json={"knCode": kb_code, "filePath": path},
+                )
+            )
+            assert rebuilt_result["isBuilt"] is True
+            assert rebuilt_result["fileId"] != first_result["fileId"]
+            assert rebuilt["tasks"][0]["taskId"] != first["tasks"][0]["taskId"]
+    finally:
+        if kb_code is not None:
+            with TestClient(main_module.app) as cleanup_client:
+                _assert_success(
+                    cleanup_client.post(
+                        "/api/v1/knowledgeBases/delete", json={"knCode": kb_code}
+                    )
+                )
+        asyncio.run(_drop_schema(settings))
+
+
+def test_completed_build_follows_move_across_all_public_status_apis(
+    monkeypatch, tmp_path
+):
+    """Moving a built file preserves identity, artifacts, and public Build status."""
+    settings = _api_settings(
+        tmp_path,
+        schema_prefix="file_build_move_it",
+        worker_id="file-build-move-test",
+    )
+    publisher = _RecordingPublisher()
+    _reset_main_runtime(monkeypatch, settings=settings, publisher=publisher)
+    kb_code = None
+    try:
+        with TestClient(main_module.app) as client:
+            kb_code = _assert_success(
+                client.post(
+                    "/api/v1/knowledgeBases/create",
+                    json={"knName": f"Completed Build Move {uuid4().hex}"},
+                )
+            )["knCode"]
+            source = "/source/file.txt"
+            target = "/target/renamed.txt"
+            for directory in ("/source", "/target"):
+                _assert_success(
+                    client.post(
+                        "/api/v1/directories/create",
+                        json={"knCode": kb_code, "directoryPath": directory},
+                    )
+                )
+            _upload_file(client, kb_code=kb_code, path=source, content=b"move me")
+            acceptance = _build_file(client, kb_code=kb_code, path=source)
+            before = _assert_success(
+                client.post(
+                    "/api/v1/buildResult",
+                    json={"knCode": kb_code, "filePath": source},
+                )
+            )
+
+            _assert_success(
+                client.post(
+                    "/api/v1/knowledgeItems/move",
+                    json={
+                        "knCode": kb_code,
+                        "sourcePath": [source],
+                        "targetFilePath": target,
+                    },
+                )
+            )
+
+            listed = _listed_file(client, kb_code=kb_code, path=target)
+            status = _assert_success(
+                client.post(
+                    "/api/v1/fileBuildStatus",
+                    json={"knCode": kb_code, "filePath": target},
+                )
+            )
+            result = _assert_success(
+                client.post(
+                    "/api/v1/buildResult",
+                    json={"knCode": kb_code, "filePath": target},
+                )
+            )
+            assert listed["buildStatus"] == "complete"
+            assert status["status"] == "complete"
+            assert status["taskId"] == acceptance["tasks"][0]["taskId"]
+            assert result["isBuilt"] is True
+            assert result["fileId"] == before["fileId"]
+            assert result["markdown"]["data"] == "move me"
     finally:
         if kb_code is not None:
             with TestClient(main_module.app) as cleanup_client:

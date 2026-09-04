@@ -664,6 +664,12 @@ BackgroundTasks 退出。宽限期后仍为活动状态的旧任务直接进入
 - Callback 失败不改变终态；
 - Entity INLINE 构建不被 Build Runner 领取且不发 Build Callback；
 - `fileBuildStatus` 兼容映射和 `processing*Status` 的 FILE_BUILD 查询。
+- `listDir`、`glob`、`fileBuildStatus`、`buildResult` 对当前文件的构建状态
+  必须一致，不能仅验证其中一个接口；内容更新后均不得继续表达为已构建。
+- 相同内容更新必须保留完整构建产物并继续复用原任务；checksum 执行
+  A -> B -> A 回绕时，不得复活已经失效的历史成功任务。
+- 删除文件后在同一路径重新上传相同内容，必须按新 `fileId` 处理，不能继承
+  已删除文件的构建任务；移动或重命名则必须保持原 `fileId` 和完整构建状态。
 - legacy task 回填、不可复用、Built Content 保留和活动任务迁移终结。
 - migration 只新增更高版本 SQL、历史脚本 checksum 不变、重复启动不重复
   执行已登记脚本。

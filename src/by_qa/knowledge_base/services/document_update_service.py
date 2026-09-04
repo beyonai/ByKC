@@ -100,6 +100,7 @@ class DocumentUpdateService:
         original_location: StorageLocation | None = None
         wrote_original = False
         committed = False
+        content_changed = False
         terminated_build_tasks: list[dict[str, Any]] = []
         completed_build_batch_ids: list[str] = []
         logger.info(
@@ -195,10 +196,8 @@ class DocumentUpdateService:
             )
 
             checksum = hashlib.sha256(final_bytes).hexdigest()
-            if (
-                checksum != str(file_row.get("checksum") or "")
-                and self.file_build_mutation_service is not None
-            ):
+            content_changed = checksum != str(file_row.get("checksum") or "")
+            if content_changed and self.file_build_mutation_service is not None:
                 (
                     terminated_build_tasks,
                     completed_build_batch_ids,
@@ -236,18 +235,21 @@ class DocumentUpdateService:
             )
             wrote_original = True
 
-            await self.knowledge_item_chunk_repository.delete_for_fs_entry(
-                cursor, fs_entry_id=fs_entry_id
-            )
-            await self.retrieval_projection_repository.delete_for_fs_entry_ids(
-                cursor, knowledge_base_id=knowledge_base_id, fs_entry_ids=[fs_entry_id]
-            )
-            await self.knowledge_fetch_cache_repository.delete_cache_entries_for_fs_entry_ids(
-                cursor, fs_entry_ids=[fs_entry_id]
-            )
-            await self.knowledge_fs_entry_repository.clear_markdown_metadata(
-                cursor, fs_entry_id=fs_entry_id
-            )
+            if content_changed:
+                await self.knowledge_item_chunk_repository.delete_for_fs_entry(
+                    cursor, fs_entry_id=fs_entry_id
+                )
+                await self.retrieval_projection_repository.delete_for_fs_entry_ids(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    fs_entry_ids=[fs_entry_id],
+                )
+                await self.knowledge_fetch_cache_repository.delete_cache_entries_for_fs_entry_ids(
+                    cursor, fs_entry_ids=[fs_entry_id]
+                )
+                await self.knowledge_fs_entry_repository.clear_markdown_metadata(
+                    cursor, fs_entry_id=fs_entry_id
+                )
             front_matter = (
                 parse_front_matter(request.file_content)
                 if is_markdown and request.process_front_matter
@@ -305,7 +307,7 @@ class DocumentUpdateService:
                 )
 
             old_sidecar = self._markdown_location(file_row)
-            if old_sidecar is not None:
+            if content_changed and old_sidecar is not None:
                 await self.storage_provider.delete_quietly(old_sidecar)
             timeline_id = self._row_id(timeline)
             logger.info(

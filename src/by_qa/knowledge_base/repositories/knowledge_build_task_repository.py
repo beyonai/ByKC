@@ -122,6 +122,17 @@ class KnowledgeBuildTaskRepository:
             WHERE task.fs_entry_id = %(fs_entry_id)s
               AND task.input_checksum = fs.checksum
               AND task.input_is_deleted = fs.is_deleted
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM knowledge_file_update_timeline update_event
+                    WHERE update_event.fs_entry_id = task.fs_entry_id
+                      AND update_event.created_at > COALESCE(
+                            task.finished_at,
+                            task.created_at
+                      )
+                      AND update_event.old_checksum IS DISTINCT FROM
+                          update_event.new_checksum
+              )
             ORDER BY task.created_at DESC, task.kid DESC
             LIMIT 1
             """,
@@ -150,6 +161,17 @@ class KnowledgeBuildTaskRepository:
                 WHERE task.fs_entry_id = ANY(%(fs_entry_ids)s)
                   AND task.input_checksum = fs.checksum
                   AND task.input_is_deleted = fs.is_deleted
+                  AND NOT EXISTS (
+                        SELECT 1
+                        FROM knowledge_file_update_timeline update_event
+                        WHERE update_event.fs_entry_id = task.fs_entry_id
+                          AND update_event.created_at > COALESCE(
+                                task.finished_at,
+                                task.created_at
+                          )
+                          AND update_event.old_checksum IS DISTINCT FROM
+                              update_event.new_checksum
+                  )
             ) ranked
             WHERE row_no = 1
             """,

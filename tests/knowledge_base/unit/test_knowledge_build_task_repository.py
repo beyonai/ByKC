@@ -70,6 +70,9 @@ async def test_get_latest_current_build_task_matches_file_checksum_and_delete_st
     assert "join knowledge_fs_entry fs on fs.kid = task.fs_entry_id" in normalized_sql
     assert "task.input_checksum = fs.checksum" in normalized_sql
     assert "task.input_is_deleted = fs.is_deleted" in normalized_sql
+    assert "from knowledge_file_update_timeline update_event" in normalized_sql
+    assert "update_event.old_checksum is distinct from" in normalized_sql
+    assert "update_event.new_checksum" in normalized_sql
     assert params == {"fs_entry_id": 11}
 
 
@@ -89,6 +92,9 @@ async def test_get_latest_current_build_tasks_batch_and_skip_empty_input():
     assert "partition by task.fs_entry_id" in normalized_sql
     assert "task.input_checksum = fs.checksum" in normalized_sql
     assert "task.input_is_deleted = fs.is_deleted" in normalized_sql
+    assert "from knowledge_file_update_timeline update_event" in normalized_sql
+    assert "update_event.old_checksum is distinct from" in normalized_sql
+    assert "update_event.new_checksum" in normalized_sql
     assert params == {"fs_entry_ids": [11, 12]}
 
     empty_cursor = FakeCursor()

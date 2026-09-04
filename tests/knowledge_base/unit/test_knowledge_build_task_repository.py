@@ -57,6 +57,48 @@ async def test_get_latest_build_tasks_skips_empty_input():
     assert cursor.executed == []
 
 
+async def test_get_latest_current_build_task_matches_file_checksum_and_delete_state():
+    repo = KnowledgeBuildTaskRepository()
+    expected = {"kid": 21, "fs_entry_id": 11, "status": "succeeded"}
+    cursor = FakeCursor(fetchone_results=[expected])
+
+    row = await repo.get_latest_current_by_fs_entry_id(cursor, fs_entry_id=11)
+
+    assert row == expected
+    sql, params = cursor.executed[0]
+    normalized_sql = " ".join(sql.lower().split())
+    assert "join knowledge_fs_entry fs on fs.kid = task.fs_entry_id" in normalized_sql
+    assert "task.input_checksum = fs.checksum" in normalized_sql
+    assert "task.input_is_deleted = fs.is_deleted" in normalized_sql
+    assert params == {"fs_entry_id": 11}
+
+
+async def test_get_latest_current_build_tasks_batch_and_skip_empty_input():
+    repo = KnowledgeBuildTaskRepository()
+    expected = [
+        {"kid": 21, "fs_entry_id": 11, "status": "succeeded"},
+        {"kid": 22, "fs_entry_id": 12, "status": "running"},
+    ]
+    cursor = FakeCursor(fetchall_results=[expected])
+
+    rows = await repo.get_latest_current_by_fs_entry_ids(cursor, fs_entry_ids=[11, 12])
+
+    assert rows == expected
+    sql, params = cursor.executed[0]
+    normalized_sql = " ".join(sql.lower().split())
+    assert "partition by task.fs_entry_id" in normalized_sql
+    assert "task.input_checksum = fs.checksum" in normalized_sql
+    assert "task.input_is_deleted = fs.is_deleted" in normalized_sql
+    assert params == {"fs_entry_ids": [11, 12]}
+
+    empty_cursor = FakeCursor()
+    assert (
+        await repo.get_latest_current_by_fs_entry_ids(empty_cursor, fs_entry_ids=[])
+        == []
+    )
+    assert empty_cursor.executed == []
+
+
 async def test_build_task_repository_keeps_the_file_build_schema_contract():
     repo = KnowledgeBuildTaskRepository()
     cursor = FakeCursor(fetchone_results=[{"kid": 1}, {"kid": 2}])

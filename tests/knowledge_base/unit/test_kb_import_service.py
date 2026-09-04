@@ -939,6 +939,12 @@ class FakeKnowledgeBuildTaskRepository:
         self.calls.append(("get_latest_by_fs_entry_id", {"fs_entry_id": fs_entry_id}))
         return self.latest_task_by_fs_entry_id.get(fs_entry_id)
 
+    async def get_latest_current_by_fs_entry_id(self, cursor, *, fs_entry_id):
+        self.calls.append(
+            ("get_latest_current_by_fs_entry_id", {"fs_entry_id": fs_entry_id})
+        )
+        return self.latest_task_by_fs_entry_id.get(fs_entry_id)
+
     async def create_task(
         self, cursor, *, knowledge_base_id, fs_entry_id, status, current_step
     ):
@@ -2400,7 +2406,7 @@ async def test_file_build_status_returns_latest_task_for_file():
         )
     ]
     assert build_task_repository.calls == [
-        ("get_latest_by_fs_entry_id", {"fs_entry_id": 71})
+        ("get_latest_current_by_fs_entry_id", {"fs_entry_id": 71})
     ]
 
 

@@ -448,6 +448,22 @@ def test_updated_file_returns_not_built_and_can_be_rebuilt(monkeypatch, tmp_path
             )
             assert after_update["markdown"]["available"] is False
             assert after_update["chunks"]["total"] == 0
+            listed_after_update = _assert_success(
+                client.post(
+                    "/api/v1/listDir",
+                    json={"knCode": kb_code, "directoryPath": "/docs"},
+                )
+            )["data"][0]
+            assert listed_after_update["name"] == file_path
+            assert listed_after_update["buildStatus"] is None
+            assert listed_after_update["buildCurrentStep"] is None
+            status_after_update = client.post(
+                "/api/v1/fileBuildStatus",
+                json={"knCode": kb_code, "filePath": file_path},
+            )
+            assert status_after_update.status_code == 200
+            assert status_after_update.json()["resultCode"] == "-1"
+            assert "build task not found" in status_after_update.json()["resultMsg"]
 
             rebuild_acceptance = _assert_success(
                 client.post(
@@ -483,6 +499,22 @@ def test_updated_file_returns_not_built_and_can_be_rebuilt(monkeypatch, tmp_path
             assert rebuilt["markdown"]["available"] is True
             assert rebuilt["markdown"]["data"] == "after update"
             assert rebuilt["chunks"]["total"] == 1
+            listed_after_rebuild = _assert_success(
+                client.post(
+                    "/api/v1/listDir",
+                    json={"knCode": kb_code, "directoryPath": "/docs"},
+                )
+            )["data"][0]
+            assert listed_after_rebuild["buildStatus"] == "complete"
+            assert listed_after_rebuild["buildCurrentStep"] == "complete"
+            status_after_rebuild = _assert_success(
+                client.post(
+                    "/api/v1/fileBuildStatus",
+                    json={"knCode": kb_code, "filePath": file_path},
+                )
+            )
+            assert status_after_rebuild["status"] == "complete"
+            assert status_after_rebuild["taskId"] == rebuilt["build"]["taskId"]
     finally:
         if kb_code is not None:
             with TestClient(main_module.app) as cleanup_client:

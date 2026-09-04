@@ -110,6 +110,53 @@ class KnowledgeBuildTaskRepository:
         )
         return await cursor.fetchall()
 
+    async def get_latest_current_by_fs_entry_id(
+        self, cursor: Any, *, fs_entry_id: int
+    ) -> dict[str, Any] | None:
+        """Fetch the latest task whose input still matches the current file."""
+        await cursor.execute(
+            """
+            SELECT task.*
+            FROM knowledge_build_task task
+            JOIN knowledge_fs_entry fs ON fs.kid = task.fs_entry_id
+            WHERE task.fs_entry_id = %(fs_entry_id)s
+              AND task.input_checksum = fs.checksum
+              AND task.input_is_deleted = fs.is_deleted
+            ORDER BY task.created_at DESC, task.kid DESC
+            LIMIT 1
+            """,
+            {"fs_entry_id": fs_entry_id},
+        )
+        return await cursor.fetchone()
+
+    async def get_latest_current_by_fs_entry_ids(
+        self, cursor: Any, *, fs_entry_ids: list[int]
+    ) -> list[dict[str, Any]]:
+        """Fetch each file's latest task whose input still matches that file."""
+        if not fs_entry_ids:
+            return []
+        await cursor.execute(
+            """
+            SELECT *
+            FROM (
+                SELECT
+                    task.*,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY task.fs_entry_id
+                        ORDER BY task.created_at DESC, task.kid DESC
+                    ) AS row_no
+                FROM knowledge_build_task task
+                JOIN knowledge_fs_entry fs ON fs.kid = task.fs_entry_id
+                WHERE task.fs_entry_id = ANY(%(fs_entry_ids)s)
+                  AND task.input_checksum = fs.checksum
+                  AND task.input_is_deleted = fs.is_deleted
+            ) ranked
+            WHERE row_no = 1
+            """,
+            {"fs_entry_ids": fs_entry_ids},
+        )
+        return await cursor.fetchall()
+
     async def create_task(
         self,
         cursor: Any,

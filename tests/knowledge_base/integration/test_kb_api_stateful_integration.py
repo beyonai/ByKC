@@ -1115,8 +1115,8 @@ def test_document_update_metadata_merges_preserves_and_rolls_back_with_content(
     assert browse["metadata"] == expected
     assert glob_browse == browse
     assert browse["updatedAt"] > before_update_browse["updatedAt"]
-    assert browse["buildStatus"] == "complete"
-    assert browse["buildCurrentStep"] == "complete"
+    assert browse["buildStatus"] is None
+    assert browse["buildCurrentStep"] is None
     assert stale.json()["resultCode"] == "-1"
     assert after_stale == expected
     assert disabled.json()["resultCode"] == "0"
@@ -3135,6 +3135,7 @@ async def test_browse_returns_each_latest_terminal_or_running_build_state(
                             origin,
                             execution_mode,
                             file_path_snapshot,
+                            input_checksum,
                             input_is_deleted,
                             build_profile,
                             build_profile_hash,
@@ -3154,6 +3155,7 @@ async def test_browse_returns_each_latest_terminal_or_running_build_state(
                             'API',
                             'BACKGROUND',
                             virtual_path,
+                            checksum,
                             false,
                             '{"legacy":true}'::jsonb,
                             repeat('0', 64),
@@ -7271,8 +7273,8 @@ async def test_document_update_markdown_replaces_content_and_invalidates_derived
         "documentKind": "original",
     }
     assert downloaded_body == b"# After\nnew-only-token\n"
-    assert build_status.json()["resultCode"] == "0"
-    assert build_status.json()["resultObject"]["status"] == "complete"
+    assert build_status.json()["resultCode"] == "-1"
+    assert "build task not found" in build_status.json()["resultMsg"]
     assert search_after == []
     assert metadata.json()["resultObject"]["metadata"] == {
         "title": {"valueType": "string", "value": "After"},
@@ -7353,8 +7355,8 @@ async def test_document_update_markdown_reregisters_stable_source_references_and
             "status": "resolved",
         }
     ]
-    assert build_status.json()["resultCode"] == "0"
-    assert build_status.json()["resultObject"]["status"] == "complete"
+    assert build_status.json()["resultCode"] == "-1"
+    assert "build task not found" in build_status.json()["resultMsg"]
     assert timeline["old_file_size"] > 0
     assert timeline["new_file_size"] > 0
     assert timeline["summary_source"] in {"RULE_BASED", "LLM"}
@@ -7447,7 +7449,8 @@ async def test_document_update_non_markdown_and_validation_errors_use_http_200_e
         assert response.status_code == 200
         assert response.json()["resultCode"] == "-1"
     assert running_error.json()["resultCode"] == "0"
-    assert superseded_build.json()["resultObject"]["status"] == "skipped"
+    assert superseded_build.json()["resultCode"] == "-1"
+    assert "build task not found" in superseded_build.json()["resultMsg"]
 
 
 @pytest.mark.integration

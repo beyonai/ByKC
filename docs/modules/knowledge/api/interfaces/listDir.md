@@ -144,7 +144,7 @@
 - `pageNum` 和 `pageSize` 均未传时不分页，响应保持只有 `data` 的旧结构。分页时响应额外包含 `total`、`pageNum`、`pageSize`。
 - 只传 `pageNum` 不传 `pageSize` 时请求校验失败。
 - `updatedAt` 使用 ISO 8601 格式。
-- `buildStatus`、`buildCurrentStep` 返回文件最新构建任务的状态；目录或尚未创建构建任务的文件返回 `null`。
+- `buildStatus`、`buildCurrentStep` 返回与文件当前 checksum、删除态一致的最新构建任务状态；目录、尚未创建构建任务或内容更新后尚未重新构建的文件返回 `null`。历史构建任务仍保留用于审计。
 - `metadata` 始终返回对象。未传或传入空 `metadataFieldList` 时不查询元数据并返回 `{}`；传入时只返回列表中实际存在的字段，全部不存在时仍返回 `{}`。
 - 元数据值保持统一的 `{valueType, value}` 结构，不平铺到条目顶层。
 

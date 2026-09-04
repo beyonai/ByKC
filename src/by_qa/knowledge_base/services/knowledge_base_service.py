@@ -1109,11 +1109,9 @@ class KnowledgeBaseService:
                 raise KnowledgeBaseValidationError(
                     f"file not found: {request.file_path}"
                 )
-            latest_task = (
-                await self.knowledge_build_task_repository.get_latest_by_fs_entry_id(
-                    cursor,
-                    fs_entry_id=self._row_id(file_row),
-                )
+            latest_task = await self.knowledge_build_task_repository.get_latest_current_by_fs_entry_id(
+                cursor,
+                fs_entry_id=self._row_id(file_row),
             )
             if latest_task is None:
                 raise KnowledgeBaseValidationError(
@@ -1939,11 +1937,9 @@ class KnowledgeBaseService:
         if self.knowledge_build_task_repository is None:
             return {}
         file_ids = [int(row["kid"]) for row in rows if row.get("type") == "file"]
-        build_rows = (
-            await self.knowledge_build_task_repository.get_latest_by_fs_entry_ids(
-                cursor,
-                fs_entry_ids=file_ids,
-            )
+        build_rows = await self.knowledge_build_task_repository.get_latest_current_by_fs_entry_ids(
+            cursor,
+            fs_entry_ids=file_ids,
         )
         return {
             int(row["fs_entry_id"]): {

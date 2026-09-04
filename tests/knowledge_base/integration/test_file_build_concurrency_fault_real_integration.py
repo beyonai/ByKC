@@ -404,6 +404,104 @@ async def test_same_file_and_overlapping_directory_acceptance_serialize() -> Non
         await _cleanup(harness)
 
 
+async def test_directory_acceptance_reports_unbounded_count_and_truncated_preview() -> (
+    None
+):
+    harness = await _make_harness()
+    try:
+        connection = await harness.connection_factory()
+        try:
+            cursor = connection.cursor()
+            for index in range(19):
+                await cursor.execute(
+                    """
+                    INSERT INTO knowledge_fs_entry (
+                        knowledge_base_id, parent_entry_id, entry_type, is_root,
+                        name, path_ltree, depth, virtual_path, mime_type,
+                        checksum, file_bucket_name, file_object_key
+                    )
+                    SELECT %(kb)s, kid, 'FILE', FALSE, %(name)s,
+                           %(path_ltree)s::ltree, 2, %(path)s, 'text/plain',
+                           %(checksum)s, 'source', %(object_key)s
+                    FROM knowledge_fs_entry
+                    WHERE knowledge_base_id = %(kb)s
+                      AND virtual_path = '/docs'
+                    """,
+                    {
+                        "kb": harness.knowledge_base_id,
+                        "name": f"extra-{index}.txt",
+                        "path_ltree": f"d1_docs.f2_extra_{index}",
+                        "path": f"/docs/extra-{index}.txt",
+                        "checksum": f"extra-checksum-{index}",
+                        "object_key": f"extra-{index}.txt",
+                    },
+                )
+            await connection.commit()
+        finally:
+            await connection.close()
+
+        accepted = await harness.processing_service.accept(
+            FileToMarkdownIndexRequest(
+                knCode=str(harness.knowledge_base_id), filePath="/docs"
+            )
+        )
+        assert accepted["candidateCount"] == 21
+        assert accepted["acceptedCount"] == 21
+        assert accepted["returnedTaskCount"] == 20
+        assert accepted["tasksTruncated"] is True
+    finally:
+        await _cleanup(harness)
+
+
+async def test_priority_aging_eventually_precedes_new_single_file_work() -> None:
+    harness = await _make_harness()
+    try:
+        accepted = await harness.processing_service.accept(
+            FileToMarkdownIndexRequest(
+                knCode=str(harness.knowledge_base_id), filePath="/docs"
+            )
+        )
+        task_by_path = {
+            task["filePathSnapshot"]: int(task["taskId"]) for task in accepted["tasks"]
+        }
+        old_task_id = task_by_path["/docs/a.txt"]
+        new_task_id = task_by_path["/docs/nested/b.txt"]
+        connection = await harness.connection_factory()
+        try:
+            await connection.execute(
+                """
+                UPDATE knowledge_build_task
+                SET priority = CASE WHEN kid = %(new_task_id)s THEN 100 ELSE 0 END,
+                    created_at = CASE
+                        WHEN kid = %(old_task_id)s
+                            THEN NOW() - INTERVAL '2 hours'
+                        ELSE NOW()
+                    END
+                WHERE kid IN (%(old_task_id)s, %(new_task_id)s)
+                """,
+                {"old_task_id": old_task_id, "new_task_id": new_task_id},
+            )
+            await connection.commit()
+        finally:
+            await connection.close()
+
+        connection = await harness.connection_factory()
+        try:
+            cursor = connection.cursor()
+            claimed = await harness.task_repository.claim_next_task(
+                cursor,
+                worker_id="priority-aging-owner",
+                lease_token=uuid4().hex,
+                lease_seconds=30,
+            )
+            await connection.commit()
+        finally:
+            await connection.close()
+        assert int(claimed["kid"]) == old_task_id
+    finally:
+        await _cleanup(harness)
+
+
 async def test_heartbeat_keeps_long_extraction_away_from_reaper() -> None:
     chunking = _GatedChunkingService()
     harness = await _make_harness(chunking_service=chunking)

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from by_qa.knowledge_base.api.schemas import BuildResultRequest
+from by_qa.knowledge_base.infrastructure.storage import StorageNotFoundError
 from by_qa.knowledge_base.services.knowledge_base_service import KnowledgeBaseService
 
 
@@ -106,6 +107,11 @@ class FakeStorageProvider:
         return b"# Demo\nFirst\nSecond\nEnd"
 
 
+class MissingMarkdownStorageProvider(FakeStorageProvider):
+    async def read(self, location):
+        raise StorageNotFoundError(f"missing: {location.key}")
+
+
 class CompleteChunkRepository(FakeChunkRepository):
     async def get_build_result_summary(self, cursor, *, fs_entry_id):
         del cursor
@@ -194,6 +200,28 @@ async def test_build_result_is_built_requires_matching_checksum_and_full_artifac
 
     assert result["isBuilt"] is True
     assert result["markdown"]["available"] is True
+    assert result["markdown"]["data"] is None
+
+
+@pytest.mark.asyncio
+async def test_build_result_treats_concurrently_deleted_markdown_as_not_built():
+    connection = FakeConnection()
+    service = KnowledgeBaseService(
+        connection_factory=lambda: _async_return(connection),
+        knowledge_base_repository=FakeKnowledgeBaseRepository(),
+        knowledge_fs_entry_repository=FakeFsEntryRepository(),
+        knowledge_build_task_repository=FakeBuildTaskRepository(),
+        knowledge_item_chunk_repository=CompleteChunkRepository(),
+        embedding_dimension=1024,
+        storage_provider=MissingMarkdownStorageProvider(),
+    )
+
+    result = await service.build_result(
+        BuildResultRequest(knCode="7", filePath="/slides/demo.pptx", chunkPageSize=2)
+    )
+
+    assert result["isBuilt"] is False
+    assert result["markdown"]["available"] is False
     assert result["markdown"]["data"] is None
 
 

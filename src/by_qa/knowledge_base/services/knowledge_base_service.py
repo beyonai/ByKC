@@ -41,7 +41,10 @@ from by_qa.knowledge_base.build_status import (
     legacy_build_status,
     legacy_build_step,
 )
-from by_qa.knowledge_base.infrastructure.storage import StorageLocation
+from by_qa.knowledge_base.infrastructure.storage import (
+    StorageLocation,
+    StorageNotFoundError,
+)
 from by_qa.knowledge_base.metadata_types import (
     SYSTEM_FIELD_VALUE_TYPES,
     extract_system_metadata,
@@ -1237,9 +1240,18 @@ class KnowledgeBaseService:
                 namespace=str(file_row.get("markdown_bucket_name") or ""),
                 key=str(file_row["markdown_object_key"]),
             )
-            markdown_text = (await self.storage_provider.read(location)).decode("utf-8")
+            try:
+                markdown_text = (await self.storage_provider.read(location)).decode(
+                    "utf-8"
+                )
+            except StorageNotFoundError:
+                # A concurrent update/delete may clear the fixed-key Markdown
+                # object after the database snapshot was read. Return an
+                # audited non-built result instead of leaking a storage 404.
+                markdown_available = False
             if (
-                self.markdown_reference_resolver is not None
+                markdown_text is not None
+                and self.markdown_reference_resolver is not None
                 and "byqa-ref://" in markdown_text
             ):
                 markdown_text = (

@@ -304,6 +304,8 @@ class FileBuildExecutionService:
         chunks: list[Any],
     ) -> dict[str, Any]:
         connection = await self.connection_factory()
+        markdown_location = None
+        committed = False
         try:
             cursor = connection.cursor()
             current_task, file_row = await self._lock_input(
@@ -390,6 +392,7 @@ class FileBuildExecutionService:
                 raise FileBuildLeaseLostError("lease lost during commit")
             batch = await self._advance_batch(cursor, finished)
             await connection.commit()
+            committed = True
             if self.terminal_event_service is not None:
                 await self.terminal_event_service.publish_tasks(
                     [finished],
@@ -403,6 +406,8 @@ class FileBuildExecutionService:
             return finished
         except Exception:
             await connection.rollback()
+            if markdown_location is not None and not committed:
+                await self.storage_provider.delete_quietly(markdown_location)
             raise
         finally:
             await connection.close()
@@ -410,6 +415,20 @@ class FileBuildExecutionService:
     async def _lock_input(
         self, cursor: Any, *, task_id: int, lease_token: str | None
     ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        # All file mutations lock the file row before fencing its active Build
+        # task. Keep the worker in that same order to avoid a task -> file / file
+        # -> task deadlock with update, move, and delete transactions.
+        await cursor.execute(
+            """
+            SELECT fs.*
+            FROM knowledge_fs_entry fs
+            JOIN knowledge_build_task task ON task.fs_entry_id = fs.kid
+            WHERE task.kid = %(task_id)s
+            FOR UPDATE OF fs
+            """,
+            {"task_id": task_id},
+        )
+        file_row = await cursor.fetchone()
         if lease_token is None:
             await cursor.execute(
                 """
@@ -439,16 +458,7 @@ class FileBuildExecutionService:
         task = await cursor.fetchone()
         if task is None:
             raise FileBuildLeaseLostError("file build lease is no longer valid")
-        await cursor.execute(
-            """
-            SELECT *
-            FROM knowledge_fs_entry
-            WHERE kid = %(fs_entry_id)s
-            FOR UPDATE
-            """,
-            {"fs_entry_id": task["fs_entry_id"]},
-        )
-        return task, await cursor.fetchone()
+        return task, file_row
 
     @staticmethod
     def _validate_input(task: dict[str, Any], file_row: dict[str, Any] | None) -> None:

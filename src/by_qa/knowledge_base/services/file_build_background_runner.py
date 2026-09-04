@@ -137,7 +137,12 @@ class FileBuildBackgroundRunner:
         lease_token = str(row["lease_token"])
         lease_lost = asyncio.Event()
         heartbeat = asyncio.create_task(
-            self._heartbeat(task_id, lease_token, lease_lost),
+            self._heartbeat(
+                task_id,
+                int(row["knowledge_base_id"]),
+                lease_token,
+                lease_lost,
+            ),
             name=f"file-build-heartbeat-{task_id}",
         )
         worker_task = asyncio.create_task(
@@ -208,7 +213,11 @@ class FileBuildBackgroundRunner:
                 lost_wait.cancel()
 
     async def _heartbeat(
-        self, task_id: int, lease_token: str, lease_lost: asyncio.Event
+        self,
+        task_id: int,
+        knowledge_base_id: int,
+        lease_token: str,
+        lease_lost: asyncio.Event,
     ) -> None:
         while True:
             await asyncio.sleep(self.heartbeat_seconds)
@@ -224,6 +233,17 @@ class FileBuildBackgroundRunner:
                 )
                 await connection.commit()
                 if not refreshed:
+                    task = await self.task_repository.get_task(
+                        cursor,
+                        task_id=task_id,
+                        knowledge_base_id=knowledge_base_id,
+                    )
+                    # The execution coroutine publishes callbacks after its
+                    # successful terminal commit. Do not mistake that expected
+                    # lease removal for an external lease loss and cancel it
+                    # between the file and batch events.
+                    if task is not None and str(task.get("status")) == "succeeded":
+                        return
                     lease_lost.set()
                     return
             except Exception:

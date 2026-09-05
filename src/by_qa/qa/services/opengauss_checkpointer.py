@@ -13,6 +13,7 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.postgres.base import BasePostgresSaver
 from langgraph.checkpoint.serde.types import TASKS
+from psycopg import sql
 from psycopg.rows import DictRow
 
 
@@ -80,6 +81,31 @@ class _OpenGaussMixin:
             values.append((channel.encode(), row["type"].encode(), row["blob"]))
         return values
 
+    @staticmethod
+    def _build_blob_rows_query(
+        channel_versions: dict[str, Any],
+    ) -> tuple[sql.Composed, list[Any]]:
+        """Select only the exact channel versions referenced by a checkpoint."""
+        pairs = [
+            (channel, str(version)) for channel, version in channel_versions.items()
+        ]
+        expected_values = sql.SQL(", ").join(
+            sql.SQL("(%s::text, %s::text)") for _ in pairs
+        )
+        query = sql.SQL(
+            """
+                SELECT blobs.channel, blobs.version, blobs.type, blobs.blob
+                FROM checkpoint_blobs AS blobs
+                JOIN (VALUES {}) AS expected(channel, version)
+                  ON blobs.channel = expected.channel
+                 AND blobs.version = expected.version
+                WHERE blobs.thread_id = %s
+                  AND blobs.checkpoint_ns = %s
+            """
+        ).format(expected_values)
+        params = [value for pair in pairs for value in pair]
+        return query, params
+
     def _normalize_write_rows(
         self,
         rows: list[dict[str, Any]],
@@ -133,17 +159,10 @@ class OpenGaussSaver(_OpenGaussMixin, PostgresSaver):
         if not channel_versions:
             return []
 
+        query, params = self._build_blob_rows_query(channel_versions)
+        params.extend((thread_id, checkpoint_ns))
         with self._cursor() as cur:
-            cur.execute(
-                """
-                SELECT channel, version, type, blob
-                FROM checkpoint_blobs
-                WHERE thread_id = %s
-                  AND checkpoint_ns = %s
-                  AND channel = ANY(%s)
-                """,
-                (thread_id, checkpoint_ns, list(channel_versions.keys())),
-            )
+            cur.execute(query, params)
             rows = cur.fetchall()
         return self._normalize_blob_rows(rows, channel_versions)
 
@@ -313,17 +332,10 @@ class AsyncOpenGaussSaver(_OpenGaussMixin, AsyncPostgresSaver):
         if not channel_versions:
             return []
 
+        query, params = self._build_blob_rows_query(channel_versions)
+        params.extend((thread_id, checkpoint_ns))
         async with self._cursor() as cur:
-            await cur.execute(
-                """
-                SELECT channel, version, type, blob
-                FROM checkpoint_blobs
-                WHERE thread_id = %s
-                  AND checkpoint_ns = %s
-                  AND channel = ANY(%s)
-                """,
-                (thread_id, checkpoint_ns, list(channel_versions.keys())),
-            )
+            await cur.execute(query, params)
             rows = await cur.fetchall()
         return self._normalize_blob_rows(rows, channel_versions)
 

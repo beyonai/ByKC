@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
@@ -13,6 +15,7 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.checkpoint.postgres.base import BasePostgresSaver
 from langgraph.checkpoint.serde.types import TASKS
+from psycopg import Error as PsycopgError
 from psycopg import sql
 from psycopg.rows import DictRow
 
@@ -23,7 +26,38 @@ def _opengauss_migrations() -> list[str]:
     migrations[-1] = (
         "ALTER TABLE checkpoint_writes ADD COLUMN task_path TEXT NOT NULL DEFAULT '';"
     )
+    migrations.append(
+        """
+        CREATE TABLE IF NOT EXISTS qa_session_turns (
+            turn_seq BIGSERIAL PRIMARY KEY,
+            engine TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            message_id TEXT NOT NULL,
+            query TEXT NOT NULL,
+            status VARCHAR(16) NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMPTZ,
+            UNIQUE (engine, session_id, message_id)
+        );
+        """
+    )
+    migrations.append(
+        """
+        CREATE INDEX qa_session_turn_history_idx
+            ON qa_session_turns (engine, session_id, status, turn_seq);
+        """
+    )
     return migrations
+
+
+_TASK_PATH_MIGRATION_VERSION = len(BasePostgresSaver.MIGRATIONS) - 1
+_CONCURRENT_SETUP_SQLSTATES = {"23505", "42701", "42710", "42P07"}
+_SETUP_MAX_ATTEMPTS = 5
+
+
+def _is_concurrent_setup_error(exc: PsycopgError) -> bool:
+    """Return whether another worker won the same idempotent migration step."""
+    return exc.sqlstate in _CONCURRENT_SETUP_SQLSTATES
 
 
 class _OpenGaussMixin:
@@ -131,6 +165,19 @@ class OpenGaussSaver(_OpenGaussMixin, PostgresSaver):
     """Synchronous LangGraph saver compatible with openGauss."""
 
     def setup(self) -> None:
+        for attempt in range(_SETUP_MAX_ATTEMPTS):
+            try:
+                self._setup_once()
+                return
+            except PsycopgError as exc:
+                if (
+                    not _is_concurrent_setup_error(exc)
+                    or attempt == _SETUP_MAX_ATTEMPTS - 1
+                ):
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+
+    def _setup_once(self) -> None:
         with self._cursor() as cur:
             cur.execute(self.MIGRATIONS[0])
             results = cur.execute(
@@ -143,7 +190,7 @@ class OpenGaussSaver(_OpenGaussMixin, PostgresSaver):
                 self.MIGRATIONS[version + 1 :],
                 strict=False,
             ):
-                if v == len(self.MIGRATIONS) - 1:
+                if v == _TASK_PATH_MIGRATION_VERSION:
                     exists = cur.execute(self._task_path_exists_query()).fetchone()
                     if exists is None:
                         cur.execute(migration)
@@ -301,6 +348,19 @@ class AsyncOpenGaussSaver(_OpenGaussMixin, AsyncPostgresSaver):
     """Asynchronous LangGraph saver compatible with openGauss."""
 
     async def setup(self) -> None:
+        for attempt in range(_SETUP_MAX_ATTEMPTS):
+            try:
+                await self._setup_once()
+                return
+            except PsycopgError as exc:
+                if (
+                    not _is_concurrent_setup_error(exc)
+                    or attempt == _SETUP_MAX_ATTEMPTS - 1
+                ):
+                    raise
+                await asyncio.sleep(0.05 * (attempt + 1))
+
+    async def _setup_once(self) -> None:
         async with self._cursor() as cur:
             await cur.execute(self.MIGRATIONS[0])
             results = await cur.execute(
@@ -313,7 +373,7 @@ class AsyncOpenGaussSaver(_OpenGaussMixin, AsyncPostgresSaver):
                 self.MIGRATIONS[version + 1 :],
                 strict=False,
             ):
-                if v == len(self.MIGRATIONS) - 1:
+                if v == _TASK_PATH_MIGRATION_VERSION:
                     exists_results = await cur.execute(self._task_path_exists_query())
                     exists = await exists_results.fetchone()
                     if exists is None:

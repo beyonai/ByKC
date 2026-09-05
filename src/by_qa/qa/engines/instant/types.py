@@ -20,6 +20,7 @@ class NodeNames(Enum):
     SINGLE_HOP_WORKER = "single_hop_worker"
     MULTI_HOP_WORKER = "multi_hop_worker"
     FINAL_ANSWER = "final_answer"
+    STATE_CLEANUP = "state_cleanup"
 
 
 class AgentNames(str, Enum):

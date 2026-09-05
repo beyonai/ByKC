@@ -1,8 +1,11 @@
 """Abstract base class for QA engines."""
 
+import asyncio
 import json
 import uuid
 from abc import ABC, abstractmethod
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any, AsyncGenerator
 
 from langchain_core.runnables import RunnableConfig
@@ -19,6 +22,34 @@ from by_qa.qa.services.checkpointer_factory import (
     create_checkpointer_async,
 )
 from by_qa.qa.services.llm_service import LLMService
+
+
+@dataclass
+class _SessionLockEntry:
+    lock: asyncio.Lock
+    users: int = 0
+
+
+_SESSION_LOCKS: dict[str, _SessionLockEntry] = {}
+_SESSION_LOCKS_GUARD = asyncio.Lock()
+
+
+@asynccontextmanager
+async def _session_run_lock(thread_id: str):
+    """Serialize one checkpoint thread while allowing other threads to run."""
+    async with _SESSION_LOCKS_GUARD:
+        entry = _SESSION_LOCKS.setdefault(
+            thread_id, _SessionLockEntry(lock=asyncio.Lock())
+        )
+        entry.users += 1
+    try:
+        async with entry.lock:
+            yield
+    finally:
+        async with _SESSION_LOCKS_GUARD:
+            entry.users -= 1
+            if entry.users == 0:
+                _SESSION_LOCKS.pop(thread_id, None)
 
 
 class BaseQAEngine(ABC):
@@ -90,8 +121,19 @@ class BaseQAEngine(ABC):
             recursion_limit=recursion_limit,
             run_id=message_id,
         )
-        config["configurable"] = {"thread_id": f"{self.THREAD_ID_PREFIX}_{session_id}"}
+        config["configurable"] = {
+            "thread_id": self._checkpoint_thread_id(session_id, message_id)
+        }
         return session_id, message_id, config
+
+    def _checkpoint_thread_id(self, session_id: str, message_id: str) -> str:
+        """Return the checkpoint thread used by one engine invocation."""
+        del message_id
+        return f"{self.THREAD_ID_PREFIX}_{session_id}"
+
+    def _serialize_checkpoint_thread(self) -> bool:
+        """Whether invocations sharing a checkpoint thread must be serialized."""
+        return True
 
     async def _get_graph(self):
         """Lazy-init: create checkpointer if needed, then build graph."""
@@ -127,6 +169,28 @@ class BaseQAEngine(ABC):
         session_id, message_id, config = self._prepare_run(
             input_data, recursion_limit=self._recursion_limit
         )
+        thread_id = config["configurable"]["thread_id"]
+        if self._serialize_checkpoint_thread():
+            async with _session_run_lock(thread_id):
+                async for event in self._stream_with_config(
+                    input_data, session_id, message_id, config
+                ):
+                    yield event
+            return
+
+        async for event in self._stream_with_config(
+            input_data, session_id, message_id, config
+        ):
+            yield event
+
+    async def _stream_with_config(
+        self,
+        input_data: CoreInput,
+        session_id: str,
+        message_id: str,
+        config: RunnableConfig,
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Execute and filter a prepared graph invocation."""
         graph = await self._get_graph()
         event_filter = EventFilter(self._get_visible_roles())
         async for event in self._do_stream_search(

@@ -14,8 +14,11 @@ from by_qa.qa.common.base_engine import BaseQAEngine
 from by_qa.qa.common.models import CoreInput, StreamEvent, StreamEventType
 from by_qa.qa.common.operation_registry import OPERATION_REGISTRY, OperationType
 from by_qa.qa.engines.instant.graph import build_instant_search_graph
+from by_qa.qa.engines.instant.nodes.state_cleanup import MAX_RETAINED_USER_MESSAGES
 from by_qa.qa.engines.instant.state import InstantSearchState
 from by_qa.qa.engines.instant.types import NodeNames
+from by_qa.qa.services.checkpointer_factory import get_checkpointer_backend_name
+from by_qa.qa.services.session_history import OpenGaussSessionHistoryStore
 
 USER_VISIBLE_ROLES: dict[str, list[str] | None] = {
     NodeNames.DECOMPOSER.value: None,
@@ -69,6 +72,28 @@ class InstantQAEngine(BaseQAEngine):
     THREAD_ID_PREFIX = "instant_search"
     _recursion_limit = 50
 
+    def _uses_concurrent_session_history(self) -> bool:
+        if self._get_config_value("session_history_store") is not None:
+            return True
+        backend = getattr(self._settings, "checkpointer_backend", "")
+        return str(backend).lower() == "opengauss"
+
+    def _checkpoint_thread_id(self, session_id: str, message_id: str) -> str:
+        if self._uses_concurrent_session_history():
+            return f"{self.THREAD_ID_PREFIX}_{session_id}_{message_id}"
+        return super()._checkpoint_thread_id(session_id, message_id)
+
+    def _serialize_checkpoint_thread(self) -> bool:
+        return not self._uses_concurrent_session_history()
+
+    def _get_session_history_store(self):
+        override = self._get_config_value("session_history_store")
+        if override is not None:
+            return override
+        if get_checkpointer_backend_name(self._checkpointer) == "opengauss":
+            return OpenGaussSessionHistoryStore(self._checkpointer.conn)
+        return None
+
     def _get_visible_roles(self) -> dict[str, list[str] | None] | None:
         return USER_VISIBLE_ROLES
 
@@ -86,7 +111,25 @@ class InstantQAEngine(BaseQAEngine):
         graph: Any,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Execute instant QA and stream results incrementally."""
+        history_store = self._get_session_history_store()
+        turn_reserved = False
+        succeeded = False
+        role = None
+        instance_id = None
+        parent_ids = None
         try:
+            previous_queries: list[str] = []
+            if history_store is not None:
+                reserved_turn = await history_store.reserve_turn(
+                    engine=self.THREAD_ID_PREFIX,
+                    session_id=session_id,
+                    message_id=message_id,
+                    query=input_data.query,
+                    history_limit=MAX_RETAINED_USER_MESSAGES - 1,
+                )
+                previous_queries = reserved_turn.previous_queries
+                turn_reserved = True
+
             initial_state = InstantSearchState(
                 original_query=input_data.query,
                 sub_queries=[],
@@ -95,7 +138,10 @@ class InstantQAEngine(BaseQAEngine):
                 final_answer="",
                 citations=[],
                 confidence=0.0,
-                messages=[HumanMessage(content=input_data.query)],
+                messages=[
+                    *[HumanMessage(content=query) for query in previous_queries],
+                    HumanMessage(content=input_data.query),
+                ],
                 decomposition_time=None,
                 retrieval_time=None,
                 aggregation_time=None,
@@ -200,6 +246,7 @@ class InstantQAEngine(BaseQAEngine):
                         )
                 if yield_event:
                     yield yield_event
+            succeeded = True
             info("[stream_search] Completed successfully")
         except Exception as exc:
             error("[stream_search] Error occurred - error: %s", traceback.format_exc())
@@ -210,3 +257,12 @@ class InstantQAEngine(BaseQAEngine):
                 instance_id=instance_id,
                 parent_ids=parent_ids,
             )
+        finally:
+            if turn_reserved:
+                await history_store.finish_turn(
+                    engine=self.THREAD_ID_PREFIX,
+                    session_id=session_id,
+                    message_id=message_id,
+                    succeeded=succeeded,
+                    retention_limit=MAX_RETAINED_USER_MESSAGES,
+                )

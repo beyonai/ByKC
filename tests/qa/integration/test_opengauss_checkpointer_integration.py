@@ -9,6 +9,7 @@ long-lived thread does not load every historical blob into worker memory.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from typing import Any, TypedDict
@@ -33,6 +34,7 @@ from by_qa.qa.services.opengauss_checkpointer import (  # noqa: E402
     AsyncOpenGaussSaver,
     OpenGaussSaver,
 )
+from by_qa.qa.services.session_history import OpenGaussSessionHistoryStore  # noqa: E402
 
 pytestmark = pytest.mark.integration
 
@@ -224,6 +226,29 @@ async def test_async_setup_in_two_schemas_each_has_task_path(two_fresh_schemas):
     assert _column_exists(schema_b, "checkpoint_writes", "task_path")
 
 
+async def test_async_setup_is_safe_for_concurrent_first_requests(fresh_schema):
+    connections = []
+    try:
+        for _ in range(4):
+            conn = await psycopg.AsyncConnection.connect(
+                _base_dsn(),
+                autocommit=True,
+                prepare_threshold=0,
+                row_factory=dict_row,
+            )
+            await _set_search_path_async(conn, fresh_schema)
+            connections.append(conn)
+
+        await asyncio.gather(
+            *(AsyncOpenGaussSaver(conn).setup() for conn in connections)
+        )
+    finally:
+        for conn in connections:
+            await conn.close()
+
+    assert _column_exists(fresh_schema, "qa_session_turns", "turn_seq")
+
+
 def test_sync_fetch_blob_rows_filters_exact_versions_in_database(fresh_schema):
     with psycopg.connect(
         _base_dsn(),
@@ -345,6 +370,75 @@ async def test_async_saver_restores_latest_blob_value_end_to_end(fresh_schema):
         if "payload" in item.checkpoint["channel_values"]
     }
     assert historical_payloads == {("v1",), ("v2",), ("v3",)}
+
+
+async def test_concurrent_session_turns_merge_by_reservation_order(fresh_schema):
+    setup_conn = await psycopg.AsyncConnection.connect(
+        _base_dsn(),
+        autocommit=True,
+        prepare_threshold=0,
+        row_factory=dict_row,
+    )
+    await _set_search_path_async(setup_conn, fresh_schema)
+    saver = AsyncOpenGaussSaver(setup_conn)
+    await saver.setup()
+
+    connections = []
+    try:
+        for _ in range(4):
+            conn = await psycopg.AsyncConnection.connect(
+                _base_dsn(),
+                autocommit=True,
+                prepare_threshold=0,
+                row_factory=dict_row,
+            )
+            await _set_search_path_async(conn, fresh_schema)
+            connections.append(conn)
+
+        stores = [OpenGaussSessionHistoryStore(conn) for conn in connections]
+        reservations = await asyncio.gather(
+            *(
+                store.reserve_turn(
+                    engine="instant_search",
+                    session_id="shared-session",
+                    message_id=f"message-{index}",
+                    query=f"query {index}",
+                    history_limit=5,
+                )
+                for index, store in enumerate(stores, start=1)
+            )
+        )
+
+        assert len({item.sequence for item in reservations}) == 4
+        assert all(item.previous_queries == [] for item in reservations)
+
+        for index in (3, 1, 4, 2):
+            await stores[index - 1].finish_turn(
+                engine="instant_search",
+                session_id="shared-session",
+                message_id=f"message-{index}",
+                succeeded=True,
+                retention_limit=6,
+            )
+
+        next_turn = await stores[0].reserve_turn(
+            engine="instant_search",
+            session_id="shared-session",
+            message_id="message-5",
+            query="query 5",
+            history_limit=5,
+        )
+        query_by_sequence = {
+            item.sequence: f"query {index}"
+            for index, item in enumerate(reservations, start=1)
+        }
+        assert next_turn.previous_queries == [
+            query_by_sequence[sequence] for sequence in sorted(query_by_sequence)
+        ]
+    finally:
+        for conn in connections:
+            await conn.close()
+        await setup_conn.close()
 
 
 async def test_fast_engine_runs_two_rounds_with_opengauss_checkpoint(fresh_schema):

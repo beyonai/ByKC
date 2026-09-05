@@ -1,10 +1,11 @@
 """Tests for BaseQAEngine."""
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from by_qa.qa.common.base_engine import BaseQAEngine
+from by_qa.qa.common.base_engine import _SESSION_LOCKS, BaseQAEngine
 from by_qa.qa.common.exceptions import ValidationError
 from by_qa.qa.common.models import CoreInput, StreamEvent
 
@@ -36,6 +37,20 @@ class FilteredErrorEngine(BaseQAEngine):
         yield StreamEvent.error(error="boom", role="hidden_role")
 
 
+class ConcurrencyProbeEngine(ConcreteEngine):
+    active = 0
+    max_active = 0
+
+    async def _do_stream_search(
+        self, input_data, session_id, message_id, config, graph
+    ):
+        type(self).active += 1
+        type(self).max_active = max(type(self).max_active, type(self).active)
+        await asyncio.sleep(0.02)
+        type(self).active -= 1
+        yield StreamEvent.done(session_id=session_id, role="test")
+
+
 def _make_engine(config=None):
     with patch("by_qa.qa.common.base_engine.get_settings", return_value=object()):
         engine = ConcreteEngine(config=config)
@@ -47,6 +62,13 @@ def _make_engine(config=None):
 def _make_filtered_error_engine():
     with patch("by_qa.qa.common.base_engine.get_settings", return_value=object()):
         engine = FilteredErrorEngine()
+    engine._checkpointer = AsyncMock()
+    return engine
+
+
+def _make_concurrency_probe_engine():
+    with patch("by_qa.qa.common.base_engine.get_settings", return_value=object()):
+        engine = ConcurrencyProbeEngine()
     engine._checkpointer = AsyncMock()
     return engine
 
@@ -106,6 +128,46 @@ async def test_stream_search_passes_error_events_through_visible_role_filter():
     assert events[0].type.value == "error"
     assert events[0].data["error"] == "boom"
     assert events[0].role == "hidden_role"
+
+
+@pytest.mark.asyncio
+async def test_stream_search_serializes_same_checkpoint_thread_and_releases_lock():
+    ConcurrencyProbeEngine.active = 0
+    ConcurrencyProbeEngine.max_active = 0
+
+    async def consume(message_id):
+        engine = _make_concurrency_probe_engine()
+        return [
+            event
+            async for event in engine.stream_search(
+                CoreInput(query="hello", session_id="same", message_id=message_id)
+            )
+        ]
+
+    await asyncio.gather(consume("m1"), consume("m2"))
+
+    assert ConcurrencyProbeEngine.max_active == 1
+    assert "test_engine_same" not in _SESSION_LOCKS
+
+
+@pytest.mark.asyncio
+async def test_stream_search_allows_different_checkpoint_threads_in_parallel():
+    ConcurrencyProbeEngine.active = 0
+    ConcurrencyProbeEngine.max_active = 0
+
+    async def consume(session_id):
+        engine = _make_concurrency_probe_engine()
+        return [
+            event
+            async for event in engine.stream_search(
+                CoreInput(query="hello", session_id=session_id)
+            )
+        ]
+
+    await asyncio.gather(consume("one"), consume("two"))
+
+    assert ConcurrencyProbeEngine.max_active == 2
+    assert not _SESSION_LOCKS
 
 
 @pytest.mark.asyncio

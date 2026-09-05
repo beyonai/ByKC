@@ -1,5 +1,6 @@
 """Main graph builder for the instant-search capability."""
 
+from langchain_core.runnables import RunnableLambda
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
@@ -49,6 +50,20 @@ def route_worker_output(state: InstantSearchState) -> str:
     return NodeNames.SUBANSWER_AGGREGATOR.value
 
 
+def compact_worker_output(state: dict) -> dict:
+    """Remove retrieval bodies after they have been streamed to the caller."""
+    compact_answers = []
+    for answer in state.get("sub_answers", []):
+        compact_answer = dict(answer)
+        compact_answer["retrieval_results"] = []
+        compact_answer["sources"] = [
+            {key: value for key, value in source.items() if key != "content"}
+            for source in answer.get("sources", [])
+        ]
+        compact_answers.append(compact_answer)
+    return {"sub_answers": compact_answers}
+
+
 async def build_instant_search_graph(
     config: QAEngineConfig | dict | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
@@ -91,23 +106,31 @@ async def build_instant_search_graph(
 
     decomposer_override = _agent_override(AgentNames.DECOMPOSER)
     aggregator_override = _agent_override(AgentNames.AGGREGATOR)
+    # The parent graph checkpoints every completed subgraph node. Persisting each
+    # nested step as well duplicates large retrieval payloads and is not needed
+    # for turn-to-turn conversation history.
+    nested_checkpointer = False
 
     builder = StateGraph(InstantSearchState, context_schema=QARuntimeContext)
     decomposer_subgraph = await build_decomposer_subgraph(
         llm_service=llm_service,
         override=decomposer_override,
-        checkpointer=checkpointer,
+        checkpointer=nested_checkpointer,
     )
     builder.add_node(NodeNames.DECOMPOSER.value, decomposer_subgraph)
     builder.add_node(NodeNames.ROUTER.value, name2node[NodeNames.ROUTER])
     builder.add_node(NodeNames.FINAL_ANSWER.value, name2node[NodeNames.FINAL_ANSWER])
+    builder.add_node(NodeNames.STATE_CLEANUP.value, name2node[NodeNames.STATE_CLEANUP])
 
     single_hop_override = _agent_override(AgentNames.SINGLE_HOP)
     single_hop_override.tools = [*single_hop_override.tools, *dispatcher_tools]
     single_hop_worker = await build_single_hop_subgraph(
         agent_override=single_hop_override,
         llm_service=llm_service,
-        checkpointer=checkpointer,
+        checkpointer=nested_checkpointer,
+    )
+    single_hop_worker = single_hop_worker | RunnableLambda(
+        compact_worker_output, name="compact_single_hop_output"
     )
 
     multi_hop_override = _agent_override(AgentNames.MULTI_HOP)
@@ -117,7 +140,10 @@ async def build_instant_search_graph(
         agent_override=multi_hop_override,
         summary_override=multi_hop_summary_override,
         llm_service=llm_service,
-        checkpointer=checkpointer,
+        checkpointer=nested_checkpointer,
+    )
+    multi_hop_worker = multi_hop_worker | RunnableLambda(
+        compact_worker_output, name="compact_multi_hop_output"
     )
 
     builder.add_node(NodeNames.SINGLE_HOP_WORKER.value, single_hop_worker)
@@ -125,7 +151,7 @@ async def build_instant_search_graph(
     aggregator_subgraph = await build_aggregator_subgraph(
         llm_service=llm_service,
         override=aggregator_override,
-        checkpointer=checkpointer,
+        checkpointer=nested_checkpointer,
     )
     builder.add_node(NodeNames.SUBANSWER_AGGREGATOR.value, aggregator_subgraph)
 
@@ -153,8 +179,11 @@ async def build_instant_search_graph(
             NodeNames.SUBANSWER_AGGREGATOR.value: NodeNames.SUBANSWER_AGGREGATOR.value,
         },
     )
-    builder.add_edge(NodeNames.SUBANSWER_AGGREGATOR.value, END)
-    builder.add_edge(NodeNames.FINAL_ANSWER.value, END)
+    builder.add_edge(
+        NodeNames.SUBANSWER_AGGREGATOR.value, NodeNames.STATE_CLEANUP.value
+    )
+    builder.add_edge(NodeNames.FINAL_ANSWER.value, NodeNames.STATE_CLEANUP.value)
+    builder.add_edge(NodeNames.STATE_CLEANUP.value, END)
 
     if checkpointer is None:
         checkpointer = await create_checkpointer_async(settings)
@@ -164,6 +193,7 @@ async def build_instant_search_graph(
 __all__ = [
     "NodeNames",
     "build_instant_search_graph",
+    "compact_worker_output",
     "dispatch_subgraph_workers",
     "route_worker_output",
 ]

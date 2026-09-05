@@ -1,6 +1,7 @@
 """Tests for the instant QA engine."""
 
-from unittest.mock import MagicMock, patch
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -11,11 +12,29 @@ from by_qa.qa.engines.instant.engine import (
     InstantQAEngine,
     _extract_search_result_chunks,
 )
+from by_qa.qa.services.session_history import ReservedTurn
 
 
 def _mock_settings():
     settings = type("Settings", (), {})()
     return settings
+
+
+class _HistoryStore:
+    def __init__(self, previous_queries=None):
+        self.previous_queries = previous_queries or []
+        self.reserved = []
+        self.finished = []
+
+    async def reserve_turn(self, **kwargs):
+        self.reserved.append(kwargs)
+        return ReservedTurn(
+            sequence=len(self.reserved),
+            previous_queries=list(self.previous_queries),
+        )
+
+    async def finish_turn(self, **kwargs):
+        self.finished.append(kwargs)
 
 
 def test_extract_search_result_chunks_only_reads_artifact():
@@ -152,3 +171,68 @@ async def test_stream_search_sets_prefixed_thread_id_and_request_run_id():
     )
     assert captured["config"]["metadata"]["message_id"] == "msg-42"
     assert captured["config"]["run_id"] == "msg-42"
+
+
+@pytest.mark.asyncio
+async def test_opengauss_session_requests_run_concurrently_with_isolated_state():
+    history_store = _HistoryStore(previous_queries=["previous question"])
+    with patch(
+        "by_qa.qa.common.base_engine.get_settings", return_value=_mock_settings()
+    ):
+        engine = InstantQAEngine(config={"session_history_store": history_store})
+
+    mock_graph = MagicMock()
+    active = 0
+    max_active = 0
+    initial_messages = {}
+
+    async def mock_astream_events(initial_state, config=None, **kwargs):
+        nonlocal active, max_active
+        del kwargs
+        thread_id = config["configurable"]["thread_id"]
+        initial_messages[thread_id] = [
+            message.content for message in initial_state["messages"]
+        ]
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.02)
+        active -= 1
+        yield {
+            "event": "on_chain_end",
+            "name": "internal_probe",
+            "metadata": {},
+            "run_id": thread_id,
+            "parent_ids": [],
+            "data": {"output": {}},
+        }
+
+    mock_graph.astream_events = mock_astream_events
+    engine._graph = mock_graph
+    engine._checkpointer = AsyncMock()
+
+    async def consume(message_id, query):
+        return [
+            event
+            async for event in engine.stream_search(
+                CoreInput(
+                    query=query,
+                    session_id="same-session",
+                    message_id=message_id,
+                )
+            )
+        ]
+
+    await asyncio.gather(
+        consume("message-1", "query 1"), consume("message-2", "query 2")
+    )
+
+    assert max_active == 2
+    assert initial_messages == {
+        "instant_search_same-session_message-1": ["previous question", "query 1"],
+        "instant_search_same-session_message-2": ["previous question", "query 2"],
+    }
+    assert [item["message_id"] for item in history_store.finished] == [
+        "message-1",
+        "message-2",
+    ]
+    assert all(item["succeeded"] for item in history_store.finished)

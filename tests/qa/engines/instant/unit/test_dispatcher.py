@@ -43,6 +43,9 @@ def test_build_tools_returns_one_tool_per_supported_op():
         OPERATION_REGISTRY[OperationType.LIST_DIR].tool_name,
     }
     list_tool = next(tool for tool in tools if tool.name == "list_directory")
+    search_tool = next(tool for tool in tools if tool.name == "search_knowledge")
+    assert search_tool.response_format == "content_and_artifact"
+    assert list_tool.response_format == "content"
     assert {
         "metadata_field_list",
         "page_num",

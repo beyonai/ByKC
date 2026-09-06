@@ -169,7 +169,9 @@ class ServiceToolDispatcher:
             {"model_config": ConfigDict(extra="allow", populate_by_name=True)},
         )
 
-        async def _fn(runtime: ToolRuntime[QARuntimeContext], **kwargs: Any) -> str:
+        async def _fn(
+            runtime: ToolRuntime[QARuntimeContext], **kwargs: Any
+        ) -> str | tuple[str, Any]:
             camel_payload = spec.input_schema.model_validate(kwargs).model_dump(
                 by_alias=True, exclude_none=True
             )
@@ -185,11 +187,24 @@ class ServiceToolDispatcher:
             results = await dispatcher.dispatch(
                 spec.operation_type, camel_payload, runtime.context
             )
+            if spec.operation_type == OperationType.KNOWLEDGE_SEARCH:
+                # Keep structured retrieval data out of the intermediate JSON
+                # ToolMessage. The middleware adds indices and serializes the
+                # final model-facing content exactly once.
+                return "", results
             return json.dumps(results, ensure_ascii=False)
 
         _fn.__name__ = spec.tool_name
         _fn.__doc__ = spec.description
-        return tool(_fn, args_schema=extended_schema)
+        return tool(
+            _fn,
+            args_schema=extended_schema,
+            response_format=(
+                "content_and_artifact"
+                if spec.operation_type == OperationType.KNOWLEDGE_SEARCH
+                else "content"
+            ),
+        )
 
     async def _execute_request(self, request: DispatchRequest) -> dict[str, Any]:
         """Execute a single HTTP request (direct URL or service discovery)."""
@@ -472,8 +487,12 @@ class DispatcherToolMiddleware(AgentMiddleware):
             or request.runtime.config.get("metadata", {}).get("session_id")
             or "default"
         )
+        raw_results = getattr(result, "artifact", None)
         try:
-            raw_results: list[dict[str, Any]] = json.loads(result.content)
+            if not isinstance(raw_results, list):
+                raw_results = json.loads(result.content)
+            if not isinstance(raw_results, list):
+                raise TypeError("search result must be a list")
         except Exception:
             return Command(
                 update={

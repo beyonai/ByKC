@@ -1,7 +1,7 @@
 """Tests for instant QA middleware compatibility."""
 
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from langchain_core.messages import ToolMessage
@@ -115,6 +115,34 @@ async def test_dispatcher_middleware_injects_index_ids_for_search():
     assert tool_msg.artifact == indexed
     llm_content = json.loads(tool_msg.content)
     assert llm_content[0] == {"index_id": "3-0-1", "content": "doc-a"}
+
+
+async def test_dispatcher_middleware_uses_structured_search_artifact_without_decode():
+    search_tool_name = OPERATION_REGISTRY[OperationType.KNOWLEDGE_SEARCH].tool_name
+    raw = [{"content": "doc-a", "score": 0.9}]
+    request, fake_result = _make_tool_call_request(
+        search_tool_name, {"sub_query_idx": 2, "current_step": 1}, []
+    )
+    fake_result.content = ""
+    fake_result.artifact = raw
+    middleware = DispatcherToolMiddleware(
+        index_id_fn=lambda sub_query_idx, step, item_id: (
+            f"{sub_query_idx}-{step}-{item_id}"
+        ),
+        follow_up_prompt="继续检索",
+    )
+
+    with patch(
+        "by_qa.qa.tools.knowledge_tools.json.loads",
+        side_effect=AssertionError("structured artifacts must not be decoded"),
+    ):
+        cmd = await middleware.awrap_tool_call(
+            request, AsyncMock(return_value=fake_result)
+        )
+
+    indexed = cmd.update["retrieval_results"]
+    assert indexed == [{"content": "doc-a", "score": 0.9, "index_id": "2-1-1"}]
+    assert cmd.update["messages"][0].artifact == indexed
 
 
 async def test_dispatcher_middleware_multi_hop_index_ids():

@@ -82,6 +82,9 @@ class KnowledgeBuildAcceptanceRepository:
             """,
             params,
         )
+        # openGauss 6.0.3 (A compatibility) rejects LEFT JOIN LATERAL.
+        # Select each matching task's primary key before joining its fields;
+        # this preserves top-one ordering and files without a matching task.
         await cursor.execute(
             f"""
             CREATE TEMP TABLE file_build_acceptance_snapshot ON COMMIT DELETE ROWS AS
@@ -128,16 +131,16 @@ class KnowledgeBuildAcceptanceRepository:
                     ELSE 'ACCEPTED'
                 END AS acceptance
             FROM candidates candidate
-            LEFT JOIN LATERAL (
-                SELECT task.kid, task.batch_id
+            LEFT JOIN knowledge_build_task active ON active.kid = (
+                SELECT task.kid
                 FROM knowledge_build_task task
                 WHERE task.fs_entry_id = candidate.fs_entry_id
                   AND task.status IN ('pending', 'running')
                 ORDER BY task.created_at DESC, task.kid DESC
                 LIMIT 1
-            ) active ON TRUE
-            LEFT JOIN LATERAL (
-                SELECT task.kid, task.status
+            )
+            LEFT JOIN knowledge_build_task reusable ON reusable.kid = (
+                SELECT task.kid
                 FROM knowledge_build_task task
                 WHERE task.fs_entry_id = candidate.fs_entry_id
                   AND task.input_checksum = candidate.input_checksum
@@ -183,7 +186,7 @@ class KnowledgeBuildAcceptanceRepository:
                   )
                 ORDER BY task.created_at DESC, task.kid DESC
                 LIMIT 1
-            ) reusable ON TRUE
+            )
             """,
             params,
         )

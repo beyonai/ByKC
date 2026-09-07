@@ -145,6 +145,31 @@ async def test_directory_acceptance_reuses_and_supersedes_by_stable_input():
         assert first["reusedCount"] == 0
         assert first["skippedCount"] == 1
 
+        connection = await connection_factory()
+        try:
+            cursor = connection.cursor()
+            await cursor.execute(
+                """
+                SELECT extra_params
+                FROM knowledge_build_batch
+                WHERE batch_id = %(batch_id)s
+                """,
+                {"batch_id": first["batchId"]},
+            )
+            assert (await cursor.fetchone())["extra_params"] == {}
+            await cursor.execute(
+                """
+                SELECT extra_params
+                FROM knowledge_build_task
+                WHERE batch_id = %(batch_id)s
+                ORDER BY kid
+                """,
+                {"batch_id": first["batchId"]},
+            )
+            assert [row["extra_params"] for row in await cursor.fetchall()] == [{}, {}]
+        finally:
+            await connection.close()
+
         second = await service.accept(
             FileToMarkdownIndexRequest(knCode=str(knowledge_base_id), filePath="/docs")
         )

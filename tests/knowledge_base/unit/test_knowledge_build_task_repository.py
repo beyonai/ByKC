@@ -168,6 +168,7 @@ async def test_create_background_task_persists_stable_input_and_profile():
         build_profile={"profileVersion": 1, "embedding": {"model": "m"}},
         build_profile_hash="a" * 64,
         priority=100,
+        extra_params={"trace": "task-31"},
     )
 
     assert row == {"kid": 31}
@@ -180,6 +181,8 @@ async def test_create_background_task_persists_stable_input_and_profile():
     assert params["input_checksum"] == "sha256:a"
     assert params["build_profile_hash"] == "a" * 64
     assert params["priority"] == 100
+    assert params["extra_params"] == '{"trace":"task-31"}'
+    assert "extra_params" in sql
 
 
 async def test_create_inline_task_requires_entity_origin_and_parent():
@@ -206,6 +209,7 @@ async def test_create_inline_task_requires_entity_origin_and_parent():
     assert params["parent_semantic_task_id"] == 99
     assert params["batch_id"] is None
     assert params["status"] == "running"
+    assert params["extra_params"] == "{}"
 
 
 async def test_find_reusable_task_uses_only_stable_identity_fields():

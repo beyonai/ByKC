@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from typing import Any
 
 
@@ -21,6 +23,7 @@ class KnowledgeBuildBatchRepository:
         accepted_count: int,
         reused_count: int,
         acceptance_skipped_count: int,
+        extra_params: Mapping[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Persist one fully counted acceptance result."""
         self._validate_counts(
@@ -50,6 +53,7 @@ class KnowledgeBuildBatchRepository:
                 acceptance_skipped_count,
                 completed_count,
                 version,
+                extra_params,
                 completed_at,
                 created_at,
                 updated_at
@@ -68,6 +72,7 @@ class KnowledgeBuildBatchRepository:
                 %(acceptance_skipped_count)s,
                 0,
                 0,
+                %(extra_params)s::jsonb,
                 CASE WHEN %(completed)s THEN NOW() ELSE NULL END,
                 NOW(),
                 NOW()
@@ -85,6 +90,7 @@ class KnowledgeBuildBatchRepository:
                 "accepted_count": accepted_count,
                 "reused_count": reused_count,
                 "acceptance_skipped_count": acceptance_skipped_count,
+                "extra_params": self._json_value(extra_params),
                 "completed": accepted_count == 0,
             },
         )
@@ -206,3 +212,7 @@ class KnowledgeBuildBatchRepository:
             raise ValueError("candidate_count invariant is not satisfied")
         if eligible_count != accepted_count + reused_count:
             raise ValueError("eligible_count invariant is not satisfied")
+
+    @staticmethod
+    def _json_value(value: Mapping[str, Any] | None) -> str:
+        return json.dumps(dict(value or {}), ensure_ascii=False)

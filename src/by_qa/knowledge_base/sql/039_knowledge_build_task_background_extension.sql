@@ -11,6 +11,7 @@ ALTER TABLE knowledge_build_task
     ADD COLUMN current_stage varchar(32) NULL,
     ADD COLUMN progress smallint NOT NULL DEFAULT 0,
     ADD COLUMN priority integer NOT NULL DEFAULT 0,
+    ADD COLUMN extra_params jsonb NOT NULL DEFAULT '{}'::jsonb,
     ADD COLUMN result_payload jsonb NULL,
     ADD COLUMN error_code varchar(64) NULL,
     ADD COLUMN failure_kind varchar(32) NULL,

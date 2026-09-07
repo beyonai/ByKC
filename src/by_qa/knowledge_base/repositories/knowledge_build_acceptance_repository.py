@@ -31,6 +31,7 @@ class KnowledgeBuildAcceptanceRepository:
         build_profile_hash: str,
         force: bool,
         priority: int,
+        extra_params: Mapping[str, Any] | None = None,
         preview_limit: int = 20,
     ) -> dict[str, Any]:
         """Accept one request without materializing its candidates in Python."""
@@ -55,6 +56,7 @@ class KnowledgeBuildAcceptanceRepository:
             "build_profile_hash": build_profile_hash,
             "force": force,
             "priority": priority,
+            "extra_params": self._canonical_json(extra_params or {}),
             "preview_limit": preview_limit,
         }
         # Overlapping requests acquire file-scoped locks in stable order. This
@@ -191,7 +193,8 @@ class KnowledgeBuildAcceptanceRepository:
                 batch_id, knowledge_base_id, task_type, scope,
                 target_path_snapshot, status, candidate_count, eligible_count,
                 accepted_count, reused_count, acceptance_skipped_count,
-                completed_count, version, completed_at, created_at, updated_at
+                completed_count, version, extra_params, completed_at,
+                created_at, updated_at
             )
             SELECT
                 %(batch_id)s, %(knowledge_base_id)s, 'FILE_BUILD', %(scope)s,
@@ -204,6 +207,7 @@ class KnowledgeBuildAcceptanceRepository:
                 counts.skipped_count,
                 0,
                 0,
+                %(extra_params)s::jsonb,
                 CASE WHEN counts.accepted_count = 0 THEN NOW() ELSE NULL END,
                 NOW(),
                 NOW()
@@ -292,7 +296,8 @@ class KnowledgeBuildAcceptanceRepository:
                 execution_mode, parent_semantic_task_id, file_path_snapshot,
                 input_checksum, input_is_deleted, build_profile,
                 build_profile_hash, status, current_step, current_stage,
-                progress, priority, outcome_uncertain, created_at, updated_at
+                progress, priority, extra_params, outcome_uncertain,
+                created_at, updated_at
             )
             SELECT
                 %(knowledge_base_id)s,
@@ -311,6 +316,7 @@ class KnowledgeBuildAcceptanceRepository:
                 'accepted',
                 0,
                 %(priority)s,
+                %(extra_params)s::jsonb,
                 FALSE,
                 NOW(),
                 NOW()

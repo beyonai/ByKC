@@ -38,12 +38,15 @@ async def test_empty_or_reused_batch_is_immediately_completed():
         accepted_count=0,
         reused_count=2,
         acceptance_skipped_count=0,
+        extra_params={"trace": "batch-1"},
     )
 
     assert row == {"batch_id": "fb-1"}
     _, params = cursor.executed[0]
     assert params["status"] == "completed"
     assert params["completed"] is True
+    assert params["extra_params"] == '{"trace": "batch-1"}'
+    assert "extra_params" in cursor.executed[0][0]
 
 
 async def test_non_empty_batch_starts_pending_and_advances_atomically():
@@ -70,6 +73,7 @@ async def test_non_empty_batch_starts_pending_and_advances_atomically():
     _, create_params = cursor.executed[0]
     advance_sql, advance_params = cursor.executed[1]
     assert create_params["status"] == "pending"
+    assert create_params["extra_params"] == "{}"
     assert "completed_count + %(completed_delta)s" in advance_sql
     assert "accepted_count" in advance_sql
     assert advance_params == {"batch_id": "fb-2", "completed_delta": 1}

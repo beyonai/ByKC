@@ -217,6 +217,7 @@ file_id + input_checksum + input_is_deleted + build_profile_hash
 | `acceptance_skipped_count` | bigint | 受理前跳过数；与 task 终态聚合区分 |
 | `completed_count` | bigint | 已终态的新建任务数 |
 | `version` | bigint | 每次终态推进递增 |
+| `extra_params` | jsonb | 保留扩展参数；当前请求固定写入空对象，不对外返回 |
 | `created_at` | timestamptz | 创建时间 |
 | `completed_at` | timestamptz | 完成时间 |
 | `updated_at` | timestamptz | 更新时间 |
@@ -247,6 +248,7 @@ Batch 不使用 `FAILED`。全部新建任务进入终态后为 `COMPLETED`；�
 | `current_stage` | varchar(32) | 当前阶段 |
 | `progress` | smallint | 阶段里程碑 |
 | `priority` | integer | 服务端调度优先级 |
+| `extra_params` | jsonb | 保留扩展参数；当前请求固定写入空对象，不对外返回 |
 | `result_payload` | jsonb | 终态结果 |
 | `error_code` | varchar(64) | 终态原因码 |
 | `error_message` | text | 截断、脱敏后的错误信息 |

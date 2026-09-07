@@ -13,6 +13,7 @@ CREATE TABLE knowledge_build_batch (
     acceptance_skipped_count bigint NOT NULL DEFAULT 0,
     completed_count bigint NOT NULL DEFAULT 0,
     version bigint NOT NULL DEFAULT 0,
+    extra_params jsonb NOT NULL DEFAULT '{}'::jsonb,
     completed_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT NOW(),
     updated_at timestamptz NOT NULL DEFAULT NOW(),

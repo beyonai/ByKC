@@ -17,8 +17,10 @@ def test_file_build_schema_is_added_only_by_incremental_migrations():
 
     assert "CREATE TABLE knowledge_build_batch" in batch
     assert "acceptance_skipped_count" in batch
+    assert "extra_params jsonb NOT NULL DEFAULT '{}'::jsonb" in batch
     assert "ALTER TABLE knowledge_build_task" in extension
     assert "ADD COLUMN build_profile jsonb" in extension
+    assert "ADD COLUMN extra_params jsonb NOT NULL DEFAULT '{}'::jsonb" in extension
     assert "{{ embedding_table_name }}" in backfill
     assert '"legacy":true' in backfill
     assert "MIGRATION_INTERRUPTED" in backfill

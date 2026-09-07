@@ -182,6 +182,7 @@ class KnowledgeBuildTaskRepository:
         status: str,
         current_step: str | None,
         file_path_snapshot: str = "",
+        extra_params: Mapping[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Create a legacy-compatible task while old callers are being migrated."""
         normalized_status = self._normalize_status(status, allow_legacy=True)
@@ -208,6 +209,7 @@ class KnowledgeBuildTaskRepository:
                 current_stage,
                 progress,
                 priority,
+                extra_params,
                 outcome_uncertain,
                 worker_id,
                 lease_token,
@@ -235,6 +237,7 @@ class KnowledgeBuildTaskRepository:
                 %(current_stage)s,
                 %(progress)s,
                 0,
+                %(extra_params)s::jsonb,
                 false,
                 CASE WHEN %(running)s THEN 'legacy-background-task' ELSE NULL END,
                 %(lease_token)s,
@@ -260,6 +263,7 @@ class KnowledgeBuildTaskRepository:
                 "current_step": current_step,
                 "current_stage": current_stage,
                 "progress": 100 if terminal else _STAGE_PROGRESS[current_stage],
+                "extra_params": self._json_value(extra_params or {}),
                 "running": running,
                 "terminal": terminal,
                 "lease_token": lease_token,
@@ -280,6 +284,7 @@ class KnowledgeBuildTaskRepository:
         build_profile: Mapping[str, Any],
         build_profile_hash: str,
         priority: int,
+        extra_params: Mapping[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Create one pending task owned by an external Build Batch."""
         return await self._create_protocol_task(
@@ -298,6 +303,7 @@ class KnowledgeBuildTaskRepository:
             status="pending",
             current_stage="accepted",
             priority=priority,
+            extra_params=extra_params,
         )
 
     async def create_inline_task(
@@ -313,6 +319,7 @@ class KnowledgeBuildTaskRepository:
         input_is_deleted: bool,
         build_profile: Mapping[str, Any],
         build_profile_hash: str,
+        extra_params: Mapping[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """Create a running task synchronously owned by an Entity task."""
         normalized_origin = origin.strip().upper()
@@ -336,6 +343,7 @@ class KnowledgeBuildTaskRepository:
             status="running",
             current_stage="accepted",
             priority=0,
+            extra_params=extra_params,
         )
 
     async def update_task(
@@ -955,6 +963,7 @@ class KnowledgeBuildTaskRepository:
         status: str,
         current_stage: str,
         priority: int,
+        extra_params: Mapping[str, Any] | None,
     ) -> dict[str, Any] | None:
         normalized_status = self._normalize_status(status)
         normalized_stage = self._normalize_stage(current_stage)
@@ -983,6 +992,7 @@ class KnowledgeBuildTaskRepository:
                 current_stage,
                 progress,
                 priority,
+                extra_params,
                 outcome_uncertain,
                 started_at,
                 created_at,
@@ -1005,6 +1015,7 @@ class KnowledgeBuildTaskRepository:
                 %(current_stage)s,
                 %(progress)s,
                 %(priority)s,
+                %(extra_params)s::jsonb,
                 false,
                 CASE
                     WHEN %(status)s::varchar(32) = 'running'::varchar(32)
@@ -1033,6 +1044,7 @@ class KnowledgeBuildTaskRepository:
                 "current_stage": normalized_stage,
                 "progress": _STAGE_PROGRESS[normalized_stage],
                 "priority": priority,
+                "extra_params": self._json_value(extra_params or {}),
             },
         )
         return await cursor.fetchone()

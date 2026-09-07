@@ -6,7 +6,14 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Protocol
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 
 class _ApiModel(BaseModel):
@@ -54,6 +61,7 @@ class ProcessingEligibility(StrEnum):
 class ProcessingTaskType(StrEnum):
     ENTITY_DISCOVERY = "ENTITY_DISCOVERY"
     DOCUMENT_ENRICH = "DOCUMENT_ENRICH"
+    FILE_BUILD = "FILE_BUILD"
 
 
 class ProcessingTaskStatus(StrEnum):
@@ -63,6 +71,7 @@ class ProcessingTaskStatus(StrEnum):
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
     SKIPPED = "SKIPPED"
+    UNSUPPORTED = "UNSUPPORTED"
 
 
 class ProcessingScope(StrEnum):
@@ -72,6 +81,7 @@ class ProcessingScope(StrEnum):
 
 
 class ProcessingBatchStatus(StrEnum):
+    PENDING = "PENDING"
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
 
@@ -202,6 +212,16 @@ class ProcessingTaskStatusRequest(_ApiModel):
         min_length=1,
         validation_alias=AliasChoices("knCode", "kb_code"),
     )
+    task_id: int | None = Field(
+        default=None,
+        gt=0,
+        validation_alias=AliasChoices("taskId", "task_id"),
+    )
+    file_id: int | None = Field(
+        default=None,
+        gt=0,
+        validation_alias=AliasChoices("fileId", "file_id"),
+    )
     file_path: str | None = Field(
         default=None,
         validation_alias=AliasChoices("filePath", "file_path"),
@@ -250,6 +270,12 @@ class ProcessingTaskStatusRequest(_ApiModel):
         if value is not None and len(set(value)) != len(value):
             raise ValueError("statusList must not contain duplicate values")
         return value
+
+    @model_validator(mode="after")
+    def validate_exact_task_query(self) -> "ProcessingTaskStatusRequest":
+        if self.task_id is not None and self.task_type is None:
+            raise ValueError("taskType is required when taskId is provided")
+        return self
 
 
 class ProcessingBatchStatusRequest(_ApiModel):
@@ -368,7 +394,32 @@ class ProcessingTaskItem(_ApiModel):
     current_stage: str | None = Field(default=None, serialization_alias="currentStage")
     progress: int | None = Field(default=None, ge=0, le=100)
     file_id: str | None = Field(serialization_alias="fileId")
-    file_path: str = Field(serialization_alias="filePath")
+    file_path: str | None = Field(default=None, serialization_alias="filePath")
+    file_path_snapshot: str | None = Field(
+        default=None, serialization_alias="filePathSnapshot"
+    )
+    origin: str | None = None
+    execution_mode: str | None = Field(
+        default=None, serialization_alias="executionMode"
+    )
+    parent_semantic_task_id: str | None = Field(
+        default=None, serialization_alias="parentSemanticTaskId"
+    )
+    input_checksum: str | None = Field(
+        default=None, serialization_alias="inputChecksum"
+    )
+    input_is_deleted: bool | None = Field(
+        default=None, serialization_alias="inputIsDeleted"
+    )
+    build_profile: dict[str, Any] | None = Field(
+        default=None, serialization_alias="buildProfile"
+    )
+    build_profile_hash: str | None = Field(
+        default=None, serialization_alias="buildProfileHash"
+    )
+    outcome_uncertain: bool | None = Field(
+        default=None, serialization_alias="outcomeUncertain"
+    )
     index_version: str | None = Field(default=None, serialization_alias="indexVersion")
     created_at: datetime = Field(serialization_alias="createdAt")
     started_at: datetime | None = Field(default=None, serialization_alias="startedAt")
@@ -393,6 +444,7 @@ class ProcessingBatchStatusResult(_ApiModel):
     kb_code: str = Field(serialization_alias="knCode")
     task_type: ProcessingTaskType = Field(serialization_alias="taskType")
     scope: ProcessingScope
+    target_path: str | None = Field(default=None, serialization_alias="targetPath")
     status: ProcessingBatchStatus
     version: int = Field(ge=0)
     total_count: int = Field(ge=0, serialization_alias="totalCount")
@@ -402,6 +454,24 @@ class ProcessingBatchStatusResult(_ApiModel):
     succeeded_count: int = Field(ge=0, serialization_alias="succeededCount")
     failed_count: int = Field(ge=0, serialization_alias="failedCount")
     skipped_count: int = Field(ge=0, serialization_alias="skippedCount")
+    unsupported_count: int = Field(
+        default=0, ge=0, serialization_alias="unsupportedCount"
+    )
+    candidate_count: int | None = Field(
+        default=None, ge=0, serialization_alias="candidateCount"
+    )
+    eligible_count: int | None = Field(
+        default=None, ge=0, serialization_alias="eligibleCount"
+    )
+    accepted_count: int | None = Field(
+        default=None, ge=0, serialization_alias="acceptedCount"
+    )
+    reused_count: int | None = Field(
+        default=None, ge=0, serialization_alias="reusedCount"
+    )
+    acceptance_skipped_count: int | None = Field(
+        default=None, ge=0, serialization_alias="acceptanceSkippedCount"
+    )
     progress: int = Field(ge=0, le=100)
     created_at: datetime = Field(serialization_alias="createdAt")
     completed_at: datetime | None = Field(

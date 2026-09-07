@@ -1,0 +1,21 @@
+ALTER TABLE knowledge_build_task
+    ADD COLUMN batch_id varchar(64) NULL
+        REFERENCES knowledge_build_batch(batch_id) ON DELETE CASCADE,
+    ADD COLUMN origin varchar(32) NULL,
+    ADD COLUMN execution_mode varchar(16) NULL,
+    ADD COLUMN file_path_snapshot text NULL,
+    ADD COLUMN input_checksum varchar(128) NULL,
+    ADD COLUMN input_is_deleted boolean NULL,
+    ADD COLUMN build_profile jsonb NULL,
+    ADD COLUMN build_profile_hash varchar(64) NULL,
+    ADD COLUMN current_stage varchar(32) NULL,
+    ADD COLUMN progress smallint NOT NULL DEFAULT 0,
+    ADD COLUMN priority integer NOT NULL DEFAULT 0,
+    ADD COLUMN result_payload jsonb NULL,
+    ADD COLUMN error_code varchar(64) NULL,
+    ADD COLUMN failure_kind varchar(32) NULL,
+    ADD COLUMN outcome_uncertain boolean NOT NULL DEFAULT false,
+    ADD COLUMN worker_id varchar(160) NULL,
+    ADD COLUMN lease_token varchar(64) NULL,
+    ADD COLUMN heartbeat_at timestamptz NULL,
+    ADD COLUMN lease_expires_at timestamptz NULL;

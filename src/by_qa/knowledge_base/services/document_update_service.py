@@ -13,7 +13,6 @@ from typing import Any, Callable
 
 from by_qa.core import logger
 from by_qa.knowledge_base.api.schemas import DocumentUpdateRequest
-from by_qa.knowledge_base.build_status import BUILD_STATUS_RUNNING
 from by_qa.knowledge_base.infrastructure.storage import StorageLocation
 from by_qa.knowledge_base.services.entry_metadata import (
     merge_entry_metadata,
@@ -71,6 +70,7 @@ class DocumentUpdateService:
     storage_provider: Any
     update_timeline_repository: Any
     markdown_update_summary_service: Any
+    file_build_mutation_service: Any | None = None
 
     MAX_MARKDOWN_CONTEXT_CHARS = 12_000
     FIXED_SUMMARY = "文件内容已更新。"
@@ -100,6 +100,9 @@ class DocumentUpdateService:
         original_location: StorageLocation | None = None
         wrote_original = False
         committed = False
+        content_changed = False
+        terminated_build_tasks: list[dict[str, Any]] = []
+        completed_build_batch_ids: list[str] = []
         logger.info(
             "document update started: kb_code=%s file_path=%s update_run_id=%s generated_assertion_count=%s skip_if_duplicate=%s process_front_matter=%s",
             request.kb_code,
@@ -140,16 +143,6 @@ class DocumentUpdateService:
                     f"expected {request.refer_signature}, "
                     f"current {file_row.get('checksum') or ''}"
                 )
-            latest_task = (
-                await self.knowledge_build_task_repository.get_latest_by_fs_entry_id(
-                    cursor, fs_entry_id=fs_entry_id
-                )
-            )
-            if latest_task and latest_task.get("status") == BUILD_STATUS_RUNNING:
-                raise KnowledgeBaseValidationError(
-                    f"File is being built and cannot be updated: {request.file_path}"
-                )
-
             original_location = self._original_location(file_row, request.file_path)
             old_bytes = await self.storage_provider.read(original_location)
             mime_type = self._guess_mime_type(normalized_path)
@@ -203,6 +196,18 @@ class DocumentUpdateService:
             )
 
             checksum = hashlib.sha256(final_bytes).hexdigest()
+            content_changed = checksum != str(file_row.get("checksum") or "")
+            if content_changed and self.file_build_mutation_service is not None:
+                (
+                    terminated_build_tasks,
+                    completed_build_batch_ids,
+                ) = await self.file_build_mutation_service.terminate_active(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    fs_entry_ids=[fs_entry_id],
+                    error_code="INPUT_STALE",
+                    error_message="Source checksum changed during file update",
+                )
             await self.knowledge_fs_entry_repository.lock_checksum_scope(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
@@ -230,21 +235,21 @@ class DocumentUpdateService:
             )
             wrote_original = True
 
-            await self.knowledge_item_chunk_repository.delete_for_fs_entry(
-                cursor, fs_entry_id=fs_entry_id
-            )
-            await self.retrieval_projection_repository.delete_for_fs_entry_ids(
-                cursor, knowledge_base_id=knowledge_base_id, fs_entry_ids=[fs_entry_id]
-            )
-            await self.knowledge_build_task_repository.delete_for_fs_entry_id(
-                cursor, fs_entry_id=fs_entry_id
-            )
-            await self.knowledge_fetch_cache_repository.delete_cache_entries_for_fs_entry_ids(
-                cursor, fs_entry_ids=[fs_entry_id]
-            )
-            await self.knowledge_fs_entry_repository.clear_markdown_metadata(
-                cursor, fs_entry_id=fs_entry_id
-            )
+            if content_changed:
+                await self.knowledge_item_chunk_repository.delete_for_fs_entry(
+                    cursor, fs_entry_id=fs_entry_id
+                )
+                await self.retrieval_projection_repository.delete_for_fs_entry_ids(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    fs_entry_ids=[fs_entry_id],
+                )
+                await self.knowledge_fetch_cache_repository.delete_cache_entries_for_fs_entry_ids(
+                    cursor, fs_entry_ids=[fs_entry_id]
+                )
+                await self.knowledge_fs_entry_repository.clear_markdown_metadata(
+                    cursor, fs_entry_id=fs_entry_id
+                )
             front_matter = (
                 parse_front_matter(request.file_content)
                 if is_markdown and request.process_front_matter
@@ -296,9 +301,13 @@ class DocumentUpdateService:
                 raise RuntimeError("failed to create document update timeline event")
             await connection.commit()
             committed = True
+            if self.file_build_mutation_service is not None:
+                await self.file_build_mutation_service.publish(
+                    terminated_build_tasks, completed_build_batch_ids
+                )
 
             old_sidecar = self._markdown_location(file_row)
-            if old_sidecar is not None:
+            if content_changed and old_sidecar is not None:
                 await self.storage_provider.delete_quietly(old_sidecar)
             timeline_id = self._row_id(timeline)
             logger.info(

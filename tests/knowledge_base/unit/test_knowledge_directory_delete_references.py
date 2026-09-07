@@ -80,11 +80,27 @@ class FakeReferenceRepository:
         return []
 
 
+class FakeBuildMutationService:
+    def __init__(self, connection):
+        self.connection = connection
+        self.terminated = []
+        self.published = []
+
+    async def terminate_active(self, cursor, **kwargs):
+        self.terminated.append(kwargs)
+        return ([{"kid": 81}], ["fb-1"])
+
+    async def publish(self, tasks, completed_batch_ids):
+        assert self.connection.committed == 1
+        self.published.append((tasks, completed_batch_ids))
+
+
 @pytest.mark.asyncio
 async def test_delete_directory_removes_outgoing_and_breaks_inbound_references():
     connection = FakeConnection()
     fs_repo = FakeFsEntryRepository()
     reference_repo = FakeReferenceRepository()
+    build_mutation = FakeBuildMutationService(connection)
 
     async def connection_factory():
         return connection
@@ -94,6 +110,7 @@ async def test_delete_directory_removes_outgoing_and_breaks_inbound_references()
         knowledge_base_repository=FakeKnowledgeBaseRepository(),
         knowledge_fs_entry_repository=fs_repo,
         knowledge_file_reference_repository=reference_repo,
+        file_build_mutation_service=build_mutation,
     )
 
     await service.delete_directory(
@@ -107,3 +124,12 @@ async def test_delete_directory_removes_outgoing_and_breaks_inbound_references()
     assert reference_repo.calls == ["delete_outgoing", "mark_targets_deleted"]
     assert fs_repo.soft_deleted == [(1, 10)]
     assert connection.committed == 1
+    assert build_mutation.terminated == [
+        {
+            "knowledge_base_id": 1,
+            "fs_entry_ids": [10, 11, 12],
+            "error_code": "SOURCE_DELETED",
+            "error_message": "Source directory was deleted",
+        }
+    ]
+    assert build_mutation.published == [([{"kid": 81}], ["fb-1"])]

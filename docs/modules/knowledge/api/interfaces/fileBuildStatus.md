@@ -1,8 +1,12 @@
 # fileBuildStatus
 
+> 新调用方应优先使用带 `taskId` 的 [processingTaskStatus](processingTaskStatus.md)。
+
 ## 功能描述
 
-查询指定文件知识构建任务的当前状态和阶段进度。调用方可用它轮询解析、分块、向量化及索引流程是否完成或失败。
+按当前文件路径查询与文件当前 checksum、删除态一致的最新一次知识构建任务摘要。该接口保留旧的状态和阶段值，并增加 `skipped` 与 `errorCode`；路径只用于把当前文件解析为稳定 `fileId`，不用于关联历史任务。
+
+文件内容更新后，历史任务仍保留用于审计，但不再表示当前文件已经构建。此时若尚未重新构建，接口返回 `build task not found` 失败信封；重新构建完成后恢复返回 `complete`。
 
 ## 接口信息
 
@@ -20,14 +24,12 @@
 
 > 服务本身未定义额外的业务认证 Header；如由网关统一认证，按部署环境要求携带。
 
-文档构建状态查询。复用 `FileController.fileListByUser` 对应的状态查询链路。
-
-请求体：`application/json`
+## 请求参数
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `knCode` | string | 是 | 知识库编码，对应 `agt_resource.resource_id` |
-| `filePath` | string | 是 | 文件全路径，最后一级为文件名 |
+| `knCode` | string | 是 | 知识库编码 |
+| `filePath` | string | 是 | 当前文件完整路径 |
 
 ## 请求示例
 
@@ -45,51 +47,23 @@
   "resultCode": "0",
   "resultMsg": "success",
   "resultObject": {
-    "status": "running",
+    "taskId": "12001",
+    "fileId": "2048",
+    "status": "skipped",
     "currentStep": "vectorizing",
+    "errorCode": "INPUT_STALE",
     "statusDict": [
-      {
-        "standDisplayValue": "已完成",
-        "standCode": "complete",
-        "standDisplayValueEn": "complete"
-      },
-      {
-        "standDisplayValue": "失败",
-        "standCode": "failed",
-        "standDisplayValueEn": "failed"
-      },
-      {
-        "standDisplayValue": "构建中",
-        "standCode": "running",
-        "standDisplayValueEn": "running"
-      },
-      {
-        "standDisplayValue": "不支持构建",
-        "standCode": "unsupported",
-        "standDisplayValueEn": "unsupported"
-      }
+      {"standCode": "complete", "standDisplayValue": "已完成", "standDisplayValueEn": "complete"},
+      {"standCode": "failed", "standDisplayValue": "失败", "standDisplayValueEn": "failed"},
+      {"standCode": "running", "standDisplayValue": "构建中", "standDisplayValueEn": "running"},
+      {"standCode": "skipped", "standDisplayValue": "已跳过", "standDisplayValueEn": "skipped"},
+      {"standCode": "unsupported", "standDisplayValue": "不支持构建", "standDisplayValueEn": "unsupported"}
     ],
     "stepDict": [
-      {
-        "standDisplayValue": "原始文件转 Markdown",
-        "standCode": "markdown",
-        "standDisplayValueEn": "markdown"
-      },
-      {
-        "standDisplayValue": "文档切片",
-        "standCode": "chunking",
-        "standDisplayValueEn": "chunking"
-      },
-      {
-        "standDisplayValue": "切片向量化",
-        "standCode": "vectorizing",
-        "standDisplayValueEn": "vectorizing"
-      },
-      {
-        "standDisplayValue": "已完成",
-        "standCode": "complete",
-        "standDisplayValueEn": "complete"
-      }
+      {"standCode": "markdown", "standDisplayValue": "原始文件转 Markdown", "standDisplayValueEn": "markdown"},
+      {"standCode": "chunking", "standDisplayValue": "文档切片", "standDisplayValueEn": "chunking"},
+      {"standCode": "vectorizing", "standDisplayValue": "切片向量化", "standDisplayValueEn": "vectorizing"},
+      {"standCode": "complete", "standDisplayValue": "已完成", "standDisplayValueEn": "complete"}
     ]
   }
 }
@@ -99,39 +73,41 @@
 
 | 字段路径 | 类型 | 必返 | 说明 |
 | --- | --- | --- | --- |
-| `resultCode` | string | 是 | 业务结果码；`0` 表示成功 |
+| `resultCode` | string | 是 | `0` 表示查询成功 |
 | `resultMsg` | string | 是 | 业务结果说明 |
-| `resultObject` | object | 是 | 最新构建任务摘要 |
-| `resultObject.status` | string | 是 | 构建状态 |
-| `resultObject.currentStep` | string | 是 | 当前构建环节 |
-| `resultObject.statusDict` | array[object] | 是 | 构建状态字典 |
+| `resultObject` | object | 是 | 与当前文件内容匹配的最新 Build task 摘要 |
+| `resultObject.taskId` | string | 是 | 最新 Build task ID |
+| `resultObject.fileId` | string | 是 | 稳定文件 ID |
+| `resultObject.status` | string | 是 | 兼容构建状态 |
+| `resultObject.currentStep` | string | 是 | 兼容构建阶段 |
+| `resultObject.errorCode` | string \| null | 是 | 失败、跳过或不支持原因；其他状态为 `null` |
+| `resultObject.statusDict` | array[object] | 是 | 状态字典 |
 | `resultObject.statusDict[].standCode` | string | 是 | 状态代码 |
-| `resultObject.statusDict[].standDisplayValue` | string | 是 | 状态中文展示值 |
-| `resultObject.statusDict[].standDisplayValueEn` | string | 是 | 状态英文展示值 |
-| `resultObject.stepDict` | array[object] | 是 | 构建环节字典 |
-| `resultObject.stepDict[].standCode` | string | 是 | 环节代码 |
-| `resultObject.stepDict[].standDisplayValue` | string | 是 | 环节中文展示值 |
-| `resultObject.stepDict[].standDisplayValueEn` | string | 是 | 环节英文展示值 |
+| `resultObject.statusDict[].standDisplayValue` | string | 是 | 中文展示值 |
+| `resultObject.statusDict[].standDisplayValueEn` | string | 是 | 英文展示值 |
+| `resultObject.stepDict` | array[object] | 是 | 阶段字典 |
+| `resultObject.stepDict[].standCode` | string | 是 | 阶段代码 |
+| `resultObject.stepDict[].standDisplayValue` | string | 是 | 中文展示值 |
+| `resultObject.stepDict[].standDisplayValueEn` | string | 是 | 英文展示值 |
 
-`statusDict` 当前支持取值：
+## 状态映射
 
-| `standCode` | `standDisplayValue` | `standDisplayValueEn` |
-| --- | --- | --- |
-| `complete` | 已完成 | complete |
-| `failed` | 失败 | failed |
-| `running` | 构建中 | running |
-| `unsupported` | 不支持构建 | unsupported |
+| Build task 状态 | `status` |
+| --- | --- |
+| `PENDING`、`RUNNING` | `running` |
+| `SUCCEEDED` | `complete` |
+| `FAILED` | `failed` |
+| `SKIPPED` | `skipped` |
+| `UNSUPPORTED` | `unsupported` |
 
-`unsupported` 表示该文件类型不在可构建类型范围内（见 `POST /api/v1/knowledgeItems/import` 的文件类型说明），构建在「原始文件转 Markdown」环节即结束，不会进入切片与向量化。
+| Build task 阶段或终态 | `currentStep` |
+| --- | --- |
+| `ACCEPTED`、`EXTRACTING` | `markdown` |
+| `CHUNKING` | `chunking` |
+| `EMBEDDING`、`COMMITTING` | `vectorizing` |
+| `SUCCEEDED` | `complete` |
 
-`stepDict` 当前支持取值：
-
-| `standCode` | `standDisplayValue` | `standDisplayValueEn` |
-| --- | --- | --- |
-| `markdown` | 原始文件转 Markdown | markdown |
-| `chunking` | 文档切片 | chunking |
-| `vectorizing` | 切片向量化 | vectorizing |
-| `complete` | 已完成 | complete |
+非成功终态保留任务结束前最后一个可映射阶段。`errorCode` 用于区分 `INPUT_STALE`、`SOURCE_DELETED`、`SUPERSEDED`、`KNOWLEDGE_BASE_DELETED`、`TASK_TIMEOUT`、`WORKER_LOST` 和 `UNSUPPORTED_FILE_TYPE` 等原因。
 
 ## 失败响应示例
 
@@ -143,15 +119,10 @@
 }
 ```
 
-## 特殊逻辑
-
-- 返回文件最新一次构建任务的摘要状态。
-- `complete/failed/running/unsupported` 是任务状态，`markdown/chunking/vectorizing/complete` 是阶段。
-
 ## 路径与定位规则
 
-- `knCode` 是知识库编码，HTTP 请求中使用字符串。
-- `filePath` 必须以 `/` 开头，表示知识库内完整文件路径，不允许使用 `..` 越界。
+- `filePath` 必须以 `/` 开头，不允许使用 `..` 越界。
+- 文件移动或重命名后，旧路径不能再定位该文件；需要稳定查询时使用受理响应中的 `taskId` 或 `fileId`。
 
 ---
 

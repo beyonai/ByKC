@@ -221,6 +221,18 @@ def test_file_to_markdown_index_request_accepts_camel_case():
     )
     assert req.kb_code == "1"
     assert req.file_path == "/制度/人事/请假制度.pdf"
+    assert req.force is False
+
+
+def test_file_to_markdown_index_request_accepts_directory_and_force():
+    from by_qa.knowledge_base.api.schemas import FileToMarkdownIndexRequest
+
+    req = FileToMarkdownIndexRequest.model_validate(
+        {"knCode": "1", "filePath": "/制度/人事", "force": True}
+    )
+
+    assert req.file_path == "/制度/人事"
+    assert req.force is True
 
 
 def test_file_to_markdown_index_request_accepts_snake_case():

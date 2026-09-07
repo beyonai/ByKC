@@ -35,6 +35,33 @@ class KnowledgeItemChunkRepository:
             "indexed_chunk_count": 0,
         }
 
+    async def get_complete_build_fs_entry_ids(
+        self, cursor: Any, *, fs_entry_ids: list[int]
+    ) -> set[int]:
+        """Return files whose Markdown, chunks, embeddings, and index all exist."""
+        if not fs_entry_ids:
+            return set()
+        await cursor.execute(
+            f"""
+            SELECT fs.kid
+            FROM knowledge_fs_entry fs
+            JOIN knowledge_chunk chunk ON chunk.fs_entry_id = fs.kid
+            LEFT JOIN {self.embedding_table_name} embedding
+              ON embedding.chunk_id = chunk.kid
+            LEFT JOIN knowledge_chunk_retrieval_mv retrieval
+              ON retrieval.chunk_id = chunk.kid
+            WHERE fs.kid = ANY(%(fs_entry_ids)s)
+              AND fs.markdown_bucket_name IS NOT NULL
+              AND fs.markdown_object_key IS NOT NULL
+            GROUP BY fs.kid
+            HAVING COUNT(chunk.kid) > 0
+               AND COUNT(embedding.chunk_id) = COUNT(chunk.kid)
+               AND COUNT(retrieval.chunk_id) = COUNT(chunk.kid)
+            """,
+            {"fs_entry_ids": fs_entry_ids},
+        )
+        return {int(row["kid"]) for row in await cursor.fetchall()}
+
     async def list_build_result_chunks(
         self,
         cursor: Any,

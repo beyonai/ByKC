@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from by_qa.knowledge_base.api.schemas import BuildResultRequest
+from by_qa.knowledge_base.infrastructure.storage import StorageNotFoundError
 from by_qa.knowledge_base.services.knowledge_base_service import KnowledgeBaseService
 
 
@@ -37,6 +38,8 @@ class FakeFsEntryRepository:
             "markdown_bucket_name": "kb",
             "markdown_object_key": "demo.md",
             "line_count": 4,
+            "checksum": "current-checksum",
+            "is_deleted": False,
         }
 
 
@@ -45,8 +48,19 @@ class FakeBuildTaskRepository:
         assert fs_entry_id == 71
         started = datetime(2026, 8, 3, 12, 0, tzinfo=timezone.utc)
         return {
-            "status": "complete",
+            "kid": 9001,
+            "status": "succeeded",
             "current_step": "complete",
+            "batch_id": "fb-1",
+            "origin": "API",
+            "execution_mode": "BACKGROUND",
+            "input_checksum": "current-checksum",
+            "input_is_deleted": False,
+            "build_profile": {
+                "profileVersion": 1,
+                "embedding": {"model": "bge-m3", "dimension": 1024},
+            },
+            "build_profile_hash": "a" * 64,
             "error_message": None,
             "started_at": started,
             "finished_at": started + timedelta(milliseconds=1250),
@@ -93,6 +107,22 @@ class FakeStorageProvider:
         return b"# Demo\nFirst\nSecond\nEnd"
 
 
+class MissingMarkdownStorageProvider(FakeStorageProvider):
+    async def read(self, location):
+        raise StorageNotFoundError(f"missing: {location.key}")
+
+
+class CompleteChunkRepository(FakeChunkRepository):
+    async def get_build_result_summary(self, cursor, *, fs_entry_id):
+        del cursor
+        assert fs_entry_id == 71
+        return {
+            "chunk_count": 3,
+            "embedded_chunk_count": 3,
+            "indexed_chunk_count": 3,
+        }
+
+
 @pytest.mark.asyncio
 async def test_build_result_aggregates_markdown_chunks_and_index_coverage():
     connection = FakeConnection()
@@ -116,7 +146,13 @@ async def test_build_result_aggregates_markdown_chunks_and_index_coverage():
     )
 
     assert result["fileType"] == "pptx"
+    assert result["fileId"] == "71"
+    assert result["currentChecksum"] == "current-checksum"
+    assert result["isBuilt"] is False
     assert result["build"]["durationMs"] == 1250
+    assert result["build"]["batchId"] == "fb-1"
+    assert result["build"]["inputChecksum"] == "current-checksum"
+    assert result["build"]["buildProfileHash"] == "a" * 64
     assert result["markdown"] == {
         "available": True,
         "data": "# Demo\nFirst\nSecond\nEnd",
@@ -137,6 +173,56 @@ async def test_build_result_aggregates_markdown_chunks_and_index_coverage():
         "coverageRate": 66.67,
     }
     assert connection.closed is True
+
+
+@pytest.mark.asyncio
+async def test_build_result_is_built_requires_matching_checksum_and_full_artifacts():
+    connection = FakeConnection()
+    service = KnowledgeBaseService(
+        connection_factory=lambda: _async_return(connection),
+        knowledge_base_repository=FakeKnowledgeBaseRepository(),
+        knowledge_fs_entry_repository=FakeFsEntryRepository(),
+        knowledge_build_task_repository=FakeBuildTaskRepository(),
+        knowledge_item_chunk_repository=CompleteChunkRepository(),
+        embedding_dimension=1024,
+        storage_provider=FakeStorageProvider(),
+    )
+
+    result = await service.build_result(
+        BuildResultRequest(
+            knCode="7",
+            filePath="/slides/demo.pptx",
+            chunkPage=1,
+            chunkPageSize=2,
+            includeMarkdown=False,
+        )
+    )
+
+    assert result["isBuilt"] is True
+    assert result["markdown"]["available"] is True
+    assert result["markdown"]["data"] is None
+
+
+@pytest.mark.asyncio
+async def test_build_result_treats_concurrently_deleted_markdown_as_not_built():
+    connection = FakeConnection()
+    service = KnowledgeBaseService(
+        connection_factory=lambda: _async_return(connection),
+        knowledge_base_repository=FakeKnowledgeBaseRepository(),
+        knowledge_fs_entry_repository=FakeFsEntryRepository(),
+        knowledge_build_task_repository=FakeBuildTaskRepository(),
+        knowledge_item_chunk_repository=CompleteChunkRepository(),
+        embedding_dimension=1024,
+        storage_provider=MissingMarkdownStorageProvider(),
+    )
+
+    result = await service.build_result(
+        BuildResultRequest(knCode="7", filePath="/slides/demo.pptx", chunkPageSize=2)
+    )
+
+    assert result["isBuilt"] is False
+    assert result["markdown"]["available"] is False
+    assert result["markdown"]["data"] is None
 
 
 async def _async_return(value):

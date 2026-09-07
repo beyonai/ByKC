@@ -46,8 +46,22 @@ async def test_build_knowledge_entity_processing_service_composes_real_worker(
         calls.append(("storage", value, embedding_config))
         return storage
 
-    async def fake_ingestion(value, provider=None, *, event_publisher_invoker=None):
-        calls.append(("ingestion", value, provider, event_publisher_invoker))
+    async def fake_ingestion(
+        value,
+        provider=None,
+        *,
+        event_publisher_invoker=None,
+        document_chunking_service=None,
+    ):
+        calls.append(
+            (
+                "ingestion",
+                value,
+                provider,
+                event_publisher_invoker,
+                document_chunking_service,
+            )
+        )
         return ingestion
 
     async def fake_update(value, provider=None):
@@ -93,6 +107,7 @@ async def test_build_knowledge_entity_processing_service_composes_real_worker(
     ]
     assert calls[2][:3] == ("ingestion", settings, provider)
     assert calls[2][3] is service.event_publisher_invoker
+    assert calls[2][4] is chunker
     assert calls[3:] == [
         ("update", settings, provider),
         ("search", settings, provider),

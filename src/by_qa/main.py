@@ -304,6 +304,13 @@ async def _get_or_build_knowledge_item_ingestion_service(provider: Any | None = 
 
         active_provider = provider or _build_model_config_provider()
         await _ensure_knowledge_base_schema_initialized(provider=active_provider)
+        build_runtime_kwargs: dict[str, Any] = {}
+        if settings.knowledge_build_worker_enabled and hasattr(
+            active_provider, "get_config"
+        ):
+            build_runtime_kwargs[
+                "document_chunking_service"
+            ] = await _get_or_build_document_chunking_service(provider=active_provider)
         _knowledge_item_ingestion_service = (
             await build_knowledge_item_ingestion_service(
                 settings,
@@ -311,6 +318,7 @@ async def _get_or_build_knowledge_item_ingestion_service(provider: Any | None = 
                 event_publisher_invoker=(
                     _get_or_build_knowledge_event_publisher_invoker()
                 ),
+                **build_runtime_kwargs,
             )
         )
     return _knowledge_item_ingestion_service
@@ -694,6 +702,12 @@ async def _shutdown_knowledge_base_runtime(enabled_modules: list[str]) -> None:
         await _knowledge_entity_processing_service.stop()
     if (
         "knowledge_base" in enabled_modules
+        and _knowledge_item_ingestion_service is not None
+        and _knowledge_item_ingestion_service.file_build_processing_service is not None
+    ):
+        await _knowledge_item_ingestion_service.file_build_processing_service.stop()
+    if (
+        "knowledge_base" in enabled_modules
         and _knowledge_fetch_cache_cleanup_service is not None
     ):
         await _knowledge_fetch_cache_cleanup_service.stop()
@@ -715,6 +729,9 @@ async def lifespan(application):
     if "knowledge_base" in enabled_modules and settings.knowledge_entity_worker_enabled:
         entity_service = await _get_or_build_knowledge_entity_processing_service()
         await entity_service.start()
+    if "knowledge_base" in enabled_modules and settings.knowledge_build_worker_enabled:
+        ingestion_service = await _get_or_build_knowledge_item_ingestion_service()
+        await ingestion_service.file_build_processing_service.start()
 
     yield
 

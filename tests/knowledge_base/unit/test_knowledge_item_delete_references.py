@@ -83,11 +83,28 @@ class FakeStorageProvider:
     storage_path_bound_to_logical_path = False
 
 
+class FakeBuildMutationService:
+    def __init__(self, connection):
+        self.connection = connection
+        self.calls = []
+
+    async def terminate_active(self, cursor, **kwargs):
+        self.calls.append(("terminate", kwargs))
+        return ([{"kid": 71}], ["fb-1"])
+
+    async def publish(self, tasks, completed_batch_ids):
+        assert self.connection.committed == 1
+        self.calls.append(
+            ("publish", {"tasks": tasks, "batch_ids": completed_batch_ids})
+        )
+
+
 @pytest.mark.asyncio
 async def test_delete_knowledge_item_removes_outgoing_and_breaks_inbound_references():
     connection = FakeConnection()
     fs_repo = FakeFsEntryRepository()
     reference_repo = FakeReferenceRepository()
+    build_mutation = FakeBuildMutationService(connection)
 
     async def connection_factory():
         return connection
@@ -101,6 +118,7 @@ async def test_delete_knowledge_item_removes_outgoing_and_breaks_inbound_referen
         storage_provider=FakeStorageProvider(),
         embedding_dimension=3,
         knowledge_file_reference_repository=reference_repo,
+        file_build_mutation_service=build_mutation,
     )
 
     await service.delete_knowledge_item(
@@ -112,3 +130,15 @@ async def test_delete_knowledge_item_removes_outgoing_and_breaks_inbound_referen
     assert reference_repo.calls == ["delete_outgoing", "mark_targets_deleted"]
     assert fs_repo.soft_deleted == [(1, 10)]
     assert connection.committed == 1
+    assert build_mutation.calls == [
+        (
+            "terminate",
+            {
+                "knowledge_base_id": 1,
+                "fs_entry_ids": [10],
+                "error_code": "SOURCE_DELETED",
+                "error_message": "Source file was deleted",
+            },
+        ),
+        ("publish", {"tasks": [{"kid": 71}], "batch_ids": ["fb-1"]}),
+    ]

@@ -11,6 +11,7 @@ Tests must NOT require docker/redis/MinIO — test in-process.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -238,6 +239,26 @@ def _upload_file(
     assert response.status_code == 200, response.text
 
 
+def _build_file(client: TestClient, *, kb_code: str, file_path: str) -> None:
+    response = client.post(
+        "/api/v1/fileToMarkdownIndex",
+        json={"knCode": kb_code, "filePath": file_path},
+    )
+    payload = response.json()
+    assert response.status_code == 200 and payload["resultCode"] == "0", payload
+    batch_id = payload["resultObject"]["batchId"]
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        status = client.post(
+            "/api/v1/knowledgeItems/processingBatchStatus",
+            json={"knCode": kb_code, "batchId": batch_id},
+        ).json()
+        if status.get("resultObject", {}).get("status") == "COMPLETED":
+            return
+        time.sleep(0.05)
+    pytest.fail(f"Build batch did not complete: {batch_id}")
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # U1: Import file → verify filesystem path and content
 # ═══════════════════════════════════════════════════════════════════════
@@ -310,13 +331,7 @@ def test_u2_import_and_build_markdown_path_and_readfile(monkeypatch, tmp_path):
             client, kb_code=kb_code, file_path=file_path, file_content=original_content
         )
 
-        resp = client.post(
-            "/api/v1/fileToMarkdownIndex",
-            json={"knCode": kb_code, "filePath": file_path},
-        )
-        assert resp.status_code == 200, resp.text
-        payload = resp.json()
-        assert payload["resultCode"] == "0", f"Build failed: {payload}"
+        _build_file(client, kb_code=kb_code, file_path=file_path)
 
         md_path = root / kb_code / "md" / "docs" / "readme.md.md"
         assert md_path.exists(), f"Expected markdown file at {md_path}"
@@ -487,10 +502,7 @@ def test_u6_readfile_line_window_matches_markdown_filesystem(monkeypatch, tmp_pa
             client, kb_code=kb_code, file_path=file_path, file_content=b"ignored"
         )
 
-        client.post(
-            "/api/v1/fileToMarkdownIndex",
-            json={"knCode": kb_code, "filePath": file_path},
-        )
+        _build_file(client, kb_code=kb_code, file_path=file_path)
 
         resp = client.post(
             "/api/v1/readFile",
@@ -542,11 +554,7 @@ def test_u7_deep_nested_directories_filesystem_paths(monkeypatch, tmp_path):
         expected_raw = root / kb_code / "raw" / "A" / "B" / "C" / "file.md"
         assert expected_raw.exists(), f"Expected raw file at {expected_raw}"
 
-        resp = client.post(
-            "/api/v1/fileToMarkdownIndex",
-            json={"knCode": kb_code, "filePath": "/A/B/C/file.md"},
-        )
-        assert resp.status_code == 200, resp.text
+        _build_file(client, kb_code=kb_code, file_path="/A/B/C/file.md")
 
         expected_md = root / kb_code / "md" / "A" / "B" / "C" / "file.md.md"
         assert expected_md.exists(), f"Expected md file at {expected_md}"

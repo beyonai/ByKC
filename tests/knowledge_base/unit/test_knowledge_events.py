@@ -14,6 +14,8 @@ from by_qa.knowledge_base.events import (
     FileUpdatedPayload,
     KnowledgeEventPublisherInvoker,
     ResourceEventType,
+    build_file_build_batch_terminal_event,
+    build_file_build_terminal_event,
     build_file_completed_event,
     build_resource_event,
     build_semantic_terminal_events,
@@ -125,6 +127,53 @@ async def test_build_file_completed_event_rejects_invalid_terminal_shape():
             status="complete",
             current_step="complete",
         )
+
+
+async def test_file_build_v2_terminal_events_use_stable_file_id_and_counts():
+    now = datetime.now(timezone.utc)
+    task = {
+        "kid": 91,
+        "batch_id": "fb-1",
+        "origin": "API",
+        "execution_mode": "BACKGROUND",
+        "knowledge_base_id": 7,
+        "fs_entry_id": 22,
+        "file_path_snapshot": "/docs/a.pdf",
+        "status": "succeeded",
+        "current_stage": "committing",
+        "result_payload": {"lineCount": 20, "chunkCount": 3},
+        "finished_at": now,
+    }
+    batch = {
+        "batch_id": "fb-1",
+        "knowledge_base_id": 7,
+        "scope": "DIRECTORY",
+        "target_path_snapshot": "/docs",
+        "status": "completed",
+        "candidate_count": 4,
+        "eligible_count": 3,
+        "accepted_count": 2,
+        "reused_count": 1,
+        "acceptance_skipped_count": 1,
+        "completed_count": 2,
+        "completed_at": now,
+    }
+
+    file_event = build_file_build_terminal_event(task)
+    batch_event = build_file_build_batch_terminal_event(
+        batch, {"succeeded": 1, "unsupported": 1}
+    )
+    serialized_file = serialize_knowledge_event(file_event)
+    serialized_batch = serialize_knowledge_event(batch_event)
+
+    assert serialized_file["eventVersion"] == 2
+    assert serialized_file["payload"]["fileId"] == "22"
+    assert serialized_file["payload"]["filePathSnapshot"] == "/docs/a.pdf"
+    assert serialized_batch["eventVersion"] == 2
+    assert serialized_batch["payload"]["acceptanceSkippedCount"] == 1
+    assert serialized_batch["payload"]["unsupportedCount"] == 1
+    assert parse_knowledge_event(serialized_file) == file_event
+    assert parse_knowledge_event(serialized_batch) == batch_event
 
     with pytest.raises(ValidationError):
         parse_knowledge_event(

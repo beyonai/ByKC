@@ -29,6 +29,12 @@ from by_qa.knowledge_base.repositories.file_metadata_value_repository import (
 from by_qa.knowledge_base.repositories.knowledge_base_repository import (
     KnowledgeBaseRepository,
 )
+from by_qa.knowledge_base.repositories.knowledge_build_acceptance_repository import (
+    KnowledgeBuildAcceptanceRepository,
+)
+from by_qa.knowledge_base.repositories.knowledge_build_batch_repository import (
+    KnowledgeBuildBatchRepository,
+)
 from by_qa.knowledge_base.repositories.knowledge_build_task_repository import (
     KnowledgeBuildTaskRepository,
 )
@@ -65,6 +71,9 @@ from by_qa.knowledge_base.repositories.knowledge_semantic_processing_task_reposi
 from by_qa.knowledge_base.repositories.metadata_search_repository import (
     MetadataSearchRepository,
 )
+from by_qa.knowledge_base.repositories.processing_task_query_repository import (
+    ProcessingTaskQueryRepository,
+)
 from by_qa.knowledge_base.repositories.retrieval_projection_repository import (
     RetrievalProjectionRepository,
 )
@@ -75,6 +84,25 @@ from by_qa.knowledge_base.services.bootstrap_service import (
 from by_qa.knowledge_base.services.document_update_service import DocumentUpdateService
 from by_qa.knowledge_base.services.embedding_query_service import EmbeddingQueryService
 from by_qa.knowledge_base.services.errors import KnowledgeBaseConfigurationError
+from by_qa.knowledge_base.services.file_build_background_runner import (
+    FileBuildBackgroundRunner,
+)
+from by_qa.knowledge_base.services.file_build_execution_service import (
+    FileBuildExecutionService,
+)
+from by_qa.knowledge_base.services.file_build_models import (
+    EmbeddingBuildProfile,
+    FileBuildProfile,
+)
+from by_qa.knowledge_base.services.file_build_mutation_service import (
+    FileBuildMutationService,
+)
+from by_qa.knowledge_base.services.file_build_processing_service import (
+    FileBuildProcessingService,
+)
+from by_qa.knowledge_base.services.file_build_terminal_event_service import (
+    FileBuildTerminalEventService,
+)
 from by_qa.knowledge_base.services.file_metadata_query_service import (
     FileMetadataQueryService,
 )
@@ -122,6 +150,9 @@ from by_qa.knowledge_base.services.markdown_reference_rewriter import (
 )
 from by_qa.knowledge_base.services.markdown_update_summary_service import (
     MarkdownUpdateSummaryService,
+)
+from by_qa.knowledge_base.services.semantic_task_mutation_service import (
+    SemanticTaskMutationService,
 )
 
 
@@ -243,6 +274,8 @@ async def build_bootstrap_service(
 async def build_knowledge_base_service(
     settings: Settings,
     provider: ModelConfigProvider | None = None,
+    *,
+    event_publisher_invoker: KnowledgeEventPublisherInvoker | None = None,
 ) -> KnowledgeBaseService:
     """Build the knowledge base metadata service."""
     embedding_config = (
@@ -257,11 +290,25 @@ async def build_knowledge_base_service(
         if embedding_config is not None and embedding_config.dimension is not None
         else settings.embedding_dimension
     )
+    connection_factory = build_connection_factory(settings)
+    build_task_repository = KnowledgeBuildTaskRepository()
+    build_batch_repository = KnowledgeBuildBatchRepository()
+    active_event_invoker = event_publisher_invoker or KnowledgeEventPublisherInvoker(
+        publisher=load_knowledge_event_publisher(
+            getattr(settings, "event_publisher_provider", "")
+        ),
+        timeout_seconds=getattr(settings, "event_publish_timeout_seconds", 5.0),
+    )
+    terminal_event_service = FileBuildTerminalEventService(
+        connection_factory=connection_factory,
+        batch_repository=build_batch_repository,
+        event_publisher_invoker=active_event_invoker,
+    )
     return KnowledgeBaseService(
-        connection_factory=build_connection_factory(settings),
+        connection_factory=connection_factory,
         knowledge_base_repository=KnowledgeBaseRepository(),
         knowledge_fs_entry_repository=KnowledgeFsEntryRepository(),
-        knowledge_build_task_repository=KnowledgeBuildTaskRepository(),
+        knowledge_build_task_repository=build_task_repository,
         knowledge_item_chunk_repository=KnowledgeItemChunkRepository(
             bootstrap.embedding_table_name
         ),
@@ -279,6 +326,16 @@ async def build_knowledge_base_service(
         file_metadata_value_repository=FileMetadataValueRepository(),
         knowledge_entity_asset_repository=KnowledgeEntityAssetRepository(
             bootstrap.entity_embedding_table_name
+        ),
+        file_build_mutation_service=FileBuildMutationService(
+            task_repository=build_task_repository,
+            batch_repository=build_batch_repository,
+            terminal_event_service=terminal_event_service,
+        ),
+        semantic_task_mutation_service=SemanticTaskMutationService(
+            task_repository=KnowledgeSemanticProcessingTaskRepository(),
+            batch_repository=KnowledgeSemanticProcessingBatchRepository(),
+            event_publisher_invoker=active_event_invoker,
         ),
         cache_root=settings.kb_cache_path,
         cache_ttl_seconds=settings.kb_fetch_cache_ttl_seconds,
@@ -302,6 +359,7 @@ async def build_knowledge_item_ingestion_service(
     provider: ModelConfigProvider | None = None,
     *,
     event_publisher_invoker: KnowledgeEventPublisherInvoker | None = None,
+    document_chunking_service: Any | None = None,
 ) -> KnowledgeItemIngestionService:
     """Build the document ingestion service."""
     if provider is not None:
@@ -312,26 +370,58 @@ async def build_knowledge_item_ingestion_service(
         dimension = settings.embedding_dimension
     validate_knowledge_base_settings(settings, embedding_config=embedding_config)
     bootstrap = await build_bootstrap_service(settings, provider=provider)
-    return KnowledgeItemIngestionService(
-        connection_factory=build_connection_factory(settings),
-        knowledge_base_repository=KnowledgeBaseRepository(),
-        knowledge_fs_entry_repository=KnowledgeFsEntryRepository(),
-        knowledge_build_task_repository=KnowledgeBuildTaskRepository(),
-        knowledge_item_chunk_repository=KnowledgeItemChunkRepository(
+    connection_factory = build_connection_factory(settings)
+    knowledge_base_repository = KnowledgeBaseRepository()
+    knowledge_fs_entry_repository = KnowledgeFsEntryRepository()
+    knowledge_build_task_repository = KnowledgeBuildTaskRepository()
+    knowledge_build_batch_repository = KnowledgeBuildBatchRepository()
+    knowledge_item_chunk_repository = KnowledgeItemChunkRepository(
+        bootstrap.embedding_table_name
+    )
+    retrieval_projection_repository = RetrievalProjectionRepository()
+    knowledge_fetch_cache_repository = KnowledgeFetchCacheRepository()
+    storage_provider = await build_storage_provider(
+        settings, embedding_config=embedding_config
+    )
+    build_profile = FileBuildProfile(
+        embedding=EmbeddingBuildProfile(
+            model=(
+                embedding_config.model_name
+                if embedding_config is not None
+                else settings.embedding_model_name
+            ),
+            dimension=dimension,
+        )
+    )
+    file_build_processing_service = FileBuildProcessingService(
+        connection_factory=connection_factory,
+        knowledge_base_repository=knowledge_base_repository,
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        acceptance_repository=KnowledgeBuildAcceptanceRepository(
             bootstrap.embedding_table_name
         ),
-        retrieval_projection_repository=RetrievalProjectionRepository(),
-        storage_provider=await build_storage_provider(
-            settings, embedding_config=embedding_config
-        ),
+        batch_repository=knowledge_build_batch_repository,
+        task_repository=knowledge_build_task_repository,
+        build_profile=build_profile,
+        unified_task_repository=ProcessingTaskQueryRepository(),
+    )
+    ingestion_service = KnowledgeItemIngestionService(
+        connection_factory=connection_factory,
+        knowledge_base_repository=knowledge_base_repository,
+        knowledge_fs_entry_repository=knowledge_fs_entry_repository,
+        knowledge_build_task_repository=knowledge_build_task_repository,
+        knowledge_item_chunk_repository=knowledge_item_chunk_repository,
+        retrieval_projection_repository=retrieval_projection_repository,
+        storage_provider=storage_provider,
         embedding_dimension=dimension,
-        knowledge_fetch_cache_repository=KnowledgeFetchCacheRepository(),
+        knowledge_fetch_cache_repository=knowledge_fetch_cache_repository,
         knowledge_entity_asset_repository=KnowledgeEntityAssetRepository(
             bootstrap.entity_embedding_table_name
         ),
         file_metadata_value_repository=FileMetadataValueRepository(),
         knowledge_file_reference_repository=KnowledgeFileReferenceRepository(),
         markdown_reference_rewriter=MarkdownReferenceRewriter(),
+        file_build_processing_service=file_build_processing_service,
         event_publisher_invoker=event_publisher_invoker
         or KnowledgeEventPublisherInvoker(
             publisher=load_knowledge_event_publisher(
@@ -340,6 +430,54 @@ async def build_knowledge_item_ingestion_service(
             timeout_seconds=getattr(settings, "event_publish_timeout_seconds", 5.0),
         ),
     )
+    terminal_event_service = FileBuildTerminalEventService(
+        connection_factory=connection_factory,
+        batch_repository=knowledge_build_batch_repository,
+        event_publisher_invoker=ingestion_service.event_publisher_invoker,
+    )
+    file_build_processing_service.terminal_event_service = terminal_event_service
+    ingestion_service.file_build_mutation_service = FileBuildMutationService(
+        task_repository=knowledge_build_task_repository,
+        batch_repository=knowledge_build_batch_repository,
+        terminal_event_service=terminal_event_service,
+    )
+    if document_chunking_service is not None:
+        execution_service = FileBuildExecutionService(
+            connection_factory=connection_factory,
+            task_repository=knowledge_build_task_repository,
+            batch_repository=knowledge_build_batch_repository,
+            fs_entry_repository=knowledge_fs_entry_repository,
+            chunk_repository=knowledge_item_chunk_repository,
+            retrieval_repository=retrieval_projection_repository,
+            fetch_cache_repository=knowledge_fetch_cache_repository,
+            storage_provider=storage_provider,
+            document_chunking_service=document_chunking_service,
+            embedding_dimension=dimension,
+            terminal_event_service=terminal_event_service,
+        )
+        ingestion_service.file_build_execution_service = execution_service
+    else:
+        execution_service = None
+    if execution_service is not None and settings.knowledge_build_worker_enabled:
+        worker_id = settings.knowledge_build_worker_id.strip() or (
+            f"{gethostname()}:{getpid()}:{uuid4().hex[:12]}"
+        )
+        file_build_processing_service.background_runner = FileBuildBackgroundRunner(
+            connection_factory=connection_factory,
+            task_repository=knowledge_build_task_repository,
+            batch_repository=knowledge_build_batch_repository,
+            execution_service=execution_service,
+            worker_id=worker_id,
+            concurrency=settings.knowledge_build_worker_concurrency,
+            poll_seconds=settings.knowledge_build_worker_poll_seconds,
+            task_timeout_seconds=settings.knowledge_build_task_timeout_seconds,
+            lease_seconds=settings.knowledge_build_lease_seconds,
+            heartbeat_seconds=settings.knowledge_build_heartbeat_seconds,
+            reaper_seconds=settings.knowledge_build_reaper_seconds,
+            status_log_seconds=settings.knowledge_build_worker_status_log_seconds,
+            shutdown_grace_seconds=settings.knowledge_build_shutdown_grace_seconds,
+        )
+    return ingestion_service
 
 
 async def build_document_update_service(
@@ -354,15 +492,29 @@ async def build_document_update_service(
     )
     validate_knowledge_base_settings(settings, embedding_config=embedding_config)
     bootstrap = await build_bootstrap_service(settings, provider=provider)
+    connection_factory = build_connection_factory(settings)
+    build_task_repository = KnowledgeBuildTaskRepository()
+    build_batch_repository = KnowledgeBuildBatchRepository()
+    active_event_invoker = KnowledgeEventPublisherInvoker(
+        publisher=load_knowledge_event_publisher(
+            getattr(settings, "event_publisher_provider", "")
+        ),
+        timeout_seconds=getattr(settings, "event_publish_timeout_seconds", 5.0),
+    )
+    terminal_event_service = FileBuildTerminalEventService(
+        connection_factory=connection_factory,
+        batch_repository=build_batch_repository,
+        event_publisher_invoker=active_event_invoker,
+    )
     return DocumentUpdateService(
-        connection_factory=build_connection_factory(settings),
+        connection_factory=connection_factory,
         knowledge_base_repository=KnowledgeBaseRepository(),
         knowledge_fs_entry_repository=KnowledgeFsEntryRepository(),
         knowledge_item_chunk_repository=KnowledgeItemChunkRepository(
             bootstrap.embedding_table_name
         ),
         retrieval_projection_repository=RetrievalProjectionRepository(),
-        knowledge_build_task_repository=KnowledgeBuildTaskRepository(),
+        knowledge_build_task_repository=build_task_repository,
         knowledge_fetch_cache_repository=KnowledgeFetchCacheRepository(),
         file_metadata_value_repository=FileMetadataValueRepository(),
         knowledge_file_reference_repository=KnowledgeFileReferenceRepository(),
@@ -372,6 +524,11 @@ async def build_document_update_service(
         ),
         update_timeline_repository=KnowledgeFileUpdateTimelineRepository(),
         markdown_update_summary_service=MarkdownUpdateSummaryService(),
+        file_build_mutation_service=FileBuildMutationService(
+            task_repository=build_task_repository,
+            batch_repository=build_batch_repository,
+            terminal_event_service=terminal_event_service,
+        ),
     )
 
 
@@ -451,6 +608,7 @@ async def build_knowledge_entity_processing_service(
         settings,
         provider=provider,
         event_publisher_invoker=active_event_publisher_invoker,
+        document_chunking_service=document_chunking_service,
     )
     document_update_service = await build_document_update_service(
         settings, provider=provider

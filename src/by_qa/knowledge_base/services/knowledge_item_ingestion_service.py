@@ -34,6 +34,9 @@ from by_qa.knowledge_base.services.entry_metadata import (
     upsert_entry_metadata,
 )
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
+from by_qa.knowledge_base.services.file_build_execution_service import (
+    FileBuildTerminalError,
+)
 from by_qa.knowledge_base.services.knowledge_document_metadata import (
     ensure_document_kind_metadata,
 )
@@ -141,9 +144,22 @@ class KnowledgeItemIngestionService:
     file_metadata_value_repository: Any | None = None
     knowledge_file_reference_repository: Any | None = None
     markdown_reference_rewriter: Any | None = None
+    file_build_processing_service: Any | None = None
+    file_build_execution_service: Any | None = None
+    file_build_mutation_service: Any | None = None
     event_publisher_invoker: KnowledgeEventPublisherInvoker = field(
         default_factory=KnowledgeEventPublisherInvoker
     )
+
+    async def accept_file_to_markdown_index(
+        self, request: FileToMarkdownIndexRequest
+    ) -> dict[str, Any]:
+        """Accept a durable external file or directory Build batch."""
+        if self.file_build_processing_service is None:
+            raise KnowledgeBaseValidationError(
+                "file build processing service is not configured"
+            )
+        return await self.file_build_processing_service.accept(request)
 
     async def convert_uploaded_file_to_markdown(
         self,
@@ -553,9 +569,21 @@ class KnowledgeItemIngestionService:
         return targets
 
     async def file_to_markdown_index(
-        self, request: FileToMarkdownIndexRequest, *, document_chunking_service: Any
+        self,
+        request: FileToMarkdownIndexRequest,
+        *,
+        document_chunking_service: Any,
+        parent_semantic_task_id: int | None = None,
+        origin: str | None = None,
     ) -> None:
         """Synchronously build for an internal caller without an API event."""
+        if parent_semantic_task_id is not None:
+            await self._file_to_markdown_index_inline(
+                request,
+                parent_semantic_task_id=parent_semantic_task_id,
+                origin=origin or "",
+            )
+            return
         build_task_id = await self.create_file_to_markdown_index_task(request)
         await self.execute_file_to_markdown_index_task(
             request,
@@ -563,6 +591,120 @@ class KnowledgeItemIngestionService:
             build_task_id=build_task_id,
             publish_event=False,
         )
+
+    async def _file_to_markdown_index_inline(
+        self,
+        request: FileToMarkdownIndexRequest,
+        *,
+        parent_semantic_task_id: int,
+        origin: str,
+    ) -> None:
+        """Persist and synchronously execute a file build owned by Entity work."""
+        if self.file_build_execution_service is None:
+            raise RuntimeError("inline file build execution service is not configured")
+        if self.file_build_processing_service is None:
+            raise RuntimeError("file build processing service is not configured")
+        normalized_file_path = request.file_path.strip("/")
+        if not normalized_file_path:
+            raise KnowledgeBaseValidationError("file_path must not be empty")
+
+        connection = await self.connection_factory()
+        superseded_tasks: list[dict[str, Any]] = []
+        completed_batch_ids: list[str] = []
+        try:
+            cursor = connection.cursor()
+            kb_row = await self.knowledge_base_repository.get_by_code(
+                cursor, request.kb_code
+            )
+            if kb_row is None:
+                raise KnowledgeBaseValidationError(
+                    f"knowledge base not found: {request.kb_code}"
+                )
+            knowledge_base_id = self._row_id(kb_row)
+            file_row = (
+                await self.knowledge_fs_entry_repository.get_file_by_path_for_update(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    full_path=normalized_file_path,
+                )
+            )
+            if file_row is None:
+                raise KnowledgeBaseValidationError(
+                    f"file not found: {request.file_path}"
+                )
+            fs_entry_id = self._row_id(file_row)
+            checksum = str(file_row.get("checksum") or "")
+            if not checksum or not file_row.get("file_object_key"):
+                raise KnowledgeBaseValidationError(
+                    f"file has not been uploaded yet: {request.file_path}"
+                )
+            active = await self.knowledge_build_task_repository.get_active_for_update(
+                cursor, fs_entry_id=fs_entry_id
+            )
+            if active is not None:
+                if self.file_build_mutation_service is None:
+                    raise RuntimeError("file build mutation service is not configured")
+                (
+                    superseded_tasks,
+                    completed_batch_ids,
+                ) = await self.file_build_mutation_service.terminate_active(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    fs_entry_ids=[fs_entry_id],
+                    error_code="SUPERSEDED",
+                    error_message="Build superseded by an inline Entity build",
+                )
+            profile = self.file_build_processing_service.build_profile
+            task = await self.knowledge_build_task_repository.create_inline_task(
+                cursor,
+                knowledge_base_id=knowledge_base_id,
+                fs_entry_id=fs_entry_id,
+                origin=origin,
+                parent_semantic_task_id=parent_semantic_task_id,
+                file_path_snapshot=normalized_file_path,
+                input_checksum=checksum,
+                input_is_deleted=False,
+                build_profile=profile.storage_value(),
+                build_profile_hash=profile.sha256(),
+            )
+            if task is None:
+                raise RuntimeError("failed to create inline file build task")
+            await connection.commit()
+        except Exception:
+            await connection.rollback()
+            raise
+        finally:
+            await connection.close()
+
+        if superseded_tasks:
+            await self.file_build_mutation_service.publish(
+                superseded_tasks, completed_batch_ids
+            )
+
+        try:
+            await self.file_build_execution_service.execute_inline(task)
+        except FileBuildTerminalError as exc:
+            finished = await self.file_build_execution_service.finish_inline(
+                task,
+                status=exc.status,
+                error_code=exc.error_code,
+                error_message=str(exc),
+                failure_kind=exc.failure_kind,
+                outcome_uncertain=exc.outcome_uncertain,
+            )
+            if finished is None:
+                raise RuntimeError("inline file build was superseded") from exc
+            if exc.status != "unsupported":
+                raise
+        except Exception as exc:
+            await self.file_build_execution_service.finish_inline(
+                task,
+                status="failed",
+                error_code="BUILD_FAILED",
+                error_message=str(exc) or "internal error",
+                failure_kind="SYSTEM",
+            )
+            raise
 
     async def create_file_to_markdown_index_task(
         self, request: FileToMarkdownIndexRequest
@@ -900,6 +1042,8 @@ class KnowledgeItemIngestionService:
             request.file_path,
         )
         connection = await self.connection_factory()
+        terminated_build_tasks: list[dict[str, Any]] = []
+        completed_build_batch_ids: list[str] = []
         try:
             cursor = connection.cursor()
             kb_row = await self.knowledge_base_repository.get_by_code(
@@ -920,6 +1064,17 @@ class KnowledgeItemIngestionService:
                     f"knowledge item not found: {request.file_path}"
                 )
             fs_entry_id = int(file_row["kid"])
+            if self.file_build_mutation_service is not None:
+                (
+                    terminated_build_tasks,
+                    completed_build_batch_ids,
+                ) = await self.file_build_mutation_service.terminate_active(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    fs_entry_ids=[fs_entry_id],
+                    error_code="SOURCE_DELETED",
+                    error_message="Source file was deleted",
+                )
             if self.knowledge_entity_asset_repository is not None:
                 await self.knowledge_entity_asset_repository.clear_fs_entry_ids(
                     cursor,
@@ -972,6 +1127,10 @@ class KnowledgeItemIngestionService:
                 },
             )
             await connection.commit()
+            if self.file_build_mutation_service is not None:
+                await self.file_build_mutation_service.publish(
+                    terminated_build_tasks, completed_build_batch_ids
+                )
             if self.storage_provider.storage_path_bound_to_logical_path:
                 original_location = _build_optional_location(
                     file_row,

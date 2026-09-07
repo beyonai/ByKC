@@ -21,6 +21,7 @@ import os
 import stat
 import sys
 import tempfile
+import time
 from pathlib import Path
 from types import ModuleType
 from uuid import uuid4
@@ -293,6 +294,19 @@ def _upload_and_build_file(
         },
     )
     assert build_response.status_code == 200, build_response.text
+    payload = build_response.json()
+    assert payload["resultCode"] == "0", payload
+    batch_id = payload["resultObject"]["batchId"]
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        status = client.post(
+            "/api/v1/knowledgeItems/processingBatchStatus",
+            json={"knCode": kb_code, "batchId": batch_id},
+        ).json()
+        if status.get("resultObject", {}).get("status") == "COMPLETED":
+            return
+        time.sleep(0.05)
+    pytest.fail(f"Build batch did not complete: {batch_id}")
 
 
 @pytest.mark.integration

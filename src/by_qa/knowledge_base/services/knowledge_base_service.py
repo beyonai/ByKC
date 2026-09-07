@@ -35,8 +35,16 @@ from by_qa.knowledge_base.api.schemas import (
     UpdateDirectoryRequest,
     UpdateKnowledgeBaseRequest,
 )
-from by_qa.knowledge_base.build_status import STATUS_DICT, STEP_DICT
-from by_qa.knowledge_base.infrastructure.storage import StorageLocation
+from by_qa.knowledge_base.build_status import (
+    STATUS_DICT,
+    STEP_DICT,
+    legacy_build_status,
+    legacy_build_step,
+)
+from by_qa.knowledge_base.infrastructure.storage import (
+    StorageLocation,
+    StorageNotFoundError,
+)
 from by_qa.knowledge_base.metadata_types import (
     SYSTEM_FIELD_VALUE_TYPES,
     extract_system_metadata,
@@ -76,6 +84,8 @@ class KnowledgeBaseService:
     knowledge_file_reference_repository: Any | None = None
     file_metadata_value_repository: Any | None = None
     knowledge_entity_asset_repository: Any | None = None
+    file_build_mutation_service: Any | None = None
+    semantic_task_mutation_service: Any | None = None
     cache_root: Path | None = None
     cache_ttl_seconds: int = 24 * 60 * 60
 
@@ -136,6 +146,12 @@ class KnowledgeBaseService:
             request.kb_code,
         )
         connection = await self.connection_factory()
+        terminated_build_tasks: list[dict[str, Any]] = []
+        completed_build_batch_ids: list[str] = []
+        terminated_semantic_tasks: list[dict[str, Any]] = []
+        completed_semantic_batches: dict[
+            str, tuple[dict[str, Any], dict[str, int]]
+        ] = {}
         try:
             cursor = connection.cursor()
             kb_row = await self.knowledge_base_repository.get_by_code(
@@ -146,6 +162,23 @@ class KnowledgeBaseService:
                     f"knowledge base not found: {request.kb_code}"
                 )
             knowledge_base_id = self._row_id(kb_row)
+            if self.file_build_mutation_service is not None:
+                (
+                    terminated_build_tasks,
+                    completed_build_batch_ids,
+                ) = await self.file_build_mutation_service.terminate_active(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    error_code="KNOWLEDGE_BASE_DELETED",
+                    error_message="Knowledge base was deleted",
+                )
+            if self.semantic_task_mutation_service is not None:
+                (
+                    terminated_semantic_tasks,
+                    completed_semantic_batches,
+                ) = await self.semantic_task_mutation_service.terminate_for_knowledge_base(
+                    cursor, knowledge_base_id=knowledge_base_id
+                )
             file_locator_rows = []
             if (
                 self.storage_provider is not None
@@ -191,6 +224,14 @@ class KnowledgeBaseService:
                 {"knowledge_base_id": knowledge_base_id},
             )
             await connection.commit()
+            if self.file_build_mutation_service is not None:
+                await self.file_build_mutation_service.publish(
+                    terminated_build_tasks, completed_build_batch_ids
+                )
+            if self.semantic_task_mutation_service is not None:
+                await self.semantic_task_mutation_service.publish(
+                    terminated_semantic_tasks, completed_semantic_batches
+                )
             if file_locator_rows:
                 for row in file_locator_rows:
                     original = _optional_location(
@@ -315,6 +356,8 @@ class KnowledgeBaseService:
         )
 
         connection = await self.connection_factory()
+        terminated_build_tasks: list[dict[str, Any]] = []
+        completed_build_batch_ids: list[str] = []
         try:
             cursor = connection.cursor()
             kb_row = await self.knowledge_base_repository.get_by_code(
@@ -345,6 +388,17 @@ class KnowledgeBaseService:
                     root_fs_entry_id=root_fs_entry_id,
                 )
             )
+            if self.file_build_mutation_service is not None:
+                (
+                    terminated_build_tasks,
+                    completed_build_batch_ids,
+                ) = await self.file_build_mutation_service.terminate_active(
+                    cursor,
+                    knowledge_base_id=knowledge_base_id,
+                    fs_entry_ids=fs_entry_ids,
+                    error_code="SOURCE_DELETED",
+                    error_message="Source directory was deleted",
+                )
             if self.knowledge_entity_asset_repository is not None:
                 await self.knowledge_entity_asset_repository.clear_fs_entry_ids(
                     cursor,
@@ -414,6 +468,10 @@ class KnowledgeBaseService:
                     fs_entry_ids=fs_entry_ids,
                 )
             await connection.commit()
+            if self.file_build_mutation_service is not None:
+                await self.file_build_mutation_service.publish(
+                    terminated_build_tasks, completed_build_batch_ids
+                )
             if path_bound_storage and file_locator_rows:
                 for row in file_locator_rows:
                     original = _optional_location(
@@ -1054,19 +1112,33 @@ class KnowledgeBaseService:
                 raise KnowledgeBaseValidationError(
                     f"file not found: {request.file_path}"
                 )
-            latest_task = (
-                await self.knowledge_build_task_repository.get_latest_by_fs_entry_id(
-                    cursor,
-                    fs_entry_id=self._row_id(file_row),
-                )
+            latest_task = await self.knowledge_build_task_repository.get_latest_current_by_fs_entry_id(
+                cursor,
+                fs_entry_id=self._row_id(file_row),
             )
+            if (
+                latest_task is not None
+                and str(latest_task.get("status") or "").lower() == "succeeded"
+            ):
+                complete_ids = await self.knowledge_item_chunk_repository.get_complete_build_fs_entry_ids(
+                    cursor, fs_entry_ids=[self._row_id(file_row)]
+                )
+                if self._row_id(file_row) not in complete_ids:
+                    latest_task = None
             if latest_task is None:
                 raise KnowledgeBaseValidationError(
                     f"build task not found: {request.file_path}"
                 )
             result = {
-                "status": latest_task.get("status"),
-                "currentStep": latest_task.get("current_step"),
+                "taskId": str(self._row_id(latest_task)),
+                "fileId": str(self._row_id(file_row)),
+                "status": legacy_build_status(latest_task.get("status")),
+                "currentStep": legacy_build_step(
+                    status=latest_task.get("status"),
+                    current_step=latest_task.get("current_step"),
+                    current_stage=latest_task.get("current_stage"),
+                ),
+                "errorCode": latest_task.get("error_code"),
                 "statusDict": STATUS_DICT,
                 "stepDict": STEP_DICT,
             }
@@ -1155,7 +1227,9 @@ class KnowledgeBaseService:
         finally:
             await connection.close()
 
-        markdown_available = bool(file_row.get("markdown_object_key"))
+        markdown_available = bool(
+            file_row.get("markdown_bucket_name") and file_row.get("markdown_object_key")
+        )
         markdown_text: str | None = None
         if request.include_markdown and markdown_available:
             if self.storage_provider is None:
@@ -1166,9 +1240,18 @@ class KnowledgeBaseService:
                 namespace=str(file_row.get("markdown_bucket_name") or ""),
                 key=str(file_row["markdown_object_key"]),
             )
-            markdown_text = (await self.storage_provider.read(location)).decode("utf-8")
+            try:
+                markdown_text = (await self.storage_provider.read(location)).decode(
+                    "utf-8"
+                )
+            except StorageNotFoundError:
+                # A concurrent update/delete may clear the fixed-key Markdown
+                # object after the database snapshot was read. Return an
+                # audited non-built result instead of leaking a storage 404.
+                markdown_available = False
             if (
-                self.markdown_reference_resolver is not None
+                markdown_text is not None
+                and self.markdown_reference_resolver is not None
                 and "byqa-ref://" in markdown_text
             ):
                 markdown_text = (
@@ -1205,8 +1288,24 @@ class KnowledgeBaseService:
         line_count = int(file_row.get("line_count") or 0)
         if markdown_text is not None and line_count <= 0:
             line_count = markdown_text.count("\n") + (1 if markdown_text else 0)
+        current_checksum = str(file_row.get("checksum") or "")
+        input_checksum = str(latest_task.get("input_checksum") or "")
+        is_built = bool(
+            str(latest_task.get("status") or "").lower() == "succeeded"
+            and input_checksum
+            and input_checksum == current_checksum
+            and not bool(file_row.get("is_deleted"))
+            and markdown_available
+            and chunk_count > 0
+            and embedded_chunk_count == chunk_count
+            and indexed_chunk_count == chunk_count
+        )
+        build_profile = latest_task.get("build_profile")
+        if isinstance(build_profile, str):
+            build_profile = json.loads(build_profile)
         result = {
             "knCode": request.kb_code,
+            "fileId": str(fs_entry_id),
             "filePath": request.file_path,
             "fileName": str(
                 file_row.get("name") or PurePosixPath(request.file_path).name
@@ -1214,10 +1313,31 @@ class KnowledgeBaseService:
             "fileType": PurePosixPath(request.file_path).suffix.lower().lstrip("."),
             "fileSize": int(file_row.get("file_size") or 0),
             "mimeType": file_row.get("mime_type"),
+            "currentChecksum": current_checksum,
+            "isBuilt": is_built,
             "build": {
-                "status": latest_task.get("status"),
-                "currentStep": latest_task.get("current_step"),
+                "taskId": str(self._row_id(latest_task)),
+                "batchId": (
+                    str(latest_task["batch_id"])
+                    if latest_task.get("batch_id") is not None
+                    else None
+                ),
+                "origin": str(latest_task.get("origin") or "API").upper(),
+                "executionMode": str(
+                    latest_task.get("execution_mode") or "BACKGROUND"
+                ).upper(),
+                "status": legacy_build_status(latest_task.get("status")),
+                "currentStep": legacy_build_step(
+                    status=latest_task.get("status"),
+                    current_step=latest_task.get("current_step"),
+                    current_stage=latest_task.get("current_stage"),
+                ),
+                "errorCode": latest_task.get("error_code"),
                 "errorMessage": latest_task.get("error_message"),
+                "inputChecksum": input_checksum,
+                "inputIsDeleted": bool(latest_task.get("input_is_deleted")),
+                "buildProfile": build_profile or {},
+                "buildProfileHash": str(latest_task.get("build_profile_hash") or ""),
                 "startedAt": self._isoformat(latest_task.get("started_at")),
                 "finishedAt": self._isoformat(latest_task.get("finished_at")),
                 "durationMs": duration_ms,
@@ -1838,13 +1958,40 @@ class KnowledgeBaseService:
         if self.knowledge_build_task_repository is None:
             return {}
         file_ids = [int(row["kid"]) for row in rows if row.get("type") == "file"]
-        build_rows = (
-            await self.knowledge_build_task_repository.get_latest_by_fs_entry_ids(
-                cursor,
-                fs_entry_ids=file_ids,
-            )
+        build_rows = await self.knowledge_build_task_repository.get_latest_current_by_fs_entry_ids(
+            cursor,
+            fs_entry_ids=file_ids,
         )
-        return {int(row["fs_entry_id"]): row for row in build_rows}
+        succeeded_ids = [
+            int(row["fs_entry_id"])
+            for row in build_rows
+            if str(row.get("status") or "").lower() == "succeeded"
+        ]
+        complete_ids = (
+            await self.knowledge_item_chunk_repository.get_complete_build_fs_entry_ids(
+                cursor, fs_entry_ids=succeeded_ids
+            )
+            if self.knowledge_item_chunk_repository is not None
+            else set()
+        )
+        build_rows = [
+            row
+            for row in build_rows
+            if str(row.get("status") or "").lower() != "succeeded"
+            or int(row["fs_entry_id"]) in complete_ids
+        ]
+        return {
+            int(row["fs_entry_id"]): {
+                **row,
+                "status": legacy_build_status(row.get("status")),
+                "current_step": legacy_build_step(
+                    status=row.get("status"),
+                    current_step=row.get("current_step"),
+                    current_stage=row.get("current_stage"),
+                ),
+            }
+            for row in build_rows
+        }
 
     async def _browse_metadata(
         self,

@@ -251,15 +251,6 @@ def register_routes(
 ):
     """Register knowledge base API routes on the FastAPI app."""
 
-    async def _run_file_to_markdown_index_task(service, request, *, build_task_id: int):
-        """Resolve heavy dependencies inside the background task itself."""
-        chunking_service = await _resolve_maybe_async(get_document_chunking_service)
-        await service.execute_file_to_markdown_index_task(
-            request,
-            document_chunking_service=chunking_service,
-            build_task_id=build_task_id,
-        )
-
     async def _get_knowledge_entity_service() -> KnowledgeEntityProcessingService:
         if get_knowledge_entity_processing_service is None:
             raise KnowledgeBaseConfigurationError(
@@ -1116,7 +1107,7 @@ def register_routes(
 
     @app.post("/api/v1/fileToMarkdownIndex")
     async def file_to_markdown_index(
-        background_tasks: BackgroundTasks, body: dict[str, Any] = Body(...)
+        body: dict[str, Any] = Body(...),
     ):
         logger.info(
             "file_to_markdown_index request received: body_keys=%s",
@@ -1132,13 +1123,7 @@ def register_routes(
 
         try:
             service = await get_knowledge_item_ingestion_service()
-            build_task_id = await service.create_file_to_markdown_index_task(request)
-            background_tasks.add_task(
-                _run_file_to_markdown_index_task,
-                service,
-                request,
-                build_task_id=build_task_id,
-            )
+            result = await service.accept_file_to_markdown_index(request)
         except KnowledgeBaseConfigurationError as exc:
             logger.warning("file_to_markdown_index configuration failed: error=%s", exc)
             return _documented_error_response(
@@ -1159,7 +1144,10 @@ def register_routes(
             request.kb_code,
             request.file_path,
         )
-        return _documented_success_response()
+        return _documented_success_response(
+            result_object=result,
+            result_msg="accepted",
+        )
 
     @app.post("/api/v1/fileBuildStatus")
     async def file_build_status(body: dict[str, Any] = Body(...)):
@@ -1915,8 +1903,15 @@ def register_routes(
             request.batch_id,
         )
         try:
-            service = await _get_knowledge_entity_service()
-            result = await service.get_processing_task_status(request)
+            ingestion_service = await get_knowledge_item_ingestion_service()
+            build_service = getattr(
+                ingestion_service, "file_build_processing_service", None
+            )
+            if build_service is not None:
+                result = await build_service.get_unified_processing_task_status(request)
+            else:
+                service = await _get_knowledge_entity_service()
+                result = await service.get_processing_task_status(request)
         except KnowledgeBaseConfigurationError as exc:
             return _documented_error_response(
                 result_msg=str(exc),
@@ -1956,8 +1951,15 @@ def register_routes(
             request.batch_id,
         )
         try:
-            service = await _get_knowledge_entity_service()
-            result = await service.get_processing_batch_status(request)
+            result = None
+            if request.batch_id.startswith("fb-"):
+                ingestion_service = await get_knowledge_item_ingestion_service()
+                result = await ingestion_service.file_build_processing_service.get_processing_batch_status(
+                    request
+                )
+            if result is None:
+                service = await _get_knowledge_entity_service()
+                result = await service.get_processing_batch_status(request)
         except KnowledgeBaseConfigurationError as exc:
             return _documented_error_response(
                 result_msg=str(exc),

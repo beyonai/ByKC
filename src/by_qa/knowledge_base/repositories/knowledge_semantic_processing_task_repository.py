@@ -433,6 +433,34 @@ class KnowledgeSemanticProcessingTaskRepository:
         )
         return await cursor.fetchone()
 
+    async def terminate_active_for_knowledge_base(
+        self, cursor: Any, *, knowledge_base_id: int
+    ) -> list[dict[str, Any]]:
+        """Fence semantic work before a knowledge base is deleted."""
+        await cursor.execute(
+            """
+            UPDATE knowledge_semantic_processing_task
+            SET status = 'skipped',
+                current_stage = 'skipped',
+                progress = 100,
+                error_code = 'KNOWLEDGE_BASE_DELETED',
+                error_message = 'Knowledge base was deleted',
+                failure_kind = NULL,
+                outcome_uncertain = (status = 'running'),
+                worker_id = NULL,
+                lease_token = NULL,
+                heartbeat_at = NULL,
+                lease_expires_at = NULL,
+                finished_at = NOW(),
+                updated_at = NOW()
+            WHERE knowledge_base_id = %(knowledge_base_id)s
+              AND status IN ('pending', 'running')
+            RETURNING *
+            """,
+            {"knowledge_base_id": knowledge_base_id},
+        )
+        return list(await cursor.fetchall())
+
     async def refresh_lease(
         self,
         cursor: Any,

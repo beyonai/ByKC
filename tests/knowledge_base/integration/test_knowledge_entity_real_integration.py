@@ -118,11 +118,11 @@ async def _mock_llm_complete(
             ensure_ascii=False,
         )
 
-    if "updating exactly one existing KnowledgeEntity" in system_prompt:
+    if "每次只更新一份已存在的 KnowledgeEntity" in system_prompt:
         identity = re.search(r"(?m)^- entityName:\s*(.+?)\s*$", user_prompt)
         assert identity is not None, "enrichment mock did not receive entityName"
         source_reference = re.search(
-            r"Source reference[^:]*:\s*(\[[^\n]+\]\([^\n]+\))", user_prompt
+            r"来源引用[^\n]*：\s*(\[[^\n]+\]\([^\n]+\))", user_prompt
         )
         assert source_reference is not None, (
             "enrichment mock did not receive a Markdown source reference"
@@ -131,7 +131,7 @@ async def _mock_llm_complete(
         reference = source_reference.group(1)
         digest = hashlib.sha256(user_prompt.encode("utf-8")).hexdigest()[:12]
         existing = re.search(
-            r"Existing Markdown .*?:\n(.*?)\n\nSoft template guidance",
+            r"完整旧 Markdown[^\n]*\n[^\n]*）：\n(.*?)\n\n软模板指引",
             user_prompt,
             flags=re.DOTALL,
         )
@@ -227,8 +227,9 @@ def _real_test_client() -> Iterable[TestClient]:
     """Run one real lifespan and release Redis on that lifespan's event loop."""
 
     # Other integration modules also exercise the module-level ASGI app and
-    # leave its terminal runner cached after lifespan shutdown.
+    # leave terminal Entity and File Build runners cached after lifespan shutdown.
     main_module._knowledge_entity_processing_service = None
+    main_module._knowledge_item_ingestion_service = None
     try:
         with TestClient(main_module.app) as client:
             try:
@@ -237,10 +238,11 @@ def _real_test_client() -> Iterable[TestClient]:
                 client.portal.call(main_module._unregister_service, main_module.app)
                 client.portal.call(close_redis)
     finally:
-        # ``stop()`` intentionally makes the application runner terminal. Each
-        # test lifespan therefore needs a newly wired runner instead of reusing
-        # the stopped module-level service from the previous TestClient.
+        # ``stop()`` intentionally makes application runners terminal. Each test
+        # lifespan therefore needs newly wired runners instead of reusing the
+        # stopped module-level services from the previous TestClient.
         main_module._knowledge_entity_processing_service = None
+        main_module._knowledge_item_ingestion_service = None
 
 
 def _assert_real_runtime_configuration() -> None:
@@ -373,7 +375,23 @@ def _build_markdown_index(
         "/api/v1/fileToMarkdownIndex",
         json={"knCode": kb_code, "filePath": file_path},
     )
-    _assert_success(response)
+    accepted = _assert_success(response)
+    batch_id = accepted["batchId"]
+    deadline = time.monotonic() + 10
+    batch_status = None
+    while time.monotonic() < deadline:
+        batch_status = _assert_success(
+            client.post(
+                "/api/v1/knowledgeItems/processingBatchStatus",
+                json={"knCode": kb_code, "batchId": batch_id},
+            )
+        )
+        if batch_status["status"] == "COMPLETED":
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail(f"Build batch did not complete: {batch_id}; {batch_status}")
+
     build_status = _assert_success(
         client.post(
             "/api/v1/fileBuildStatus",
@@ -1379,7 +1397,7 @@ def test_knowledge_entity_real_eligibility_and_request_matrix() -> None:
                     "/api/v1/knowledgeItems/processingTaskStatus",
                     json={"knCode": kb_code, "filePath": "/missing.md"},
                 ),
-                message="document not found",
+                message="file not found",
             )
 
             # KE-M2/M9: direct imports below the reserved directory receive the
@@ -2086,7 +2104,7 @@ entity and links to its canonical file.
                 task_type="ENTITY_DISCOVERY",
                 latest_only=False,
             )
-            assert all_tasks["total"] == source_tasks["total"] == 4
+            assert all_tasks["total"] == source_tasks["total"] == 3
             page_one = _task_page(
                 client,
                 kb_code=kb_code,

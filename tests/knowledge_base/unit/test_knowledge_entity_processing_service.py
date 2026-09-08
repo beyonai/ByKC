@@ -411,6 +411,43 @@ async def test_discovery_versions_are_audit_only_and_do_not_make_input_stale(
     assert result.reason_code == "INPUT_UNCHANGED"
 
 
+async def test_discovery_with_tags_creates_task_instead_of_reusing_fresh_result():
+    file_row = original()
+    service, _ = make_service([file_row])
+    fingerprint = service._fingerprint(
+        file_row, ProcessingCapability.ENTITY_DISCOVERY, []
+    )
+    tasks = Tasks(
+        [
+            {
+                "kid": 81,
+                "knowledge_base_id": 7,
+                "fs_entry_id": 10,
+                "file_path": file_row["file_path"],
+                "task_type": "ENTITY_DISCOVERY",
+                "status": "succeeded",
+                "input_fingerprint": fingerprint,
+                "method_version": "discovery/1.2",
+                "protocol_version": "entity-topic/1.0",
+                "finished_at": datetime.now(timezone.utc),
+            }
+        ]
+    )
+    service, _ = make_service([file_row], tasks=tasks)
+
+    accepted = await service.discover_knowledge_entities(
+        EntityDiscoveryRequest(
+            knCode="7",
+            filePath=file_row["file_path"],
+            tags=["project-a", "reviewed"],
+        )
+    )
+
+    assert accepted.accepted_count == 1
+    assert accepted.reused_count == 0
+    assert tasks.rows[-1]["request_params"]["tags"] == ["project-a", "reviewed"]
+
+
 async def test_enrich_fingerprint_canonicalizes_latest_relation_timestamp():
     service, _ = make_service([original()])
     entity = original(
@@ -1286,6 +1323,40 @@ async def test_force_reuses_active_task_even_when_fingerprint_changed():
     assert accepted.tasks[0].status.value == "RUNNING"
     assert len(service.knowledge_semantic_processing_task_repository.rows) == 1
     assert connection.locked_ids == [10]
+
+
+async def test_discovery_rejects_new_tags_while_different_tagged_task_is_active():
+    file_row = original()
+    tasks = Tasks(
+        [
+            {
+                "kid": 82,
+                "knowledge_base_id": 7,
+                "fs_entry_id": 10,
+                "file_path": file_row["file_path"],
+                "task_type": "ENTITY_DISCOVERY",
+                "status": "running",
+                "input_fingerprint": "old",
+                "request_params": {"tags": ["existing"]},
+                "finished_at": None,
+            }
+        ]
+    )
+    service, connection = make_service([file_row], tasks=tasks)
+
+    with pytest.raises(
+        processing_module.KnowledgeBaseValidationError,
+        match="already processing with different tags",
+    ):
+        await service.discover_knowledge_entities(
+            EntityDiscoveryRequest(
+                knCode="7",
+                filePath=file_row["file_path"],
+                tags=["requested"],
+            )
+        )
+
+    assert connection.rollbacks == 1
 
 
 async def test_status_filters_by_optional_file_and_hides_details():

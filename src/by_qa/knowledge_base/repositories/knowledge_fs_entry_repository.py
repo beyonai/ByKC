@@ -944,6 +944,12 @@ class KnowledgeFsEntryRepository:
         """Fetch one filesystem entry by id."""
         return await self._get_entry_by_id(cursor, entry_id=entry_id)
 
+    async def get_entry_by_id_for_update(
+        self, cursor: Any, *, entry_id: int
+    ) -> dict[str, Any] | None:
+        """Fetch and lock one live filesystem entry by id."""
+        return await self._get_entry_by_id(cursor, entry_id=entry_id, for_update=True)
+
     async def get_child_entry(
         self,
         cursor: Any,

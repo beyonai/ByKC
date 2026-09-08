@@ -613,9 +613,27 @@ class KnowledgeEntityProcessingOrchestrator:
                             task_type,
                         )
                         if reusable is not None:
+                            if (
+                                isinstance(request, EntityDiscoveryRequest)
+                                and request.tags
+                            ):
+                                active_params = (
+                                    normalize_json_mapping(
+                                        reusable.get("request_params")
+                                    )
+                                    or {}
+                                )
+                                active_tags = active_params.get("tags") or []
+                                if not all(tag in active_tags for tag in request.tags):
+                                    raise KnowledgeBaseValidationError(
+                                        "entity discovery is already processing with "
+                                        "different tags; retry after it reaches a terminal state"
+                                    )
                             skip_reason = "ALREADY_PROCESSING"
                             reused_task_id = self._row_id(reusable)
-                        elif not request.force:
+                        elif not request.force and not (
+                            isinstance(request, EntityDiscoveryRequest) and request.tags
+                        ):
                             reusable = await self._find_fresh_task(
                                 cursor,
                                 knowledge_base_id,

@@ -611,6 +611,77 @@ class KnowledgeEntityAssetService:
         finally:
             await connection.close()
 
+    async def append_file_tags(
+        self,
+        *,
+        knowledge_base_id: int,
+        fs_entry_id: int,
+        tags: Sequence[str],
+    ) -> None:
+        """Append tags to an existing KnowledgeEntity file without lost updates."""
+        requested_tags = list(dict.fromkeys(tags))
+        if not requested_tags:
+            return
+        connection = await self._connection_factory()
+        try:
+            cursor = connection.cursor()
+            file_row = await self._fs_entries.get_entry_by_id_for_update(
+                cursor, entry_id=fs_entry_id
+            )
+            if (
+                file_row is None
+                or int(file_row["knowledge_base_id"]) != knowledge_base_id
+                or file_row.get("entry_type") != "FILE"
+            ):
+                raise KnowledgeBaseValidationError(
+                    "tag target must be a live file in the same knowledge base"
+                )
+            rows = await self._file_metadata.get_file_metadata(
+                cursor,
+                fs_entry_id=fs_entry_id,
+                property_names=["tags"],
+            )
+            if len(rows) > 1 or (rows and rows[0].get("value_type") != "stringList"):
+                raise KnowledgeBaseValidationError(
+                    "existing KnowledgeEntity tags must be a single stringList value"
+                )
+            current_tags: list[str] = []
+            if rows:
+                stored = rows[0].get("value_string_list")
+                if isinstance(stored, str):
+                    try:
+                        stored = json.loads(stored)
+                    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                        raise KnowledgeBaseValidationError(
+                            "existing KnowledgeEntity tags contain invalid JSON"
+                        ) from exc
+                if not isinstance(stored, list) or not all(
+                    isinstance(item, str) for item in stored
+                ):
+                    raise KnowledgeBaseValidationError(
+                        "existing KnowledgeEntity tags must contain only strings"
+                    )
+                current_tags = stored
+            merged_tags = list(current_tags)
+            for tag in requested_tags:
+                if tag not in merged_tags:
+                    merged_tags.append(tag)
+            if merged_tags != current_tags:
+                await self._file_metadata.upsert_value(
+                    cursor,
+                    fs_entry_id=fs_entry_id,
+                    knowledge_base_id=knowledge_base_id,
+                    property_name="tags",
+                    value_type="stringList",
+                    value=merged_tags,
+                )
+            await connection.commit()
+        except Exception:
+            await connection.rollback()
+            raise
+        finally:
+            await connection.close()
+
     async def refresh_embeddings(
         self, *, knowledge_base_id: int, entity_id: int
     ) -> None:

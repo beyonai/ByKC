@@ -201,6 +201,22 @@ def test_discovery_and_enrich_accept_deprecated_extra_params_unchanged(field_nam
     assert enrich.model_dump()["extra_params"] == value
 
 
+def test_discovery_accepts_optional_string_tags():
+    omitted = EntityDiscoveryRequest.model_validate({"knCode": "1"})
+    tagged = EntityDiscoveryRequest.model_validate(
+        {"knCode": "1", "tags": ["project-a", "reviewed"]}
+    )
+
+    assert omitted.tags is None
+    assert tagged.tags == ["project-a", "reviewed"]
+
+
+@pytest.mark.parametrize("value", ["project-a", ["project-a", 1]])
+def test_discovery_rejects_tags_that_are_not_a_list_of_strings(value):
+    with pytest.raises(ValidationError):
+        EntityDiscoveryRequest.model_validate({"knCode": "1", "tags": value})
+
+
 @pytest.mark.parametrize("request_type", [EntityDiscoveryRequest, EntityEnrichRequest])
 def test_discovery_and_enrich_mark_extra_params_deprecated(request_type):
     field_schema = request_type.model_json_schema(by_alias=True)["properties"][
@@ -291,7 +307,11 @@ def test_discovery_route_uses_provider_and_never_accepts_http_callback():
 
     response = client.post(
         "/api/v1/knowledgeItems/entityDiscovery",
-        json={"knCode": "1", "extraParams": {"legacy": {"keep": True}}},
+        json={
+            "knCode": "1",
+            "tags": ["project-a", "reviewed"],
+            "extraParams": {"legacy": {"keep": True}},
+        },
     )
 
     assert response.status_code == 200
@@ -300,6 +320,7 @@ def test_discovery_route_uses_provider_and_never_accepts_http_callback():
     operation, request, callback = service.calls[0]
     assert operation == "discovery"
     assert request.file_path is None
+    assert request.tags == ["project-a", "reviewed"]
     assert request.model_dump()["extra_params"] == {"legacy": {"keep": True}}
     assert callback is None
 

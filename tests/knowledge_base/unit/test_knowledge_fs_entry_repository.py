@@ -49,6 +49,21 @@ async def test_checksum_lock_key_is_scoped_by_kb_and_checksum():
 
 
 @pytest.mark.asyncio
+async def test_get_entry_by_id_for_update_locks_live_entry():
+    row = {"kid": 20, "entry_type": "FILE", "is_deleted": False}
+    cursor = _RecordingCursor([row])
+
+    result = await KnowledgeFsEntryRepository().get_entry_by_id_for_update(
+        cursor, entry_id=20
+    )
+
+    assert result == row
+    sql, params = cursor.executed[0]
+    assert "FOR UPDATE" in sql
+    assert params == {"entry_id": 20}
+
+
+@pytest.mark.asyncio
 async def test_move_entry_reparents_and_rewrites_subtree_paths():
     repo = KnowledgeFsEntryRepository()
     cursor = _RecordingCursor(

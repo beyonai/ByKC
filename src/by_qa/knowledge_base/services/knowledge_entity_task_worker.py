@@ -188,6 +188,7 @@ class KnowledgeEntityTaskWorker:
             )
         )[0]
         request_params = context.request_params or {}
+        requested_tags = tuple(dict.fromkeys(request_params.get("tags") or ()))
         discovery = await self._discovery.discover(
             markdown,
             max_entities=int(
@@ -239,10 +240,12 @@ class KnowledgeEntityTaskWorker:
                 projection = await self._get_entity_by_file_id(
                     context, resolution.fs_entry_id
                 )
+            file_created = False
             if projection is None:
-                _, projection, _ = await self._create_or_reuse_entity(
+                _, projection, file_created = await self._create_or_reuse_entity(
                     context,
                     candidate=canonical_candidate,
+                    tags=requested_tags,
                 )
                 await self._asset_service.attach_file(
                     knowledge_base_id=int(context.knowledge_base_id),
@@ -251,6 +254,12 @@ class KnowledgeEntityTaskWorker:
                 )
             else:
                 await self._ensure_indexed(context, projection)
+            if requested_tags and not file_created:
+                await self._asset_service.append_file_tags(
+                    knowledge_base_id=int(context.knowledge_base_id),
+                    fs_entry_id=int(projection["kid"]),
+                    tags=requested_tags,
+                )
             projection = dict(projection)
             projection["entity_name"] = resolution.canonical_name
             projections.append(projection)
@@ -658,6 +667,7 @@ class KnowledgeEntityTaskWorker:
         context: KnowledgeEntityTaskContext | Any,
         *,
         candidate: DiscoveredEntity,
+        tags: Sequence[str] = (),
     ) -> tuple[int, dict[str, Any], bool]:
         aliases = self._candidate_aliases(candidate)
         content = self._render_entity_markdown(
@@ -672,6 +682,7 @@ class KnowledgeEntityTaskWorker:
             subject_file_id=None,
             entity_type=None,
             entity_enriched=False,
+            tags=tags,
         )
         path = self._entity_path(candidate.name)
         occupied = await self._get_entity_by_path(context, path)
@@ -1300,6 +1311,7 @@ class KnowledgeEntityTaskWorker:
         subject_file_id: int | None,
         entity_type: str | None,
         entity_enriched: bool,
+        tags: Sequence[str] = (),
     ) -> str:
         metadata: dict[str, Any] = {
             "documentKind": "knowledgeEntity",
@@ -1308,6 +1320,8 @@ class KnowledgeEntityTaskWorker:
             "aliases": list(aliases),
             ENTITY_ENRICHED_PROPERTY: entity_enriched,
         }
+        if tags:
+            metadata["tags"] = list(dict.fromkeys(tags))
         if subject_file_id is not None:
             metadata["subjectFileId"] = subject_file_id
         if entity_type:

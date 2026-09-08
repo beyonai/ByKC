@@ -31,6 +31,7 @@
 | `directoryPath` | string | 否 | - | 原始文档目录，递归处理子目录；未传 `filePath` 时生效 |
 | `maxEntities` | integer | 否 | `12` | 每个源文档的最大抽取实体数，不得超过 12 |
 | `force` | boolean | 否 | `false` | 是否跳过 freshness 判断；不跳过资格和权限校验 |
+| `tags` | array[string] | 否 | `null` | 追加到本次 Discovery 实际创建或锚定到的 KnowledgeEntity metadata |
 | `extraParams` | object | 否 | `null` | **已弃用**，仅为历史请求兼容而接收；服务端不修改其内容，也不使用、持久化或传入 Callback |
 
 HTTP 请求中不包含 `callback` 字段。历史客户端也可使用别名 `extra_params`；新接入不应再传入该字段。`extParams` 不是受支持的字段，传入时请求校验失败。
@@ -42,9 +43,12 @@ HTTP 请求中不包含 `callback` 字段。历史客户端也可使用别名 `e
   "knCode": "1",
   "filePath": "/原始文档/AI时代的组织革命.md",
   "maxEntities": 12,
-  "force": false
+  "force": false,
+  "tags": ["organization", "ai"]
 }
 ```
+
+`tags` 只写入当前任务实际创建或锚定到的 KnowledgeEntity，不写入被扫描的原始文档。已有标签顺序保持不变，请求中的新标签按传入顺序追加，重复字符串不会重复写入；空数组等价于不传。携带非空 `tags` 时不会复用历史已完成任务，以确保标签被应用。若同一源文档已有运行中的任务，只有其 tags 已覆盖本次请求时才复用；否则请求失败，调用方应在该任务进入终态后重试。
 
 兼容旧请求时可以携带 `extraParams`，但它不影响任务语义：
 

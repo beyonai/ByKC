@@ -26,6 +26,9 @@ from by_qa.knowledge_base.services.knowledge_entity_intelligence import (
     KnowledgeEntityOutputError,
     RelationCode,
 )
+from by_qa.knowledge_base.services.knowledge_entity_synonym_resolution import (
+    KnowledgeEntityAssetService,
+)
 from by_qa.knowledge_base.services.knowledge_entity_task_worker import (
     KnowledgeEntityTaskContext,
     KnowledgeEntityTaskWorker,
@@ -354,6 +357,7 @@ class FakeCreatedAssetService:
         self.topic_upserts: list[dict] = []
         self.topics = topics
         self.topic_requests: list[dict] = []
+        self.tag_appends: list[dict] = []
 
     async def resolve_candidate(self, **kwargs):
         return SimpleNamespace(
@@ -373,6 +377,9 @@ class FakeCreatedAssetService:
     async def upsert_topics(self, **kwargs):
         self.topic_upserts.append(kwargs)
         return []
+
+    async def append_file_tags(self, **kwargs):
+        self.tag_appends.append(kwargs)
 
     async def list_topics_for_entity_file(self, **kwargs):
         self.topic_requests.append(kwargs)
@@ -475,6 +482,72 @@ def make_worker(
 
 
 @pytest.mark.asyncio
+async def test_asset_service_appends_file_tags_under_file_lock():
+    factory = FakeConnectionFactory()
+
+    class FsEntries:
+        calls = []
+
+        async def get_entry_by_id_for_update(self, cursor, *, entry_id):
+            del cursor
+            self.calls.append(entry_id)
+            return {
+                "kid": entry_id,
+                "knowledge_base_id": 1,
+                "entry_type": "FILE",
+            }
+
+    class Metadata:
+        upserts = []
+
+        async def get_file_metadata(self, cursor, **kwargs):
+            del cursor
+            assert kwargs == {"fs_entry_id": 20, "property_names": ["tags"]}
+            return [
+                {
+                    "property_name": "tags",
+                    "value_type": "stringList",
+                    "value_string_list": '["existing", "shared"]',
+                }
+            ]
+
+        async def upsert_value(self, cursor, **kwargs):
+            del cursor
+            self.upserts.append(kwargs)
+            return {"kid": 1}
+
+    fs_entries = FsEntries()
+    metadata = Metadata()
+    service = KnowledgeEntityAssetService(
+        connection_factory=factory,
+        knowledge_base_repository=object(),
+        asset_repository=object(),
+        fs_entry_repository=fs_entries,
+        file_metadata_repository=metadata,
+        embedding_service=object(),
+        adjudicator=object(),
+    )
+
+    await service.append_file_tags(
+        knowledge_base_id=1,
+        fs_entry_id=20,
+        tags=["shared", "requested", "requested"],
+    )
+
+    assert fs_entries.calls == [20]
+    assert metadata.upserts == [
+        {
+            "fs_entry_id": 20,
+            "knowledge_base_id": 1,
+            "property_name": "tags",
+            "value_type": "stringList",
+            "value": ["existing", "shared", "requested"],
+        }
+    ]
+    assert factory.connections[-1].committed is True
+
+
+@pytest.mark.asyncio
 async def test_discovery_never_loads_or_builds_the_full_surface_vocabulary():
     source = file_row(10, "/docs/source.md", content_key="source")
     entity = file_row(
@@ -489,6 +562,7 @@ async def test_discovery_never_loads_or_builds_the_full_surface_vocabulary():
         "ByKC-基础问答引擎",
         "ByKC 的基础问答引擎负责回答。",
     )
+    tag_appends = []
 
     class AssetService:
         async def resolve_candidate(self, **kwargs):
@@ -510,6 +584,9 @@ async def test_discovery_never_loads_or_builds_the_full_surface_vocabulary():
         async def upsert_topics(self, **_kwargs):
             return []
 
+        async def append_file_tags(self, **kwargs):
+            tag_appends.append(kwargs)
+
     deps = make_worker(
         rows=[source, entity],
         objects={
@@ -529,6 +606,7 @@ async def test_discovery_never_loads_or_builds_the_full_surface_vocabulary():
             knowledge_base_id=1,
             source_file_id=10,
             file_path="/docs/source.md",
+            request_params={"tags": ["existing", "project-a", "project-a"]},
         )
     )
 
@@ -536,6 +614,13 @@ async def test_discovery_never_loads_or_builds_the_full_surface_vocabulary():
     assert result.index_version is None
     assert result.result_payload["actions"][0]["canonicalEntityId"] == 100
     assert result.result_payload["actions"][0]["resolutionMethod"] == "EXACT_ALIAS"
+    assert tag_appends == [
+        {
+            "knowledge_base_id": 1,
+            "fs_entry_id": 20,
+            "tags": ("existing", "project-a"),
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -575,11 +660,17 @@ async def test_discovery_persists_topics_after_entity_owner_resolution_without_f
             source_file_id=10,
             file_path="/docs/source.md",
             input_checksum="checksum-1",
+            request_params={"tags": ["project-a", "reviewed"]},
         )
     )
 
     assert len(deps.ingestion.uploads) == 1
     assert deps.ingestion.uploads[0].file_path == "/KnowledgeEntity/OpenClaw.md"
+    assert parse_front_matter(deps.ingestion.uploads[0].file_content)["tags"] == [
+        "project-a",
+        "reviewed",
+    ]
+    assert asset_service.tag_appends == []
     upsert = asset_service.topic_upserts[0]
     assert upsert["topics"] == [{"owner_entity_id": 100, "name": "上下文管理"}]
     assert result.result_payload["topicCount"] == 1

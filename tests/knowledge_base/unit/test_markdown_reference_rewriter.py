@@ -1,7 +1,11 @@
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
+from by_qa.knowledge_base.repositories.knowledge_file_reference_repository import (
+    KnowledgeFileReferenceRepository,
+)
 from by_qa.knowledge_base.services.markdown_reference_rewriter import (
     MarkdownReferenceRewriter,
 )
@@ -117,6 +121,106 @@ async def _rewrite(
         producer_run_id="markdown-run-1",
     )
     return out, reference_repository
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "README.md",
+        "./README.md#sec",
+        "/docs/p/README.md#sec",
+        "../p/README.md?download=1#sec",
+        "%52EADME.md#sec",
+    ],
+)
+async def test_self_reference_remains_original_without_relation_write(target):
+    cursor = AsyncMock()
+    fs_repository = FakeFsEntryRepository(files={"/docs/p/README.md": 37254})
+    text = f"[self]({target})"
+
+    result = await MarkdownReferenceRewriter().rewrite(
+        text,
+        source_dir="/docs/p",
+        knowledge_base_id=68,
+        source_fs_entry_id=37254,
+        cursor=cursor,
+        reference_repository=KnowledgeFileReferenceRepository(),
+        fs_entry_repository=fs_repository,
+    )
+
+    assert result == text
+    assert fs_repository.file_reference_calls == ["/docs/p/README.md"]
+    cursor.execute.assert_not_awaited()
+
+
+async def test_workflow_self_references_do_not_interrupt_other_references():
+    cursor = AsyncMock()
+    cursor.fetchone.return_value = {"kid": 51}
+    source_dir = "/Capabilities/Ontology building/Applications/Foundry Rules/Deploy"
+    self_link = (
+        "[alternate backing dataset](configure-workflow.md#alternate-backing-datasets)"
+    )
+    text = f"{self_link}\n[other](other.md#sec)\n{self_link}"
+
+    result = await MarkdownReferenceRewriter().rewrite(
+        text,
+        source_dir=source_dir,
+        knowledge_base_id=68,
+        source_fs_entry_id=37254,
+        cursor=cursor,
+        reference_repository=KnowledgeFileReferenceRepository(),
+        fs_entry_repository=FakeFsEntryRepository(
+            files={
+                f"{source_dir}/configure-workflow.md": 37254,
+                f"{source_dir}/other.md": 37255,
+            }
+        ),
+    )
+
+    assert result == f"{self_link}\n[other](byqa-ref://51#sec)\n{self_link}"
+    cursor.execute.assert_awaited_once()
+    assert cursor.execute.call_args.args[1]["target_fs_entry_id"] == 37255
+
+
+async def test_pure_anchor_bypasses_target_lookup_and_real_repository():
+    cursor = AsyncMock()
+    fs_repository = FakeFsEntryRepository(files={"/docs/p/README.md": 37254})
+    text = "[section](#sec)"
+
+    result = await MarkdownReferenceRewriter().rewrite(
+        text,
+        source_dir="/docs/p",
+        knowledge_base_id=68,
+        source_fs_entry_id=37254,
+        cursor=cursor,
+        reference_repository=KnowledgeFileReferenceRepository(),
+        fs_entry_repository=fs_repository,
+    )
+
+    assert result == text
+    assert fs_repository.file_reference_calls == []
+    cursor.execute.assert_not_awaited()
+
+
+async def test_other_file_reference_passes_real_repository_validation():
+    cursor = AsyncMock()
+    cursor.fetchone.return_value = {"kid": 51}
+
+    result = await MarkdownReferenceRewriter().rewrite(
+        "[other](./other.md#sec)",
+        source_dir="/docs/p",
+        knowledge_base_id=68,
+        source_fs_entry_id=37254,
+        cursor=cursor,
+        reference_repository=KnowledgeFileReferenceRepository(),
+        fs_entry_repository=FakeFsEntryRepository(files={"/docs/p/other.md": 37255}),
+    )
+
+    assert result == "[other](byqa-ref://51#sec)"
+    cursor.execute.assert_awaited_once()
+    params = cursor.execute.call_args.args[1]
+    assert params["source_fs_entry_id"] == 37254
+    assert params["target_fs_entry_id"] == 37255
 
 
 async def test_existing_file_target_creates_resolved_reference_token():

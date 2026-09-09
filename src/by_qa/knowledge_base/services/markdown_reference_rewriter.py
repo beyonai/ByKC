@@ -201,6 +201,10 @@ class MarkdownReferenceRewriter:
             target_file_id = (
                 self._row_value(target_file, "kid") if target_file is not None else None
             )
+            if target_file_id == source_fs_entry_id:
+                # Same-document links are valid Markdown, but not relation edges.
+                skipped_count += len(occurrences)
+                continue
             reference = await reference_repository.upsert_markdown_relation(
                 cursor,
                 knowledge_base_id=knowledge_base_id,

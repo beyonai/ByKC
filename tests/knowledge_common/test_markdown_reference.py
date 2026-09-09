@@ -34,6 +34,33 @@ def test_detect_reference_spans_image_takes_precedence_over_link():
     assert spans[0][4] is True
 
 
+def test_version_range_in_code_does_not_consume_later_link():
+    text = 'Use `compile "package:[0,1["`.\n\n' + "Details.\n" * 80
+    text += "See [imported](guide.md)."
+
+    spans = detect_reference_spans(text)
+
+    assert len(spans) == 1
+    start, end, label, target, is_image = spans[0]
+    assert text[start:end] == "[imported](guide.md)"
+    assert (label, target, is_image) == ("imported", "guide.md", False)
+
+
+def test_reference_detection_skips_code_and_preserves_code_in_link_labels():
+    text = (
+        "`[example](code.md)` ``![example `code`](code.png)``\n"
+        "```markdown\n[fenced](code.md)\n```\n"
+        "[Use `compile`](guide.md) ![The `result`](image.png)"
+    )
+
+    spans = detect_reference_spans(text)
+
+    assert [(label, target, image) for _, _, label, target, image in spans] == [
+        ("Use `compile`", "guide.md", False),
+        ("The `result`", "image.png", True),
+    ]
+
+
 def test_detect_reference_spans_ignores_bare_reference_tokens():
     text = "see [doc](../doc.md), ![img](images/x.png), and byqa-ref://12345"
     spans = detect_reference_spans(text)

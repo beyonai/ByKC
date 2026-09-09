@@ -1130,10 +1130,13 @@ class DocumentChunkingService:
         spans: list[tuple[int, int]] = []
         for s, e, _, _, _ in detect_reference_spans(text):
             if s < end_char and e > start_char:
-                spans.append((s, e))
+                # A reference can overlap multiple paragraph blocks. Keep
+                # each split inside its source block instead of duplicating
+                # the whole reference and counting its newlines again.
+                spans.append((max(s, start_char), min(e, end_char)))
         for s, e, _ in detect_reference_token_spans(text):
             if s < end_char and e > start_char:
-                spans.append((s, e))
+                spans.append((max(s, start_char), min(e, end_char)))
         return spans
 
     @staticmethod

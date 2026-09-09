@@ -14,6 +14,7 @@ IMAGE_REF_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 LINK_REF_RE = re.compile(r"(?<!!)\[([^\]]*)\]\(([^)]+)\)")
 REFERENCE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_])byqa-ref://([0-9]+)(?![A-Za-z0-9_])")
 URL_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*:")
+BACKTICK_CODE_RE = re.compile(r"(?<!`)(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)")
 
 
 def detect_reference_spans(text: str) -> list[tuple[int, int, str, str, bool]]:
@@ -25,17 +26,37 @@ def detect_reference_spans(text: str) -> list[tuple[int, int, str, str, bool]]:
     """
     spans: list[tuple[int, int, str, str, bool]] = []
     occupied: list[tuple[int, int]] = []
+    # Hide code from the link matcher while preserving source offsets. In
+    # particular, a version range like `[0,1[` must not open a link label
+    # that consumes later paragraphs up to a real Markdown link.
+    searchable_text = BACKTICK_CODE_RE.sub(lambda match: " " * len(match.group()), text)
 
     def overlaps(s: int, e: int) -> bool:
         return any(s < oe and e > os_ for os_, oe in occupied)
 
-    for m in IMAGE_REF_RE.finditer(text):
+    for m in IMAGE_REF_RE.finditer(searchable_text):
         if not overlaps(m.start(), m.end()):
-            spans.append((m.start(), m.end(), m.group(1), m.group(2), True))
+            spans.append(
+                (
+                    m.start(),
+                    m.end(),
+                    text[m.start(1) : m.end(1)],
+                    text[m.start(2) : m.end(2)],
+                    True,
+                )
+            )
             occupied.append((m.start(), m.end()))
-    for m in LINK_REF_RE.finditer(text):
+    for m in LINK_REF_RE.finditer(searchable_text):
         if not overlaps(m.start(), m.end()):
-            spans.append((m.start(), m.end(), m.group(1), m.group(2), False))
+            spans.append(
+                (
+                    m.start(),
+                    m.end(),
+                    text[m.start(1) : m.end(1)],
+                    text[m.start(2) : m.end(2)],
+                    False,
+                )
+            )
             occupied.append((m.start(), m.end()))
     spans.sort(key=lambda t: t[0])
     return spans

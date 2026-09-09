@@ -28,6 +28,48 @@ def _make_service() -> DocumentChunkingService:
     )
 
 
+def test_chunking_version_range_before_distant_link_has_valid_source_lines():
+    service = _make_service()
+    text = 'Use `compile "package:[0,1["`.\n\n'
+    text += "First paragraph.\n" * 40 + "\n"
+    text += "Second paragraph.\n" * 40
+    text += "See [imported](guide.md) for details.\n\nFinal paragraph."
+
+    chunks = service._split_text(text, ".md")
+
+    assert chunks
+    assert all(
+        1 <= chunk["start_line"] <= chunk["end_line"] <= len(text.splitlines())
+        for chunk in chunks
+    )
+    combined = "\n".join(chunk["chunk_text"] for chunk in chunks)
+    assert combined.count("[imported](guide.md)") == 1
+    assert combined.count("First paragraph.") == 40
+    assert combined.count("Second paragraph.") == 40
+
+
+def test_cross_paragraph_reference_splits_stay_within_source_blocks():
+    service = _make_service()
+    text = "[" + "First label line.\n" * 40 + "\n"
+    text += "Second label line.\n" * 40 + "](guide.md) tail."
+    blocks = service._build_blocks(text, treat_as_markdown=True)
+
+    for block in blocks:
+        parts = service._split_oversized_block(block, text, 819)
+        for part in parts:
+            assert block.start_char <= part.start_char < part.end_char <= block.end_char
+            assert (
+                block.start_line <= part.start_line <= part.end_line <= block.end_line
+            )
+            assert part.text == text[part.start_char : part.end_char]
+
+    chunks = service._split_text(text, ".md")
+    combined = "\n".join(chunk["chunk_text"] for chunk in chunks)
+    assert combined.count("First label line.") == 40
+    assert combined.count("Second label line.") == 40
+    assert all(chunk["start_line"] <= chunk["end_line"] for chunk in chunks)
+
+
 def test_extract_text_from_file_accepts_text_types_case_insensitively():
     """Direct service callers should get case-insensitive text type handling."""
     service = _make_service()

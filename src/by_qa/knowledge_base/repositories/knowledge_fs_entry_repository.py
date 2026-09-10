@@ -30,7 +30,6 @@ class KnowledgeFsEntryRepository:
         current_path_ltree: str | None = None
         current_virtual_path: str = "/"
         path_segments = normalized_path.split("/")
-        await self._lock_entry_tree_for_write(cursor)
 
         for index, segment in enumerate(path_segments[:-1], start=1):
             existing = await self._get_child_entry(
@@ -38,6 +37,7 @@ class KnowledgeFsEntryRepository:
                 knowledge_base_id=knowledge_base_id,
                 parent_entry_id=current_parent_id,
                 name=segment,
+                for_share=True,
             )
             if existing is not None:
                 if existing.get("entry_type") != "DIRECTORY":
@@ -101,6 +101,7 @@ class KnowledgeFsEntryRepository:
         full_path: str,
         file_description: str | None = None,
         created_parent_entries: list[dict[str, Any]] | None = None,
+        create_missing_parents: bool = True,
     ) -> dict[str, Any] | None:
         """Create one file entry under an existing parent directory."""
         normalized_path = full_path.strip("/")
@@ -111,7 +112,6 @@ class KnowledgeFsEntryRepository:
         current_path_ltree: str | None = None
         current_virtual_path: str = "/"
         path_segments = normalized_path.split("/")
-        await self._lock_entry_tree_for_write(cursor)
 
         for index, segment in enumerate(path_segments[:-1], start=1):
             existing = await self._get_child_entry(
@@ -119,6 +119,7 @@ class KnowledgeFsEntryRepository:
                 knowledge_base_id=knowledge_base_id,
                 parent_entry_id=current_parent_id,
                 name=segment,
+                for_share=True,
             )
             if existing is not None:
                 if existing.get("entry_type") != "DIRECTORY":
@@ -130,6 +131,9 @@ class KnowledgeFsEntryRepository:
                 current_path_ltree = self._row_value(existing, "path_ltree")
                 current_virtual_path = self._row_value(existing, "virtual_path")
                 continue
+
+            if not create_missing_parents:
+                raise ValueError(f"parent directory not found: {normalized_path}")
 
             parent_directory, created = await self._insert_directory_entry(
                 cursor,
@@ -165,62 +169,69 @@ class KnowledgeFsEntryRepository:
             if current_virtual_path != "/"
             else f"/{path_segments[-1]}"
         )
-        await cursor.execute(
-            """
-            INSERT INTO knowledge_fs_entry (
-                knowledge_base_id,
-                parent_entry_id,
-                entry_type,
-                is_root,
-                name,
-                path_ltree,
-                depth,
-                description,
-                virtual_path,
-                file_bucket_name,
-                file_object_key,
-                markdown_bucket_name,
-                markdown_object_key,
-                file_size,
-                mime_type,
-                checksum,
-                line_count,
-                created_at,
-                updated_at
+        try:
+            await cursor.execute(
+                """
+                INSERT INTO knowledge_fs_entry (
+                    knowledge_base_id,
+                    parent_entry_id,
+                    entry_type,
+                    is_root,
+                    name,
+                    path_ltree,
+                    depth,
+                    description,
+                    virtual_path,
+                    file_bucket_name,
+                    file_object_key,
+                    markdown_bucket_name,
+                    markdown_object_key,
+                    file_size,
+                    mime_type,
+                    checksum,
+                    line_count,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    %(knowledge_base_id)s,
+                    %(parent_entry_id)s,
+                    'FILE',
+                    FALSE,
+                    %(name)s,
+                    %(path_ltree)s::ltree,
+                    %(depth)s,
+                    %(description)s,
+                    %(virtual_path)s,
+                    NULL,
+                    NULL,
+                    NULL,
+                    NULL,
+                    NULL,
+                    NULL,
+                    NULL,
+                    NULL,
+                    NOW(),
+                    NOW()
+                )
+                RETURNING kid, knowledge_base_id, parent_entry_id, path_ltree, name, entry_type, is_root, depth, virtual_path
+                """,
+                {
+                    "knowledge_base_id": knowledge_base_id,
+                    "parent_entry_id": current_parent_id,
+                    "name": path_segments[-1],
+                    "path_ltree": path_ltree,
+                    "depth": len(path_segments),
+                    "description": file_description,
+                    "virtual_path": virtual_path,
+                },
             )
-            VALUES (
-                %(knowledge_base_id)s,
-                %(parent_entry_id)s,
-                'FILE',
-                FALSE,
-                %(name)s,
-                %(path_ltree)s::ltree,
-                %(depth)s,
-                %(description)s,
-                %(virtual_path)s,
-                NULL,
-                NULL,
-                NULL,
-                NULL,
-                NULL,
-                NULL,
-                NULL,
-                NULL,
-                NOW(),
-                NOW()
-            )
-            RETURNING kid, knowledge_base_id, parent_entry_id, path_ltree, name, entry_type, is_root, depth, virtual_path
-            """,
-            {
-                "knowledge_base_id": knowledge_base_id,
-                "parent_entry_id": current_parent_id,
-                "name": path_segments[-1],
-                "path_ltree": path_ltree,
-                "depth": len(path_segments),
-                "description": file_description,
-                "virtual_path": virtual_path,
-            },
-        )
+        except Exception as exc:
+            if self._is_unique_violation(exc):
+                raise ValueError(
+                    f"file path already exists: /{normalized_path}"
+                ) from exc
+            raise
         return await cursor.fetchone()
 
     async def update_file_entry_storage(
@@ -437,11 +448,6 @@ class KnowledgeFsEntryRepository:
         return (
             getattr(exc, "sqlstate", None) == "23505"
             or getattr(exc, "pgcode", None) == "23505"
-        )
-
-    async def _lock_entry_tree_for_write(self, cursor: Any) -> None:
-        await cursor.execute(
-            "LOCK TABLE knowledge_fs_entry IN SHARE ROW EXCLUSIVE MODE"
         )
 
     async def lock_checksum_scope(
@@ -797,6 +803,7 @@ class KnowledgeFsEntryRepository:
         knowledge_base_id: int,
         parent_entry_id: int | None,
         name: str,
+        for_share: bool = False,
     ) -> dict[str, Any] | None:
         if parent_entry_id is None:
             await cursor.execute(
@@ -824,7 +831,8 @@ class KnowledgeFsEntryRepository:
                   AND parent_entry_id IS NULL
                   AND name = %(name)s
                   AND is_deleted = FALSE
-                """,
+                """
+                + (" FOR SHARE" if for_share else ""),
                 {
                     "knowledge_base_id": knowledge_base_id,
                     "name": name,
@@ -856,7 +864,8 @@ class KnowledgeFsEntryRepository:
                   AND parent_entry_id = %(parent_entry_id)s
                   AND name = %(name)s
                   AND is_deleted = FALSE
-                """,
+                """
+                + (" FOR SHARE" if for_share else ""),
                 {
                     "knowledge_base_id": knowledge_base_id,
                     "parent_entry_id": parent_entry_id,

@@ -207,6 +207,30 @@ class KnowledgeItemIngestionService:
                     f"knowledge base not found: {request.kb_code}"
                 )
             knowledge_base_id = self._row_id(kb_row)
+            # Commit shared directories before any slow external storage write.
+            # Failed file uploads intentionally leave these directories in place.
+            parent_path = normalized_object_path.rpartition("/")[0]
+            if parent_path:
+                created_directories: list[dict[str, Any]] = []
+                try:
+                    await self.knowledge_fs_entry_repository.create_directory_entry(
+                        cursor,
+                        knowledge_base_id=knowledge_base_id,
+                        full_path=parent_path,
+                        created_directory_entries=created_directories,
+                    )
+                except ValueError as exc:
+                    raise KnowledgeBaseValidationError(str(exc)) from exc
+                for directory in created_directories:
+                    await upsert_entry_metadata(
+                        cursor,
+                        metadata_repository=self.file_metadata_value_repository,
+                        fs_entry_id=self._row_id(directory),
+                        knowledge_base_id=knowledge_base_id,
+                        metadata=request.metadata or {},
+                    )
+                await connection.commit()
+
             checksum = hashlib.sha256(request.file_content).hexdigest()
             await self.knowledge_fs_entry_repository.lock_checksum_scope(
                 cursor,
@@ -227,7 +251,6 @@ class KnowledgeItemIngestionService:
                         f"{duplicate['virtual_path']}"
                     )
 
-            created_parent_entries: list[dict[str, Any]] = []
             try:
                 file_entry_row = (
                     await self.knowledge_fs_entry_repository.create_file_entry(
@@ -235,7 +258,7 @@ class KnowledgeItemIngestionService:
                         knowledge_base_id=knowledge_base_id,
                         full_path=normalized_object_path,
                         file_description=request.file_description,
-                        created_parent_entries=created_parent_entries,
+                        create_missing_parents=False,
                     )
                 )
             except ValueError as exc:
@@ -282,15 +305,6 @@ class KnowledgeItemIngestionService:
                 normalized_object_path, mime_type
             ):
                 front_matter = parse_front_matter(request.file_content)
-            if request.metadata is not None:
-                for parent_entry in created_parent_entries:
-                    await upsert_entry_metadata(
-                        cursor,
-                        metadata_repository=self.file_metadata_value_repository,
-                        fs_entry_id=self._row_id(parent_entry),
-                        knowledge_base_id=knowledge_base_id,
-                        metadata=request.metadata,
-                    )
             await upsert_entry_metadata(
                 cursor,
                 metadata_repository=self.file_metadata_value_repository,

@@ -347,6 +347,15 @@ class KnowledgeBaseService:
         finally:
             await connection.close()
 
+    @staticmethod
+    async def _lock_entry_for_tree_mutation(cursor: Any, entry_id: int) -> None:
+        # Wait for uploads holding shared ancestor locks before taking the
+        # subtree snapshot, so newly committed files are included in the change.
+        await cursor.execute(
+            "SELECT kid FROM knowledge_fs_entry WHERE kid = %(entry_id)s FOR UPDATE",
+            {"entry_id": entry_id},
+        )
+
     async def delete_directory(self, request: DeleteDirectoryRequest) -> None:
         """Logically delete one directory subtree and its retrieval projection rows."""
         logger.info(
@@ -381,6 +390,7 @@ class KnowledgeBaseService:
                     f"directory not found: {request.directory_path}"
                 )
             root_fs_entry_id = int(directory_row["kid"])
+            await self._lock_entry_for_tree_mutation(cursor, root_fs_entry_id)
             fs_entry_ids = (
                 await self.knowledge_fs_entry_repository.list_subtree_entry_ids(
                     cursor,
@@ -523,6 +533,7 @@ class KnowledgeBaseService:
                     f"directory not found: {request.directory_path}"
                 )
             fs_entry_id = int(fs_entry_row["kid"])
+            await self._lock_entry_for_tree_mutation(cursor, fs_entry_id)
             moved: list = []
             locator_updates: list = []
 
@@ -752,6 +763,8 @@ class KnowledgeBaseService:
         )
         if source is None:
             raise KnowledgeBaseValidationError(f"source path not found: {source_path}")
+
+        await self._lock_entry_for_tree_mutation(cursor, int(source["kid"]))
 
         target_parent_path, target_name, target_path = await self._resolve_move_target(
             request=request,

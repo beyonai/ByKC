@@ -49,6 +49,14 @@ class FakeFsEntryRepository:
         self.duplicate_path = duplicate_path
         self.auto_created_parent_entries = []
 
+    async def create_directory_entry(
+        self, cursor, *, created_directory_entries=None, **kwargs
+    ):
+        self.calls.append(("create_directory_entry", kwargs))
+        if created_directory_entries is not None:
+            created_directory_entries.extend(self.auto_created_parent_entries)
+        return {"kid": 70}
+
     async def create_file_entry(
         self,
         cursor,
@@ -57,6 +65,7 @@ class FakeFsEntryRepository:
         full_path,
         file_description=None,
         created_parent_entries=None,
+        create_missing_parents=True,
     ):
         self.calls.append(
             (
@@ -68,7 +77,7 @@ class FakeFsEntryRepository:
                 },
             )
         )
-        if created_parent_entries is not None:
+        if create_missing_parents and created_parent_entries is not None:
             created_parent_entries.extend(self.auto_created_parent_entries)
         return {
             "kid": 71,
@@ -318,7 +327,10 @@ async def test_markdown_upload_rewrites_inside_transaction_before_storage_and_co
     assert names.index("update_file_entry_storage") < names.index(
         "resolve_pending_for_path"
     )
-    assert names.index("resolve_pending_for_path") < names.index("commit")
+    commits = [i for i, name in enumerate(names) if name == "commit"]
+    assert len(commits) == 2
+    assert commits[0] < names.index("create_file_entry")
+    assert names.index("resolve_pending_for_path") < commits[1]
 
     storage_call = calls[names.index("storage_write")][1]
     assert storage_call["content"] == b"![later](byqa-ref://501)\n"
@@ -371,9 +383,10 @@ async def test_storage_write_failure_rolls_back_references_and_runs_cleanup():
     assert "upsert_markdown_relation" in names
     assert names.index("upsert_markdown_relation") < names.index("storage_write")
     assert names.index("rollback") < names.index("storage_delete_quietly")
-    assert "commit" not in names
+    assert names.count("commit") == 1
+    assert names.index("commit") < names.index("create_file_entry")
     assert connection.rolled_back is True
-    assert connection.committed is False
+    assert connection.committed is True  # Only the directory transaction committed.
 
 
 async def test_upload_duplicate_guard_rejects_before_entry_or_storage_mutation():

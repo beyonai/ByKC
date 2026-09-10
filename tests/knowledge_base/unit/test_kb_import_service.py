@@ -411,6 +411,7 @@ class FakeKnowledgeFsEntryRepository:
         full_path,
         file_description=None,
         created_parent_entries=None,
+        create_missing_parents=True,
     ):
         self.calls.append(
             (
@@ -425,7 +426,7 @@ class FakeKnowledgeFsEntryRepository:
         if self.raise_missing_parent_directory:
             parent_path = full_path.strip("/").rsplit("/", 1)[0]
             raise ValueError(f"parent directory not found: {parent_path}")
-        if created_parent_entries is not None:
+        if create_missing_parents and created_parent_entries is not None:
             created_parent_entries.extend(self.auto_created_parent_entries)
         return {
             "kid": 71,

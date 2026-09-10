@@ -17,7 +17,10 @@ class FakeConnection:
         self.closed = 0
 
     def cursor(self):
-        return object()
+        return self
+
+    async def execute(self, statement, params=None):
+        pass
 
     async def commit(self):
         self.committed += 1

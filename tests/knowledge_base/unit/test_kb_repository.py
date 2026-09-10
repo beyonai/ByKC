@@ -196,10 +196,7 @@ async def test_create_directory_entry_executes_insert_sql():
         directory_description=None,
     )
 
-    assert (
-        cursor.executed[0][0]
-        == "LOCK TABLE knowledge_fs_entry IN SHARE ROW EXCLUSIVE MODE"
-    )
+    assert all("LOCK TABLE" not in sql for sql, _ in cursor.executed)
     insert_sql, params = next(
         (sql, params)
         for sql, params in cursor.executed

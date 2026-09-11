@@ -101,7 +101,7 @@ Agent DSL
   "where": {
     "and": [
       {"eq": {"fieldName": "status", "value": "active"}},
-      {"contains": {"fieldName": "tags", "value": "contract"}}
+      {"containsAny": {"fieldName": "tags", "value": ["contract", "legal"]}}
     ]
   }
 }
@@ -140,7 +140,9 @@ Agent DSL
 - `eq`
 - `ne`
 - `in`
-- `contains`
+- `contains`（不建议使用）
+- `containsAll`
+- `containsAny`
 - `exists`
 - `gt`
 - `gte`
@@ -166,7 +168,7 @@ Agent DSL
 {
   "and": [
     {"eq": {"fieldName": "status", "value": "active"}},
-    {"contains": {"fieldName": "tags", "value": "contract"}}
+    {"containsAny": {"fieldName": "tags", "value": ["contract", "legal"]}}
   ]
 }
 ```
@@ -193,14 +195,16 @@ Agent DSL
 
 不支持：
 
-- `contains`
+- `contains` / `containsAll` / `containsAny`
 - `gt` / `gte` / `lt` / `lte`
 
 ### stringList
 
 | 叶子操作符 | 用例 | 用例含义 |
 | --- | --- | --- |
-| `contains` | `{"contains": {"fieldName": "tags", "value": "contract"}}` | `tags` 列表中包含元素 `contract`。 |
+| `containsAll` | `{"containsAll": {"fieldName": "tags", "value": ["contract", "legal"]}}` | `tags` 列表同时包含 `contract` 和 `legal`。 |
+| `containsAny` | `{"containsAny": {"fieldName": "tags", "value": ["contract", "legal"]}}` | `tags` 列表至少包含 `contract` 或 `legal` 中的一个。 |
+| `contains`（不建议使用） | `{"contains": {"fieldName": "tags", "value": "contract"}}` | 兼容旧请求；表示 `tags` 列表中包含单个元素 `contract`。新请求建议使用语义明确的 `containsAll` 或 `containsAny`。 |
 | `exists` | `{"exists": {"fieldName": "tags"}}` | 文件上存在 `tags` 字段且值非空。 |
 
 不支持：
@@ -221,7 +225,7 @@ Agent DSL
 
 不支持：
 
-- `contains`
+- `contains` / `containsAll` / `containsAny`
 - `prefix` / `wildcard`
 
 ### boolean
@@ -234,7 +238,7 @@ Agent DSL
 
 不支持：
 
-- `contains`
+- `contains` / `containsAll` / `containsAny`
 - `gt` / `gte` / `lt` / `lte`
 - `prefix` / `wildcard`
 
@@ -249,7 +253,7 @@ Agent DSL
 
 不支持：
 
-- `contains`
+- `contains` / `containsAll` / `containsAny`
 - `prefix` / `wildcard`
 
 ## `prefix` / `wildcard` 的使用规则
@@ -287,13 +291,13 @@ Agent DSL
 - `number`：`value` 必须是数值，不接受布尔值
 - `boolean`：`value` 必须是布尔值
 - `datetime`：`value` 必须是 ISO 8601 字符串，如 `2026-05-15T10:00:00Z`
-- `stringList`：仅支持 `contains` 和 `exists`；其中 `contains.value` 必须是单个字符串
+- `stringList`：支持 `containsAll`、`containsAny`、`contains` 和 `exists`；`containsAll.value` 与 `containsAny.value` 必须是非空字符串数组，`contains.value` 必须是单个字符串
 
 额外规则：
 
 - `exists` 不应携带 `value`
 - `in.value` 必须是非空数组
-- `in` 不适用于 `stringList`，请改用 `contains`
+- `in` 不适用于 `stringList`，请根据语义改用 `containsAll` 或 `containsAny`
 - `gt/gte/lt/lte` 仅适用于 `number` 和 `datetime`
 
 ## 当前局限性
@@ -301,10 +305,10 @@ Agent DSL
 当前实现是“受控 DSL”，目的是让调用方能稳定地表达常见过滤条件，而不是提供一门无限扩展的查询语言。主要局限如下：
 
 - 仅支持 `and` / `or` / `not` 三种布尔操作
-- 仅支持 11 个叶子操作符，不支持 `between`、`regex`、脚本表达式等
+- 仅支持 13 个叶子操作符，不支持 `between`、`regex`、脚本表达式等
 - 最大布尔嵌套深度为 `3`
 - 最大叶子条件数为 `12`
-- `stringList` 只支持 `contains` 和 `exists`
+- `stringList` 支持 `containsAll`、`containsAny`、`contains` 和 `exists`；`contains` 仅为兼容旧请求保留，不建议新请求继续使用
 
 ## 使用建议
 
@@ -314,7 +318,11 @@ Agent DSL
 2. 通配匹配
    - 只需要“某前缀开头”时优先用 `prefix`
    - 只有确实需要 `*` / `?` 语义时再使用 `wildcard`
-3. 条件复杂度
+3. 列表匹配
+   - 要求全部值都存在时使用 `containsAll`
+   - 只要求任意值存在时使用 `containsAny`
+   - `contains` 不建议使用，仅用于兼容单值旧请求
+4. 条件复杂度
    - 尽量避免过深嵌套
    - 尽量控制叶子条件数量，便于排查错误
 

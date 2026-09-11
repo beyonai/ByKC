@@ -41,7 +41,7 @@ Agent DSL 版纯元数据检索，同一份请求同时查询文件和目录。�
   "where": {
     "and": [
       {"eq": {"fieldName": "status", "value": "active"}},
-      {"contains": {"fieldName": "tags", "value": "contract"}}
+      {"containsAny": {"fieldName": "tags", "value": ["contract", "legal"]}}
     ]
   },
   "metadataFieldList": ["status", "tags", "fileSignature"],

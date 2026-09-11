@@ -41,6 +41,22 @@ def test_contains_string_list():
     assert "contract" in str(params.values())
 
 
+def test_contains_all_string_list_uses_one_jsonb_containment_predicate():
+    where = {"containsAll": {"fieldName": "tags", "value": ["legal", "contract"]}}
+    sql, params = compile_where_to_sql(where, property_map=PROPERTY_MAP)
+    assert sql.count("value_string_list @>") == 1
+    assert '["legal", "contract"]' in params.values()
+
+
+def test_contains_any_string_list_ors_jsonb_containment_predicates():
+    where = {"containsAny": {"fieldName": "tags", "value": ["legal", "contract"]}}
+    sql, params = compile_where_to_sql(where, property_map=PROPERTY_MAP)
+    assert sql.count("value_string_list @>") == 2
+    assert " OR " in sql
+    assert '["legal"]' in params.values()
+    assert '["contract"]' in params.values()
+
+
 def test_and_combination():
     where = {
         "and": [

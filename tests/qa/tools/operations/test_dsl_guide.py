@@ -24,6 +24,12 @@ def test_dsl_guide_content_describes_nesting_and_leaf_limits():
     assert "leaf conditions: 12" in DSL_GUIDE_CONTENT
 
 
+def test_dsl_guide_recommends_explicit_string_list_operators():
+    assert "containsAll" in DSL_GUIDE_CONTENT
+    assert "containsAny" in DSL_GUIDE_CONTENT
+    assert "contains (not recommended)" in DSL_GUIDE_CONTENT
+
+
 def test_dsl_guide_tool_uses_configured_limits(monkeypatch):
     from by_qa.config import Settings
     from by_qa.qa.tools import dsl_guide

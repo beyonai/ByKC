@@ -4,23 +4,31 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Callable
+from typing import Annotated, Any, Callable, get_args
 
 import httpx
-from langchain.agents.middleware import AgentMiddleware, ToolCallRequest
+from langchain.agents.middleware import (
+    AgentMiddleware,
+    AgentState,
+    ToolCallRequest,
+    hook_config,
+)
+from langchain.agents.middleware.types import PrivateStateAttr
 from langchain.tools import ToolRuntime, tool
 from langchain_core.messages import HumanMessage, ToolMessage
+from langgraph.managed import RemainingSteps
 from langgraph.runtime import Runtime
 from langgraph.types import Command
 from langgraph.typing import ContextT, StateT
 from pydantic import ConfigDict
+from typing_extensions import NotRequired
 
 from by_qa.core import logger, post_discovered_json
 from by_qa.core.exceptions import (
     KnowledgeBaseNotFoundOrForbiddenError,
     OperationNotSupportedError,
 )
-from by_qa.core.logger import error, info
+from by_qa.core.logger import error, info, warning
 from by_qa.qa.common.config import KnowledgeBaseConfig
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.messages import agent_metadata
@@ -44,6 +52,8 @@ from by_qa.qa.tools.operations.base import (
     _normalize_headers,
 )
 from by_qa.qa.tools.operations.knowledge_search import KnowledgeSearchOperation
+
+_PrivateRemainingSteps = Annotated[int, PrivateStateAttr, get_args(RemainingSteps)[1]]
 
 
 def _format_operation_error(
@@ -358,8 +368,20 @@ class ServiceToolDispatcher:
         return resp
 
 
+class DispatcherToolState(AgentState):
+    """State used to exit an agent loop before its recursion budget is exhausted."""
+
+    # PrivateStateAttr keeps the managed value out of create_agent's generated
+    # input/output schemas. The public RemainingSteps manager stays last so
+    # LangGraph recognizes and populates the managed channel.
+    remaining_steps: NotRequired[_PrivateRemainingSteps]
+    recursion_fallback_required: NotRequired[bool]
+
+
 class DispatcherToolMiddleware(AgentMiddleware):
     """Post-processes dispatcher tool results: injects index_id, artifact, follow-up prompt."""
+
+    state_schema = DispatcherToolState
 
     def __init__(
         self,
@@ -402,6 +424,7 @@ class DispatcherToolMiddleware(AgentMiddleware):
             missing.append(self._dsl_guide_tool_name)
         return missing
 
+    @hook_config(can_jump_to=["end"])
     async def abefore_model(
         self,
         state: StateT,
@@ -409,6 +432,16 @@ class DispatcherToolMiddleware(AgentMiddleware):
     ) -> dict[str, Any] | None:
         """Inject follow-up prompt if the last tool call was a knowledge search."""
         _ = runtime
+        remaining_steps = state.get("remaining_steps")
+        if remaining_steps is not None and remaining_steps <= 2:
+            warning(
+                "[dispatcher] LangGraph recursion budget is nearly exhausted; "
+                "routing to fallback"
+            )
+            return {
+                "recursion_fallback_required": True,
+                "jump_to": "end",
+            }
         messages = state.get("messages", [])
         if not messages:
             return None
@@ -539,6 +572,7 @@ class DispatcherToolMiddleware(AgentMiddleware):
 
 
 __all__ = [
+    "DispatcherToolState",
     "DispatcherToolMiddleware",
     "ServiceToolDispatcher",
 ]

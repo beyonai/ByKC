@@ -16,6 +16,10 @@ from langgraph.types import Command
 from by_qa.core.logger import error, info
 from by_qa.core.model_config import LLMModelProfile
 from by_qa.qa.agents.multi_hop_summarizer import build_multi_hop_summary_subgraph
+from by_qa.qa.agents.recursion_fallback import (
+    build_recursion_fallback_node,
+    should_use_recursion_fallback,
+)
 from by_qa.qa.common.config import AgentOverride
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.messages import agent_metadata, is_user_message
@@ -47,6 +51,7 @@ class MultiHopState(TypedDict):
     retrieval_results: Annotated[list[dict[str, Any]], merge_list_with_mode]
     sub_answers: Annotated[list[SubAnswer], merge_list_with_mode]
     result_counter: int
+    recursion_fallback_required: bool
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +64,7 @@ class MultiHopNodeNames(str, Enum):
     AGENT = "multi_hop_agent"
     EXIT = "multi_hop_exit"
     SUMMARY = "multi_hop_summary"
+    RECURSION_FALLBACK = "recursion_fallback"
 
 
 # ---------------------------------------------------------------------------
@@ -392,6 +398,7 @@ async def multi_hop_entry_node(state: MultiHopState) -> Dict[str, Any]:
         "reasoning_chain": [],
         "retrieval_results": {"mode": "RESET", "data": []},
         "result_counter": 0,
+        "recursion_fallback_required": False,
     }
 
 
@@ -471,15 +478,27 @@ async def build_multi_hop_subgraph(
         override=summary_override,
         checkpointer=checkpointer,
     )
+    fallback_node = build_recursion_fallback_node(
+        llm_service=llm_service, query_type="multi-hop"
+    )
 
     workflow = StateGraph(MultiHopState, context_schema=QARuntimeContext)
     workflow.add_node(MultiHopNodeNames.ENTRY.value, multi_hop_entry_node)
     workflow.add_node(MultiHopNodeNames.AGENT.value, agent_graph)
     workflow.add_node(MultiHopNodeNames.SUMMARY.value, summary_graph)
+    workflow.add_node(MultiHopNodeNames.RECURSION_FALLBACK.value, fallback_node)
     workflow.set_entry_point(MultiHopNodeNames.ENTRY.value)
     workflow.add_edge(MultiHopNodeNames.ENTRY.value, MultiHopNodeNames.AGENT.value)
-    workflow.add_edge(MultiHopNodeNames.AGENT.value, MultiHopNodeNames.SUMMARY.value)
+    workflow.add_conditional_edges(
+        MultiHopNodeNames.AGENT.value,
+        should_use_recursion_fallback,
+        {
+            True: MultiHopNodeNames.RECURSION_FALLBACK.value,
+            False: MultiHopNodeNames.SUMMARY.value,
+        },
+    )
     workflow.add_edge(MultiHopNodeNames.SUMMARY.value, END)
+    workflow.add_edge(MultiHopNodeNames.RECURSION_FALLBACK.value, END)
     compiled = workflow.compile(checkpointer=checkpointer)
     info("[multi_hop] Compiled multi-hop subgraph with streaming support")
     return compiled

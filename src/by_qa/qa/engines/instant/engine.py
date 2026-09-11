@@ -26,6 +26,7 @@ USER_VISIBLE_ROLES: dict[str, list[str] | None] = {
     NodeNames.SINGLE_HOP_WORKER.value: None,
     SingleHopNodeNames.AGENT.value: None,
     SingleHopNodeNames.SUMMARY.value: None,
+    SingleHopNodeNames.RECURSION_FALLBACK.value: None,
     NodeNames.MULTI_HOP_WORKER.value: None,
     NodeNames.SUBANSWER_AGGREGATOR.value: None,
     NodeNames.FINAL_ANSWER.value: None,

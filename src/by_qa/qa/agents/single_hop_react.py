@@ -10,6 +10,10 @@ from langgraph.graph.message import add_messages
 
 from by_qa.core.logger import info
 from by_qa.core.model_config import LLMModelProfile
+from by_qa.qa.agents.recursion_fallback import (
+    build_recursion_fallback_node,
+    should_use_recursion_fallback,
+)
 from by_qa.qa.common.config import AgentOverride
 from by_qa.qa.common.context import QARuntimeContext
 from by_qa.qa.common.messages import agent_metadata
@@ -35,6 +39,7 @@ class SingleHopState(TypedDict):
     retrieval_results: Annotated[list[dict[str, Any]], merge_list_with_mode]
     sub_answers: Annotated[list[SubAnswer], merge_list_with_mode]
     messages: Annotated[list, add_messages]
+    recursion_fallback_required: bool
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +51,7 @@ class SingleHopNodeNames(str, Enum):
     ENTRY = "single_hop_entry"
     AGENT = "single_hop_agent"
     SUMMARY = "single_hop_summary"
+    RECURSION_FALLBACK = "recursion_fallback"
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +249,7 @@ async def single_hop_entry_node(state: SingleHopState) -> Dict[str, Any]:
         "retrieval_results": {"mode": "RESET", "data": []},
         "cited_indices": [],
         "result_counter": 0,
+        "recursion_fallback_required": False,
     }
 
 
@@ -330,15 +337,27 @@ async def build_single_hop_subgraph(
         llm_service=llm_service,
         checkpointer=checkpointer,
     )
+    fallback_node = build_recursion_fallback_node(
+        llm_service=llm_service, query_type="single-hop"
+    )
 
     workflow = StateGraph(SingleHopState, context_schema=QARuntimeContext)
     workflow.add_node(SingleHopNodeNames.ENTRY.value, single_hop_entry_node)
     workflow.add_node(SingleHopNodeNames.AGENT.value, agent_graph)
     workflow.add_node(SingleHopNodeNames.SUMMARY.value, single_hop_summary_node)
+    workflow.add_node(SingleHopNodeNames.RECURSION_FALLBACK.value, fallback_node)
     workflow.set_entry_point(SingleHopNodeNames.ENTRY.value)
     workflow.add_edge(SingleHopNodeNames.ENTRY.value, SingleHopNodeNames.AGENT.value)
-    workflow.add_edge(SingleHopNodeNames.AGENT.value, SingleHopNodeNames.SUMMARY.value)
+    workflow.add_conditional_edges(
+        SingleHopNodeNames.AGENT.value,
+        should_use_recursion_fallback,
+        {
+            True: SingleHopNodeNames.RECURSION_FALLBACK.value,
+            False: SingleHopNodeNames.SUMMARY.value,
+        },
+    )
     workflow.add_edge(SingleHopNodeNames.SUMMARY.value, END)
+    workflow.add_edge(SingleHopNodeNames.RECURSION_FALLBACK.value, END)
     return workflow.compile(checkpointer=checkpointer)
 
 

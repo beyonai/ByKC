@@ -219,7 +219,7 @@ async def test_builder_appends_override_middleware_for_agents_without_defaults(
 
 
 @pytest.mark.asyncio
-async def test_single_hop_agent_graph_preserves_defaults_and_appends_override_middleware():
+async def test_single_hop_agent_graph_places_recursion_guard_closest_to_model():
     captured = {}
     extra = _ProbeMiddleware()
 
@@ -244,12 +244,12 @@ async def test_single_hop_agent_graph_preserves_defaults_and_appends_override_mi
     middleware = captured["middleware"]
     assert len(middleware) == 3
     assert isinstance(middleware[0], ToolCallGuardMiddleware)
-    assert isinstance(middleware[1], DispatcherToolMiddleware)
-    assert middleware[2] is extra
+    assert middleware[1] is extra
+    assert isinstance(middleware[2], DispatcherToolMiddleware)
 
 
 @pytest.mark.asyncio
-async def test_multi_hop_agent_graph_preserves_defaults_and_appends_override_middleware():
+async def test_multi_hop_agent_graph_places_recursion_guard_closest_to_model():
     captured = {}
     extra = _ProbeMiddleware()
 
@@ -274,8 +274,8 @@ async def test_multi_hop_agent_graph_preserves_defaults_and_appends_override_mid
     middleware = captured["middleware"]
     assert len(middleware) == 3
     assert isinstance(middleware[0], ToolCallGuardMiddleware)
-    assert isinstance(middleware[1], DispatcherToolMiddleware)
-    assert middleware[2] is extra
+    assert middleware[1] is extra
+    assert isinstance(middleware[2], DispatcherToolMiddleware)
 
 
 @pytest.mark.asyncio

@@ -439,13 +439,13 @@ async def build_multi_hop_agent_graph(
     tools = [next_hop, finalize] + list(override.tools)
     middleware = [
         ToolCallGuardMiddleware(),
+        *override.middleware,
         DispatcherToolMiddleware(
             index_id_fn=lambda sub_query_idx, step, item_id: (
                 f"{sub_query_idx}-{step}-{item_id}"
             ),
             follow_up_prompt="A retrieval has been completed. If this retrieval did not collect sufficient information, continue calling search_knowledge to collect more. Otherwise, immediately call next_hop to clean up context and proceed to the next query. If all retrievals are complete, immediately call finalize to end the multi-hop retrieval and generate the final answer.",
         ),
-        *override.middleware,
     ]
     return create_agent(
         model=llm,

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Annotated, Any, TypedDict
 
 import pytest
+from langchain.agents.middleware import AgentMiddleware
 from langchain.tools import tool
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage
@@ -42,6 +43,14 @@ class _FakeLLMService:
     async def get_model_config(self, model_type):
         assert model_type == LLMModelProfile.STANDARD
         return SimpleNamespace(max_model_len=None)
+
+
+class _ExtraBeforeModelMiddleware(AgentMiddleware):
+    """Represent configurable middleware that adds a graph step before the model."""
+
+    async def abefore_model(self, state, runtime):
+        del state, runtime
+        return None
 
 
 @pytest.mark.asyncio
@@ -166,7 +175,10 @@ async def test_multi_hop_loop_limit_skips_normal_summary_and_uses_fallback():
     llm_service = _FakeLLMService([looping_model, unused_summary_model, fallback_model])
 
     graph = await build_multi_hop_subgraph(
-        agent_override=AgentOverride(tools=[search_knowledge]),
+        agent_override=AgentOverride(
+            tools=[search_knowledge],
+            middleware=[_ExtraBeforeModelMiddleware()],
+        ),
         llm_service=llm_service,
         checkpointer=False,
     )
@@ -186,7 +198,7 @@ async def test_multi_hop_loop_limit_skips_normal_summary_and_uses_fallback():
             "reasoning_chain": [],
             "result_counter": 0,
         },
-        config={"recursion_limit": 6},
+        config={"recursion_limit": 8},
         context=QARuntimeContext(
             retrieval=QARetrievalConfig(),
             llm_service=llm_service,

@@ -304,13 +304,13 @@ async def build_single_hop_agent_graph(
     tools = list(override.tools)
     middleware = [
         ToolCallGuardMiddleware(),
+        *override.middleware,
         DispatcherToolMiddleware(
             index_id_fn=lambda sub_query_idx, step, item_id: (
                 f"{sub_query_idx}-{step}-{item_id}"
             ),
             follow_up_prompt="If the current evidence is still insufficient to answer the question, continue calling search_knowledge to collect more information; if it is already sufficient, output the final answer directly based on existing evidence, do not call tools again.",
         ),
-        *override.middleware,
     ]
     return create_agent(
         model=llm,

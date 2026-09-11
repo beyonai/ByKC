@@ -74,7 +74,7 @@ def _custom_field_filter(
 def _query_value_type(operator: str, value: Any) -> str:
     if operator in ("prefix", "wildcard"):
         return "string"
-    if operator == "contains":
+    if operator in {"contains", "containsAll", "containsAny"}:
         return "stringList"
     if operator in ORDER_OPS and isinstance(value, str):
         if _parse_datetime_literal(value) is not None:
@@ -195,10 +195,10 @@ def _compile_node(
             f"AND mv.{col} LIKE %({val_key})s ESCAPE '{LIKE_ESCAPE_CHAR}')"
         )
 
-    if operator == "contains":
-        # `contains` is validator-restricted to user-defined stringList
-        # fields; no system-field branch here.
-        body = node["contains"]
+    if operator in {"contains", "containsAll", "containsAny"}:
+        # These operators are validator-restricted to user-defined stringList
+        # fields; there is no system-field branch here.
+        body = node[operator]
         field_name = body["fieldName"]
         value = body["value"]
         prop = property_map[field_name]
@@ -206,11 +206,20 @@ def _compile_node(
         filters = _custom_field_filter(
             ctx, field_name=field_name, value_type=value_type
         )
-        val_key = ctx.next_param(json.dumps([value]))
+        values = [value] if operator == "contains" else value
+        if operator == "containsAny":
+            predicates = []
+            for item in values:
+                val_key = ctx.next_param(json.dumps([item]))
+                predicates.append(f"mv.value_string_list @> %({val_key})s::jsonb")
+            value_predicate = "(" + " OR ".join(predicates) + ")"
+        else:
+            val_key = ctx.next_param(json.dumps(values))
+            value_predicate = f"mv.value_string_list @> %({val_key})s::jsonb"
         return (
             f"EXISTS (SELECT 1 FROM knowledge_file_metadata_value mv "
             f"WHERE {filters} "
-            f"AND mv.value_string_list @> %({val_key})s::jsonb)"
+            f"AND {value_predicate})"
         )
 
     if operator == "in":

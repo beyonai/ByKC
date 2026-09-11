@@ -7611,6 +7611,64 @@ async def test_metadata_pagination_system_signatures_and_file_guards(
 
 
 @pytest.mark.integration
+def test_metadata_search_string_list_contains_all_and_any(monkeypatch, tmp_path):
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Metadata contains {uuid4().hex[:12]}")
+        tagged_files = {
+            "/both.md": ["contract", "legal"],
+            "/contract.md": ["contract"],
+            "/hr.md": ["hr"],
+        }
+        for file_path, tags in tagged_files.items():
+            _upload_file(
+                client,
+                kb_code=kb_code,
+                file_path=file_path,
+                file_content=b"# Tagged\n",
+            )
+            response = _update_file_metadata(
+                client,
+                kb_code=kb_code,
+                file_path=file_path,
+                operation_list=[
+                    {
+                        "propertyName": "tags",
+                        "operation": "set",
+                        "valueType": "stringList",
+                        "value": tags,
+                    }
+                ],
+            )
+            assert response.json()["resultCode"] == "0", response.json()
+
+        def matching_paths(where: dict) -> set[str]:
+            response = client.post(
+                "/api/v1/knowledgeItems/metadataSearch",
+                json={"knCodeList": [kb_code], "where": where},
+            ).json()
+            assert response["resultCode"] == "0", response
+            return {item["filePath"] for item in response["resultObject"]["data"]}
+
+        assert matching_paths(
+            {
+                "containsAll": {
+                    "fieldName": "tags",
+                    "value": ["contract", "legal"],
+                }
+            }
+        ) == {"/both.md"}
+        assert matching_paths(
+            {"containsAny": {"fieldName": "tags", "value": ["legal", "hr"]}}
+        ) == {"/both.md", "/hr.md"}
+        assert matching_paths(
+            {"contains": {"fieldName": "tags", "value": "contract"}}
+        ) == {"/both.md", "/contract.md"}
+
+
+@pytest.mark.integration
 def test_metadata_search_uses_unchanged_request_for_files_and_directories(
     monkeypatch, tmp_path
 ):

@@ -238,6 +238,39 @@ def test_contains_value_must_be_single_string():
     assert exc_info.value.error_list[0].code == "INVALID_FIELD_VALUE_TYPE"
 
 
+@pytest.mark.parametrize("operator", ["containsAll", "containsAny"])
+def test_contains_list_operators_accept_non_empty_string_array(operator):
+    validate_where_clause(
+        {operator: {"fieldName": "tags", "value": ["a", "b"]}},
+        known_fields=KNOWN_FIELDS,
+    )
+
+
+@pytest.mark.parametrize("operator", ["containsAll", "containsAny"])
+@pytest.mark.parametrize("value", [[], "a"])
+def test_contains_list_operators_require_non_empty_array(operator, value):
+    where = {operator: {"fieldName": "tags", "value": value}}
+    with pytest.raises(DslValidationError) as exc_info:
+        validate_where_clause(where, known_fields=KNOWN_FIELDS)
+    assert exc_info.value.error_list[0].path == f"where.{operator}.value"
+
+
+@pytest.mark.parametrize("operator", ["containsAll", "containsAny"])
+def test_contains_list_operators_require_string_elements(operator):
+    where = {operator: {"fieldName": "tags", "value": ["a", 2]}}
+    with pytest.raises(DslValidationError) as exc_info:
+        validate_where_clause(where, known_fields=KNOWN_FIELDS)
+    assert exc_info.value.error_list[0].path == f"where.{operator}.value[1]"
+
+
+@pytest.mark.parametrize("operator", ["containsAll", "containsAny"])
+def test_contains_list_operators_only_support_string_list_fields(operator):
+    where = {operator: {"fieldName": "status", "value": ["a"]}}
+    with pytest.raises(DslValidationError) as exc_info:
+        validate_where_clause(where, known_fields=KNOWN_FIELDS)
+    assert exc_info.value.error_list[0].path == f"where.{operator}.fieldName"
+
+
 def test_exists_must_not_carry_value():
     where = {"exists": {"fieldName": "status", "value": "x"}}
     with pytest.raises(DslValidationError) as exc_info:

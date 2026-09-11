@@ -14,6 +14,8 @@ LEAF_OPERATORS = {
     "ne",
     "in",
     "contains",
+    "containsAll",
+    "containsAny",
     "exists",
     "gt",
     "gte",
@@ -267,20 +269,20 @@ def _validate_leaf(
         )
         return
 
-    if operator == "contains":
+    if operator in {"contains", "containsAll", "containsAny"}:
         if value_type != "stringList":
             errors.append(
                 DslValidationDetail(
-                    path=f"{path}.contains.fieldName",
+                    path=f"{path}.{operator}.fieldName",
                     code="INVALID_FIELD_VALUE_TYPE",
                     message=(
-                        f"'contains' is only valid for stringList fields; "
+                        f"'{operator}' is only valid for stringList fields; "
                         f"'{field_name}' is {value_type}"
                     ),
                 )
             )
             return
-        if not isinstance(value, str):
+        if operator == "contains" and not isinstance(value, str):
             errors.append(
                 DslValidationDetail(
                     path=f"{path}.contains.value",
@@ -288,6 +290,26 @@ def _validate_leaf(
                     message="'contains' value must be a string",
                 )
             )
+        elif operator != "contains":
+            if not isinstance(value, list) or not value:
+                errors.append(
+                    DslValidationDetail(
+                        path=f"{path}.{operator}.value",
+                        code="INVALID_FIELD_VALUE_TYPE",
+                        message=f"'{operator}' value must be a non-empty array",
+                    )
+                )
+                return
+            for i, item in enumerate(value):
+                if not isinstance(item, str):
+                    errors.append(
+                        DslValidationDetail(
+                            path=f"{path}.{operator}.value[{i}]",
+                            code="INVALID_FIELD_VALUE_TYPE",
+                            message=f"'{operator}' value at index {i} must be a string",
+                        )
+                    )
+                    return
         return
 
     if operator == "in":
@@ -297,7 +319,8 @@ def _validate_leaf(
                     path=f"{path}.in.fieldName",
                     code="INVALID_FIELD_VALUE_TYPE",
                     message=(
-                        "'in' is not supported for stringList fields; use 'contains'"
+                        "'in' is not supported for stringList fields; use "
+                        "'containsAll' or 'containsAny'"
                     ),
                 )
             )
@@ -381,7 +404,7 @@ def _value_matches_type(value: Any, value_type: str) -> bool:
 def _infer_query_value_type(operator: str, value: Any) -> str:
     if operator in ("prefix", "wildcard"):
         return "string"
-    if operator == "contains":
+    if operator in {"contains", "containsAll", "containsAny"}:
         return "stringList"
     if operator == "in" and isinstance(value, list) and value:
         return _infer_query_value_type("eq", value[0])

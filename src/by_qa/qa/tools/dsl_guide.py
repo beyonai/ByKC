@@ -19,27 +19,30 @@ def _build_dsl_guide_content(max_depth: int, max_leaf_count: int) -> str:
         "### Leaf Operators by Field Type\n\n"
         "**string fields** (e.g. status, fileName):\n"
         "Supported: eq, ne, in, exists, prefix, wildcard\n"
-        "NOT supported: contains, gt, gte, lt, lte\n\n"
+        "NOT supported: contains, containsAll, containsAny, gt, gte, lt, lte\n\n"
         "**stringList fields** (e.g. tags):\n"
-        "Supported: contains, exists\n"
+        "Supported: containsAll, containsAny, contains (not recommended), exists\n"
         "NOT supported: eq, ne, in, gt, gte, lt, lte, prefix, wildcard\n\n"
         "**number fields** (e.g. priority):\n"
         "Supported: eq, ne, in, exists, gt, gte, lt, lte\n"
-        "NOT supported: contains, prefix, wildcard\n\n"
+        "NOT supported: contains, containsAll, containsAny, prefix, wildcard\n\n"
         "**boolean fields** (e.g. archived):\n"
         "Supported: eq, ne, in, exists\n"
-        "NOT supported: contains, gt, gte, lt, lte, prefix, wildcard\n\n"
+        "NOT supported: contains, containsAll, containsAny, gt, gte, lt, lte, prefix, wildcard\n\n"
         "**datetime fields** (e.g. publishedAt):\n"
         "Supported: eq, ne, in, exists, gt, gte, lt, lte\n"
-        "NOT supported: contains, prefix, wildcard\n\n"
+        "NOT supported: contains, containsAll, containsAny, prefix, wildcard\n\n"
         "### Value Type Rules\n"
         "- string field: value must be a string\n"
         "- number field: value must be a number (not boolean)\n"
         "- boolean field: value must be a boolean (true/false)\n"
         "- datetime field: value must be an ISO 8601 string, e.g. '2026-05-15T10:00:00Z'\n"
-        "- stringList field: only 'contains' (value is a single string) and 'exists' are supported\n"
+        "- stringList field: 'containsAll' requires all strings in its non-empty array to be present; "
+        "'containsAny' requires at least one string to be present; 'contains' accepts one string "
+        "but is not recommended; 'exists' checks that the field has a value\n"
         "- exists: should not carry a 'value' key\n"
-        "- in: value must be a non-empty array; not applicable to stringList (use 'contains' instead)\n"
+        "- in: value must be a non-empty array; not applicable to stringList "
+        "(use 'containsAll' or 'containsAny' instead)\n"
         "- prefix: string type only; matches values starting with the given prefix\n"
         "- wildcard: string type only; '*' matches zero or more characters, '?' matches exactly one character\n"
         "- gt/gte/lt/lte: number and datetime types only\n\n"
@@ -52,7 +55,7 @@ def _build_dsl_guide_content(max_depth: int, max_leaf_count: int) -> str:
         "2. Boolean combination (AND):\n"
         '  {"where": {"and": [\n'
         '    {"eq": {"fieldName": "status", "value": "active"}},\n'
-        '    {"contains": {"fieldName": "tags", "value": "contract"}}\n'
+        '    {"containsAny": {"fieldName": "tags", "value": ["contract", "legal"]}}\n'
         "  ]}}\n\n"
         "3. Nested boolean with range:\n"
         '  {"where": {"and": [\n'
@@ -65,7 +68,7 @@ def _build_dsl_guide_content(max_depth: int, max_leaf_count: int) -> str:
         "### Error Response Format\n"
         "On DSL validation failure, the API returns:\n"
         '  {"errorCode": "DSL_VALIDATION_ERROR", "errorList": [\n'
-        '    {"path": "where.and[1].contains.fieldName",\n'
+        '    {"path": "where.and[1].containsAny.fieldName",\n'
         '     "code": "UNKNOWN_FIELD",\n'
         '     "message": "fieldName \'tagz\' is not defined"}\n'
         "  ]}\n"

@@ -139,6 +139,11 @@ Enrich 不得改变实体身份、权限和证据边界，但文档章节、标�
 `031` 按同一规则回填历史 live FILE；读取层保留相同的兼容默认，
 以支持滚动升级和未及时回填的存量数据。
 
+`/KnowledgeEntity` 只是未指定 Discovery 输出目录时的默认组织位置，
+不是 KnowledgeEntity 的身份边界。Discovery 在其他目录新建实体文件时
+必须显式写入 `documentKind=knowledgeEntity`；已有实体文件被移动时
+保留原 metadata，不按新路径重新推断文档类型。
+
 ### 5.2 原始文档 metadata
 
 | 属性 | 必需 | 说明 |
@@ -191,9 +196,16 @@ knowledgeEntity -> [entityEnrich]
 `processingCapabilities` 只用于覆盖默认策略。例如原始文档设置为空列表，表示该文档不参与实体发现。v1 不对 Enrich 后的 KnowledgeEntity 再执行实体发现，避免形成处理循环。
 系统不为默认能力物化 `processingCapabilities`，以便保留“缺失表示使用默认、显式空列表表示禁用”的区别。
 
-Discovery 和 Enrich 都支持单文件或全库触发。全库触发仍逐文件应用上述资格规则：Discovery 枚举本库全部合格 original 文档，并排除固定 `/KnowledgeEntity` 目录；Enrich 只枚举本库 `/KnowledgeEntity` 下的合格 knowledgeEntity 文档。未传文件路径不代表跳过资格校验。
+Discovery 和 Enrich 都支持单文件、目录或全库触发；两者都使用
+`filePath` 定位单文件，使用 `directoryPath` 定位目录，两者都不传时
+表示全库触发。全库触发仍逐文件应用上述资格规则：
+Discovery 枚举本库全部合格 original 文档，并排除所有显式
+`documentKind=knowledgeEntity` 的文件及兼容的 `/KnowledgeEntity` 子树；
+Enrich 按 `documentKind=knowledgeEntity` 枚举指定目录或整个知识库中的
+实体文件，不以 `/KnowledgeEntity` 作为硬路径限制。未传定位路径
+不代表跳过资格校验。
 
-输入文件还必须是当前版本支持的文本格式。Discovery 中，文件存在后缀时，以 `.md`、`.markdown`、`.txt`、`.html`、`.htm` 和 `.csv` 白名单为准；仅对无后缀文件使用规范化的 `text/*` MIME 回退判定。PDF 和 Office 文件即使已生成 Markdown sidecar 也不参与 Discovery，资格结果为 `UNSUPPORTED_FILE_FORMAT`。Enrich 先要求目标位于 `/KnowledgeEntity`，否则返回 `KNOWLEDGE_ENTITY_PATH_REQUIRED`；再硬性限制后缀为 `.md/.markdown`，否则返回 `UNSUPPORTED_CONTENT_TYPE`。上述检查位于 capability 判定之后、`CONTENT_NOT_READY` 之前。
+输入文件还必须是当前版本支持的文本格式。Discovery 中，文件存在后缀时，以 `.md`、`.markdown`、`.txt`、`.html`、`.htm` 和 `.csv` 白名单为准；仅对无后缀文件使用规范化的 `text/*` MIME 回退判定。PDF 和 Office 文件即使已生成 Markdown sidecar 也不参与 Discovery，资格结果为 `UNSUPPORTED_FILE_FORMAT`。Enrich 先要求目标为 `documentKind=knowledgeEntity`，再硬性限制后缀为 `.md/.markdown`，否则返回 `UNSUPPORTED_CONTENT_TYPE`。上述检查位于 capability 判定之后、`CONTENT_NOT_READY` 之前。
 
 “可以执行”和“现在需要执行”分开判断：
 
@@ -394,20 +406,28 @@ LLM 必须返回一份由文档内容决定的完整显著实体集。AC 结果�
 
 向量召回只产生 top-K 候选，不直接触发合并。阈值必须用真实标注集校准，不使用未经验证的固定 95% 阈值。
 
-### 9.6 阶段 E：持久化
+### 9.6 阶段 E：持久化与输出目录
 
-持久化目标固定为源文档所在知识库的 `/KnowledgeEntity` 目录；目录不存在时由系统自动创建。接口不提供 `targetKnCode` 或 `targetDirectoryPath`，v1 不把整理出的实体写入其他知识库。
+Discovery 仅在源文档所在知识库内创建或整理实体，不提供
+`targetKnCode`。请求可选传入 `targetDirectoryPath` 指定库内输出目录：
+
+- 未传入时，新实体保存到 `/KnowledgeEntity`，已有实体保持原文件路径；
+- 传入时，新实体直接保存到该目录，已有实体按需移动到该目录；
+- 目标目录不存在时由系统在同一知识库内递归创建；
+- 实体已在目标目录时为幂等 no-op；
+- 目标同名路径被另一文件占用时不覆盖，任务失败并保留原文件。
 
 对已有实体：
 
 - 只在当前知识库中锚定已有实体，并建立原始文档到实体的 `MENTIONS`；
+- 仅当请求显式指定 `targetDirectoryPath` 时移动实体文件；
 - v1 Discovery 不自动改写已有实体的 `entityName` 或 `aliases`；候选别名只参与本次身份匹配，显式元数据治理另行执行；
 - 不直接覆盖实体正文；
 - 可根据策略触发 Enrich。
 
 对新实体：
 
-1. 在当前知识库 `/KnowledgeEntity` 下创建 `documentKind=knowledgeEntity` 文档；
+1. 在当前知识库的有效输出目录下创建 `documentKind=knowledgeEntity` 文档；
 2. 写入 `entityName`、`aliases` 和可选 `subjectFileId`；
 3. 正文至少包含实体定义与边界、初始证据和非链接形式的来源路径；
 4. 建立原始文档到新实体的 `MENTIONS`；
@@ -418,8 +438,18 @@ LLM 必须返回一份由文档内容决定的完整显著实体集。AC 结果�
 实体文件使用规范名派生的单一可读路径：
 
 ```text
-/KnowledgeEntity/{normalized-readable-name}.md
+{effective-output-directory}/{normalized-readable-name}.md
 ```
+
+`effective-output-directory` 在未传参时为 `/KnowledgeEntity`，否则为规范化后的
+`targetDirectoryPath`。移动只改变文件组织位置，不改变 canonical entity ID、
+entity file ID、metadata 或基于稳定 ID 的关系。移动必须复用通用文件
+移动的事务语义，同步更新文件树、路径绑定对象、检索投影和缓存。
+
+Discovery 受理响应中的 `targetPath` 继续表示源文件或源目录的扫描范围，
+不用于表示实体输出目录。每个实体的最终路径由文件任务结果中的
+`actions[].filePath` 返回；结果重放另外返回 `previousFilePath` 和
+`moveAction=MOVED|UNCHANGED`，使调用方可以区分身份锚定与文件整理。
 
 文件名不附加 MD5、哈希签名或数字序号。同一知识库中该路径已经存在时，不创建第二份文件，而是按同一个 KnowledgeEntity 实例处理：现有文件必须是 `documentKind=knowledgeEntity`，其 `entityName` 与候选规范化后相同，或暂时缺失；subject-local 实体的 `subjectFileId` 必须一致。缺失的 `entityName` 只在当前任务内用候选名完成锚定，Discovery 不静默回写元数据或合并别名。现有文件为普通文档、`entityName` 明显不同或 subject 身份不一致时属于数据冲突，任务失败并要求显式治理。
 
@@ -429,9 +459,29 @@ LLM 必须返回一份由文档内容决定的完整显著实体集。AC 结果�
 
 - 单文件和全库请求都按“一个实际处理文件一条任务记录”执行，同批文件共享 `batchId`；
 - 任务状态按知识库查询，文件路径可选；需要查看某次触发时再用 `batchId` 收窄；
-- 同一原始文档、同一 checksum 和同一抽取方法/策略版本的重复任务可复用结果；
+- Discovery 的源文件指纹只表示需要大模型重新理解的内容输入，
+  `targetDirectoryPath` 和 `tags` 等后处理参数不改变该指纹；
+- 不存在可复用的成功结果、源文件指纹变化或 `force=true` 时，执行完整
+  Discovery，包括大模型实体发现；
+- 源文件指纹未变时，复用最近成功 Discovery 结果中的 canonical entity ID
+  和 entity file ID，不再读取模型候选、不调用大模型；
+- 指纹未变且所有实体已满足目标路径和 metadata 后处理要求时，直接复用
+  原成功任务，不创建新任务；
+- 指纹未变但仍需移动实体文件或追加 tags 时，创建新的
+  `ENTITY_DISCOVERY` 轻量结果重放任务。任务在内部记录
+  `executionMode=REPLAY_RESULT` 和 `reuseSourceTaskId`，仅校验并复用前次结果，
+  执行移动和 metadata 后处理；
+- 结果重放任务必须校验历史结果所指实体仍存在于当前知识库，且文件仍锚定到
+  同一 canonical entity。历史结果缺少稳定 ID、实体已删除或锚定损坏时，
+  任务以 `DISCOVERY_RESULT_NOT_REPLAYABLE` 失败，不隐式回退到大模型；
+- 结果重放创建了新任务时计入 `acceptedCount`；无后处理需求而直接返回
+  旧任务时才计入 `reusedCount`；
+- 同一源文件的活动任务只有在目标目录相同且已覆盖本次 metadata 后处理要求时
+  才可复用；参数不兼容时拒绝请求，调用方在活动任务进入终态后重试；
 - 创建新实体前对规范可读路径使用事务级互斥或等价机制；
 - 并发创建同名路径时重新读取已创建实体，通过上述身份校验后转为锚定，不派生哈希或数字后缀；
+- 不同源文件的任务并发移动同一实体时，按 entity file ID 锁定文件；
+  相同目标幂等，不同目标串行提交，最终以后提交的有效请求为准；
 - 关系断言按“生产者运行 + 证据指纹”精确幂等；查询层再按 source、relation、target 合并为逻辑边；
 - Callback 不参与核心事务。
 
@@ -549,12 +599,19 @@ Enrich 以实体稳定身份为中心，从多份授权证据中组织可阅读�
 输入包括：
 
 - 知识库标识；
-- 可选目标 KnowledgeEntity 路径；传入时处理该实体，不传时处理本库 `/KnowledgeEntity` 下全部合格实体文档；
+- 可选 `filePath`，指向单个 KnowledgeEntity 文件；
+- 可选 `directoryPath`，未传 `filePath` 时递归处理该目录中的
+  KnowledgeEntity；两者都不传时处理本库全部合格实体文档；
 - 当前 `entityName`、`aliases` 和 `subjectFileId`；
 - 目标文档 checksum；
 - Callback 由服务启动时注入，不属于 Enrich 请求输入。
 
-全库触发只改变调度范围，不改变执行原子单元：每个实体文档独立召回、生成、校验和提交，并形成自己的任务记录；同批次共享 `batchId`。
+目录和全库触发只改变调度范围，不改变执行原子单元：每个实体文档独立召回、生成、校验和提交，并形成自己的任务记录；同批次共享 `batchId`。候选枚举应直接按 KnowledgeEntity 身份筛选，不应把全库普通文档都计入 `candidateCount` 后再作类型跳过。
+
+`filePath` 生效时受理响应为 `scope=SINGLE_FILE`，`directoryPath`
+生效时为 `scope=DIRECTORY`，两者都不传时为 `scope=WHOLE_KB`。
+定位优先级与 Discovery 一致：`filePath > directoryPath > knCode`。目录必须
+存在，并递归枚举子目录；`filePath` 指向普通文件时按文档类型校验失败。
 
 ### 11.2 证据召回
 
@@ -574,6 +631,10 @@ ByKC 现有检索支持全文、向量融合和 metadata 过滤，可作为证�
 - 最近的明确关系文档优先于语义相关；
 - 只有语义相关而无身份连接的片段不能单独证明强关系；
 - 记录每个片段的来源文档和位置。
+
+KnowledgeEntity 链接的归类同样以已授权证据中的 `documentKind` 和稳定文件 ID
+为准，不能通过目标路径是否以 `/KnowledgeEntity/` 开头判定。否则自定义
+目录中的实体链接会被错误当作普通资料链接处理。
 
 ### 11.3 生成与软模板
 
@@ -755,6 +816,9 @@ ByDC 在 2026-08-08 曾进入 `develop` 的实现是：
 - LLM 输出不可解析：有限次重试后失败；
 - 单个候选无法确认：丢弃并记录，不一定使整篇任务失败；
 - 新实体创建或关系写入失败：回滚对应原子写入单元；
+- 结果重放时历史结果缺少稳定实体 ID、实体已删除或锚定不一致：
+  以 `DISCOVERY_RESULT_NOT_REPLAYABLE` 失败，不隐式调用大模型；
+- 实体移动的目标路径被其他文件占用：任务失败，不覆盖目标且保留原文件；
 - Callback 失败：不改变主任务结果。
 
 ### 15.2 Enrich
@@ -857,9 +921,31 @@ KnowledgeEntity 文档和关系不保存 `definitionVersion`。实体身份由 `
 ### 17.5 运行指标
 
 - discovery/enrich 任务数、成功率、失败分类和分阶段延迟；
+- Discovery 完整执行与 `REPLAY_RESULT` 执行数、重放成功率和避免的大模型调用数；
+- 实体移动数、幂等 no-op 数、目标冲突数和不可重放历史结果数；
 - 重试次数；
 - Callback 调用数、异常数和执行时间；
 - 每个任务使用的 `methodVersion`、`indexVersion` 和模型版本。
+
+### 17.6 接口集成验收
+
+路径扩展必须使用真实 OpenGauss、对象存储和检索投影验证，不能只依赖
+请求模型或 Worker mock。至少覆盖：
+
+| 编号 | 场景 | 核心断言 |
+| --- | --- | --- |
+| `KE-D9` | Discovery 未指定输出目录 | 新实体仍创建到 `/KnowledgeEntity`；已有实体保持原路径 |
+| `KE-D10` | Discovery 指定不存在的输出目录 | 递归创建目录，新实体的 metadata、Markdown、索引和 `MENTIONS` 完整 |
+| `KE-D11` | 已有实体移动 | canonical entity ID 和 entity file ID 不变；旧路径失效，新路径可读；对象、检索投影、缓存和关系指向新路径 |
+| `KE-D12` | 目标目录已满足或同名冲突 | 已在目标目录时 no-op；被其他文件占用时不覆盖且不损坏原数据 |
+| `KE-D13` | 源文件指纹未变但需要移动 | 新建 `REPLAY_RESULT` 任务，大模型调用数为 `0`，仅按历史稳定 ID 移动文件 |
+| `KE-D14` | 指纹未变且无后处理 | 直接复用历史任务，不新建任务且不调用大模型 |
+| `KE-D15` | 重放不可用、`force=true` 和指纹变化 | 不可重放时明确失败且不隐式调模型；后两者执行完整 Discovery |
+| `KE-D16` | 并发移动同一实体 | 相同目标不产生副本；不同目标按文件锁串行，无对象或关系丢失 |
+| `KE-E9` | Enrich 单文件位于自定义目录 | eligibility、证据召回、原子更新和重新索引成功 |
+| `KE-E10` | Enrich 传入 `directoryPath` | `scope=DIRECTORY`，递归处理实体，不枚举普通文档，各类资格跳过计数正确 |
+| `KE-E11` | Enrich 不传 `filePath` 和 `directoryPath` | `scope=WHOLE_KB`，同时处理默认目录和多个自定义目录中的实体 |
+| `KE-E12` | Discovery 移动后立即 Enrich | 证据和引用通过稳定 ID 跟随新路径，自定义目录实体链接不被当作普通资料 |
 
 ## 18. 分阶段落地
 
@@ -911,8 +997,12 @@ KnowledgeEntity 文档和关系不保存 `definitionVersion`。实体身份由 `
 - KnowledgeEntity 和原始文档共用 `knowledge_fs_entry`；
 - v1 使用 `fileId` 作为实体稳定身份；v2 改用实体表主键，metadata 不再是实体名称和 alias 的事实源；
 - `documentKind` 决定默认处理资格，`processingCapabilities` 覆盖策略，任务输入指纹决定是否需要重跑；
-- Discovery/Enrich 支持单文件和全库触发；不传文件路径时逐文件筛选并执行，同批任务共享 `batchId`；
-- 新实体只保存在源文档同库的 `/KnowledgeEntity` 目录，不接受自定义目标库和目标目录；
+- Discovery 和 Enrich 都使用 `filePath > directoryPath > knCode` 的定位优先级，
+  支持单文件、目录和全库触发，同批任务共享 `batchId`；
+- Discovery 不接受自定义目标库；新实体默认保存到 `/KnowledgeEntity`，
+  可通过 `targetDirectoryPath` 在同库指定输出目录，已有实体只在显式指定时按需移动；
+- 源文件指纹未变时复用上次成功发现的稳定实体 ID，只执行必要的移动和
+  metadata 后处理，不再调用大模型；
 - 不建设草稿—审核—发布流；
 - global/subject 只使用可选 `subjectFileId` 和派生身份键；
 - 全系统词表使用 AC snapshot + delta，索引不是业务主数据；

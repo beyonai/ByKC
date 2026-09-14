@@ -20,14 +20,15 @@
 
 > 服务本身未定义额外的业务认证 Header；如由网关统一认证，按部署环境要求携带。
 
-异步召回授权证据，生成并原子更新一个 KnowledgeEntity 文档，或批量处理知识库 `/KnowledgeEntity` 目录下全部符合条件的实体文档，同时提取允许的语义关系。
+异步召回授权证据，生成并原子更新一个 KnowledgeEntity 文档，或批量处理目录/全库范围内符合条件的实体文档，同时提取允许的语义关系。
 
 请求字段：
 
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 | --- | --- | --- | --- | --- |
 | `knCode` | string | 是 | - | 目标实体文档所属知识库 |
-| `filePath` | string | 否 | - | KnowledgeEntity 文档路径；不传表示处理本库 `/KnowledgeEntity` 下全部符合条件的实体文档 |
+| `filePath` | string | 否 | - | KnowledgeEntity 文件路径；传入时优先于 `directoryPath` |
+| `directoryPath` | string | 否 | - | KnowledgeEntity 目录路径，递归处理子目录；未传 `filePath` 时生效 |
 | `topK` | integer | 否 | `20` | 语义证据候选上限，建议最大 100 |
 | `force` | boolean | 否 | `false` | 是否跳过 freshness 判断 |
 | `extraParams` | object | 否 | `null` | **已弃用**，仅为历史请求兼容而接收；服务端不修改其内容，也不使用、持久化或传入 Callback |
@@ -57,7 +58,17 @@ HTTP 请求中不包含 `callback` 或模板正文。历史客户端也可使用
 
 上述对象仅在请求模型中原样接收，不进入 batch/task 执行参数、状态响应或 Callback 事件。
 
-全库触发时不传 `filePath`。
+按目录触发：
+
+```json
+{
+  "knCode": "1",
+  "directoryPath": "/领域知识/组织",
+  "topK": 20
+}
+```
+
+全库触发时不传 `filePath` 和 `directoryPath`；全库会按 `documentKind=knowledgeEntity` 筛选，不受实体所在目录限制。定位优先级为 `filePath > directoryPath > knCode`。
 
 ## 成功响应示例（已受理）
 
@@ -98,8 +109,8 @@ HTTP 请求中不包含 `callback` 或模板正文。历史客户端也可使用
 | `resultMsg` | string | 是 | 业务结果说明；受理时为 `accepted` |
 | `resultObject` | object | 是 | 批次受理结果 |
 | `resultObject.batchId` | string | 是 | 本次触发形成的批次 ID |
-| `resultObject.scope` | string | 是 | 处理范围：`SINGLE_FILE` 或 `WHOLE_KB` |
-| `resultObject.targetPath` | string | 否 | 单文件目标路径；全库触发时省略 |
+| `resultObject.scope` | string | 是 | 处理范围：`SINGLE_FILE`、`DIRECTORY` 或 `WHOLE_KB` |
+| `resultObject.targetPath` | string | 否 | 单文件或目录的目标路径；全库触发时省略 |
 | `resultObject.taskType` | string | 是 | 固定为 `DOCUMENT_ENRICH` |
 | `resultObject.candidateCount` | integer | 是 | 本次扫描到的候选文件数 |
 | `resultObject.eligibleCount` | integer | 是 | 通过基础资格筛选的文件数 |
@@ -129,7 +140,8 @@ HTTP 请求中不包含 `callback` 或模板正文。历史客户端也可使用
 ## 6.1 Enrich 执行约束
 
 - 只接受 `documentKind=knowledgeEntity` 且启用 `entityEnrich` 的文档；
-- 传入 `filePath` 时，目标必须属于当前知识库的 `/KnowledgeEntity` 目录；不传时只枚举该固定目录；
+- 传入 `filePath` 时只按完整文件路径解析；未传 `filePath` 且传入 `directoryPath` 时递归枚举该目录；两者都不传时枚举全库；
+- 目录和全库枚举只把显式 `documentKind=knowledgeEntity` 的文件计入 `candidateCount`；为兼容历史数据，`/KnowledgeEntity` 下未配置 `documentKind` 的文件也进入后续资格校验；
 - `entityName`、`aliases` 等身份 metadata 必须完整；
 - 至少存在一份调用方有权访问的证据，否则受理时跳过且不创建 task；
 - evidence 范围只能收窄调用方权限，不能扩大权限；
@@ -155,7 +167,7 @@ HTTP 请求中不包含 `callback` 或模板正文。历史客户端也可使用
 
 - 一次请求创建一个 batch，每个合格 KnowledgeEntity 文件对应一个 task。
 - 受理前不合格的文件只计入 `skippedCount`，不写入 task 表。
-- 目标限定为当前库 `/KnowledgeEntity` 中 `documentKind=knowledgeEntity` 的文档。
+- 目标是当前库任意路径下 `documentKind=knowledgeEntity` 的文档；`/KnowledgeEntity` 只是 Discovery 的默认输出目录。
 - 证据范围不能超过调用方权限；无可用证据时跳过该文件。
 - 并发 checksum 冲突、身份漂移和空正文会阻断写入。
 - 文件失败、`TASK_TIMEOUT` 或 `WORKER_LOST` 都是终态，不自动重试。
@@ -163,7 +175,8 @@ HTTP 请求中不包含 `callback` 或模板正文。历史客户端也可使用
 ## 路径与定位规则
 
 - `knCode` 是知识库编码，HTTP 请求中使用字符串。
-- `filePath` 必须以 `/` 开头，表示知识库内完整文件路径，不允许使用 `..` 越界。
+- `filePath` 必须以 `/` 开头并定位完整文件，不允许根目录 `/` 或使用 `..` 越界。
+- `directoryPath` 必须以 `/` 开头，允许根目录 `/`，不允许使用 `..`；目录必须存在。
 
 ---
 

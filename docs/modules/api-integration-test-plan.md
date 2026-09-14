@@ -413,7 +413,7 @@ LLM 输出不断言特定遣词，但必须断言结构性和持久化不变式�
 | KE-M5 | 内容管理员 | 验证能力默认和显式禁用 | `metadata/get/update/unset processingCapabilities -> processingEligibility` | 属性缺失时按 `documentKind` 使用默认；显式空列表返回 `CAPABILITY_DISABLED`；unset 后恢复默认 | 已写 |
 | KE-M6 | 内容管理员 | 校验 Discovery 文本白名单 | `import+build md/markdown/txt/html/htm/csv/pdf/docx -> processingEligibility(entityDiscovery)` | 六类文本后缀可继续判定；PDF/Office 即使已有 Markdown sidecar 仍为 `UNSUPPORTED_FILE_FORMAT` | 已写 |
 | KE-M7 | 内容管理员 | 校验无后缀 MIME 回退 | `import no-suffix text/plain + application/octet-stream -> processingEligibility` | 仅规范化后 `text/*` 可通过；有后缀文件始终以后缀白名单为准 | 已写 |
-| KE-M8 | 内容管理员 | 校验 Enrich 格式和固定目录 | `processingEligibility(entityEnrich)` 覆盖保留目录外路径实体、保留目录 txt/pdf、md/markdown | 目录外返回 `KNOWLEDGE_ENTITY_PATH_REQUIRED`；非 Markdown 返回 `UNSUPPORTED_CONTENT_TYPE`；仅保留目录 md/markdown 继续身份/证据判定 | 已写 |
+| KE-M8 | 内容管理员 | 校验 Enrich 格式和实体身份 | `processingEligibility(entityEnrich)` 覆盖任意目录下的 KnowledgeEntity、普通文档、txt/pdf、md/markdown | 显式 `documentKind=knowledgeEntity` 不受目录限制；非 Markdown 返回 `UNSUPPORTED_CONTENT_TYPE`；普通文档返回 `UNSUPPORTED_DOCUMENT_KIND` | 已写 |
 | KE-M9 | 内容管理员 | 校验资格原因顺序和内容就绪 | `processingEligibility` 覆盖未构建、空正文、身份不全、无证据 | 依契约返回 `CONTENT_NOT_READY/IDENTITY_METADATA_INCOMPLETE/NO_EVIDENCE`；格式不支持时不被 sidecar 状态掩盖 | 已写部分（已覆盖未构建、身份不全、无证据和格式优先级，待补空正文） |
 | KE-M10 | 内容管理员 | 判定 Enrich freshness | `successful task -> eligibility -> insert newer incoming relation -> eligibility` | 无新关系为 `ELIGIBLE_BUT_FRESH/NO_NEW_RELATIONS`；入边断言创建时间晚于实体更新时为 `ELIGIBLE_AND_STALE/NEW_RELATION` | 已写 |
 
@@ -424,18 +424,29 @@ LLM 输出不断言特定遣词，但必须断言结构性和持久化不变式�
 | KE-D1 | 知识整理者 | 单文件实体发现 | `import+build original -> entityDiscovery(filePath) -> processingTaskStatus` | 接受响应 `scope=SINGLE_FILE`，生成一条真实任务并到达终态；结果计数与实体文档/关系落库一致 | 已写 |
 | KE-D2 | 知识整理者 | 全库文件触发 | `seed eligible/fresh/disabled/unsupported/not-ready/entity docs -> entityDiscovery(no filePath)` | `scope=WHOLE_KB`；`eligibleCount/acceptedCount/reusedCount/skippedCount` 和逐文件资格一致；不为 skipped 文件强制建任务，不创建父任务 | 已写部分（已覆盖 fresh 复用、not-ready 跳过和实体排除） |
 | KE-D3 | 知识整理者 | 锚定已有名称和别名 | `create entity metadata -> import source mentioning canonical+alias -> entityDiscovery` | 真实词面扫描命中已有实体，不重复创建；任务结果为 `ANCHORED/DISAMBIGUATED`，关系指向稳定 `fileId` | 已写 |
-| KE-D4 | 知识整理者 | 创建最小有效实体文档 | `entityDiscovery(source with new stable subject) -> readFile/metadata/get/listDir` | 新文档只保存在同库 `/KnowledgeEntity`，且具有 `documentKind/entityName/aliases`、非空 Markdown 和来源证据引用 | 已写 |
+| KE-D4 | 知识整理者 | 创建最小有效实体文档 | `entityDiscovery(source with new stable subject) -> readFile/metadata/get/listDir` | 未指定输出目录时新文档保存到同库 `/KnowledgeEntity`，且具有 `documentKind/entityName/aliases`、非空 Markdown 和来源证据 | 已写 |
 | KE-D5 | 知识治理者 | 验证全系统词表不引入重型跨库身份 | `KB-A/KB-B seed same surface -> discovery in KB-A` | 可扫描全系统词面，但只锚定 KB-A 实体；无跨库 `target_fs_entry_id`、关系、别名合并或创建阻断 | 已写 |
 | KE-D6 | 调度使用者 | 验证重复请求和 `force` | `discovery -> repeat same input -> force=true -> poll` | 相同指纹复用运行中/成功任务；`force=true` 对已成功任务建新任务，但仍复用同文件活动任务 | 已写 |
 | KE-D7 | 调度使用者 | 并发防止同文件双活动任务 | `concurrent HTTP entityDiscovery for same file` | 最多一条 `PENDING/RUNNING`；其余请求返回 reused；数据库部分唯一约束生效 | 已写 |
-| KE-D8 | 接口使用者 | 移除自定义目标库/目录参数 | `entityDiscovery` 附带 `targetKnCode/targetDirectoryPath` | extra 字段被标准请求校验拒绝；不可将实体写到其他库或目录 | 已写 |
+| KE-D8 | 接口使用者 | 禁止跨库目标 | `entityDiscovery` 附带 `targetKnCode` | extra 字段被标准请求校验拒绝；不可将实体写到其他库 | 已写 |
+| KE-D9 | 知识整理者 | 自定义目录创建新实体 | `entityDiscovery(targetDirectoryPath=/entities/a)` | 新实体直接写入目标目录，目录可递归创建，不在 `/KnowledgeEntity` 创建副本 | 已写 |
+| KE-D10 | 知识整理者 | 默认请求保留已有实体路径 | `entityDiscovery` 命中自定义目录实体且不传 `targetDirectoryPath` | 锚定后文件 ID 和路径不变 | 已写 |
+| KE-D11 | 知识整理者 | 移动已有实体 | 相同源文件先输出到 A，再指定 B | canonical entity ID/entity file ID 不变；旧路径失效，新路径、对象、检索投影和关系有效 | 已写 |
+| KE-D12 | 知识整理者 | 目标目录幂等 | 对已在目标目录的实体重复 Discovery | `moveAction=UNCHANGED`，不创建副本 | 已写（单元） |
+| KE-D13 | 调度器 | 指纹未变时只回放后处理 | 相同源指纹改变输出目录或追加 tags | 新建 `REPLAY_RESULT` 任务，LLM 调用数不增加，只按历史稳定 ID 移动/补 metadata | 已写 |
+| KE-D14 | 调度器 | 回放结果失效 | 删除实体、损坏锚点或构造缺少稳定 ID 的历史结果 | 任务以 `DISCOVERY_RESULT_NOT_REPLAYABLE` 失败，不回退调用 LLM | 已写（单元） |
+| KE-D16 | 并发调度器 | 不同源文件并发移动同一实体 | 两个源文件指纹未变，并发重放到不同目标目录 | 路径过期时按稳定 entity file ID 重试；请求按时序创建重放或复用已满足的结果，LLM 调用数不增加，仅保留一份实体文件 | 已写 |
 
 ### Entity Enrich：真实检索/LLM、软模板与原子更新
 
 | 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
 | --- | --- | --- | --- | --- | --- |
 | KE-E1 | 知识编辑 | 单实体真实 Enrich | `seed entity+vectorized evidence -> entityEnrich(filePath) -> poll -> readFile/metadata/timeline` | 真实检索和 LLM 被调用；文档非空、身份不漂移，checksum 和 `UPDATE` 时间线原子切换 | 已写 |
-| KE-E2 | 知识编辑 | 全库 Enrich | `seed eligible/ineligible entity docs -> entityEnrich(no filePath)` | 仅枚举当前库 `/KnowledgeEntity` 下合格 md/markdown；计数、共享 `batchId` 和任务行数一致 | 已写 |
+| KE-E2 | 知识编辑 | 全库 Enrich | `seed eligible/ineligible entity docs in multiple directories -> entityEnrich(no filePath)` | 枚举当前库任意目录下的 KnowledgeEntity，不把普通文档计入 `candidateCount`；计数和任务行数一致 | 已写 |
+| KE-E9 | 知识编辑 | 自定义目录单文件 Enrich | `entityEnrich(filePath=/entities/a/entity.md)` | eligibility、证据召回、更新和重新索引成功 | 已写（单元） |
+| KE-E10 | 知识编辑 | 目录 Enrich | `entityEnrich(directoryPath=/entities/a)` | 返回 `scope=DIRECTORY`，递归处理目录下 KnowledgeEntity，排除普通文档 | 已写 |
+| KE-E11 | 知识编辑 | 全库不依赖默认目录 | 自定义目录内同时存在原文档和 KnowledgeEntity 后调用 `entityEnrich(no filePath)` | 全库 `candidateCount` 只计 KnowledgeEntity，自定义目录实体可被处理/复用 | 已写 |
+| KE-E12 | 知识编辑 | Discovery 移动后立即 Enrich | `entityDiscovery(move) -> entityEnrich(directory) -> entityEnrich(whole KB)` | 稳定 ID、证据和引用跟随新路径，自定义目录实体链接不被当作普通资料 | 已写 |
 | KE-E3 | 知识编辑 | 模板只作软约束 | `entityEnrich -> readFile -> task details` | 缺章节、章节顺序变化或少量占位符最多记 warning，不使任务失败；空正文/身份漂移仍必须阻断 | 已写部分（已断言真实任务的 template coverage/warning 结构和成功提交，待补可控缺章节/占位符输出） |
 | KE-E4 | 知识编辑 | 无证据不产生半更新 | `entityEnrich(entity without authorized evidence) -> status/readFile/DB` | 受理前无证据计入 skipped 或执行中证据失效落 `SKIPPED/NO_EVIDENCE`；对象、checksum、关系和时间线均不半更新 | 已写 |
 | KE-E5 | 知识编辑 | 证据严格限定同库 | `seed local/foreign evidence -> entityEnrich` | 关系证据和语义召回都只使用目标实体所在知识库；不泄漏外库 marker | 已写 |

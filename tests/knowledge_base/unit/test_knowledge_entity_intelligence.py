@@ -953,6 +953,32 @@ def test_generated_references_do_not_duplicate_existing_entity_link() -> None:
     assert normalized.count("](/KnowledgeEntity/GBrain.md)") == 1
 
 
+def test_generated_references_recognize_entity_evidence_outside_default_directory() -> (
+    None
+):
+    generated = "# Beta\n\n## 相关实体\n\nCustomEntity 提供了相关背景。"
+    custom_path = "/领域知识/组织/CustomEntity.md"
+
+    normalized, corrected, discarded = normalize_generated_references(
+        generated,
+        existing_markdown="# Beta",
+        evidence=[
+            EvidenceFragment(
+                2,
+                custom_path,
+                "Custom entity evidence.",
+                document_kind="knowledgeEntity",
+                source_entity_name="CustomEntity",
+            )
+        ],
+        identity=KnowledgeEntityIdentity(1, 1, "Beta"),
+    )
+
+    assert corrected == 1
+    assert discarded == 0
+    assert format_source_reference(custom_path, "knowledgeEntity") in normalized
+
+
 @pytest.mark.asyncio
 async def test_enrich_prompt_uses_topics_as_clustered_coverage_guidance():
     llm = _FakeLLM(

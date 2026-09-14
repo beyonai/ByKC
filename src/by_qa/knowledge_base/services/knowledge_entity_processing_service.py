@@ -485,11 +485,7 @@ class KnowledgeEntityProcessingOrchestrator:
     ) -> ProcessingBatchAccepted:
         batch_id = self._batch_id(task_type)
         acceptance_started_at = time.perf_counter()
-        directory_path = (
-            request.directory_path
-            if isinstance(request, EntityDiscoveryRequest) and request.file_path is None
-            else None
-        )
+        directory_path = request.directory_path if request.file_path is None else None
         if request.file_path is not None:
             scope = ProcessingScope.SINGLE_FILE
             target_path = request.file_path
@@ -525,20 +521,23 @@ class KnowledgeEntityProcessingOrchestrator:
             else:
                 if directory_path is not None:
                     await self._get_directory(cursor, knowledge_base_id, directory_path)
-                    if self._inside_entity_directory(directory_path):
+                    if (
+                        capability == ProcessingCapability.ENTITY_DISCOVERY
+                        and self._inside_entity_directory(directory_path)
+                    ):
                         raise KnowledgeBaseValidationError(
                             "entity discovery directory must not be /KnowledgeEntity "
                             "or one of its descendants"
                         )
-                prefix = directory_path
-                if capability == ProcessingCapability.ENTITY_ENRICH:
-                    prefix = "/KnowledgeEntity"
                 files = await self.knowledge_entity_repository.list_files_with_metadata(
                     cursor,
                     knowledge_base_id=knowledge_base_id,
-                    path_prefix=prefix,
+                    path_prefix=directory_path,
                     exclude_knowledge_entities=(
                         capability == ProcessingCapability.ENTITY_DISCOVERY
+                    ),
+                    include_knowledge_entities_only=(
+                        capability == ProcessingCapability.ENTITY_ENRICH
                     ),
                 )
             logger.info(
@@ -562,6 +561,7 @@ class KnowledgeEntityProcessingOrchestrator:
                     Mapping[str, Any],
                     _Evaluation | None,
                     Mapping[str, Any] | None,
+                    dict[str, Any],
                 ]
             ] = []
             for file_row in files:
@@ -571,6 +571,7 @@ class KnowledgeEntityProcessingOrchestrator:
                 reused_task_id: int | None = None
                 reusable: Mapping[str, Any] | None = None
                 evaluation: _Evaluation | None = None
+                task_params = dict(params)
                 if (
                     capability == ProcessingCapability.ENTITY_DISCOVERY
                     and self._inside_entity_directory(file_path)
@@ -613,27 +614,19 @@ class KnowledgeEntityProcessingOrchestrator:
                             task_type,
                         )
                         if reusable is not None:
-                            if (
-                                isinstance(request, EntityDiscoveryRequest)
-                                and request.tags
+                            if isinstance(
+                                request, EntityDiscoveryRequest
+                            ) and not self._active_discovery_compatible(
+                                request, reusable
                             ):
-                                active_params = (
-                                    normalize_json_mapping(
-                                        reusable.get("request_params")
-                                    )
-                                    or {}
+                                raise KnowledgeBaseValidationError(
+                                    "entity discovery is already processing with "
+                                    "different output directory or tags; retry after "
+                                    "it reaches a terminal state"
                                 )
-                                active_tags = active_params.get("tags") or []
-                                if not all(tag in active_tags for tag in request.tags):
-                                    raise KnowledgeBaseValidationError(
-                                        "entity discovery is already processing with "
-                                        "different tags; retry after it reaches a terminal state"
-                                    )
                             skip_reason = "ALREADY_PROCESSING"
                             reused_task_id = self._row_id(reusable)
-                        elif not request.force and not (
-                            isinstance(request, EntityDiscoveryRequest) and request.tags
-                        ):
+                        elif not request.force:
                             reusable = await self._find_fresh_task(
                                 cursor,
                                 knowledge_base_id,
@@ -642,19 +635,43 @@ class KnowledgeEntityProcessingOrchestrator:
                                 evaluation.input_fingerprint,
                             )
                             if reusable is not None:
-                                skip_reason = "INPUT_UNCHANGED"
-                                reused_task_id = self._row_id(reusable)
+                                if isinstance(
+                                    request, EntityDiscoveryRequest
+                                ) and await self._discovery_postprocessing_needed(
+                                    cursor,
+                                    knowledge_base_id=knowledge_base_id,
+                                    request=request,
+                                    successful_task=reusable,
+                                ):
+                                    task_params.update(
+                                        {
+                                            "executionMode": "REPLAY_RESULT",
+                                            "reuseSourceTaskId": str(
+                                                self._row_id(reusable)
+                                            ),
+                                        }
+                                    )
+                                    reusable = None
+                                else:
+                                    skip_reason = "INPUT_UNCHANGED"
+                                    reused_task_id = self._row_id(reusable)
                 if reused_task_id is not None:
                     reused_count += 1
-                    dispositions.append(("reused", file_row, evaluation, reusable))
+                    dispositions.append(
+                        ("reused", file_row, evaluation, reusable, task_params)
+                    )
                 elif skip_reason:
                     skipped_count += 1
-                    dispositions.append(("skipped", file_row, evaluation, None))
+                    dispositions.append(
+                        ("skipped", file_row, evaluation, None, task_params)
+                    )
                 else:
-                    dispositions.append(("accepted", file_row, evaluation, None))
+                    dispositions.append(
+                        ("accepted", file_row, evaluation, None, task_params)
+                    )
 
             accepted_count = sum(
-                disposition == "accepted" for disposition, _, _, _ in dispositions
+                disposition == "accepted" for disposition, _, _, _, _ in dispositions
             )
             batch = (
                 await self.knowledge_semantic_processing_batch_repository.create_batch(
@@ -669,7 +686,13 @@ class KnowledgeEntityProcessingOrchestrator:
             if batch is None:
                 raise RuntimeError("failed to create semantic processing batch")
 
-            for disposition, file_row, evaluation, reusable in dispositions:
+            for (
+                disposition,
+                file_row,
+                evaluation,
+                reusable,
+                task_params,
+            ) in dispositions:
                 file_id = self._row_id(file_row)
                 file_path = str(file_row["file_path"])
                 if disposition == "skipped":
@@ -706,7 +729,7 @@ class KnowledgeEntityProcessingOrchestrator:
                     input_checksum=file_row.get("checksum"),
                     method_version=evaluation.method_version,
                     protocol_version=evaluation.protocol_version,
-                    request_params=params,
+                    request_params=task_params,
                 )
                 if created is None:
                     raise RuntimeError("failed to create processing task")
@@ -822,11 +845,6 @@ class KnowledgeEntityProcessingOrchestrator:
             and not self._is_supported_discovery_document(file_row)
         ):
             reason = "UNSUPPORTED_FILE_FORMAT"
-        elif (
-            capability == ProcessingCapability.ENTITY_ENRICH
-            and not self._inside_entity_directory(str(file_row.get("file_path") or ""))
-        ):
-            reason = "KNOWLEDGE_ENTITY_PATH_REQUIRED"
         elif (
             capability == ProcessingCapability.ENTITY_ENRICH
             and not self._is_markdown_document(file_row)
@@ -981,6 +999,68 @@ class KnowledgeEntityProcessingOrchestrator:
             (row for row in rows if row.get("input_fingerprint") == fingerprint),
             None,
         )
+
+    @staticmethod
+    def _active_discovery_compatible(
+        request: EntityDiscoveryRequest,
+        active_task: Mapping[str, Any],
+    ) -> bool:
+        active_params = normalize_json_mapping(active_task.get("request_params")) or {}
+        active_target_directory = active_params.get(
+            "targetDirectoryPath", active_params.get("target_directory_path")
+        )
+        if active_target_directory != request.target_directory_path:
+            return False
+        active_tags = active_params.get("tags") or []
+        return all(tag in active_tags for tag in (request.tags or ()))
+
+    async def _discovery_postprocessing_needed(
+        self,
+        cursor: Any,
+        *,
+        knowledge_base_id: int,
+        request: EntityDiscoveryRequest,
+        successful_task: Mapping[str, Any],
+    ) -> bool:
+        if request.target_directory_path is None and not request.tags:
+            return False
+        payload = normalize_json_mapping(successful_task.get("result_payload"))
+        if payload is None or not isinstance(payload.get("actions"), list):
+            return True
+        actions = payload["actions"]
+        try:
+            entity_file_ids = sorted(
+                {
+                    int(action["entityFileId"])
+                    for action in actions
+                    if isinstance(action, Mapping)
+                    and action.get("entityFileId") is not None
+                }
+            )
+        except (TypeError, ValueError):
+            return True
+        if not entity_file_ids:
+            # A genuinely empty discovery result needs no post-processing.  A
+            # non-empty legacy/malformed result without stable file identities
+            # must enter replay and fail explicitly instead of being reported as
+            # successfully reused while silently ignoring the requested move.
+            return bool(actions)
+        rows = await self.knowledge_entity_repository.get_files_by_ids(
+            cursor,
+            knowledge_base_id=knowledge_base_id,
+            fs_entry_ids=entity_file_ids,
+        )
+        if len(rows) != len(entity_file_ids):
+            return True
+        requested_tags = set(request.tags or ())
+        for row in rows:
+            if request.target_directory_path is not None:
+                current_parent = str(PurePosixPath(str(row["file_path"])).parent)
+                if current_parent != request.target_directory_path:
+                    return True
+            if requested_tags.difference(row.get("tags") or ()):
+                return True
+        return False
 
     async def _relation_prefix(
         self,

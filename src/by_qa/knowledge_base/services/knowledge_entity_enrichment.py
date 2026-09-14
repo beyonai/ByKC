@@ -1173,8 +1173,13 @@ def _canonical_link_target(target: str) -> str:
     return quote(decoded, safe="/:@-._~!$&'*+,;=%")
 
 
-def _is_knowledge_entity_target(target: str) -> bool:
-    return unquote(_canonical_link_target(target)).startswith("/KnowledgeEntity/")
+def _is_knowledge_entity_target(
+    target: str, *, known_entity_targets: set[str] | None = None
+) -> bool:
+    canonical = _canonical_link_target(target)
+    if known_entity_targets and canonical in known_entity_targets:
+        return True
+    return unquote(canonical).startswith("/KnowledgeEntity/")
 
 
 def normalize_generated_references(
@@ -1234,11 +1239,21 @@ def normalize_generated_references(
         for item in evidence
         if item.document_kind != "knowledgeEntity"
     }
+    known_entity_targets = {
+        _canonical_link_target(
+            _MARKDOWN_LINK_RE.search(
+                format_source_reference(item.document_path, item.document_kind)
+            ).group(2)
+        )
+        for item in evidence
+        if item.document_kind == "knowledgeEntity"
+    }
     original_source_targets.update(
         target
         for match in _MARKDOWN_LINK_RE.finditer(existing_markdown or "")
         if not _is_knowledge_entity_target(
-            target := _canonical_link_target(match.group(2))
+            target := _canonical_link_target(match.group(2)),
+            known_entity_targets=known_entity_targets,
         )
     )
     normalized, moved_count = _move_trailing_original_links_to_references(

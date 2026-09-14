@@ -52,9 +52,15 @@ class FakeKnowledgeEntityService:
 
     async def enrich_knowledge_entities(self, request):
         self.calls.append(("enrich", request, None))
+        scope = (
+            "SINGLE_FILE"
+            if request.file_path
+            else ("DIRECTORY" if request.directory_path else "WHOLE_KB")
+        )
         return {
             "batchId": "ee-1",
-            "scope": "WHOLE_KB" if request.file_path is None else "SINGLE_FILE",
+            "scope": scope,
+            "targetPath": request.file_path or request.directory_path,
             "taskType": "DOCUMENT_ENRICH",
             "eligibleCount": 1,
             "acceptedCount": 1,
@@ -162,17 +168,46 @@ def test_discovery_and_enrich_requests_support_whole_kb_scope():
     assert enrich.top_k == 20
 
 
-def test_discovery_accepts_normalized_directory_but_enrich_rejects_it():
+def test_discovery_and_enrich_accept_normalized_directory():
     discovery = EntityDiscoveryRequest.model_validate(
         {"knCode": "1", "directoryPath": "//Policies///2026/"}
+    )
+    enrich = EntityEnrichRequest.model_validate(
+        {"knCode": "1", "directoryPath": "//KnowledgeEntity///Products/"}
     )
 
     assert discovery.file_path is None
     assert discovery.directory_path == "/Policies/2026"
-    with pytest.raises(ValidationError, match="extra_forbidden"):
+    assert enrich.file_path is None
+    assert enrich.directory_path == "/KnowledgeEntity/Products"
+    assert (
         EntityEnrichRequest.model_validate(
-            {"knCode": "1", "directoryPath": "/KnowledgeEntity"}
-        )
+            {"knCode": "1", "directoryPath": "/"}
+        ).directory_path
+        == "/"
+    )
+
+
+def test_discovery_accepts_target_directory_and_enrich_file_path_requires_file():
+    discovery = EntityDiscoveryRequest.model_validate(
+        {"knCode": "1", "targetDirectoryPath": "//entities///products/"}
+    )
+    assert discovery.target_directory_path == "/entities/products"
+    with pytest.raises(ValidationError, match="must identify a file"):
+        EntityEnrichRequest.model_validate({"knCode": "1", "filePath": "/"})
+
+
+def test_enrich_file_path_takes_priority_over_directory_path():
+    enrich = EntityEnrichRequest.model_validate(
+        {
+            "knCode": "1",
+            "filePath": "/entities/product.md",
+            "directoryPath": "/missing",
+        }
+    )
+
+    assert enrich.file_path == "/entities/product.md"
+    assert enrich.directory_path == "/missing"
 
 
 def test_discovery_directory_path_validation_allows_root_and_rejects_escape():
@@ -241,10 +276,6 @@ def test_discovery_and_enrich_reject_incorrect_ext_params(request_type):
         (
             EntityDiscoveryRequest,
             {"knCode": "1", "targetKnCode": "2"},
-        ),
-        (
-            EntityDiscoveryRequest,
-            {"knCode": "1", "targetDirectoryPath": "/entities"},
         ),
         (
             EntityEnrichRequest,
@@ -379,6 +410,34 @@ def test_enrich_route_supports_whole_kb_and_passes_no_callback():
         json={"knCode": "1", "evidenceKnCodeList": ["1", "2"]},
     )
     assert removed_field.json()["resultCode"] == "-1"
+
+
+def test_enrich_route_passes_directory_scope_and_file_has_priority():
+    service = FakeKnowledgeEntityService()
+    client = make_client(service)
+
+    directory_response = client.post(
+        "/api/v1/knowledgeItems/entityEnrich",
+        json={"knCode": "1", "directoryPath": "/KnowledgeEntity/Products"},
+    )
+    assert directory_response.json()["resultObject"]["scope"] == "DIRECTORY"
+    assert directory_response.json()["resultObject"]["targetPath"] == (
+        "/KnowledgeEntity/Products"
+    )
+    assert service.calls[-1][1].directory_path == "/KnowledgeEntity/Products"
+
+    file_response = client.post(
+        "/api/v1/knowledgeItems/entityEnrich",
+        json={
+            "knCode": "1",
+            "filePath": "/KnowledgeEntity/Product.md",
+            "directoryPath": "/ignored",
+        },
+    )
+    assert file_response.json()["resultObject"]["scope"] == "SINGLE_FILE"
+    assert file_response.json()["resultObject"]["targetPath"] == (
+        "/KnowledgeEntity/Product.md"
+    )
 
 
 def test_status_route_queries_by_kb_and_optional_path():

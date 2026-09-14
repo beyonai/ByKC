@@ -29,6 +29,7 @@
 | `knCode` | string | 是 | - | 原始文档所属知识库 |
 | `filePath` | string | 否 | - | 原始文档路径；传入时优先于 `directoryPath` |
 | `directoryPath` | string | 否 | - | 原始文档目录，递归处理子目录；未传 `filePath` 时生效 |
+| `targetDirectoryPath` | string | 否 | - | KnowledgeEntity 输出目录；不传时新建实体默认写入 `/KnowledgeEntity`，已有实体保持原路径 |
 | `maxEntities` | integer | 否 | `12` | 每个源文档的最大抽取实体数，不得超过 12 |
 | `force` | boolean | 否 | `false` | 是否跳过 freshness 判断；不跳过资格和权限校验 |
 | `tags` | array[string] | 否 | `null` | 追加到本次 Discovery 实际创建或锚定到的 KnowledgeEntity metadata |
@@ -42,13 +43,14 @@ HTTP 请求中不包含 `callback` 字段。历史客户端也可使用别名 `e
 {
   "knCode": "1",
   "filePath": "/原始文档/AI时代的组织革命.md",
+  "targetDirectoryPath": "/领域知识/组织",
   "maxEntities": 12,
   "force": false,
   "tags": ["organization", "ai"]
 }
 ```
 
-`tags` 只写入当前任务实际创建或锚定到的 KnowledgeEntity，不写入被扫描的原始文档。已有标签顺序保持不变，请求中的新标签按传入顺序追加，重复字符串不会重复写入；空数组等价于不传。携带非空 `tags` 时不会复用历史已完成任务，以确保标签被应用。若同一源文档已有运行中的任务，只有其 tags 已覆盖本次请求时才复用；否则请求失败，调用方应在该任务进入终态后重试。
+`tags` 只写入当前任务实际创建或锚定到的 KnowledgeEntity，不写入被扫描的原始文档。已有标签顺序保持不变，请求中的新标签按传入顺序追加，重复字符串不会重复写入；空数组等价于不传。若源文件指纹未变，但输出目录或标签尚未满足，服务会复用上次成功的 Discovery 结果，只移动实体文件和/或追加标签，不再调用大模型。若同一源文档已有运行中的任务，只有其输出目录相同且 tags 已覆盖本次请求时才复用；否则请求失败，调用方应在该任务进入终态后重试。
 
 兼容旧请求时可以携带 `extraParams`，但它不影响任务语义：
 
@@ -143,7 +145,7 @@ HTTP 请求中不包含 `callback` 字段。历史客户端也可使用别名 `e
 
 目录请求返回 `scope=DIRECTORY`，全库请求返回 `scope=WHOLE_KB`。`candidateCount` 是本次扫描数，且始终满足 `candidateCount = acceptedCount + reusedCount + skippedCount`。`tasks` 只预览本次接受或复用的任务，最多返回 20 条；`tasksTruncated=true` 时表示已截断。本次新建任务的完整状态通过 `processingTaskStatus` 按 `batchId` 分页查询。
 
-相同输入指纹已经成功或已有运行中任务时不创建重复任务，计入 `reusedCount`：
+相同输入指纹已经成功且当前输出位置和标签已满足请求，或已有兼容的运行中任务时，不创建重复任务，计入 `reusedCount`：
 
 ```json
 {
@@ -191,8 +193,8 @@ Discovery 成功任务结果示例见任务状态接口。
 - 只接受 `documentKind=original` 且启用 `entityDiscovery` 的文档；
 - 文档必须已经生成可读 Markdown 正文；
 - `filePath` 未传时，候选查询直接排除显式 `documentKind=knowledgeEntity` 的文件和 `/KnowledgeEntity` 整个子树；未配置 `documentKind` 的历史普通文件仍按 `original` 进入后续资格校验；
-- 新实体只写入源文档所在知识库的固定 `/KnowledgeEntity` 目录，目录不存在时自动创建；接口不允许调用方指定其他知识库或目录；
-- 新实体路径固定为 `/KnowledgeEntity/{规范可读名称}.md`，不附加 MD5、哈希签名或数字序号；
+- 不传 `targetDirectoryPath` 时，新实体写入 `/KnowledgeEntity`，已有实体保持当前路径；传入时，新实体写入指定目录，已有实体移动到指定目录；目录不存在时由移动/导入服务按现有规则创建；
+- 新实体路径为 `{targetDirectoryPath 或 /KnowledgeEntity}/{规范可读名称}.md`，不附加 MD5、哈希签名或数字序号；
 - 同库规范路径已存在时直接锚定该文件，不创建副本：文件必须是 KnowledgeEntity，`entityName` 与候选相同或缺失，subject 身份一致；明显的元数据或文档类型冲突使任务失败；
 - LLM 先从正文抽取最多 12 个显著候选；worker 不加载全库实体、不把全量词表放入 Prompt，也不按任务构建 AC；
 - 抽取后先在当前知识库做规范名/alias 精确匹配；唯一兼容命中不调用额外 LLM；
@@ -203,6 +205,7 @@ Discovery 成功任务结果示例见任务状态接口。
 - 实体名称、alias、Subject、类型和稳定实体 ID 以 `knowledge_entity` 为事实源；KnowledgeEntity Markdown 是可空的一一文件锚点；
 - `maxEntities` 是每个源文件的结果上限，不是整个批次共享上限；不得通过截断隐藏已发生的写入；
 - `force=true` 会跳过已成功任务的 freshness 复用并创建新任务；如同文件同类型仍有 `PENDING/RUNNING` 任务，则复用该活动任务，身份和关系写入仍保持幂等；
+- 源文件指纹未变但需要移动或补标签时，新任务以 `REPLAY_RESULT` 模式执行；它校验历史 action 中的稳定文件 ID 和实体锚点，不读取源文件、不调用 LLM；历史结果不可回放时任务以 `DISCOVERY_RESULT_NOT_REPLAYABLE` 失败；
 - Discovery 文件任务进入终态并提交后才调用文件完成 Callback。
 
 ## 失败响应示例
@@ -223,7 +226,7 @@ Discovery 成功任务结果示例见任务状态接口。
 - 受理前已确定不合格的文件只计入 `skippedCount`，不写入 task 表；复用时直接返回原 task ID，不创建 `SKIPPED` task。
 - 仅处理 `documentKind=original` 且已生成可读 Markdown 的文档。
 - 目录/全库召回阶段不返回 `documentKind=knowledgeEntity` 或 `/KnowledgeEntity` 子树内的文件，这些文件不计入 `candidateCount` 和 `skippedCount`。
-- 新实体只能写入当前知识库固定 `/KnowledgeEntity` 目录，不建立跨库关系。
+- 新实体只能写入当前知识库；`/KnowledgeEntity` 是未指定输出目录时的默认位置，不是实体身份边界。
 - `force=true` 跳过已成功结果的 freshness 复用，但同文件仍有 `PENDING/RUNNING` 任务时复用活动任务。
 - 文件失败、`TASK_TIMEOUT` 或 `WORKER_LOST` 都是终态，不自动重试。
 
@@ -232,6 +235,7 @@ Discovery 成功任务结果示例见任务状态接口。
 - `knCode` 是知识库编码，HTTP 请求中使用字符串。
 - `filePath` 必须以 `/` 开头，表示知识库内完整文件路径，不允许使用 `..` 越界。
 - `directoryPath` 必须以 `/` 开头，允许根目录 `/`，不允许使用 `..`；目录必须存在。
+- `targetDirectoryPath` 必须以 `/` 开头，允许根目录 `/`，不允许使用 `..`；它只影响输出实体位置，不改变 Discovery 输入范围。
 - `/KnowledgeEntity` 及其子目录不能作为 Discovery 的 `directoryPath`。
 
 ---

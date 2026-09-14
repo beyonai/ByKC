@@ -642,6 +642,15 @@ async def build_knowledge_entity_processing_service(
             settings, "entity_synonym_adjudication_enabled", True
         ),
     )
+    move_service = KnowledgeBaseService(
+        connection_factory=connection_factory,
+        knowledge_base_repository=knowledge_base_repository,
+        knowledge_fs_entry_repository=KnowledgeFsEntryRepository(),
+        retrieval_projection_repository=RetrievalProjectionRepository(),
+        knowledge_fetch_cache_repository=KnowledgeFetchCacheRepository(),
+        storage_provider=storage_provider,
+        file_metadata_value_repository=FileMetadataValueRepository(),
+    )
     worker = KnowledgeEntityTaskWorker(
         connection_factory=connection_factory,
         knowledge_entity_repository=knowledge_entity_repository,
@@ -654,6 +663,8 @@ async def build_knowledge_entity_processing_service(
         knowledge_entity_discovery=KnowledgeEntityDiscovery(discovery_llm),
         knowledge_entity_enricher=KnowledgeEntityEnricher(enrichment_llm),
         knowledge_entity_asset_service=asset_service,
+        semantic_task_repository=semantic_processing_task_repository,
+        knowledge_item_move_service=move_service,
     )
     service = KnowledgeEntityProcessingOrchestrator(
         connection_factory=connection_factory,

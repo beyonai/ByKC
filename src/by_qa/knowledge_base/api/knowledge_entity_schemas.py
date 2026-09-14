@@ -129,6 +129,11 @@ class EntityDiscoveryRequest(_ApiModel):
         default=None,
         validation_alias=AliasChoices("directoryPath", "directory_path"),
     )
+    target_directory_path: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("targetDirectoryPath", "target_directory_path"),
+        serialization_alias="targetDirectoryPath",
+    )
     max_entities: int = Field(
         default=12,
         ge=1,
@@ -154,10 +159,13 @@ class EntityDiscoveryRequest(_ApiModel):
     _normalize_directory_path = field_validator("directory_path")(
         _validate_directory_path
     )
+    _normalize_target_directory_path = field_validator("target_directory_path")(
+        _validate_directory_path
+    )
 
 
 class EntityEnrichRequest(_ApiModel):
-    """Request for single-file or whole-knowledge-base entity enrichment."""
+    """Request for file, directory, or whole-knowledge-base entity enrichment."""
 
     kb_code: str = Field(
         min_length=1,
@@ -166,6 +174,10 @@ class EntityEnrichRequest(_ApiModel):
     file_path: str | None = Field(
         default=None,
         validation_alias=AliasChoices("filePath", "file_path"),
+    )
+    directory_path: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("directoryPath", "directory_path"),
     )
     top_k: int = Field(
         default=20,
@@ -182,6 +194,9 @@ class EntityEnrichRequest(_ApiModel):
         description="Deprecated compatibility field; accepted but ignored.",
     )
     _normalize_file_path = field_validator("file_path")(_validate_file_path)
+    _normalize_directory_path = field_validator("directory_path")(
+        _validate_directory_path
+    )
 
 
 class DeleteKnowledgeEntityRequest(_ApiModel):

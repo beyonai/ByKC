@@ -110,6 +110,7 @@ class EntityRepo:
         knowledge_base_id,
         path_prefix=None,
         exclude_knowledge_entities=False,
+        include_knowledge_entities_only=False,
     ):
         del cursor, knowledge_base_id
         rows = list(self.files)
@@ -125,6 +126,16 @@ class EntityRepo:
                 for row in rows
                 if not row["file_path"].startswith("/KnowledgeEntity/")
                 and row.get("document_kind") != "knowledgeEntity"
+            ]
+        if include_knowledge_entities_only:
+            rows = [
+                row
+                for row in rows
+                if row.get("document_kind") == "knowledgeEntity"
+                or (
+                    row.get("document_kind") is None
+                    and row["file_path"].startswith("/KnowledgeEntity/")
+                )
             ]
         return rows
 
@@ -446,6 +457,108 @@ async def test_discovery_with_tags_creates_task_instead_of_reusing_fresh_result(
     assert accepted.accepted_count == 1
     assert accepted.reused_count == 0
     assert tasks.rows[-1]["request_params"]["tags"] == ["project-a", "reviewed"]
+    assert tasks.rows[-1]["request_params"]["executionMode"] == "REPLAY_RESULT"
+    assert tasks.rows[-1]["request_params"]["reuseSourceTaskId"] == "81"
+
+
+async def test_unchanged_discovery_creates_replay_task_when_entity_needs_move():
+    source = original()
+    entity = original(
+        20,
+        "/KnowledgeEntity/A.md",
+        document_kind="knowledgeEntity",
+        entity_name="A",
+        aliases=[],
+    )
+    service, _ = make_service([source, entity])
+    fingerprint = service._fingerprint(
+        source, ProcessingCapability.ENTITY_DISCOVERY, []
+    )
+    tasks = service.knowledge_semantic_processing_task_repository
+    tasks.rows.append(
+        {
+            "kid": 81,
+            "knowledge_base_id": 7,
+            "fs_entry_id": 10,
+            "file_path": source["file_path"],
+            "task_type": "ENTITY_DISCOVERY",
+            "status": "succeeded",
+            "input_fingerprint": fingerprint,
+            "result_payload": {
+                "actions": [
+                    {
+                        "action": "ANCHORED",
+                        "canonicalEntityId": 100,
+                        "entityFileId": 20,
+                    }
+                ]
+            },
+            "finished_at": datetime.now(timezone.utc),
+        }
+    )
+
+    accepted = await service.discover_knowledge_entities(
+        EntityDiscoveryRequest(
+            knCode="7",
+            filePath=source["file_path"],
+            targetDirectoryPath="/entities",
+        )
+    )
+
+    assert accepted.accepted_count == 1
+    assert accepted.reused_count == 0
+    assert tasks.rows[-1]["request_params"]["executionMode"] == "REPLAY_RESULT"
+    assert tasks.rows[-1]["request_params"]["reuseSourceTaskId"] == "81"
+    assert tasks.rows[-1]["request_params"]["targetDirectoryPath"] == "/entities"
+
+
+async def test_unchanged_discovery_reuses_result_when_entity_is_already_in_target():
+    source = original()
+    entity = original(
+        20,
+        "/entities/A.md",
+        document_kind="knowledgeEntity",
+        entity_name="A",
+        aliases=[],
+    )
+    service, _ = make_service([source, entity])
+    fingerprint = service._fingerprint(
+        source, ProcessingCapability.ENTITY_DISCOVERY, []
+    )
+    tasks = service.knowledge_semantic_processing_task_repository
+    tasks.rows.append(
+        {
+            "kid": 81,
+            "knowledge_base_id": 7,
+            "fs_entry_id": 10,
+            "file_path": source["file_path"],
+            "task_type": "ENTITY_DISCOVERY",
+            "status": "succeeded",
+            "input_fingerprint": fingerprint,
+            "result_payload": {
+                "actions": [
+                    {
+                        "action": "ANCHORED",
+                        "canonicalEntityId": 100,
+                        "entityFileId": 20,
+                    }
+                ]
+            },
+            "finished_at": datetime.now(timezone.utc),
+        }
+    )
+
+    accepted = await service.discover_knowledge_entities(
+        EntityDiscoveryRequest(
+            knCode="7",
+            filePath=source["file_path"],
+            targetDirectoryPath="/entities",
+        )
+    )
+
+    assert accepted.accepted_count == 0
+    assert accepted.reused_count == 1
+    assert len(tasks.rows) == 1
 
 
 async def test_enrich_fingerprint_canonicalizes_latest_relation_timestamp():
@@ -726,7 +839,7 @@ async def test_content_type_rejection_precedes_content_readiness_and_enrich_evid
     assert result.reason_code == "UNSUPPORTED_CONTENT_TYPE"
 
 
-async def test_enrich_requires_markdown_in_reserved_entity_directory():
+async def test_enrich_requires_markdown_but_allows_entity_outside_reserved_directory():
     entity_txt = original(
         20,
         "/KnowledgeEntity/entity.txt",
@@ -761,7 +874,7 @@ async def test_enrich_requires_markdown_in_reserved_entity_directory():
     )
 
     assert unsupported.reason_code == "UNSUPPORTED_CONTENT_TYPE"
-    assert misplaced.reason_code == "KNOWLEDGE_ENTITY_PATH_REQUIRED"
+    assert misplaced.reason_code == "UNSUPPORTED_CONTENT_TYPE"
 
 
 async def test_whole_kb_discovery_schedules_only_text_documents():
@@ -843,6 +956,41 @@ async def test_discovery_file_path_takes_priority_over_directory_path():
     assert accepted.target_path == "/other/b.md"
     assert accepted.candidate_count == 1
     assert accepted.tasks[0].file_path == "/other/b.md"
+
+
+async def test_enrich_file_path_takes_priority_over_directory_path():
+    source = original(10, "/evidence/source.md")
+    entity = original(
+        20,
+        "/catalog/A.md",
+        document_kind="knowledgeEntity",
+        entity_name="A",
+    )
+    relations = Relations(
+        incoming=[
+            {
+                "kid": 501,
+                "source_fs_entry_id": 10,
+                "target_fs_entry_id": 20,
+                "relation_code": "MENTIONS",
+                "created_at": datetime.now(timezone.utc),
+            }
+        ]
+    )
+    service, _ = make_service([source, entity], relations=relations)
+
+    accepted = await service.enrich_knowledge_entities(
+        EntityEnrichRequest(
+            knCode="7",
+            filePath="/catalog/A.md",
+            directoryPath="/missing",
+        )
+    )
+
+    assert accepted.scope.value == "SINGLE_FILE"
+    assert accepted.target_path == "/catalog/A.md"
+    assert accepted.candidate_count == 1
+    assert accepted.tasks[0].file_path == "/catalog/A.md"
 
 
 async def test_directory_discovery_rejects_missing_and_entity_directories():
@@ -979,6 +1127,64 @@ async def test_whole_kb_enrich_schedules_only_markdown_entities():
         "extraParams" not in row["request_params"]
         for row in service.knowledge_semantic_processing_task_repository.rows
     )
+
+
+async def test_directory_enrich_recursively_schedules_entities_outside_reserved_path():
+    source = original(10, "/evidence/source.md")
+    first = original(
+        20,
+        "/catalog/A.md",
+        document_kind="knowledgeEntity",
+        entity_name="A",
+        aliases=[],
+    )
+    second = original(
+        21,
+        "/catalog/nested/B.markdown",
+        document_kind="knowledgeEntity",
+        entity_name="B",
+        aliases=[],
+    )
+    ordinary = original(22, "/catalog/ordinary.md")
+    relations = Relations(
+        incoming=[
+            {
+                "kid": 501,
+                "source_fs_entry_id": 10,
+                "target_fs_entry_id": 20,
+                "relation_code": "MENTIONS",
+                "created_at": datetime.now(timezone.utc),
+            }
+        ]
+    )
+    service, _ = make_service([source, first, second, ordinary], relations=relations)
+
+    accepted = await service.enrich_knowledge_entities(
+        EntityEnrichRequest(knCode="7", directoryPath="/catalog")
+    )
+
+    assert accepted.scope.value == "DIRECTORY"
+    assert accepted.target_path == "/catalog"
+    assert accepted.candidate_count == 2
+    assert accepted.accepted_count == 2
+    assert {task.file_path for task in accepted.tasks} == {
+        "/catalog/A.md",
+        "/catalog/nested/B.markdown",
+    }
+
+
+async def test_directory_enrich_rejects_missing_directory_without_creating_tasks():
+    service, connection = make_service([])
+
+    with pytest.raises(
+        processing_module.KnowledgeBaseValidationError, match="directory not found"
+    ):
+        await service.enrich_knowledge_entities(
+            EntityEnrichRequest(knCode="7", directoryPath="/missing")
+        )
+
+    assert connection.rollbacks == 1
+    assert service.knowledge_semantic_processing_task_repository.rows == []
 
 
 async def test_missing_metadata_defaults_ordinary_document_to_discovery_input():
@@ -1346,7 +1552,7 @@ async def test_discovery_rejects_new_tags_while_different_tagged_task_is_active(
 
     with pytest.raises(
         processing_module.KnowledgeBaseValidationError,
-        match="already processing with different tags",
+        match="already processing with different output directory or tags",
     ):
         await service.discover_knowledge_entities(
             EntityDiscoveryRequest(

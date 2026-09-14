@@ -1435,7 +1435,8 @@ def test_knowledge_entity_real_eligibility_and_request_matrix() -> None:
             assert identity_incomplete["reasonCode"] == "IDENTITY_METADATA_INCOMPLETE"
 
             # KE-M3/M8: an explicit kind survives document update, and Enrich
-            # rejects an otherwise complete entity outside the reserved path.
+            # accepts that entity identity outside the default output path. It
+            # proceeds through identity validation to the evidence gate.
             outside_entity_path = "/outside/explicit-entity.md"
             _upload_markdown(
                 client,
@@ -1473,9 +1474,8 @@ def test_knowledge_entity_real_eligibility_and_request_matrix() -> None:
                 file_path=outside_entity_path,
                 capability="entityEnrich",
             )
-            assert outside_eligibility["reasonCode"] == (
-                "KNOWLEDGE_ENTITY_PATH_REQUIRED"
-            )
+            assert outside_eligibility["eligibility"] == "INELIGIBLE"
+            assert outside_eligibility["reasonCode"] == "NO_EVIDENCE"
 
             # KE-M5: missing processingCapabilities applies the kind default;
             # an explicit empty list disables it; unset restores the default.
@@ -1730,14 +1730,6 @@ def test_knowledge_entity_real_eligibility_and_request_matrix() -> None:
                         "knCode": kb_code,
                         "filePath": capability_path,
                         "targetKnCode": "other",
-                    },
-                ),
-                (
-                    "/api/v1/knowledgeItems/entityDiscovery",
-                    {
-                        "knCode": kb_code,
-                        "filePath": capability_path,
-                        "targetDirectoryPath": "/custom",
                     },
                 ),
                 (
@@ -2395,6 +2387,239 @@ entity and links to its canonical file.
         finally:
             _delete_kb(client, kb_code)
             _delete_kb(client, foreign_kb_code)
+
+
+@pytest.mark.integration
+def test_discovery_custom_output_replays_move_without_model_and_enriches_by_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cover custom output, stable-ID replay moves, and non-default Enrich scope."""
+
+    _assert_real_runtime_configuration()
+    token = uuid4().hex[:10]
+    source_path = f"/documents/replay-move-{token}.md"
+    first_directory = f"/entities/first-{token}"
+    second_directory = f"/entities/second-{token}"
+    model_calls = 0
+
+    async def counting_complete(llm, messages, *, json_mode=False):
+        nonlocal model_calls
+        model_calls += 1
+        return await _mock_llm_complete(llm, messages, json_mode=json_mode)
+
+    monkeypatch.setattr(
+        OpenAICompatibleKnowledgeEntityLLM,
+        "complete",
+        counting_complete,
+    )
+
+    with _real_test_client() as client:
+        kb_code = _create_kb(client)
+        try:
+            _upload_markdown(
+                client,
+                kb_code=kb_code,
+                file_path=source_path,
+                content=(
+                    f"# ReplayEntity{token}\n\n"
+                    f"ReplayEntity{token} is a stable entity used to verify "
+                    "result replay and file movement.\n"
+                ),
+            )
+            _build_markdown_index(client, kb_code=kb_code, file_path=source_path)
+
+            first_batch = _assert_success(
+                client.post(
+                    "/api/v1/knowledgeItems/entityDiscovery",
+                    json={
+                        "knCode": kb_code,
+                        "filePath": source_path,
+                        "targetDirectoryPath": first_directory,
+                    },
+                )
+            )
+            first_tasks = _wait_for_batch(
+                client,
+                kb_code=kb_code,
+                batch_id=first_batch["batchId"],
+                expected_task_ids=[first_batch["tasks"][0]["taskId"]],
+            )
+            first_action = first_tasks[0]["result"]["actions"][0]
+            first_path = first_action["filePath"]
+            entity_file_id = first_action["entityFileId"]
+            assert first_path.startswith(first_directory + "/")
+            calls_after_discovery = model_calls
+            assert calls_after_discovery > 0
+
+            replay_batch = _assert_success(
+                client.post(
+                    "/api/v1/knowledgeItems/entityDiscovery",
+                    json={
+                        "knCode": kb_code,
+                        "filePath": source_path,
+                        "targetDirectoryPath": second_directory,
+                        "tags": ["replayed"],
+                    },
+                )
+            )
+            assert replay_batch["acceptedCount"] == 1
+            assert replay_batch["reusedCount"] == 0
+            replay_tasks = _wait_for_batch(
+                client,
+                kb_code=kb_code,
+                batch_id=replay_batch["batchId"],
+                expected_task_ids=[replay_batch["tasks"][0]["taskId"]],
+            )
+            replay_result = replay_tasks[0]["result"]
+            replay_action = replay_result["actions"][0]
+            moved_path = replay_action["filePath"]
+            assert replay_result["executionMode"] == "REPLAY_RESULT"
+            assert replay_result["reusedDiscoveryTaskId"] == first_tasks[0]["taskId"]
+            assert replay_action["entityFileId"] == entity_file_id
+            assert replay_action["previousFilePath"] == first_path
+            assert replay_action["moveAction"] == "MOVED"
+            assert moved_path.startswith(second_directory + "/")
+            assert model_calls == calls_after_discovery
+            assert _metadata(
+                client,
+                kb_code=kb_code,
+                file_path=moved_path,
+                field_names=["tags"],
+            )["tags"]["value"] == ["replayed"]
+
+            # Omitting the output directory preserves the existing custom path.
+            unchanged_batch = _assert_success(
+                client.post(
+                    "/api/v1/knowledgeItems/entityDiscovery",
+                    json={"knCode": kb_code, "filePath": source_path},
+                )
+            )
+            assert unchanged_batch["acceptedCount"] == 0
+            assert unchanged_batch["reusedCount"] == 1
+            assert model_calls == calls_after_discovery
+            assert _read_markdown(client, kb_code=kb_code, file_path=moved_path)
+
+            directory_enrich = _assert_success(
+                client.post(
+                    "/api/v1/knowledgeItems/entityEnrich",
+                    json={"knCode": kb_code, "directoryPath": second_directory},
+                )
+            )
+            assert directory_enrich["scope"] == "DIRECTORY"
+            assert directory_enrich["candidateCount"] == 1
+            assert directory_enrich["acceptedCount"] == 1
+            _wait_for_batch(
+                client,
+                kb_code=kb_code,
+                batch_id=directory_enrich["batchId"],
+                expected_task_ids=[directory_enrich["tasks"][0]["taskId"]],
+            )
+
+            whole_enrich = _assert_success(
+                client.post(
+                    "/api/v1/knowledgeItems/entityEnrich",
+                    json={"knCode": kb_code},
+                )
+            )
+            assert whole_enrich["scope"] == "WHOLE_KB"
+            assert whole_enrich["candidateCount"] == 1
+            assert whole_enrich["reusedCount"] == 1
+            assert whole_enrich["tasks"][0]["filePath"] == moved_path
+
+            # Different source files have independent task locks and can request
+            # moves for the same stable entity concurrently. Depending on timing,
+            # both requests create replay tasks or the later acceptance observes
+            # an already-satisfied target and reuses its successful result.
+            second_source_path = f"/documents/replay-peer-{token}.md"
+            _upload_markdown(
+                client,
+                kb_code=kb_code,
+                file_path=second_source_path,
+                content=(
+                    f"# ReplayEntity{token}\n\n"
+                    f"ReplayEntity{token} is the same stable entity referenced "
+                    "by a second source file.\n"
+                ),
+            )
+            _build_markdown_index(client, kb_code=kb_code, file_path=second_source_path)
+            peer_discovery = _assert_success(
+                client.post(
+                    "/api/v1/knowledgeItems/entityDiscovery",
+                    json={"knCode": kb_code, "filePath": second_source_path},
+                )
+            )
+            _wait_for_batch(
+                client,
+                kb_code=kb_code,
+                batch_id=peer_discovery["batchId"],
+                expected_task_ids=[peer_discovery["tasks"][0]["taskId"]],
+            )
+            calls_before_concurrent_replay = model_calls
+            competing_directories = (
+                f"/entities/competing-a-{token}",
+                f"/entities/competing-b-{token}",
+            )
+
+            def request_replay(source: str, directory: str) -> dict:
+                return _assert_success(
+                    client.post(
+                        "/api/v1/knowledgeItems/entityDiscovery",
+                        json={
+                            "knCode": kb_code,
+                            "filePath": source,
+                            "targetDirectoryPath": directory,
+                        },
+                    )
+                )
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                futures = [
+                    executor.submit(
+                        request_replay, source_path, competing_directories[0]
+                    ),
+                    executor.submit(
+                        request_replay,
+                        second_source_path,
+                        competing_directories[1],
+                    ),
+                ]
+                competing_batches = [future.result() for future in futures]
+            assert all(
+                batch["acceptedCount"] + batch["reusedCount"] == 1
+                for batch in competing_batches
+            )
+            assert sum(batch["acceptedCount"] for batch in competing_batches) >= 1
+            for batch in competing_batches:
+                if batch["acceptedCount"] == 0:
+                    continue
+                completed = _wait_for_batch(
+                    client,
+                    kb_code=kb_code,
+                    batch_id=batch["batchId"],
+                    expected_task_ids=[batch["tasks"][0]["taskId"]],
+                )
+                assert completed[0]["result"]["executionMode"] == "REPLAY_RESULT"
+            assert model_calls == calls_before_concurrent_replay
+            final_entity_rows = _db_rows(
+                """
+                SELECT kid, virtual_path
+                FROM knowledge_fs_entry
+                WHERE knowledge_base_id = %(knowledge_base_id)s
+                  AND kid = %(entity_file_id)s
+                  AND is_deleted = FALSE
+                """,
+                {
+                    "knowledge_base_id": int(kb_code),
+                    "entity_file_id": int(entity_file_id),
+                },
+            )
+            assert len(final_entity_rows) == 1
+            assert any(
+                str(final_entity_rows[0]["virtual_path"]).startswith(directory + "/")
+                for directory in competing_directories
+            )
+        finally:
+            _delete_kb(client, kb_code)
 
 
 @pytest.mark.integration

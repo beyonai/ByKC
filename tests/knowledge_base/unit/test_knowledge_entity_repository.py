@@ -170,6 +170,7 @@ async def test_get_file_with_metadata_folds_eav_values_and_storage_fields():
         "subject_file_id": "200",
         "entity_type": "system",
         "entity_enriched": True,
+        "tags": [],
     }
     sql, params = cursor.executed[0]
     assert "fe.virtual_path = %(file_path)s" in sql
@@ -278,6 +279,23 @@ async def test_discovery_candidate_query_excludes_entity_kind_and_directory():
     assert "document_kind.property_name = 'documentKind'" in sql
     assert "document_kind.value_string = 'knowledgeEntity'" in sql
     assert params["exclude_knowledge_entities"] is True
+
+
+async def test_enrich_candidate_query_includes_entities_across_whole_kb():
+    cursor = FakeCursor(fetchall_results=[[]])
+
+    await KnowledgeEntityRepository().list_files_with_metadata(
+        cursor,
+        knowledge_base_id=7,
+        include_knowledge_entities_only=True,
+    )
+
+    sql, params = cursor.executed[0]
+    assert "entity_document_kind.value_string = 'knowledgeEntity'" in sql
+    assert "configured_document_kind.property_name = 'documentKind'" in sql
+    assert "fe.virtual_path = '/KnowledgeEntity'" in sql
+    assert params["path_prefix"] is None
+    assert params["include_knowledge_entities_only"] is True
 
 
 async def test_missing_processing_capabilities_is_distinct_from_explicit_empty_list():

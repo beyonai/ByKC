@@ -312,8 +312,10 @@ class FakeDiscovery:
         self.candidates = candidates
         self.topics = topics
         self.log_context = None
+        self.calls = 0
 
     async def discover(self, markdown, *, max_entities, max_topics, log_context=None):
+        self.calls += 1
         assert markdown
         assert max_entities == 12
         assert max_topics == 24
@@ -442,6 +444,8 @@ def make_worker(
     enricher: FakeEnricher | None = None,
     search_hits=(),
     asset_service=None,
+    semantic_task_repository=None,
+    move_service=None,
 ):
     factory = FakeConnectionFactory()
     repository = FakeEntityRepository(rows)
@@ -465,6 +469,8 @@ def make_worker(
         knowledge_entity_discovery=discovery,
         knowledge_entity_enricher=enricher,
         knowledge_entity_asset_service=asset_service,
+        semantic_task_repository=semantic_task_repository,
+        knowledge_item_move_service=move_service,
     )
     return SimpleNamespace(
         worker=worker,
@@ -689,6 +695,245 @@ def test_entity_path_uses_readable_name_without_identity_signature(
     entity_name: str, expected_path: str
 ) -> None:
     assert KnowledgeEntityTaskWorker._entity_path(entity_name) == expected_path
+
+
+def test_entity_path_uses_requested_output_directory() -> None:
+    assert (
+        KnowledgeEntityTaskWorker._entity_path("OpenAI Platform", "/catalog/entities")
+        == "/catalog/entities/OpenAI-Platform.md"
+    )
+
+
+@pytest.mark.asyncio
+async def test_discovery_creates_new_entity_in_requested_output_directory():
+    source = file_row(10, "/docs/source.md", content_key="source")
+    asset_service = FakeCreatedAssetService()
+    deps = make_worker(
+        rows=[source],
+        objects={
+            ("original", "source"): b"OpenClaw is a stable project.",
+        },
+        discovery=FakeDiscovery(
+            (discovered_entity("OpenClaw", "OpenClaw is a stable project."),)
+        ),
+        asset_service=asset_service,
+    )
+
+    result = await deps.worker.run_task(
+        KnowledgeEntityTaskContext(
+            task_id=504,
+            task_type="ENTITY_DISCOVERY",
+            kb_code="1",
+            knowledge_base_id=1,
+            source_file_id=10,
+            file_path="/docs/source.md",
+            request_params={"targetDirectoryPath": "/catalog/entities"},
+        )
+    )
+
+    assert deps.ingestion.uploads[0].file_path == "/catalog/entities/OpenClaw.md"
+    assert result.result_payload["actions"][0]["filePath"] == (
+        "/catalog/entities/OpenClaw.md"
+    )
+
+
+@pytest.mark.asyncio
+async def test_discovery_replay_moves_by_stable_id_without_calling_model():
+    source = file_row(10, "/docs/source.md", content_key="source")
+    entity = file_row(
+        20,
+        "/KnowledgeEntity/OpenClaw.md",
+        document_kind="knowledgeEntity",
+        entity_name="OpenClaw",
+    )
+    discovery = FakeDiscovery(())
+
+    class SemanticTasks:
+        async def get_task(self, cursor, *, task_id):
+            del cursor
+            assert task_id == 81
+            return {
+                "kid": 81,
+                "knowledge_base_id": 1,
+                "fs_entry_id": 10,
+                "task_type": "ENTITY_DISCOVERY",
+                "status": "succeeded",
+                "input_fingerprint": "same-fingerprint",
+                "result_payload": {
+                    "taskType": "ENTITY_DISCOVERY",
+                    "actions": [
+                        {
+                            "action": "ANCHORED",
+                            "canonicalEntityId": 100,
+                            "entityFileId": 20,
+                            "filePath": "/KnowledgeEntity/OpenClaw.md",
+                        }
+                    ],
+                },
+            }
+
+    class AssetService(FakeCreatedAssetService):
+        def __init__(self):
+            super().__init__()
+            self.validations = []
+
+        async def validate_file_anchor(self, **kwargs):
+            self.validations.append(kwargs)
+
+    asset_service = AssetService()
+    deps = make_worker(
+        rows=[source, entity],
+        objects={},
+        discovery=discovery,
+        asset_service=asset_service,
+        semantic_task_repository=SemanticTasks(),
+    )
+
+    class MoveService:
+        def __init__(self):
+            self.requests = []
+
+        async def move_knowledge_items(self, request):
+            self.requests.append(request)
+            row = deps.repository.rows[20]
+            row["file_path"] = "/catalog/OpenClaw.md"
+            row["name"] = "OpenClaw.md"
+            return SimpleNamespace(data=[SimpleNamespace(success=True, error=None)])
+
+    move_service = MoveService()
+    deps.worker._move_service = move_service
+
+    result = await deps.worker.run_task(
+        KnowledgeEntityTaskContext(
+            task_id=82,
+            task_type="ENTITY_DISCOVERY",
+            kb_code="1",
+            knowledge_base_id=1,
+            source_file_id=10,
+            file_path="/docs/source.md",
+            input_fingerprint="same-fingerprint",
+            request_params={
+                "executionMode": "REPLAY_RESULT",
+                "reuseSourceTaskId": "81",
+                "targetDirectoryPath": "/catalog",
+                "tags": ["reviewed"],
+            },
+        )
+    )
+
+    assert discovery.calls == 0
+    assert move_service.requests[0].source_path == ["/KnowledgeEntity/OpenClaw.md"]
+    assert move_service.requests[0].target_directory_path == "/catalog"
+    assert asset_service.validations == [
+        {"knowledge_base_id": 1, "entity_id": 100, "fs_entry_id": 20}
+    ]
+    assert asset_service.tag_appends == [
+        {"knowledge_base_id": 1, "fs_entry_id": 20, "tags": ("reviewed",)}
+    ]
+    action = result.result_payload["actions"][0]
+    assert action["previousFilePath"] == "/KnowledgeEntity/OpenClaw.md"
+    assert action["filePath"] == "/catalog/OpenClaw.md"
+    assert action["moveAction"] == "MOVED"
+    assert result.result_payload["executionMode"] == "REPLAY_RESULT"
+
+
+@pytest.mark.asyncio
+async def test_discovery_replay_rejects_nonempty_result_without_stable_file_ids():
+    source = file_row(10, "/docs/source.md", content_key="source")
+    discovery = FakeDiscovery(())
+
+    class SemanticTasks:
+        async def get_task(self, cursor, *, task_id):
+            del cursor, task_id
+            return {
+                "knowledge_base_id": 1,
+                "fs_entry_id": 10,
+                "task_type": "ENTITY_DISCOVERY",
+                "status": "succeeded",
+                "input_fingerprint": "same-fingerprint",
+                "result_payload": {
+                    "taskType": "ENTITY_DISCOVERY",
+                    "actions": [{"action": "ANCHORED", "entityName": "OpenClaw"}],
+                },
+            }
+
+    deps = make_worker(
+        rows=[source],
+        objects={},
+        discovery=discovery,
+        semantic_task_repository=SemanticTasks(),
+    )
+
+    with pytest.raises(
+        worker_module.KnowledgeEntityReplayError,
+        match="no stable entity file ids",
+    ):
+        await deps.worker.run_task(
+            KnowledgeEntityTaskContext(
+                task_id=82,
+                task_type="ENTITY_DISCOVERY",
+                kb_code="1",
+                knowledge_base_id=1,
+                source_file_id=10,
+                file_path="/docs/source.md",
+                input_fingerprint="same-fingerprint",
+                request_params={
+                    "executionMode": "REPLAY_RESULT",
+                    "reuseSourceTaskId": "81",
+                    "targetDirectoryPath": "/catalog",
+                },
+            )
+        )
+
+    assert discovery.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_move_entity_retries_when_concurrent_move_invalidates_source_path():
+    source = file_row(10, "/docs/source.md", content_key="source")
+    entity = file_row(
+        20,
+        "/KnowledgeEntity/OpenClaw.md",
+        document_kind="knowledgeEntity",
+        entity_name="OpenClaw",
+    )
+    deps = make_worker(rows=[source, entity], objects={}, discovery=FakeDiscovery(()))
+
+    class MoveService:
+        def __init__(self):
+            self.requests = []
+
+        async def move_knowledge_items(self, request):
+            self.requests.append(request)
+            row = deps.repository.rows[20]
+            if len(self.requests) == 1:
+                row["file_path"] = "/concurrent/OpenClaw.md"
+                return SimpleNamespace(
+                    data=[SimpleNamespace(success=False, error="source path not found")]
+                )
+            row["file_path"] = "/requested/OpenClaw.md"
+            return SimpleNamespace(data=[SimpleNamespace(success=True, error=None)])
+
+    deps.worker._move_service = MoveService()
+    moved, action = await deps.worker._move_entity_if_needed(
+        KnowledgeEntityTaskContext(
+            task_id=82,
+            task_type="ENTITY_DISCOVERY",
+            kb_code="1",
+            knowledge_base_id=1,
+            source_file_id=10,
+            file_path="/docs/source.md",
+        ),
+        entity,
+        target_directory_path="/requested",
+    )
+
+    assert [request.source_path for request in deps.worker._move_service.requests] == [
+        ["/KnowledgeEntity/OpenClaw.md"],
+        ["/concurrent/OpenClaw.md"],
+    ]
+    assert moved["file_path"] == "/requested/OpenClaw.md"
+    assert action == "MOVED"
 
 
 def test_discovery_source_path_is_rendered_as_a_markdown_reference() -> None:

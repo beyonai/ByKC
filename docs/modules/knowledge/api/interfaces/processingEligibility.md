@@ -88,7 +88,6 @@ NO_NEW_RELATIONS
 CAPABILITY_DISABLED
 DOCUMENT_KIND_MISMATCH
 UNSUPPORTED_FILE_FORMAT
-KNOWLEDGE_ENTITY_PATH_REQUIRED
 UNSUPPORTED_CONTENT_TYPE
 CONTENT_NOT_READY
 IDENTITY_METADATA_INCOMPLETE
@@ -100,6 +99,7 @@ PERMISSION_DENIED
 
 - `original` 默认只允许 `entityDiscovery`；
 - `knowledgeEntity` 默认只允许 `entityEnrich`；
+- KnowledgeEntity 可位于当前知识库的任意目录，资格不以 `/KnowledgeEntity` 路径为边界；
 - `processingCapabilities` 可以覆盖默认能力；
 - 指纹相同返回 `ELIGIBLE_BUT_FRESH`，而不是接口错误；
 - 不满足文档类型、权限、内容或证据条件返回 `INELIGIBLE`。

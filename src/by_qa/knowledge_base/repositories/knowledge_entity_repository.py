@@ -24,8 +24,9 @@ class KnowledgeEntityRepository:
         "subjectFileId",
         "entityType",
         "entityEnriched",
+        "tags",
     )
-    _LIST_METADATA_FIELDS = frozenset({"processingCapabilities", "aliases"})
+    _LIST_METADATA_FIELDS = frozenset({"processingCapabilities", "aliases", "tags"})
     _OUTPUT_FIELD_BY_PROPERTY = {
         "documentKind": "document_kind",
         "processingCapabilities": "processing_capabilities",
@@ -34,6 +35,7 @@ class KnowledgeEntityRepository:
         "subjectFileId": "subject_file_id",
         "entityType": "entity_type",
         "entityEnriched": "entity_enriched",
+        "tags": "tags",
     }
 
     async def get_directory_by_path(
@@ -102,8 +104,13 @@ class KnowledgeEntityRepository:
         knowledge_base_id: int,
         path_prefix: str | None = None,
         exclude_knowledge_entities: bool = False,
+        include_knowledge_entities_only: bool = False,
     ) -> list[dict[str, Any]]:
         """List live files in stable path order with optional scope filters."""
+        if exclude_knowledge_entities and include_knowledge_entities_only:
+            raise ValueError(
+                "entity include and exclude filters are mutually exclusive"
+            )
         normalized_prefix = (
             self._normalize_path(path_prefix) if path_prefix is not None else None
         )
@@ -143,6 +150,34 @@ class KnowledgeEntityRepository:
                         )
                     )
                   )
+              AND (
+                    NOT %(include_knowledge_entities_only)s
+                    OR EXISTS (
+                        SELECT 1
+                        FROM knowledge_file_metadata_value entity_document_kind
+                        WHERE entity_document_kind.fs_entry_id = fe.kid
+                          AND entity_document_kind.is_deleted = FALSE
+                          AND entity_document_kind.property_name = 'documentKind'
+                          AND entity_document_kind.value_type = 'string'
+                          AND entity_document_kind.value_string = 'knowledgeEntity'
+                    )
+                    OR (
+                        (
+                            fe.virtual_path = '/KnowledgeEntity'
+                            OR LEFT(
+                                fe.virtual_path,
+                                LENGTH('/KnowledgeEntity/')
+                            ) = '/KnowledgeEntity/'
+                        )
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM knowledge_file_metadata_value configured_document_kind
+                            WHERE configured_document_kind.fs_entry_id = fe.kid
+                              AND configured_document_kind.is_deleted = FALSE
+                              AND configured_document_kind.property_name = 'documentKind'
+                        )
+                    )
+                  )
             ORDER BY fe.virtual_path ASC, fe.kid ASC,
                      mv.property_name ASC, mv.kid ASC
             """,
@@ -150,6 +185,7 @@ class KnowledgeEntityRepository:
                 "knowledge_base_id": knowledge_base_id,
                 "path_prefix": normalized_prefix,
                 "exclude_knowledge_entities": exclude_knowledge_entities,
+                "include_knowledge_entities_only": include_knowledge_entities_only,
                 "property_names": list(self._METADATA_FIELDS),
             },
         )
@@ -335,6 +371,7 @@ class KnowledgeEntityRepository:
                     "subject_file_id": None,
                     "entity_type": None,
                     "entity_enriched": None,
+                    "tags": [],
                 }
                 records[file_id] = record
             cls._apply_metadata(record, row)

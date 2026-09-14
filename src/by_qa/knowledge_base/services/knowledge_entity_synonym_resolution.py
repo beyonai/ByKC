@@ -611,6 +611,32 @@ class KnowledgeEntityAssetService:
         finally:
             await connection.close()
 
+    async def validate_file_anchor(
+        self,
+        *,
+        knowledge_base_id: int,
+        entity_id: int,
+        fs_entry_id: int,
+    ) -> None:
+        """Ensure a replayed file still anchors the same canonical entity."""
+        connection = await self._connection_factory()
+        try:
+            canonical = await self._repository.get_by_id(
+                connection.cursor(),
+                knowledge_base_id=knowledge_base_id,
+                entity_id=entity_id,
+            )
+            if (
+                canonical is None
+                or canonical.get("name_role") != "canonical"
+                or self._optional_int(canonical.get("fs_entry_id")) != fs_entry_id
+            ):
+                raise KnowledgeBaseValidationError(
+                    "KnowledgeEntity file anchor no longer matches the canonical entity"
+                )
+        finally:
+            await connection.close()
+
     async def append_file_tags(
         self,
         *,

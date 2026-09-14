@@ -15,6 +15,7 @@ import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
+from pathlib import PurePosixPath
 from typing import Any
 
 import yaml
@@ -24,8 +25,10 @@ from by_qa.knowledge_base.api.schemas import (
     DocumentUpdateRequest,
     FileToMarkdownIndexRequest,
     KnowledgeItemUploadRequest,
+    MoveKnowledgeItemsRequest,
     SearchRequest,
 )
+from by_qa.knowledge_base.events import normalize_json_mapping
 from by_qa.knowledge_base.infrastructure.storage import (
     StorageLocation,
     StorageNotFoundError,
@@ -66,6 +69,11 @@ MAX_SEMANTIC_SOURCE_DOCUMENTS_PER_TOPIC = 2
 MIN_SEMANTIC_SCORE_RATIO = 0.7
 ENTITY_ENRICHED_PROPERTY = "entityEnriched"
 _SAFE_SLUG_RE = re.compile(r"[^\w-]+", re.UNICODE)
+
+
+class KnowledgeEntityReplayError(RuntimeError):
+    error_code = "DISCOVERY_RESULT_NOT_REPLAYABLE"
+    failure_kind = "BUSINESS"
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +129,8 @@ class KnowledgeEntityTaskWorker:
         knowledge_entity_discovery: KnowledgeEntityDiscovery,
         knowledge_entity_enricher: KnowledgeEntityEnricher,
         knowledge_entity_asset_service: Any,
+        semantic_task_repository: Any | None = None,
+        knowledge_item_move_service: Any | None = None,
     ) -> None:
         self._connection_factory = connection_factory
         self._entity_repository = knowledge_entity_repository
@@ -135,6 +145,8 @@ class KnowledgeEntityTaskWorker:
         if knowledge_entity_asset_service is None:
             raise ValueError("knowledge_entity_asset_service is required")
         self._asset_service = knowledge_entity_asset_service
+        self._semantic_tasks = semantic_task_repository
+        self._move_service = knowledge_item_move_service
 
     async def run_task(
         self, context: KnowledgeEntityTaskContext | Any
@@ -179,6 +191,9 @@ class KnowledgeEntityTaskWorker:
         self, context: KnowledgeEntityTaskContext | Any
     ) -> KnowledgeEntityTaskExecutionResult:
         """Resolve only extracted candidates against the durable entity registry."""
+        request_params = context.request_params or {}
+        if request_params.get("executionMode") == "REPLAY_RESULT":
+            return await self._run_discovery_replay(context)
         source = await self._load_source(context)
         markdown = await self._read_markdown(source)
         markdown = (
@@ -187,8 +202,10 @@ class KnowledgeEntityTaskWorker:
                 texts=[markdown],
             )
         )[0]
-        request_params = context.request_params or {}
         requested_tags = tuple(dict.fromkeys(request_params.get("tags") or ()))
+        target_directory_path = request_params.get(
+            "targetDirectoryPath", request_params.get("target_directory_path")
+        )
         discovery = await self._discovery.discover(
             markdown,
             max_entities=int(
@@ -241,11 +258,14 @@ class KnowledgeEntityTaskWorker:
                     context, resolution.fs_entry_id
                 )
             file_created = False
+            previous_file_path = None
+            move_action = "UNCHANGED"
             if projection is None:
                 _, projection, file_created = await self._create_or_reuse_entity(
                     context,
                     candidate=canonical_candidate,
                     tags=requested_tags,
+                    target_directory_path=target_directory_path,
                 )
                 await self._asset_service.attach_file(
                     knowledge_base_id=int(context.knowledge_base_id),
@@ -253,6 +273,12 @@ class KnowledgeEntityTaskWorker:
                     fs_entry_id=int(projection["kid"]),
                 )
             else:
+                previous_file_path = str(projection.get("file_path") or "")
+                projection, move_action = await self._move_entity_if_needed(
+                    context,
+                    projection,
+                    target_directory_path=target_directory_path,
+                )
                 await self._ensure_indexed(context, projection)
             if requested_tags and not file_created:
                 await self._asset_service.append_file_tags(
@@ -270,20 +296,26 @@ class KnowledgeEntityTaskWorker:
             file_id = int(projection["kid"])
             if file_id != int(context.source_file_id):
                 target_ids.add(file_id)
-            actions.append(
-                {
-                    "action": "CREATED" if resolution.created else "ANCHORED",
-                    "entityRef": candidate.entity_ref,
-                    "inputEntityName": candidate.name,
-                    "entityName": resolution.canonical_name,
-                    "canonicalEntityId": resolution.entity_id,
-                    "entityFileId": file_id,
-                    "filePath": projection.get("file_path"),
-                    "resolutionMethod": resolution.method.value,
-                    "aliasAdded": resolution.alias_added,
-                    "candidateCount": resolution.candidate_count,
-                }
-            )
+            action = {
+                "action": "CREATED" if resolution.created else "ANCHORED",
+                "entityRef": candidate.entity_ref,
+                "inputEntityName": candidate.name,
+                "entityName": resolution.canonical_name,
+                "canonicalEntityId": resolution.entity_id,
+                "entityFileId": file_id,
+                "filePath": projection.get("file_path"),
+                "resolutionMethod": resolution.method.value,
+                "aliasAdded": resolution.alias_added,
+                "candidateCount": resolution.candidate_count,
+            }
+            if previous_file_path is not None:
+                action.update(
+                    {
+                        "previousFilePath": previous_file_path,
+                        "moveAction": move_action,
+                    }
+                )
+            actions.append(action)
 
         topic_inputs: list[dict[str, Any]] = []
         for topic in discovery.topics:
@@ -333,6 +365,148 @@ class KnowledgeEntityTaskWorker:
                 "attempts": discovery.attempts,
             },
             target_file_ids=tuple(sorted(target_ids)),
+            index_version=None,
+        )
+
+    async def _run_discovery_replay(
+        self, context: KnowledgeEntityTaskContext | Any
+    ) -> KnowledgeEntityTaskExecutionResult:
+        if self._semantic_tasks is None:
+            raise KnowledgeEntityReplayError(
+                "semantic task repository is required for discovery result replay"
+            )
+        params = context.request_params or {}
+        try:
+            source_task_id = int(params["reuseSourceTaskId"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise KnowledgeEntityReplayError(
+                "discovery replay source task id is invalid"
+            ) from exc
+        connection = await self._connection_factory()
+        try:
+            source_task = await self._semantic_tasks.get_task(
+                connection.cursor(), task_id=source_task_id
+            )
+        finally:
+            await connection.close()
+        if (
+            source_task is None
+            or str(source_task.get("status") or "").lower() != "succeeded"
+            or str(source_task.get("task_type") or "").upper() != DISCOVERY_TASK_TYPE
+            or int(source_task.get("knowledge_base_id") or 0)
+            != int(context.knowledge_base_id)
+            or int(source_task.get("fs_entry_id") or 0) != int(context.source_file_id)
+            or source_task.get("input_fingerprint") != context.input_fingerprint
+        ):
+            raise KnowledgeEntityReplayError(
+                "successful discovery result does not match the current source"
+            )
+        payload = normalize_json_mapping(source_task.get("result_payload"))
+        if payload is None or not isinstance(payload.get("actions"), list):
+            raise KnowledgeEntityReplayError(
+                "successful discovery result has no replayable actions"
+            )
+        original_actions = payload["actions"]
+        entity_actions = [
+            action
+            for action in original_actions
+            if isinstance(action, Mapping) and action.get("entityFileId") is not None
+        ]
+        if original_actions and not entity_actions:
+            raise KnowledgeEntityReplayError(
+                "successful discovery result contains no stable entity file ids"
+            )
+        try:
+            entity_file_ids = sorted(
+                {int(action["entityFileId"]) for action in entity_actions}
+            )
+        except (TypeError, ValueError) as exc:
+            raise KnowledgeEntityReplayError(
+                "successful discovery result contains an invalid entity file id"
+            ) from exc
+        rows = await self._get_entities_by_file_ids(context, entity_file_ids)
+        rows_by_id = {int(row["kid"]): row for row in rows}
+        if len(rows_by_id) != len(entity_file_ids):
+            raise KnowledgeEntityReplayError(
+                "a discovery result entity file no longer exists"
+            )
+        requested_tags = tuple(dict.fromkeys(params.get("tags") or ()))
+        target_directory_path = params.get(
+            "targetDirectoryPath", params.get("target_directory_path")
+        )
+        movement_by_id: dict[int, tuple[str, str, str]] = {}
+        for file_id in entity_file_ids:
+            row = rows_by_id[file_id]
+            if row.get("document_kind") != "knowledgeEntity":
+                raise KnowledgeEntityReplayError(
+                    f"discovery result file is no longer a KnowledgeEntity: {file_id}"
+                )
+            action = next(
+                item for item in entity_actions if int(item["entityFileId"]) == file_id
+            )
+            validator = getattr(self._asset_service, "validate_file_anchor", None)
+            if callable(validator):
+                try:
+                    await validator(
+                        knowledge_base_id=int(context.knowledge_base_id),
+                        entity_id=int(action["canonicalEntityId"]),
+                        fs_entry_id=file_id,
+                    )
+                except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+                    raise KnowledgeEntityReplayError(
+                        f"discovery result entity anchor is invalid: {file_id}"
+                    ) from exc
+            previous_path = str(row["file_path"])
+            moved, move_action = await self._move_entity_if_needed(
+                context,
+                row,
+                target_directory_path=target_directory_path,
+            )
+            if requested_tags:
+                await self._asset_service.append_file_tags(
+                    knowledge_base_id=int(context.knowledge_base_id),
+                    fs_entry_id=file_id,
+                    tags=requested_tags,
+                )
+            movement_by_id[file_id] = (
+                previous_path,
+                str(moved["file_path"]),
+                move_action,
+            )
+
+        actions: list[Any] = []
+        for original in original_actions:
+            if (
+                not isinstance(original, Mapping)
+                or original.get("entityFileId") is None
+            ):
+                actions.append(original)
+                continue
+            replayed = dict(original)
+            previous_path, current_path, move_action = movement_by_id[
+                int(original["entityFileId"])
+            ]
+            replayed.update(
+                {
+                    "filePath": current_path,
+                    "previousFilePath": previous_path,
+                    "moveAction": move_action,
+                }
+            )
+            actions.append(replayed)
+        return KnowledgeEntityTaskExecutionResult(
+            result_payload={
+                **payload,
+                "taskType": DISCOVERY_TASK_TYPE,
+                "executionMode": "REPLAY_RESULT",
+                "reusedDiscoveryTaskId": str(source_task_id),
+                "actions": actions,
+            },
+            target_file_ids=tuple(
+                file_id
+                for file_id in entity_file_ids
+                if file_id != int(context.source_file_id)
+            ),
             index_version=None,
         )
 
@@ -668,6 +842,7 @@ class KnowledgeEntityTaskWorker:
         *,
         candidate: DiscoveredEntity,
         tags: Sequence[str] = (),
+        target_directory_path: str | None = None,
     ) -> tuple[int, dict[str, Any], bool]:
         aliases = self._candidate_aliases(candidate)
         content = self._render_entity_markdown(
@@ -684,7 +859,7 @@ class KnowledgeEntityTaskWorker:
             entity_enriched=False,
             tags=tags,
         )
-        path = self._entity_path(candidate.name)
+        path = self._entity_path(candidate.name, target_directory_path)
         occupied = await self._get_entity_by_path(context, path)
         if occupied is not None:
             anchored = self._validate_readable_path_identity(
@@ -731,6 +906,74 @@ class KnowledgeEntityTaskWorker:
                 "subject_file_id": None,
             }
         return int(created["kid"]), created, True
+
+    async def _get_entities_by_file_ids(
+        self,
+        context: KnowledgeEntityTaskContext | Any,
+        fs_entry_ids: Sequence[int],
+    ) -> list[dict[str, Any]]:
+        connection = await self._connection_factory()
+        try:
+            rows = await self._entity_repository.get_files_by_ids(
+                connection.cursor(),
+                knowledge_base_id=int(context.knowledge_base_id),
+                fs_entry_ids=list(fs_entry_ids),
+            )
+            return [dict(row) for row in rows]
+        finally:
+            await connection.close()
+
+    async def _move_entity_if_needed(
+        self,
+        context: KnowledgeEntityTaskContext | Any,
+        entity: Mapping[str, Any],
+        *,
+        target_directory_path: str | None,
+    ) -> tuple[dict[str, Any], str]:
+        current = dict(entity)
+        if target_directory_path is None:
+            return current, "UNCHANGED"
+        if self._move_service is None:
+            raise RuntimeError("knowledge item move service is required")
+        file_id = int(current["kid"])
+        for _ in range(8):
+            latest = await self._get_entities_by_file_ids(context, [file_id])
+            if len(latest) != 1:
+                raise RuntimeError("KnowledgeEntity to move no longer exists")
+            current = latest[0]
+            current_path = str(current.get("file_path") or "")
+            if str(PurePosixPath(current_path).parent) == target_directory_path:
+                return current, "UNCHANGED"
+            response = await self._move_service.move_knowledge_items(
+                MoveKnowledgeItemsRequest(
+                    knCode=context.kb_code,
+                    sourcePath=[current_path],
+                    targetDirectoryPath=target_directory_path,
+                )
+            )
+            result = response.data[0] if response.data else None
+            if result is not None and result.success:
+                rows = await self._get_entities_by_file_ids(context, [file_id])
+                if len(rows) != 1:
+                    raise RuntimeError("moved KnowledgeEntity could not be reloaded")
+                return rows[0], "MOVED"
+
+            # A concurrent task can move the stable entity after this worker
+            # resolved its old path but before the path-based move API locks it.
+            # Retry only when the stable ID now resolves to a different path;
+            # unchanged failures (including target conflicts) remain failures.
+            latest = await self._get_entities_by_file_ids(context, [file_id])
+            if (
+                len(latest) != 1
+                or str(latest[0].get("file_path") or "") == current_path
+            ):
+                message = (
+                    result.error if result is not None else "move returned no result"
+                )
+                raise RuntimeError(f"failed to move KnowledgeEntity: {message}")
+        raise RuntimeError(
+            "failed to move KnowledgeEntity after concurrent path changes"
+        )
 
     @staticmethod
     def _validate_readable_path_identity(
@@ -1296,11 +1539,12 @@ class KnowledgeEntityTaskWorker:
         return tuple(aliases)
 
     @staticmethod
-    def _entity_path(entity_name: str) -> str:
+    def _entity_path(entity_name: str, target_directory_path: str | None = None) -> str:
         normalized = unicodedata.normalize("NFKC", entity_name).strip()
         slug = _SAFE_SLUG_RE.sub("-", normalized.replace("/", "-")).strip("-_")
         slug = slug[:48].strip("-_") or "entity"
-        return f"{ENTITY_DIRECTORY}/{slug}.md"
+        directory = (target_directory_path or ENTITY_DIRECTORY).rstrip("/")
+        return f"{directory}/{slug}.md" if directory else f"/{slug}.md"
 
     @staticmethod
     def _render_entity_markdown(

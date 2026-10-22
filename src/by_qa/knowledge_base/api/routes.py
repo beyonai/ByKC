@@ -42,6 +42,7 @@ from by_qa.knowledge_base.api.schemas import (
     DocumentUpdateRequest,
     FileBuildStatusRequest,
     FileToMarkdownIndexRequest,
+    KnowledgeBaseFileCountRequest,
     KnowledgeItemDownloadRequest,
     KnowledgeItemGlobRequest,
     KnowledgeItemListDirRequest,
@@ -98,15 +99,17 @@ def _documented_error_response(
     result_msg: str,
     result_object: dict[str, Any] | None = None,
     status_code: int = 422,
+    preserve_http_status: bool = False,
 ) -> JSONResponse:
-    """Return the documented error envelope with HTTP status normalized to 200."""
-    logger.info(
-        "knowledge_base error response normalized to HTTP 200: business_status_code=%s, result_msg=%s",
-        status_code,
-        result_msg,
-    )
+    """Return the error envelope, normalizing legacy endpoints to HTTP 200."""
+    if not preserve_http_status:
+        logger.info(
+            "knowledge_base error response normalized to HTTP 200: business_status_code=%s, result_msg=%s",
+            status_code,
+            result_msg,
+        )
     return JSONResponse(
-        status_code=200,
+        status_code=status_code if preserve_http_status else 200,
         content=jsonable_encoder(
             {
                 "resultCode": "-1",
@@ -500,6 +503,61 @@ def register_routes(
                 status_code=500,
             )
         return _documented_success_response(result_object={})
+
+    @app.post(
+        "/api/v1/knowledgeBases/fileCount",
+        openapi_extra={
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "application/json": {
+                        "schema": KnowledgeBaseFileCountRequest.model_json_schema(
+                            by_alias=True
+                        )
+                    }
+                },
+            }
+        },
+    )
+    async def knowledge_base_file_count(http_request: Request):
+        # Parse locally so malformed bodies also honor this endpoint's HTTP 422
+        # contract rather than the application's legacy HTTP 200 error handler.
+        try:
+            request = KnowledgeBaseFileCountRequest.model_validate(
+                await http_request.json()
+            )
+        except ValueError:
+            return _documented_error_response(
+                result_msg="request validation failed",
+                status_code=422,
+                preserve_http_status=True,
+            )
+
+        logger.info(
+            "knowledge_base_file_count request received: kb_code=%s", request.kb_code
+        )
+        try:
+            service = await get_knowledge_base_service()
+            result = await service.file_count(request)
+        except KnowledgeBaseConfigurationError as exc:
+            return _documented_error_response(
+                result_msg=str(exc), status_code=503, preserve_http_status=True
+            )
+        except KnowledgeBaseValidationError as exc:
+            return _documented_error_response(
+                result_msg=str(exc), status_code=422, preserve_http_status=True
+            )
+        except Exception as exc:
+            logger.exception(
+                "knowledge_base_file_count unexpected error: kb_code=%s",
+                request.kb_code,
+            )
+            return _documented_error_response(
+                result_msg=str(exc) or "internal error",
+                status_code=500,
+                preserve_http_status=True,
+            )
+        return _documented_success_response(result_object=result)
 
     @app.post("/api/v1/directories/create")
     async def create_directory(

@@ -1,6 +1,6 @@
 # 知识模块 API 文档
 
-本目录是知识模块 HTTP API 的统一入口。当前共有 **33 个逻辑接口**；包含兼容路径后，FastAPI 中共有 41 个路径（包含 `/health`）。
+本目录是知识模块 HTTP API 的统一入口。当前共有 **34 个逻辑接口**；包含兼容路径后，FastAPI 中共有 42 个路径（包含 `/health`）。
 
 ## 公共文档
 
@@ -25,6 +25,7 @@
 | `POST` | `/api/v1/knowledgeBases/create` | [knowledgeBases-create](interfaces/knowledgeBases-create.md) |
 | `POST` | `/api/v1/knowledgeBases/update` | [knowledgeBases-update](interfaces/knowledgeBases-update.md) |
 | `POST` | `/api/v1/knowledgeBases/delete` | [knowledgeBases-delete](interfaces/knowledgeBases-delete.md) |
+| `POST` | `/api/v1/knowledgeBases/fileCount` | [knowledgeBases-fileCount](interfaces/knowledgeBases-fileCount.md) |
 
 ### 目录管理
 

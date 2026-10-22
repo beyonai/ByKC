@@ -1261,6 +1261,21 @@ class KnowledgeFsEntryRepository:
         )
         return [dict(row) for row in await self._fetchall(cursor)]
 
+    async def count_file_entries_by_knowledge_base_id(
+        self, cursor, *, knowledge_base_id: int
+    ) -> int:
+        """Count all live files, regardless of directory depth or build state."""
+        await cursor.execute(
+            """SELECT COUNT(*) AS file_count
+            FROM knowledge_fs_entry
+            WHERE knowledge_base_id = %(knowledge_base_id)s
+              AND is_deleted = FALSE
+              AND entry_type = 'FILE'""",
+            {"knowledge_base_id": knowledge_base_id},
+        )
+        row = await cursor.fetchone()
+        return int(row["file_count"])
+
     async def list_file_entries_by_knowledge_base_id(
         self, cursor, *, knowledge_base_id: int
     ) -> list[dict[str, Any]]:

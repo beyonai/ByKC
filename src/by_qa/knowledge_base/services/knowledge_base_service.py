@@ -19,6 +19,7 @@ from by_qa.knowledge_base.api.schemas import (
     DeleteDirectoryRequest,
     DeleteKnowledgeBaseRequest,
     FileBuildStatusRequest,
+    KnowledgeBaseFileCountRequest,
     KnowledgeItemDownloadRequest,
     KnowledgeItemGlobRequest,
     KnowledgeItemListDirItem,
@@ -150,7 +151,8 @@ class KnowledgeBaseService:
         completed_build_batch_ids: list[str] = []
         terminated_semantic_tasks: list[dict[str, Any]] = []
         completed_semantic_batches: dict[
-            str, tuple[dict[str, Any], dict[str, int]]
+            str,
+            tuple[dict[str, Any], dict[str, int]],
         ] = {}
         try:
             cursor = connection.cursor()
@@ -988,6 +990,27 @@ class KnowledgeBaseService:
         if current_path == source_path:
             return target_path
         return target_path.rstrip("/") + current_path[len(source_path.rstrip("/")) :]
+
+    async def file_count(
+        self, request: KnowledgeBaseFileCountRequest
+    ) -> dict[str, int]:
+        """Return the number of non-deleted files in an active knowledge base."""
+        connection = await self.connection_factory()
+        try:
+            cursor = connection.cursor()
+            kb_row = await self.knowledge_base_repository.get_by_code(
+                cursor, request.kb_code
+            )
+            if not kb_row:
+                raise KnowledgeBaseValidationError(
+                    f"knowledge base not found: {request.kb_code}"
+                )
+            count = await self.knowledge_fs_entry_repository.count_file_entries_by_knowledge_base_id(
+                cursor, knowledge_base_id=self._row_id(kb_row)
+            )
+            return {"fileCount": count}
+        finally:
+            await connection.close()
 
     async def list_dir(
         self, request: KnowledgeItemListDirRequest

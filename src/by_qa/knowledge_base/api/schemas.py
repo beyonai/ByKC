@@ -54,6 +54,17 @@ class DeleteKnowledgeBaseRequest(BaseModel):
     )
 
 
+class KnowledgeBaseFileCountRequest(BaseModel):
+    """Request body for counting all live files in a knowledge base."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    kb_code: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("knCode", "kb_code"),
+    )
+
+
 class UpdateKnowledgeBaseRequest(BaseModel):
     """Request body for updating knowledge base business fields."""
 

@@ -694,6 +694,7 @@ def register_routes(
         file_description: str | None = Body(None, alias="fileDescription"),
         file_content: UploadFile | None = File(None, alias="fileContent"),
         process_front_matter: bool = Form(True, alias="processFrontMatter"),
+        extract_zip: bool = Form(True, alias="extractZip"),
         skip_if_duplicate: bool = Form(False, alias="skipIfDuplicate"),
         metadata: str | None = Form(None, alias="metadata"),
     ):
@@ -709,6 +710,7 @@ def register_routes(
                         file_content.content_type if file_content is not None else None
                     ),
                     "processFrontMatter": process_front_matter,
+                    "extractZip": extract_zip,
                     "skipIfDuplicate": skip_if_duplicate,
                     "metadata": _parse_optional_metadata_form(metadata),
                 }
@@ -724,16 +726,17 @@ def register_routes(
                 status_code=422,
             )
         logger.info(
-            "upload_file request received: kb_code=%s, file_path=%s, has_description=%s, process_front_matter=%s",
+            "upload_file request received: kb_code=%s, file_path=%s, has_description=%s, process_front_matter=%s, extract_zip=%s",
             request.kb_code,
             request.file_path,
             request.file_description is not None,
             request.process_front_matter,
+            request.extract_zip,
         )
         filename = (file_content.filename or "") if file_content is not None else ""
         try:
             service = await get_knowledge_item_ingestion_service()
-            if filename.lower().endswith(".zip"):
+            if request.extract_zip and filename.lower().endswith(".zip"):
                 if not zipfile.is_zipfile(io.BytesIO(payload or b"")):
                     return _documented_error_response(
                         result_msg="invalid zip file",

@@ -21,19 +21,20 @@
 
 > 服务本身未定义额外的业务认证 Header；如由网关统一认证，按部署环境要求携带。
 
-将文档上传到指定知识库下面。支持单文件上传与 zip 包批量上传，入参不变，由 `fileContent` 文件名是否以 `.zip` 结尾且为合法 zip 自动判定。
+将文档上传到指定知识库下面。支持普通单文件上传与 zip 包批量解压导入。zip 默认解压导入；仅当显式指定 `extractZip=false` 时，才将 zip 作为单个二进制文件原样保存。
 
 行为描述：
 
 - 文件类型：上传不再限制文件类型，任意类型文件均可入库。不可构建的文件类型（非 `txt`、`md`、`markdown`、`csv`、`pdf`、`docx`、`doc`、`pptx`、`ppt`、`xlsx`、`xls`）在后续 `POST /api/v1/fileToMarkdownIndex` 构建时会被标记为「不支持构建」状态，不影响入库。
-- Markdown 引用处理（默认动作，无论是否 zip 包）：上传 Markdown 文件时，服务端解析其中的图片引用 `![]()` 与链接引用 `[]()`，将相对路径按当前文件所在目录解析为知识库绝对路径（消除 `.`、`..`；越过知识库根的引用保持不变），并为可管理的文件引用登记稳定引用关系。Markdown 入库内容会保存为内部 `byqa-ref://<id>` token；面向用户的读取、Markdown 下载和知识检索会在输出时解析为目标文件当前路径。未解析或目标已删除的引用回退为用户原始写法。URL（带协议头）与锚点（`#anchor`）保留不变。
-- zip 包批量上传：当 `fileContent` 文件名以 `.zip` 结尾且为合法 zip 时，按批量导入处理：
+- Markdown 引用处理：对单文件上传或 zip 解压后实际导入的 Markdown 文件，服务端解析其中的图片引用 `![]()` 与链接引用 `[]()`，将相对路径按当前文件所在目录解析为知识库绝对路径（消除 `.`、`..`；越过知识库根的引用保持不变），并为可管理的文件引用登记稳定引用关系。Markdown 入库内容会保存为内部 `byqa-ref://<id>` token；面向用户的读取、Markdown 下载和知识检索会在输出时解析为目标文件当前路径。未解析或目标已删除的引用回退为用户原始写法。URL（带协议头）与锚点（`#anchor`）保留不变。
+- zip 包默认解压：`extractZip` 未传或为 `true`，且 `fileContent` 文件名以 `.zip` 结尾时，要求内容为合法 zip，并按批量导入处理：
   - 解压后并发上传：非 Markdown 文件先上传，Markdown 文件最后上传，保证 Markdown 引用登记时图片与被引用文档已就位；仍未就位的引用会保留为待解析状态，后续同路径文件上传后自动绑定。
   - zip 内文件上传到 `filePath` 指定的目标目录下，保留 zip 内相对目录结构，包括多层空目录。
   - 若 zip 内文件在知识库中已存在，则先软删除原文件再上传（覆盖语义）。
   - 自动跳过 macOS 元数据（`__MACOSX`、以 `.` 开头的隐藏条目）；目录条目按层级由浅到深创建。
   - 文件名编码兼容：自动识别 zip 条目的 UTF-8 标志位，未设置时按 GBK 还原中文文件名，兼容中文 Windows 资源管理器 / WinRAR / 好压 生成的 zip。
   - 安全限制：单条目解压上限 64 MiB、全部条目解压上限 256 MiB、条目数上限 10000，超出返回失败；越过目标目录或知识库根的路径（含 `..` 跨界）记为失败；解析后同路径的重复条目记为失败。
+- zip 包不解压：显式传入 `extractZip=false` 时，zip 与其他文件相同，将原始字节保存到 `filePath` 指定的完整文件路径。
 - 当上传文件为 Markdown 且 `processFrontMatter` 为 `true` 时，服务端会额外解析文档开头的 YAML front matter header。
 - 若解析到合法的 YAML front matter header，则会将其中字段按同名 `propertyName` 自动录入为该文件的元数据。
 - 该行为适用于类似 Obsidian 文档头的结构化元数据写法。
@@ -73,10 +74,11 @@ module: karpathy
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `knCode` | string | 是 | 知识库编码 |
-| `filePath` | string | 是 | 单文件上传时为目标文件全路径；zip 上传时为目标目录路径（zip 内文件解压到该目录下），以 `/` 开头，不包括知识库名称 |
+| `filePath` | string | 是 | 普通文件及不解压 zip 上传时为目标文件全路径；`extractZip=true` 时为 zip 内容的目标目录路径，以 `/` 开头，不包括知识库名称 |
 | `fileDescription` | string | 否 | 文件描述；zip 批量上传时对所有文件统一使用该描述 |
-| `fileContent` | file | 是 | 文件二进制内容；文件名以 `.zip` 结尾且为合法 zip 时触发批量上传 |
+| `fileContent` | file | 是 | 文件二进制内容；仅当 `extractZip=true` 且文件名以 `.zip` 结尾时触发批量解压导入 |
 | `processFrontMatter` | boolean | 否 | 是否解析 YAML front matter 并自动录入元数据，默认 `true` |
+| `extractZip` | boolean | 否 | 是否将 `.zip` 文件解压后批量导入，默认 `true`；为 `false` 时将 zip 原样作为单文件保存 |
 | `skipIfDuplicate` | boolean | 否 | 是否检查同一知识库内的文件 checksum；默认 `false`。为 `true` 且已存在相同 checksum 时跳过导入，并在错误信息中返回已存在文件路径 |
 | `metadata` | string(JSON object) | 否 | 文件及本次自动创建父目录的基础元数据；顶层必须是 JSON object，值使用与 YAML front matter 相同的类型推断规则 |
 
@@ -94,7 +96,17 @@ curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
   -F "processFrontMatter=true"
 ```
 
-表单示例（zip 批量上传到目录 `/制度/人事`）：
+表单示例（显式不解压 zip）：
+
+```bash
+curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
+  -F "knCode=1" \
+  -F "filePath=/压缩包/人事制度.zip" \
+  -F "fileContent=@./人事制度.zip" \
+  -F "extractZip=false"
+```
+
+表单示例（zip 默认解压并批量导入到目录 `/制度/人事`）：
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/knowledgeItems/import \
@@ -171,7 +183,7 @@ zip 批量上传响应示例（部分成功，含不安全路径）：
 
 ## 失败响应示例（整请求级别失败，`resultCode` 为 `-1`）
 
-- `invalid zip file`（422）：`fileContent` 文件名以 `.zip` 结尾但不是合法 zip。
+- `invalid zip file`（422）：`extractZip` 未传或为 `true`，且 `fileContent` 文件名以 `.zip` 结尾，但内容不是合法 zip。`extractZip=false` 时不校验 zip 结构。
 - `unsafe path`（422）：单文件上传的 `filePath` 含 `..` 跨界段。
 - `file path already exists: /制度/人事/考勤制度.pdf`：单文件上传且目标路径已存在（zip 批量上传为覆盖语义，不会报此错）。
 
@@ -200,7 +212,8 @@ curl -X POST \
 
 ## 特殊逻辑
 
-- 文件名以 `.zip` 结尾且内容为合法 ZIP 时，`filePath` 解释为目标目录并执行批量导入。
+- `extractZip` 未传或为 `true`，且文件名以 `.zip` 结尾时，`filePath` 解释为目标目录并执行批量解压导入。
+- `extractZip=false` 时，zip 原样作为单文件保存，`filePath` 解释为完整文件路径。
 - ZIP 内的路径越界、重复路径和单文件失败按文件记录，不伪造整批成功。
 - Markdown front matter 只在 `processFrontMatter=true` 时写入元数据。
 - `skipIfDuplicate` 使用同库文件 checksum 判重。

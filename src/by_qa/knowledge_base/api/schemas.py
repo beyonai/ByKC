@@ -329,6 +329,10 @@ class KnowledgeItemUploadRequest(BaseModel):
         default=True,
         validation_alias=AliasChoices("processFrontMatter", "process_front_matter"),
     )
+    extract_zip: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("extractZip", "extract_zip"),
+    )
     metadata: dict[str, Any] | None = None
     skip_if_duplicate: bool = Field(
         default=False,

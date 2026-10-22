@@ -1852,6 +1852,55 @@ def test_upload_file_route_passes_markdown_bytes_to_ingestion(monkeypatch):
     assert service.import_calls[0].skip_if_duplicate is True
 
 
+def test_upload_zip_can_disable_extraction(monkeypatch):
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr("readme.md", "# readme\n")
+    zip_bytes = payload.getvalue()
+
+    response = client.post(
+        "/api/v1/knowledgeItems/import",
+        data={
+            "knCode": "hr-policy",
+            "filePath": "/archives/docs.zip",
+            "extractZip": "false",
+        },
+        files={"fileContent": ("docs.zip", zip_bytes, "application/zip")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["resultObject"]["data"] == [
+        {"filePath": "/archives/docs.zip", "success": True, "error": None}
+    ]
+    assert len(service.import_calls) == 1
+    assert service.import_calls[0].file_content == zip_bytes
+    assert service.import_calls[0].extract_zip is False
+
+
+def test_upload_zip_defaults_to_extraction_and_rejects_invalid_archive(monkeypatch):
+    service = FakeKBService()
+    client = make_test_client(monkeypatch, service)
+
+    response = client.post(
+        "/api/v1/knowledgeItems/import",
+        data={
+            "knCode": "hr-policy",
+            "filePath": "/archives",
+        },
+        files={"fileContent": ("invalid.zip", b"not a zip", "application/zip")},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "resultCode": "-1",
+        "resultMsg": "invalid zip file",
+        "resultObject": {},
+    }
+    assert service.import_calls == []
+
+
 def test_upload_file_route_parses_metadata_json_object(monkeypatch):
     service = FakeKBService()
     client = make_test_client(monkeypatch, service)
@@ -1921,7 +1970,11 @@ def test_upload_zip_route_includes_post_process_errors(monkeypatch):
 
     response = client.post(
         "/api/v1/knowledgeItems/import",
-        data={"knCode": "hr-policy", "filePath": "/docs"},
+        data={
+            "knCode": "hr-policy",
+            "filePath": "/docs",
+            "extractZip": "true",
+        },
         files={"fileContent": ("docs.zip", payload.getvalue(), "application/zip")},
     )
 

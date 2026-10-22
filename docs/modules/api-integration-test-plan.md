@@ -135,8 +135,12 @@
 
 ### zip 批量上传主链路
 
+默认行为是解压 zip；只有验证原样保存的用例显式传入 `extractZip=false`。
+
 | 编号 | 用户角色 | 用户目标 | 典型调用链 | 核心预期 | 状态 |
 | --- | --- | --- | --- | --- | --- |
+| Z3 | 内容管理员 | zip 默认解压 | `import zip(extractZip 缺省)` | zip 内 entry 解压到 `filePath` 目录，zip 本身不作为文件保存 | 已写 |
+| Z3A | 内容管理员 | zip 显式不解压 | `import zip(extractZip=false)` | zip 作为单文件保存到完整 `filePath`，内部 entry 不会被创建 | 已写 |
 | Z4 | 内容管理员 | zip happy path 改写 | `import zip(png + md 引用 png)` | 两者成功、`summary.succeeded=2`；md 引用改写为 KB 绝对路径 | 已写 |
 | Z5 | 内容管理员 | 覆盖成功替换旧内容 | `import md(OLD) -> import zip(同路径 md=NEW)` | 旧文件被软删并以新内容替换；`downloadFile` 返回 NEW，不含 OLD | 已写 |
 | Z6 | 内容管理员 | 非 md 二进制字节完整 | `import zip(png 二进制)` | `downloadFile` 返回的原始字节与上传字节逐字节一致 | 已写 |

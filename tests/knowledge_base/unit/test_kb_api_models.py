@@ -124,6 +124,7 @@ def test_upload_request_accepts_documented_form_fields():
     assert request.file_description == "操作手册"
     assert request.file_content == b"hello"
     assert request.mime_type == "application/pdf"
+    assert request.extract_zip is True
 
 
 def test_upload_request_accepts_metadata_mapping():

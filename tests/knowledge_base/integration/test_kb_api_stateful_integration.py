@@ -1990,6 +1990,104 @@ def test_entry_metadata_replaces_changed_types_and_rejects_system_fields(
 
 
 @pytest.mark.integration
+def test_zip_upload_defaults_to_extraction(monkeypatch, tmp_path):
+    """A zip is extracted into filePath when extractZip is omitted."""
+    import io
+    import zipfile
+
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr("inner/readme.md", "# readme\n")
+    zip_bytes = archive.getvalue()
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Zip file default {uuid4().hex[:12]}")
+        response = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={"knCode": kb_code, "filePath": "/"},
+            files={"fileContent": ("docs.zip", zip_bytes, "application/zip")},
+        )
+        downloaded = _download_file_bytes(
+            client,
+            kb_code=kb_code,
+            file_path="/inner/readme.md",
+        )
+        archive_download = client.post(
+            "/api/v1/downloadFile",
+            json={
+                "knCode": kb_code,
+                "filePath": "/docs.zip",
+            },
+        ).json()
+
+    assert response.json()["resultObject"] == {
+        "data": [
+            {
+                "filePath": "/inner/readme.md",
+                "success": True,
+                "error": None,
+            }
+        ],
+        "summary": {"total": 1, "succeeded": 1, "failed": 0},
+    }
+    assert downloaded.endswith(b"# readme\n")
+    assert archive_download["resultCode"] == "-1"
+
+
+@pytest.mark.integration
+def test_zip_upload_can_disable_extraction(monkeypatch, tmp_path):
+    """extractZip=false stores the archive byte-for-byte as one file."""
+    import io
+    import zipfile
+
+    settings = _kb_settings(agent_data_path=tmp_path)
+    _reset_runtime(monkeypatch, settings)
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr("inner/readme.md", "# readme\n")
+    zip_bytes = archive.getvalue()
+
+    with TestClient(main_module.app) as client:
+        kb_code = _create_kb(client, f"Zip file no extract {uuid4().hex[:12]}")
+        response = client.post(
+            "/api/v1/knowledgeItems/import",
+            data={
+                "knCode": kb_code,
+                "filePath": "/archives/docs.zip",
+                "extractZip": "false",
+            },
+            files={"fileContent": ("docs.zip", zip_bytes, "application/zip")},
+        )
+        downloaded = _download_file_bytes(
+            client,
+            kb_code=kb_code,
+            file_path="/archives/docs.zip",
+        )
+        inner_download = client.post(
+            "/api/v1/downloadFile",
+            json={
+                "knCode": kb_code,
+                "filePath": "/archives/inner/readme.md",
+            },
+        ).json()
+
+    assert response.json()["resultObject"] == {
+        "data": [
+            {
+                "filePath": "/archives/docs.zip",
+                "success": True,
+                "error": None,
+            }
+        ],
+        "summary": {"total": 1, "succeeded": 1, "failed": 0},
+    }
+    assert downloaded == zip_bytes
+    assert inner_download["resultCode"] == "-1"
+
+
+@pytest.mark.integration
 def test_zip_import_applies_common_metadata_before_each_markdown_front_matter(
     monkeypatch,
 ):
@@ -2014,6 +2112,7 @@ def test_zip_import_applies_common_metadata_before_each_markdown_front_matter(
             data={
                 "knCode": kb_code,
                 "filePath": "/zip-meta",
+                "extractZip": "true",
                 "metadata": '{"owner":"common","commonOnly":"all"}',
             },
             files={
@@ -2069,7 +2168,11 @@ def test_zip_import_persists_nested_empty_directory_entry(monkeypatch):
         kb_code = _create_kb(client, f"Zip empty dirs {uuid4().hex[:12]}")
         response = client.post(
             "/api/v1/knowledgeItems/import",
-            data={"knCode": kb_code, "filePath": "/zip-empty"},
+            data={
+                "knCode": kb_code,
+                "filePath": "/zip-empty",
+                "extractZip": "true",
+            },
             files={
                 "fileContent": (
                     "empty-directories.zip",
@@ -6449,7 +6552,11 @@ def test_import_zip_rewrites_markdown_references(monkeypatch, tmp_path):
         kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
         response = client.post(
             "/api/v1/knowledgeItems/import",
-            data={"knCode": kb_code, "filePath": "/target"},
+            data={
+                "knCode": kb_code,
+                "filePath": "/target",
+                "extractZip": "true",
+            },
             files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
         )
         download = client.post(
@@ -6489,7 +6596,11 @@ def test_zip_references_and_directory_delete_update_inbound_reference_state(
         kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
         zip_response = client.post(
             "/api/v1/knowledgeItems/import",
-            data={"knCode": kb_code, "filePath": "/zip"},
+            data={
+                "knCode": kb_code,
+                "filePath": "/zip",
+                "extractZip": "true",
+            },
             files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
         )
         build_zip_a = client.post(
@@ -6730,7 +6841,7 @@ def test_import_zip_malformed_md_preserves_existing_file(monkeypatch, tmp_path):
         # Step 2: zip overwrite with malformed md at the same path.
         zip_resp = client.post(
             "/api/v1/knowledgeItems/import",
-            data={"knCode": kb_code, "filePath": "/t"},
+            data={"knCode": kb_code, "filePath": "/t", "extractZip": "true"},
             files={"fileContent": ("batch.zip", zip_bytes, "application/zip")},
         )
         # The original valid md must still be present and downloadable.
@@ -6788,7 +6899,7 @@ def test_import_zip_overwrite_replaces_existing_file_content(monkeypatch, tmp_pa
         )
         resp = client.post(
             "/api/v1/knowledgeItems/import",
-            data={"knCode": kb_code, "filePath": "/t"},
+            data={"knCode": kb_code, "filePath": "/t", "extractZip": "true"},
             files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
         )
         new_download = client.post(
@@ -6825,7 +6936,11 @@ def test_import_zip_preserves_non_md_binary_bytes(monkeypatch, tmp_path):
         kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
         resp = client.post(
             "/api/v1/knowledgeItems/import",
-            data={"knCode": kb_code, "filePath": "/target"},
+            data={
+                "knCode": kb_code,
+                "filePath": "/target",
+                "extractZip": "true",
+            },
             files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
         )
         download = client.post(
@@ -6866,7 +6981,11 @@ def test_import_zip_uploads_non_md_before_md(monkeypatch, tmp_path):
         kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
         resp = client.post(
             "/api/v1/knowledgeItems/import",
-            data={"knCode": kb_code, "filePath": "/target"},
+            data={
+                "knCode": kb_code,
+                "filePath": "/target",
+                "extractZip": "true",
+            },
             files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
         )
 
@@ -6900,7 +7019,11 @@ def test_import_zip_rejects_unsafe_path_entry(monkeypatch, tmp_path):
         kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
         resp = client.post(
             "/api/v1/knowledgeItems/import",
-            data={"knCode": kb_code, "filePath": "/target"},
+            data={
+                "knCode": kb_code,
+                "filePath": "/target",
+                "extractZip": "true",
+            },
             files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
         )
         escape_download = client.post(
@@ -6938,7 +7061,11 @@ def test_import_zip_rejects_invalid_zip(monkeypatch, tmp_path):
         kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
         resp = client.post(
             "/api/v1/knowledgeItems/import",
-            data={"knCode": kb_code, "filePath": "/target"},
+            data={
+                "knCode": kb_code,
+                "filePath": "/target",
+                "extractZip": "true",
+            },
             files={"fileContent": ("batch.zip", b"not a zip file", "application/zip")},
         )
 
@@ -6968,7 +7095,11 @@ def test_import_zip_auto_creates_nested_directories(monkeypatch, tmp_path):
         kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
         resp = client.post(
             "/api/v1/knowledgeItems/import",
-            data={"knCode": kb_code, "filePath": "/target"},
+            data={
+                "knCode": kb_code,
+                "filePath": "/target",
+                "extractZip": "true",
+            },
             files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
         )
         download = client.post(
@@ -7009,7 +7140,11 @@ def test_import_zip_md_front_matter_is_persisted(monkeypatch, tmp_path):
         kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
         resp = client.post(
             "/api/v1/knowledgeItems/import",
-            data={"knCode": kb_code, "filePath": "/target"},
+            data={
+                "knCode": kb_code,
+                "filePath": "/target",
+                "extractZip": "true",
+            },
             files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
         )
         meta = client.post(
@@ -7056,7 +7191,11 @@ def test_import_zip_rejects_oversized_entry_at_route(monkeypatch, tmp_path):
         kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
         resp = client.post(
             "/api/v1/knowledgeItems/import",
-            data={"knCode": kb_code, "filePath": "/target"},
+            data={
+                "knCode": kb_code,
+                "filePath": "/target",
+                "extractZip": "true",
+            },
             files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
         )
         download = client.post(
@@ -7095,7 +7234,11 @@ def test_import_zip_concurrent_many_files_all_succeed(monkeypatch, tmp_path):
         kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
         resp = client.post(
             "/api/v1/knowledgeItems/import",
-            data={"knCode": kb_code, "filePath": "/target"},
+            data={
+                "knCode": kb_code,
+                "filePath": "/target",
+                "extractZip": "true",
+            },
             files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
         )
         md0_download = client.post(
@@ -7146,7 +7289,7 @@ def test_import_zip_rewrites_references_when_target_exists(monkeypatch, tmp_path
         kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
         resp = client.post(
             "/api/v1/knowledgeItems/import",
-            data={"knCode": kb_code, "filePath": "/t"},
+            data={"knCode": kb_code, "filePath": "/t", "extractZip": "true"},
             files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
         )
         download = client.post(
@@ -7187,7 +7330,7 @@ def test_import_zip_normalizes_unresolved_internal_references(monkeypatch, tmp_p
         kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
         resp = client.post(
             "/api/v1/knowledgeItems/import",
-            data={"knCode": kb_code, "filePath": "/t"},
+            data={"knCode": kb_code, "filePath": "/t", "extractZip": "true"},
             files={"fileContent": ("batch.zip", buf.getvalue(), "application/zip")},
         )
         download = client.post(
@@ -8157,6 +8300,7 @@ async def test_duplicate_checksum_flag_scope_zip_and_self_update(monkeypatch, tm
             data={
                 "knCode": first_kb,
                 "filePath": "/docs",
+                "extractZip": "true",
                 "skipIfDuplicate": "true",
             },
             files={

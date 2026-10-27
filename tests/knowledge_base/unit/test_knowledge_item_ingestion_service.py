@@ -685,3 +685,62 @@ async def test_resolve_pending_references_falls_back_per_path_for_malformed_rows
     ]
     assert connection.committed is True
     assert connection.rolled_back is False
+
+
+async def test_disk_backed_binary_upload_hashes_and_writes_without_full_read(
+    tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    from by_qa.knowledge_base.services.file_upload_source import FileUploadRequest
+
+    calls = []
+
+    class FileStorage(FakeStorageProvider):
+        async def write(self, location, content, *, content_type):
+            assert isinstance(content, Path)
+            calls.append(("storage_write_path", {"source": content}))
+            return StoredObject(location, size=content.stat().st_size)
+
+    source = tmp_path / "data.bin"
+    content = b"data" * (1024 * 1024)
+    source.write_bytes(content)
+    service, connection = _build_service(calls, storage=FileStorage(calls))
+    request = FileUploadRequest(
+        kb_code="kb1", file_path="/data.bin", file_content=source
+    )
+
+    def forbid_read_bytes(self):
+        raise AssertionError("binary upload must not read the whole file")
+
+    monkeypatch.setattr(Path, "read_bytes", forbid_read_bytes)
+    await service.upload_file(request)
+    lock = next(data for name, data in calls if name == "lock_checksum_scope")
+    assert lock["checksum"] == hashlib.sha256(content).hexdigest()
+    assert any(name == "storage_write_path" for name, _ in calls)
+    assert not any(name == "storage_write" for name, _ in calls)
+    assert connection.committed and connection.closed
+
+
+async def test_disk_backed_upload_storage_failure_rolls_back(tmp_path):
+    from by_qa.knowledge_base.services.file_upload_source import FileUploadRequest
+
+    calls = []
+
+    class FileStorage(FakeStorageProvider):
+        async def write(self, location, content, *, content_type):
+            raise RuntimeError("stream failed")
+
+    source = tmp_path / "data.bin"
+    source.write_bytes(b"data")
+    service, connection = _build_service(calls, storage=FileStorage(calls))
+    with pytest.raises(RuntimeError, match="stream failed"):
+        await service.upload_file(
+            FileUploadRequest(
+                kb_code="kb1",
+                file_path="/data.bin",
+                file_content=source,
+            )
+        )
+    assert connection.rolled_back and connection.closed
+    assert any(name == "storage_delete_quietly" for name, _ in calls)

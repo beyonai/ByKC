@@ -212,3 +212,112 @@ async def test_move_copies_then_deletes_source(provider):
 
     with pytest.raises(StorageNotFoundError):
         await provider.read(location)
+
+
+class MultipartS3Client(FakeS3Client):
+    def __init__(self, *, fail_at=None):
+        super().__init__()
+        self.fail_at = fail_at
+        self.parts = []
+        self.aborted = False
+        self.completed = False
+
+    async def create_multipart_upload(self, **kwargs):
+        self.calls.append(("create_multipart_upload", kwargs))
+        return {"UploadId": "upload-1"}
+
+    async def upload_part(self, **kwargs):
+        self.calls.append(("upload_part", kwargs))
+        if self.fail_at == "part":
+            raise RuntimeError("part failed")
+        if self.fail_at == "cancel":
+            import asyncio
+
+            raise asyncio.CancelledError()
+        self.parts.append(kwargs["Body"])
+        return {"ETag": str(kwargs["PartNumber"])}
+
+    async def complete_multipart_upload(self, **kwargs):
+        if self.fail_at == "complete":
+            raise RuntimeError("complete failed")
+        self.calls.append(("complete_multipart_upload", kwargs))
+        self.completed = True
+        self.payloads[(kwargs["Bucket"], kwargs["Key"])] = b"".join(self.parts)
+
+    async def abort_multipart_upload(self, **kwargs):
+        self.calls.append(("abort_multipart_upload", kwargs))
+        self.aborted = True
+
+
+@pytest.mark.asyncio
+async def test_write_path_uploads_bounded_parts_without_reading_whole_file(
+    tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    from by_qa.knowledge_base.infrastructure.storage_s3 import (
+        S3KnowledgeStorageProvider,
+    )
+
+    storage, _ = _make_storage()
+    client = MultipartS3Client()
+    storage.session = FakeSession(client)
+    provider = S3KnowledgeStorageProvider(storage)
+    source = tmp_path / "large.bin"
+    content = b"x" * (18 * 1024 * 1024)
+    source.write_bytes(content)
+
+    def forbid_read_bytes(self):
+        raise AssertionError("must not load the whole file")
+
+    monkeypatch.setattr(Path, "read_bytes", forbid_read_bytes)
+    location = StorageLocation("bucket", "large.bin")
+    stored = await provider.write(
+        location, source, content_type="application/octet-stream"
+    )
+    assert stored.size == len(content)
+    assert client.payloads[("bucket", "large.bin")] == content
+    assert [len(part) for part in client.parts] == [
+        8 * 1024 * 1024,
+        8 * 1024 * 1024,
+        2 * 1024 * 1024,
+    ]
+    assert client.completed
+    assert not client.aborted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_at", ["part", "complete", "cancel"])
+async def test_write_path_aborts_multipart_on_failure_or_cancel(tmp_path, fail_at):
+    import asyncio
+
+    from by_qa.knowledge_base.infrastructure.storage_s3 import (
+        S3KnowledgeStorageProvider,
+    )
+
+    storage, _ = _make_storage()
+    client = MultipartS3Client(fail_at=fail_at)
+    storage.session = FakeSession(client)
+    source = tmp_path / "large.bin"
+    source.write_bytes(b"x" * (9 * 1024 * 1024))
+    error = asyncio.CancelledError if fail_at == "cancel" else RuntimeError
+    with pytest.raises(error):
+        await S3KnowledgeStorageProvider(storage).write(
+            StorageLocation("bucket", "large.bin"),
+            source,
+            content_type="application/octet-stream",
+        )
+    assert client.aborted
+    assert not client.completed
+
+
+@pytest.mark.asyncio
+async def test_write_small_file_uses_put_object(provider, tmp_path):
+    source = tmp_path / "small.bin"
+    source.write_bytes(b"small")
+    location = StorageLocation("bucket", "small.bin")
+    stored = await provider.write(
+        location, source, content_type="application/octet-stream"
+    )
+    assert stored.size == 5
+    assert await provider.read(location) == b"small"

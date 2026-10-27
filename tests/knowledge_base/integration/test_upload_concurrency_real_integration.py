@@ -3,6 +3,7 @@
 import asyncio
 import io
 import zipfile
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -45,6 +46,8 @@ class GatedStorage:
         )
 
     async def write(self, location, content, *, content_type):
+        if isinstance(content, Path):
+            content = content.read_bytes()
         if content == b"BLOCK":
             self.entered.set()
             await self.release.wait()

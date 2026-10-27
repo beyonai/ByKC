@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 
@@ -73,10 +74,11 @@ class KnowledgeStorageProvider(Protocol):
     async def write(
         self,
         location: StorageLocation,
-        content: bytes,
+        content: bytes | Path,
         *,
         content_type: str,
-    ) -> StoredObject: ...
+    ) -> StoredObject:
+        """Write bytes or stream a local Path; the caller owns the source file."""
 
     async def read(self, location: StorageLocation) -> bytes: ...
 

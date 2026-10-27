@@ -7169,12 +7169,12 @@ def test_import_zip_md_front_matter_is_persisted(monkeypatch, tmp_path):
 
 
 @pytest.mark.integration
-def test_import_zip_rejects_oversized_entry_at_route(monkeypatch, tmp_path):
-    """A zip entry exceeding the per-entry decompressed cap is rejected at the route; no file is created."""
+def test_import_zip_accepts_entry_above_former_size_limit_at_route(
+    monkeypatch, tmp_path
+):
+    """A file above the former 64 MiB cap can be imported and downloaded."""
     import io
     import zipfile
-
-    from by_qa.knowledge_base.services import zip_batch_import_service as zbmod
 
     settings = _kb_settings(agent_data_path=tmp_path)
     _reset_runtime(monkeypatch, settings)
@@ -7182,11 +7182,11 @@ def test_import_zip_rejects_oversized_entry_at_route(monkeypatch, tmp_path):
         monkeypatch, FakeDocumentChunkingService(markdown_text="# t\n")
     )
 
-    monkeypatch.setattr(zbmod, "_MAX_ENTRY_UNCOMPRESSED", 512)
+    content = b"x" * (65 * 1024 * 1024)
 
     buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr("big.md", b"x" * 2048)
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("big.bin", content)
     with TestClient(main_module.app) as client:
         kb_code = _create_kb(client, f"Integration KB {uuid4().hex[:12]}")
         resp = client.post(
@@ -7200,15 +7200,19 @@ def test_import_zip_rejects_oversized_entry_at_route(monkeypatch, tmp_path):
         )
         download = client.post(
             "/api/v1/downloadFile",
-            json={"knCode": kb_code, "filePath": "/target/big.md"},
+            json={"knCode": kb_code, "filePath": "/target/big.bin"},
         )
 
     assert resp.status_code == 200
     payload = resp.json()
-    assert payload["resultCode"] == "-1"
-    assert payload["resultMsg"] == "zip too large"
-    # no file created
-    assert download.json()["resultCode"] == "-1"
+    assert payload["resultCode"] == "0"
+    assert payload["resultObject"]["summary"] == {
+        "total": 1,
+        "succeeded": 1,
+        "failed": 0,
+    }
+    assert download.status_code == 200
+    assert download.content == content
 
 
 @pytest.mark.integration

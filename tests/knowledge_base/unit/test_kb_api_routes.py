@@ -2629,3 +2629,46 @@ def test_build_result_validates_chunk_page_size(monkeypatch):
     assert response.status_code == 200
     assert response.json()["resultCode"] == "-1"
     assert response.json()["resultMsg"] == "request validation failed"
+
+
+def test_upload_zip_reads_bounded_chunks_and_cleans_archive(monkeypatch):
+    from pathlib import Path
+
+    from starlette.datastructures import UploadFile as StarletteUploadFile
+
+    read = StarletteUploadFile.read
+    sizes = []
+    archives = []
+
+    async def bounded_read(self, size=-1):
+        assert 0 < size <= 1024 * 1024
+        sizes.append(size)
+        return await read(self, size)
+
+    class DiskZipImport:
+        def __init__(self, **kwargs):
+            pass
+
+        async def import_zip(self, **kwargs):
+            archive = kwargs["zip_path"]
+            assert isinstance(archive, Path) and archive.is_file()
+            assert "zip_bytes" not in kwargs
+            archives.append(archive)
+            return ZipBatchImportResult(
+                data=[], summary=ImportSummary(total=0, succeeded=0, failed=0)
+            )
+
+    monkeypatch.setattr(StarletteUploadFile, "read", bounded_read)
+    monkeypatch.setattr(routes, "ZipBatchImportService", DiskZipImport)
+    client = make_test_client(monkeypatch, FakeKBService())
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as zf:
+        zf.writestr("file.bin", b"x" * (2 * 1024 * 1024))
+    response = client.post(
+        "/api/v1/knowledgeItems/import",
+        data={"knCode": "kb1", "filePath": "/target"},
+        files={"fileContent": ("files.zip", payload.getvalue(), "application/zip")},
+    )
+    assert response.json()["resultCode"] == "0"
+    assert len(sizes) >= 3
+    assert archives and not archives[0].parent.exists()

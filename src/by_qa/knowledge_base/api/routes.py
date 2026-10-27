@@ -1,11 +1,12 @@
 """Route registration for knowledge base APIs."""
 
-import io
 import json
 import mimetypes
 import zipfile
+from contextlib import AsyncExitStack
 from inspect import isawaitable
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
+from tempfile import TemporaryDirectory
 from typing import Any, Callable, Optional
 from urllib.parse import quote
 
@@ -63,6 +64,11 @@ from by_qa.knowledge_base.events import (
 from by_qa.knowledge_base.services.errors import (
     KnowledgeBaseConfigurationError,
     KnowledgeBaseValidationError,
+)
+from by_qa.knowledge_base.services.file_upload_source import (
+    UPLOAD_CHUNK_SIZE,
+    FileUploadRequest,
+    file_io,
 )
 from by_qa.knowledge_base.services.knowledge_item_ingestion_service import (
     convert_uploaded_file_to_markdown,
@@ -756,148 +762,168 @@ def register_routes(
         skip_if_duplicate: bool = Form(False, alias="skipIfDuplicate"),
         metadata: str | None = Form(None, alias="metadata"),
     ):
-        try:
-            payload = await file_content.read() if file_content is not None else None
-            request = KnowledgeItemUploadRequest.model_validate(
-                {
-                    "knCode": kn_code,
-                    "filePath": file_path,
-                    "fileDescription": file_description,
-                    "fileContent": payload,
-                    "mimeType": (
-                        file_content.content_type if file_content is not None else None
-                    ),
-                    "processFrontMatter": process_front_matter,
-                    "extractZip": extract_zip,
-                    "skipIfDuplicate": skip_if_duplicate,
-                    "metadata": _parse_optional_metadata_form(metadata),
-                }
-            )
-        except (ValidationError, ValueError) as exc:
-            return _documented_error_response(
-                result_msg="request validation failed",
-                result_object=(
-                    {"errors": json.loads(exc.json())}
-                    if isinstance(exc, ValidationError)
-                    else {"errors": [{"msg": str(exc)}]}
-                ),
-                status_code=422,
-            )
-        logger.info(
-            "upload_file request received: kb_code=%s, file_path=%s, has_description=%s, process_front_matter=%s, extract_zip=%s",
-            request.kb_code,
-            request.file_path,
-            request.file_description is not None,
-            request.process_front_matter,
-            request.extract_zip,
-        )
-        filename = (file_content.filename or "") if file_content is not None else ""
-        try:
-            service = await get_knowledge_item_ingestion_service()
-            if request.extract_zip and filename.lower().endswith(".zip"):
-                if not zipfile.is_zipfile(io.BytesIO(payload or b"")):
-                    return _documented_error_response(
-                        result_msg="invalid zip file",
-                        result_object={},
-                        status_code=422,
+        async with AsyncExitStack() as stack:
+            try:
+                filename = (
+                    (file_content.filename or "") if file_content is not None else ""
+                )
+                is_zip = extract_zip and filename.lower().endswith(".zip")
+                if is_zip and file_content is not None:
+                    temp_dir = TemporaryDirectory(prefix="byqa-upload-")
+                    stack.push_async_callback(file_io, temp_dir.cleanup)
+                    payload = Path(temp_dir.name) / "upload.zip"
+                    with payload.open("wb") as stream:
+                        while chunk := await file_content.read(UPLOAD_CHUNK_SIZE):
+                            await file_io(stream.write, chunk)
+                    request_model = FileUploadRequest
+                else:
+                    payload = (
+                        await file_content.read() if file_content is not None else None
                     )
-                directory_service = await get_knowledge_base_service()
-                batch_service = ZipBatchImportService(
-                    ingestion_service=service,
-                    directory_service=directory_service,
-                )
-                result = await batch_service.import_zip(
-                    kb_code=request.kb_code,
-                    target_dir=request.file_path,
-                    zip_bytes=payload,
-                    process_front_matter=request.process_front_matter,
-                    file_description=request.file_description,
-                    skip_if_duplicate=request.skip_if_duplicate,
-                    metadata=request.metadata,
-                )
-                result_object = {
-                    "data": [item.model_dump(by_alias=True) for item in result.data],
-                    "summary": result.summary.model_dump(by_alias=True),
-                }
-                if result.post_process_errors:
-                    result_object["postProcessErrors"] = result.post_process_errors
-                if result.summary.succeeded > 0:
-                    await _try_schedule_event(
-                        background_tasks,
-                        lambda: build_resource_event(
-                            event_type=ResourceEventType.FILE_IMPORTED,
-                            kb_code=request.kb_code,
-                            source_path=None,
-                            target_path=_ensure_leading_slash(request.file_path),
-                            items=[
-                                {
-                                    "sourcePath": item.file_path,
-                                    "targetPath": (
-                                        item.file_path if item.success else None
-                                    ),
-                                    "resourceType": item.resource_type,
-                                    "success": item.success,
-                                    "error": item.error,
-                                }
-                                for item in result.data
-                            ],
-                            result=result.summary.model_dump(),
-                        ),
-                    )
-                return _documented_success_response(result_object=result_object)
-            # single file
-            file_path_norm = "/" + request.file_path.strip("/")
-            segments = [s for s in file_path_norm.split("/") if s]
-            if any(s == ".." for s in segments):
-                return _documented_error_response(
-                    result_msg="unsafe path", result_object={}, status_code=422
-                )
-            await service.upload_file(request)
-            result_object = {
-                "data": [
+                    request_model = KnowledgeItemUploadRequest
+                request = request_model.model_validate(
                     {
-                        "filePath": file_path_norm,
-                        "success": True,
-                        "error": None,
+                        "knCode": kn_code,
+                        "filePath": file_path,
+                        "fileDescription": file_description,
+                        "fileContent": payload,
+                        "mimeType": (
+                            file_content.content_type
+                            if file_content is not None
+                            else None
+                        ),
+                        "processFrontMatter": process_front_matter,
+                        "extractZip": extract_zip,
+                        "skipIfDuplicate": skip_if_duplicate,
+                        "metadata": _parse_optional_metadata_form(metadata),
                     }
-                ],
-                "summary": {"total": 1, "succeeded": 1, "failed": 0},
-            }
-            await _try_schedule_event(
-                background_tasks,
-                lambda: build_resource_event(
-                    event_type=ResourceEventType.FILE_IMPORTED,
-                    kb_code=request.kb_code,
-                    source_path=None,
-                    target_path=file_path_norm,
-                    result=result_object["summary"],
-                ),
-            )
-            return _documented_success_response(result_object=result_object)
-        except KnowledgeBaseConfigurationError as exc:
-            return _documented_error_response(
-                result_msg=str(exc),
-                result_object={},
-                status_code=503,
-            )
-        except KnowledgeBaseValidationError as exc:
-            return _documented_error_response(
-                result_msg=str(exc),
-                result_object={},
-                status_code=422,
-            )
-        except Exception as exc:
-            logger.exception(
-                "upload_file unexpected error: kb_code=%s, file_path=%s, error=%s",
+                )
+            except (ValidationError, ValueError) as exc:
+                return _documented_error_response(
+                    result_msg="request validation failed",
+                    result_object=(
+                        {"errors": json.loads(exc.json())}
+                        if isinstance(exc, ValidationError)
+                        else {"errors": [{"msg": str(exc)}]}
+                    ),
+                    status_code=422,
+                )
+            logger.info(
+                "upload_file request received: kb_code=%s, file_path=%s, has_description=%s, process_front_matter=%s, extract_zip=%s",
                 request.kb_code,
                 request.file_path,
-                exc,
+                request.file_description is not None,
+                request.process_front_matter,
+                request.extract_zip,
             )
-            return _documented_error_response(
-                result_msg=str(exc) or "internal error",
-                result_object={},
-                status_code=500,
-            )
+            try:
+                service = await get_knowledge_item_ingestion_service()
+                if request.extract_zip and filename.lower().endswith(".zip"):
+                    if not await file_io(zipfile.is_zipfile, payload):
+                        return _documented_error_response(
+                            result_msg="invalid zip file",
+                            result_object={},
+                            status_code=422,
+                        )
+                    directory_service = await get_knowledge_base_service()
+                    batch_service = ZipBatchImportService(
+                        ingestion_service=service,
+                        directory_service=directory_service,
+                    )
+                    result = await batch_service.import_zip(
+                        kb_code=request.kb_code,
+                        target_dir=request.file_path,
+                        zip_path=payload,
+                        process_front_matter=request.process_front_matter,
+                        file_description=request.file_description,
+                        skip_if_duplicate=request.skip_if_duplicate,
+                        metadata=request.metadata,
+                    )
+                    result_object = {
+                        "data": [
+                            item.model_dump(by_alias=True) for item in result.data
+                        ],
+                        "summary": result.summary.model_dump(by_alias=True),
+                    }
+                    if result.post_process_errors:
+                        result_object["postProcessErrors"] = result.post_process_errors
+                    if result.summary.succeeded > 0:
+                        await _try_schedule_event(
+                            background_tasks,
+                            lambda: build_resource_event(
+                                event_type=ResourceEventType.FILE_IMPORTED,
+                                kb_code=request.kb_code,
+                                source_path=None,
+                                target_path=_ensure_leading_slash(request.file_path),
+                                items=[
+                                    {
+                                        "sourcePath": item.file_path,
+                                        "targetPath": (
+                                            item.file_path if item.success else None
+                                        ),
+                                        "resourceType": item.resource_type,
+                                        "success": item.success,
+                                        "error": item.error,
+                                    }
+                                    for item in result.data
+                                ],
+                                result=result.summary.model_dump(),
+                            ),
+                        )
+                    return _documented_success_response(result_object=result_object)
+                # single file
+                file_path_norm = "/" + request.file_path.strip("/")
+                segments = [s for s in file_path_norm.split("/") if s]
+                if any(s == ".." for s in segments):
+                    return _documented_error_response(
+                        result_msg="unsafe path", result_object={}, status_code=422
+                    )
+                await service.upload_file(request)
+                result_object = {
+                    "data": [
+                        {
+                            "filePath": file_path_norm,
+                            "success": True,
+                            "error": None,
+                        }
+                    ],
+                    "summary": {"total": 1, "succeeded": 1, "failed": 0},
+                }
+                await _try_schedule_event(
+                    background_tasks,
+                    lambda: build_resource_event(
+                        event_type=ResourceEventType.FILE_IMPORTED,
+                        kb_code=request.kb_code,
+                        source_path=None,
+                        target_path=file_path_norm,
+                        result=result_object["summary"],
+                    ),
+                )
+                return _documented_success_response(result_object=result_object)
+            except KnowledgeBaseConfigurationError as exc:
+                return _documented_error_response(
+                    result_msg=str(exc),
+                    result_object={},
+                    status_code=503,
+                )
+            except KnowledgeBaseValidationError as exc:
+                return _documented_error_response(
+                    result_msg=str(exc),
+                    result_object={},
+                    status_code=422,
+                )
+            except Exception as exc:
+                logger.exception(
+                    "upload_file unexpected error: kb_code=%s, file_path=%s, error=%s",
+                    request.kb_code,
+                    request.file_path,
+                    exc,
+                )
+                return _documented_error_response(
+                    result_msg=str(exc) or "internal error",
+                    result_object={},
+                    status_code=500,
+                )
 
     @app.post("/api/v1/knowledgeItems/update")
     @app.post("/api/v1/knowledge-items/update")

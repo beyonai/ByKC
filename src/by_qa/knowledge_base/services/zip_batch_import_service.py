@@ -13,9 +13,13 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import shutil
 import zipfile
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -23,19 +27,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from by_qa.knowledge_base.api.schemas import (
     CreateDirectoryRequest,
     DeleteKnowledgeItemRequest,
-    KnowledgeItemUploadRequest,
 )
+from by_qa.knowledge_base.services.file_upload_source import FileUploadRequest, file_io
 from by_qa.knowledge_common.kb_path_utils import normalize_kb_path
 
 logger = logging.getLogger(__name__)
 
 _MD_SUFFIXES = (".md", ".markdown")
-# Bounds resident memory: entries are still held in `out` (decompressed in
-# full) before upload. Full streaming (extract-one-upload-one via tempdir) is a
-# future improvement, but these caps bound the worst case.
-_MAX_TOTAL_UNCOMPRESSED = 256 * 1024 * 1024  # 256 MiB across all entries
-_MAX_ENTRY_UNCOMPRESSED = 64 * 1024 * 1024  # 64 MiB per single entry
-_MAX_ENTRIES = 10000
+# Decompression uses disk-backed files and bounded copy buffers.
 _CHUNK = 64 * 1024
 
 
@@ -72,8 +71,13 @@ class _ImportedItem:
 @dataclass(frozen=True)
 class _ZipEntry:
     name: str
-    data: bytes | None
+    path: Path | None
     is_directory: bool
+
+
+def _validate_markdown(path: Path) -> None:
+    # Validate without retaining the decoded text in the batch.
+    path.read_bytes().decode("utf-8")
 
 
 def _is_junk_segment(seg: str) -> bool:
@@ -133,15 +137,43 @@ class ZipBatchImportService:
         *,
         kb_code: str,
         target_dir: str,
-        zip_bytes: bytes,
+        zip_bytes: bytes | None = None,
+        zip_path: Path | None = None,
         process_front_matter: bool = True,
         file_description: str | None = None,
         skip_if_duplicate: bool = False,
         metadata: dict[str, Any] | None = None,
         max_concurrency: int | None = None,
     ) -> ZipBatchImportResult:
+        async with AsyncExitStack() as stack:
+            temp_dir = TemporaryDirectory(prefix="byqa-zip-")
+            stack.push_async_callback(file_io, temp_dir.cleanup)
+            source = zip_path if zip_path is not None else io.BytesIO(zip_bytes or b"")
+            entries = await file_io(self._extract_entries, source, Path(temp_dir.name))
+            return await self._import_entries(
+                entries,
+                kb_code=kb_code,
+                target_dir=target_dir,
+                process_front_matter=process_front_matter,
+                file_description=file_description,
+                skip_if_duplicate=skip_if_duplicate,
+                metadata=metadata,
+                max_concurrency=max_concurrency,
+            )
+
+    async def _import_entries(
+        self,
+        entries: list[_ZipEntry],
+        *,
+        kb_code: str,
+        target_dir: str,
+        process_front_matter: bool,
+        file_description: str | None,
+        skip_if_duplicate: bool,
+        metadata: dict[str, Any] | None,
+        max_concurrency: int | None,
+    ) -> ZipBatchImportResult:
         normalized_target = (target_dir or "").strip("/") or ""
-        entries = self._extract_entries(zip_bytes)
 
         # Dedup entries by resolved KB path: keep the first occurrence of each
         # resolved path; later duplicates are recorded as failures and skipped.
@@ -149,8 +181,8 @@ class ZipBatchImportService:
         # through their importer to be recorded as unsafe.
         seen: set[str] = set()
         directories: list[_ZipEntry] = []
-        non_md: list[tuple[str, bytes]] = []
-        md: list[tuple[str, bytes]] = []
+        non_md: list[tuple[str, Path]] = []
+        md: list[tuple[str, Path]] = []
         duplicate_results: list[ImportItem] = []
         for entry in entries:
             resolved = _resolve_within_target(normalized_target, entry.name)
@@ -159,7 +191,7 @@ class ZipBatchImportService:
                     directories.append(entry)
                 else:
                     group = md if entry.name.lower().endswith(_MD_SUFFIXES) else non_md
-                    group.append((entry.name, entry.data or b""))
+                    group.append((entry.name, entry.path))
                 continue
             if resolved in seen:
                 duplicate_results.append(
@@ -176,7 +208,7 @@ class ZipBatchImportService:
                 directories.append(entry)
             else:
                 group = md if entry.name.lower().endswith(_MD_SUFFIXES) else non_md
-                group.append((entry.name, entry.data or b""))
+                group.append((entry.name, entry.path))
 
         directory_imports = await self._import_directories(
             directories,
@@ -187,12 +219,11 @@ class ZipBatchImportService:
         )
 
         limit = max(1, max_concurrency or self.max_concurrency)
-        sem = asyncio.Semaphore(limit)
 
         # Phase 1: non-md concurrent.
         non_md_imports = await self._run_phase(
             non_md,
-            sem=sem,
+            limit=limit,
             kb_code=kb_code,
             target_dir=normalized_target,
             process_front_matter=process_front_matter,
@@ -204,7 +235,7 @@ class ZipBatchImportService:
         # Phase 2: md concurrent after barrier.
         md_imports = await self._run_phase(
             md,
-            sem=sem,
+            limit=limit,
             kb_code=kb_code,
             target_dir=normalized_target,
             process_front_matter=process_front_matter,
@@ -246,9 +277,9 @@ class ZipBatchImportService:
 
     async def _run_phase(
         self,
-        group: list[tuple[str, bytes]],
+        group: list[tuple[str, Path]],
         *,
-        sem: asyncio.Semaphore,
+        limit: int,
         kb_code: str,
         target_dir: str,
         process_front_matter: bool,
@@ -256,20 +287,27 @@ class ZipBatchImportService:
         skip_if_duplicate: bool,
         metadata: dict[str, Any] | None = None,
     ) -> list[_ImportedItem]:
-        async def one(name: str, data: bytes) -> _ImportedItem:
-            async with sem:
-                return await self._import_one(
+        pending = iter(enumerate(group))
+        results: list[_ImportedItem | None] = [None] * len(group)
+
+        async def worker() -> None:
+            for index, (name, path) in pending:
+                results[index] = await self._import_one(
                     kb_code=kb_code,
                     target_dir=target_dir,
                     name=name,
-                    data=data,
+                    path=path,
                     process_front_matter=process_front_matter,
                     file_description=file_description,
                     skip_if_duplicate=skip_if_duplicate,
                     metadata=metadata,
                 )
 
-        return await asyncio.gather(*(one(n, d) for n, d in group))
+        # Only a fixed number of tasks exist, irrespective of archive entry count.
+        async with asyncio.TaskGroup() as tasks:
+            for _ in range(min(limit, len(group))):
+                tasks.create_task(worker())
+        return results
 
     async def _resolve_pending_references_after_batch(
         self,
@@ -293,45 +331,25 @@ class ZipBatchImportService:
             return f"batch reference compensation failed: {exc}"
         return None
 
-    def _extract_entries(self, zip_bytes: bytes) -> list[_ZipEntry]:
+    def _extract_entries(self, source, temp_dir: Path) -> list[_ZipEntry]:
         try:
-            zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+            with zipfile.ZipFile(source) as zf:
+                out: list[_ZipEntry] = []
+                for index, info in enumerate(zf.infolist()):
+                    name = _decode_zip_name(info)
+                    if any(_is_junk_segment(seg) for seg in name.split("/")):
+                        continue
+                    if info.is_dir():
+                        out.append(_ZipEntry(name=name, path=None, is_directory=True))
+                        continue
+                    # Never use untrusted entry names as local filesystem paths.
+                    path = temp_dir / str(index)
+                    with zf.open(info) as src, path.open("wb") as dst:
+                        shutil.copyfileobj(src, dst, length=_CHUNK)
+                    out.append(_ZipEntry(name=name, path=path, is_directory=False))
+                return out
         except zipfile.BadZipFile as exc:
             raise ValueError("invalid zip file") from exc
-        total = 0
-        out: list[_ZipEntry] = []
-        for info in zf.infolist():
-            name = _decode_zip_name(info)
-            segments = name.split("/")
-            if any(_is_junk_segment(seg) for seg in segments):
-                continue
-            if len(out) >= _MAX_ENTRIES:
-                raise ValueError("zip too large")
-            if info.is_dir():
-                out.append(_ZipEntry(name=name, data=None, is_directory=True))
-                continue
-            # Stream-decompress and cap ACTUAL uncompressed bytes, not the
-            # (spoofable) header-declared file_size, to defend against zip
-            # bombs that declare small sizes but decompress to gigabytes.
-            # Open by ZipInfo object (not the decoded name string) so zipfile
-            # does not try to match the (possibly re-decoded) name against the
-            # raw entry name.
-            buf = bytearray()
-            with zf.open(info) as fh:
-                while True:
-                    chunk = fh.read(_CHUNK)
-                    if not chunk:
-                        break
-                    buf.extend(chunk)
-                    total += len(chunk)
-                    # Per-entry cap on ACTUAL decompressed bytes (not the
-                    # spoofable header file_size) bounds a single bomb entry.
-                    if len(buf) > _MAX_ENTRY_UNCOMPRESSED:
-                        raise ValueError("zip too large")
-                    if total > _MAX_TOTAL_UNCOMPRESSED:
-                        raise ValueError("zip too large")
-            out.append(_ZipEntry(name=name, data=bytes(buf), is_directory=False))
-        return out
 
     async def _import_directories(
         self,
@@ -495,7 +513,7 @@ class ZipBatchImportService:
         kb_code: str,
         target_dir: str,
         name: str,
-        data: bytes,
+        path: Path,
         process_front_matter: bool,
         file_description: str | None,
         skip_if_duplicate: bool,
@@ -514,11 +532,20 @@ class ZipBatchImportService:
             # Validate markdown bytes BEFORE deleting the existing file: a
             # malformed md (UnicodeDecodeError) must NOT lose the original.
             if name.lower().endswith(_MD_SUFFIXES):
-                data.decode("utf-8")
+                await file_io(_validate_markdown, path)
+            request = FileUploadRequest(
+                kb_code=kb_code,
+                file_path=file_path,
+                file_description=file_description,
+                file_content=path,
+                process_front_matter=process_front_matter,
+                skip_if_duplicate=skip_if_duplicate,
+                metadata=metadata,
+            )
             if skip_if_duplicate:
                 duplicate_path = await self.ingestion_service.find_duplicate_file(
                     kb_code=kb_code,
-                    file_content=data,
+                    file_content=path,
                 )
                 if duplicate_path is not None:
                     return _ImportedItem(
@@ -535,15 +562,6 @@ class ZipBatchImportService:
                 await self.ingestion_service.delete_knowledge_item(
                     DeleteKnowledgeItemRequest(kb_code=kb_code, file_path=file_path)
                 )
-            request = KnowledgeItemUploadRequest(
-                kb_code=kb_code,
-                file_path=file_path,
-                file_description=file_description,
-                file_content=data,
-                process_front_matter=process_front_matter,
-                skip_if_duplicate=skip_if_duplicate,
-                metadata=metadata,
-            )
             upload_row = await self.ingestion_service.upload_file(request)
             return _ImportedItem(
                 item=ImportItem(file_path=file_path, success=True, error=None),

@@ -20,6 +20,7 @@ from by_qa.knowledge_base.infrastructure.storage import (
     StorageOperationError,
     StoredObject,
 )
+from by_qa.knowledge_base.services.file_upload_source import file_io
 
 
 @dataclass
@@ -60,12 +61,15 @@ class UserFSProvider:
         target = self._resolve(location)
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(content)
+            if isinstance(content, Path):
+                await file_io(shutil.copyfile, content, target)
+                size = content.stat().st_size
+            else:
+                target.write_bytes(content)
+                size = len(content)
         except OSError as exc:
             raise StorageOperationError(str(exc)) from exc
-        return StoredObject(
-            location=location, size=len(content), content_type=content_type
-        )
+        return StoredObject(location=location, size=size, content_type=content_type)
 
     async def read(self, location):
         target = self._resolve(location)

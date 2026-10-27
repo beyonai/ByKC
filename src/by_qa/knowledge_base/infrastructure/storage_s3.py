@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from botocore.exceptions import ClientError
@@ -20,6 +20,7 @@ from by_qa.knowledge_base.infrastructure.storage import (
     StorageOperationError,
     StoredObject,
 )
+from by_qa.knowledge_base.services.file_upload_source import file_io
 
 _NOT_FOUND_CODES = {"NoSuchKey", "404", "NotFound"}
 _MISSING_BUCKET_CODES = {"NoSuchBucket"}
@@ -71,25 +72,62 @@ class S3KnowledgeStorageProvider:
     async def write(
         self,
         location: StorageLocation,
-        content: bytes,
+        content: bytes | Path,
         *,
         content_type: str,
     ) -> StoredObject:
+        size = content.stat().st_size if isinstance(content, Path) else len(content)
+        target = {"Bucket": location.namespace, "Key": location.key}
         try:
             async with self.storage._client() as s3:  # noqa: SLF001
-                await s3.put_object(
-                    Bucket=location.namespace,
-                    Key=location.key,
-                    Body=content,
-                    ContentType=content_type,
-                )
+                if isinstance(content, bytes):
+                    await s3.put_object(
+                        **target, Body=content, ContentType=content_type
+                    )
+                else:
+                    # One part in flight per file; ZIP workers provide concurrency.
+                    part_size = max(8 * 1024 * 1024, (size + 9999) // 10000)
+                    with content.open("rb") as stream:
+                        chunk = await file_io(stream.read, part_size)
+                        if size <= part_size:
+                            await s3.put_object(
+                                **target, Body=chunk, ContentType=content_type
+                            )
+                        else:
+                            response = await s3.create_multipart_upload(
+                                **target, ContentType=content_type
+                            )
+                            upload_id = response["UploadId"]
+                            parts = []
+                            try:
+                                while chunk:
+                                    number = len(parts) + 1
+                                    response = await s3.upload_part(
+                                        **target,
+                                        UploadId=upload_id,
+                                        PartNumber=number,
+                                        Body=chunk,
+                                    )
+                                    parts.append(
+                                        {"ETag": response["ETag"], "PartNumber": number}
+                                    )
+                                    chunk = await file_io(stream.read, part_size)
+                                await s3.complete_multipart_upload(
+                                    **target,
+                                    UploadId=upload_id,
+                                    MultipartUpload={"Parts": parts},
+                                )
+                            except BaseException:
+                                try:
+                                    await s3.abort_multipart_upload(
+                                        **target, UploadId=upload_id
+                                    )
+                                except Exception:
+                                    pass
+                                raise
         except ClientError as exc:
             raise self._translate(exc, "write") from exc
-        return StoredObject(
-            location=location,
-            size=len(content),
-            content_type=content_type,
-        )
+        return StoredObject(location=location, size=size, content_type=content_type)
 
     async def read(self, location: StorageLocation) -> bytes:
         try:

@@ -2,6 +2,7 @@
 import asyncio
 import io
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -12,6 +13,14 @@ from by_qa.knowledge_base.api.schemas import (
 )
 from by_qa.knowledge_base.services import zip_batch_import_service as zbmod
 from by_qa.knowledge_base.services.zip_batch_import_service import ZipBatchImportService
+
+
+def _in_memory_request(request):
+    if isinstance(request.file_content, Path):
+        return KnowledgeItemUploadRequest.model_validate(
+            {**request.model_dump(), "file_content": request.file_content.read_bytes()}
+        )
+    return request
 
 
 class FakeIngestion:
@@ -47,6 +56,7 @@ class FakeIngestion:
     async def upload_file(
         self, request: KnowledgeItemUploadRequest
     ) -> dict[str, object]:
+        request = _in_memory_request(request)
         seq = self._next()
         self.uploads.append((seq, request))
         normalized = "/" + request.file_path.strip("/")
@@ -115,6 +125,7 @@ class MarkdownReferenceRaceIngestion(FakeIngestion):
     async def upload_file(
         self, request: KnowledgeItemUploadRequest
     ) -> dict[str, object]:
+        request = _in_memory_request(request)
         seq = self._next()
         self.uploads.append((seq, request))
         normalized = "/" + request.file_path.strip("/")
@@ -337,7 +348,15 @@ async def test_import_zip_resolves_md_to_md_pending_after_markdown_phase():
         (
             "kb1",
             ("/target/b.md", "/target/a.md"),
-            ((1, "/target/b.md"), (2, "/target/a.md")),
+            tuple(
+                (
+                    next(
+                        seq for seq, req in ingestion.uploads if req.file_path == path
+                    ),
+                    path,
+                )
+                for path in ("/target/b.md", "/target/a.md")
+            ),
         )
     ]
 
@@ -627,18 +646,34 @@ async def test_import_zip_keeps_reference_to_failed_phase1_for_ingestion():
     assert b"![alt](/t/images/x.png)" not in md_uploads[0].file_content
 
 
-async def test_import_zip_rejects_oversized_entry(monkeypatch: pytest.MonkeyPatch):
-    """The per-entry cap rejects a single entry whose ACTUAL decompressed bytes
-    exceed the limit (not the spoofable header-declared file_size)."""
-    ingestion = FakeIngestion()
-    # Lower the per-entry cap to a small value so the test is fast and does not
-    # allocate megabytes. Restore is automatic via monkeypatch.
-    monkeypatch.setattr(zbmod, "_MAX_ENTRY_UNCOMPRESSED", 256)
-    # One entry whose decompressed content (1000 bytes) exceeds the 256 cap.
-    zip_bytes = _make_zip({"big.md": b"x" * 1000})
-    svc = ZipBatchImportService(ingestion_service=ingestion)
-    with pytest.raises(ValueError, match="zip too large"):
-        await svc.import_zip(kb_code="kb1", target_dir="/t", zip_bytes=zip_bytes)
+def test_extract_zip_accepts_entries_and_total_above_former_size_limits(tmp_path):
+    """Extract real contents above both former 64 MiB and 256 MiB limits."""
+    content = b"x" * (65 * 1024 * 1024)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for index in range(4):
+            zf.writestr(f"large-{index}.bin", content)
+    svc = ZipBatchImportService(ingestion_service=FakeIngestion())
+
+    entries = svc._extract_entries(io.BytesIO(buf.getvalue()), tmp_path)
+
+    assert len(entries) == 4
+    assert all(entry.path.stat().st_size == len(content) for entry in entries)
+    assert all(entry.path.read_bytes() == content for entry in entries)
+
+
+def test_extract_zip_accepts_more_than_former_entry_limit(tmp_path):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for index in range(10001):
+            zf.writestr(f"directory-{index}/", b"")
+    svc = ZipBatchImportService(ingestion_service=FakeIngestion())
+
+    entries = svc._extract_entries(io.BytesIO(buf.getvalue()), tmp_path)
+
+    assert len(entries) == 10001
+    assert all(entry.is_directory for entry in entries)
+    assert entries[-1].name == "directory-10000/"
 
 
 async def test_import_zip_decodes_gbk_chinese_filenames():
@@ -690,3 +725,161 @@ async def test_decode_zip_name_helper_handles_ascii_and_gbk():
     info_gbk = zipfile.ZipInfo("中文.txt".encode("gbk").decode("cp437"))
     info_gbk.flag_bits = 0  # no UTF-8 flag
     assert zbmod._decode_zip_name(info_gbk) == "中文.txt"
+
+
+async def test_import_zip_uses_eight_disk_backed_workers_and_cleans_up():
+    class ConcurrentIngestion(FakeIngestion):
+        def __init__(self):
+            super().__init__()
+            self.active = 0
+            self.peak = 0
+            self.paths = []
+            self.workers = set()
+
+        async def upload_file(self, request):
+            path = request.file_content
+            assert isinstance(path, Path)
+            assert path.is_file()
+            self.paths.append(path)
+            self.workers.add(asyncio.current_task())
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            try:
+                await asyncio.sleep(0.001)
+                return await super().upload_file(request)
+            finally:
+                self.active -= 1
+
+    ingestion = ConcurrentIngestion()
+    service = ZipBatchImportService(ingestion_service=ingestion)
+    result = await service.import_zip(
+        kb_code="kb1",
+        target_dir="/target",
+        zip_bytes=_make_zip({f"{i}.bin": b"data" for i in range(100)}),
+    )
+    assert result.summary.succeeded == 100
+    assert ingestion.peak == 8
+    assert len(ingestion.workers) == 8
+    assert all(not path.exists() for path in ingestion.paths)
+
+
+async def test_import_zip_extracts_off_event_loop(monkeypatch):
+    import threading
+
+    heartbeat = threading.Event()
+    service = ZipBatchImportService(ingestion_service=FakeIngestion())
+    extract = service._extract_entries
+    event_loop_thread = threading.get_ident()
+
+    def slow_extract(source, temp_dir):
+        assert threading.get_ident() != event_loop_thread
+        assert heartbeat.wait(2), "event loop stopped responding during extraction"
+        return extract(source, temp_dir)
+
+    monkeypatch.setattr(service, "_extract_entries", slow_extract)
+    asyncio.get_running_loop().call_later(0.01, heartbeat.set)
+    result = await service.import_zip(
+        kb_code="kb1",
+        target_dir="/target",
+        zip_bytes=_make_zip({"a.bin": b"x"}),
+    )
+    assert result.summary.succeeded == 1
+
+
+async def test_import_zip_cancellation_waits_for_extraction_and_cleans_up(monkeypatch):
+    import threading
+
+    entered = threading.Event()
+    release = threading.Event()
+    directories = []
+    service = ZipBatchImportService(ingestion_service=FakeIngestion())
+    extract = service._extract_entries
+
+    def slow_extract(source, temp_dir):
+        directories.append(temp_dir)
+        entered.set()
+        assert release.wait(3)
+        return extract(source, temp_dir)
+
+    monkeypatch.setattr(service, "_extract_entries", slow_extract)
+    task = asyncio.create_task(
+        service.import_zip(
+            kb_code="kb1",
+            target_dir="/target",
+            zip_bytes=_make_zip({"a.bin": b"x"}),
+        )
+    )
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert directories[0].exists()
+        assert not task.done()
+    finally:
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert not directories[0].exists()
+
+
+async def test_import_zip_cleans_temporary_files_after_extraction_error(monkeypatch):
+    directories = []
+    service = ZipBatchImportService(ingestion_service=FakeIngestion())
+
+    def broken_extract(source, temp_dir):
+        _ = source
+        directories.append(temp_dir)
+        (temp_dir / "partial").write_bytes(b"partial")
+        raise OSError("disk write failed")
+
+    monkeypatch.setattr(service, "_extract_entries", broken_extract)
+    with pytest.raises(OSError, match="disk write failed"):
+        await service.import_zip(kb_code="kb1", target_dir="/", zip_bytes=b"zip")
+    assert not directories[0].exists()
+
+
+async def test_import_zip_cancels_upload_workers_before_cleanup():
+    entered = asyncio.Event()
+    paths = []
+    finished = []
+
+    class BlockedIngestion(FakeIngestion):
+        async def upload_file(self, request):
+            path = request.file_content
+            paths.append(path)
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                assert path.exists()
+                finished.append(path)
+
+    service = ZipBatchImportService(ingestion_service=BlockedIngestion())
+    task = asyncio.create_task(
+        service.import_zip(
+            kb_code="kb1",
+            target_dir="/target",
+            zip_bytes=_make_zip({f"{i}.bin": b"x" for i in range(16)}),
+        )
+    )
+    await asyncio.wait_for(entered.wait(), 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert set(finished) == set(paths)
+    assert all(not path.exists() for path in paths)
+
+
+async def test_empty_binary_upload_preserves_existing_file():
+    ingestion = FakeIngestion()
+    ingestion.files.add("/target/a.bin")
+    service = ZipBatchImportService(ingestion_service=ingestion)
+    result = await service.import_zip(
+        kb_code="kb1",
+        target_dir="/target",
+        zip_bytes=_make_zip({"a.bin": b""}),
+    )
+    assert result.summary.failed == 1
+    assert "fileContent must not be empty" in result.data[0].error
+    assert ingestion.deletes == []
+    assert "/target/a.bin" in ingestion.files

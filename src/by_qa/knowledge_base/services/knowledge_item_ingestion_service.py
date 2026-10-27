@@ -5,7 +5,7 @@ import hashlib
 import mimetypes
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from by_qa.core import logger
@@ -36,6 +36,11 @@ from by_qa.knowledge_base.services.entry_metadata import (
 from by_qa.knowledge_base.services.errors import KnowledgeBaseValidationError
 from by_qa.knowledge_base.services.file_build_execution_service import (
     FileBuildTerminalError,
+)
+from by_qa.knowledge_base.services.file_upload_source import (
+    FileUploadRequest,
+    file_checksum,
+    file_io,
 )
 from by_qa.knowledge_base.services.knowledge_document_metadata import (
     ensure_document_kind_metadata,
@@ -175,13 +180,22 @@ class KnowledgeItemIngestionService:
             document_chunking_service=document_chunking_service,
         )
 
-    async def upload_file(self, request: KnowledgeItemUploadRequest) -> dict[str, Any]:
+    async def upload_file(
+        self, request: KnowledgeItemUploadRequest | FileUploadRequest
+    ) -> dict[str, Any]:
         """Upload one original file and register its storage metadata on the file entry."""
+        source = request.file_content
+        source_size = source.stat().st_size if isinstance(source, Path) else len(source)
+        checksum = (
+            await file_io(file_checksum, source)
+            if isinstance(source, Path)
+            else hashlib.sha256(source).hexdigest()
+        )
         logger.info(
             "knowledge_item_ingestion_service.upload_file started: kb_code=%s, file_path=%s, file_size=%s",
             request.kb_code,
             request.file_path,
-            len(request.file_content),
+            source_size,
         )
         normalized_file_path = request.file_path.strip()
         if not normalized_file_path:
@@ -231,7 +245,6 @@ class KnowledgeItemIngestionService:
                     )
                 await connection.commit()
 
-            checksum = hashlib.sha256(request.file_content).hexdigest()
             await self.knowledge_fs_entry_repository.lock_checksum_scope(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
@@ -265,8 +278,11 @@ class KnowledgeItemIngestionService:
                 raise KnowledgeBaseValidationError(str(exc)) from exc
 
             fs_entry_id = self._row_id(file_entry_row)
-            content = request.file_content
+            content = source
+            original_content = source
             if self._is_markdown_upload(normalized_object_path, mime_type):
+                if isinstance(source, Path):
+                    original_content = content = await file_io(source.read_bytes)
                 _, content = split_front_matter(content)
                 content = await self._rewrite_markdown_references(
                     content,
@@ -285,17 +301,16 @@ class KnowledgeItemIngestionService:
             )
 
             stored = await self.storage_provider.write(
-                original_location,
-                content,
-                content_type=mime_type,
+                original_location, content, content_type=mime_type
             )
+            stored_size = source_size if isinstance(content, Path) else len(content)
 
             await self.knowledge_fs_entry_repository.update_file_entry_storage(
                 cursor,
                 fs_entry_id=fs_entry_id,
                 file_description=request.file_description,
                 original_location=stored.location,
-                file_size=len(content),
+                file_size=stored_size,
                 mime_type=mime_type,
                 checksum=checksum,
             )
@@ -304,7 +319,7 @@ class KnowledgeItemIngestionService:
             if request.process_front_matter and self._is_markdown_upload(
                 normalized_object_path, mime_type
             ):
-                front_matter = parse_front_matter(request.file_content)
+                front_matter = parse_front_matter(original_content)
             await upsert_entry_metadata(
                 cursor,
                 metadata_repository=self.file_metadata_value_repository,
@@ -345,7 +360,7 @@ class KnowledgeItemIngestionService:
             await connection.close()
 
     async def find_duplicate_file(
-        self, *, kb_code: str, file_content: bytes
+        self, *, kb_code: str, file_content: bytes | Path
     ) -> str | None:
         """Return the path of a same-checksum file for guarded batch imports."""
         connection = await self.connection_factory()
@@ -357,7 +372,11 @@ class KnowledgeItemIngestionService:
                     f"knowledge base not found: {kb_code}"
                 )
             knowledge_base_id = self._row_id(kb_row)
-            checksum = hashlib.sha256(file_content).hexdigest()
+            checksum = (
+                await file_io(file_checksum, file_content)
+                if isinstance(file_content, Path)
+                else hashlib.sha256(file_content).hexdigest()
+            )
             await self.knowledge_fs_entry_repository.lock_checksum_scope(
                 cursor,
                 knowledge_base_id=knowledge_base_id,
